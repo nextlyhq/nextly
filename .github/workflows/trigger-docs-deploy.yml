@@ -1,0 +1,16 @@
+name: Trigger Docs Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/content/**'
+
+jobs:
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel Deploy Hook
+        run: |
+          curl -X POST "${{ secrets.VERCEL_DOCS_DEPLOY_HOOK }}"
+          echo "Triggered Vercel deploy for docs update"

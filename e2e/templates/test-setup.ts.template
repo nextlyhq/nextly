@@ -1,0 +1,42 @@
+// Bootstrap for the per-project adapter integration test (Task 2 §3.6).
+// Reads DATABASE_URL from the project's .env and detects the dialect from
+// the URL prefix. The actual tests live in adapter.integration.test.ts and
+// import from this file.
+//
+// Source of truth: e2e/templates/test-setup.ts.template
+// Copy (ephemeral): <project>/src/__tests__/test-setup.ts
+
+import { config as loadEnv } from "dotenv";
+import { resolve } from "path";
+
+// Load the project's .env file. Resolves relative to the test file location.
+loadEnv({ path: resolve(__dirname, "../../.env") });
+
+export const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  throw new Error(
+    "DATABASE_URL is not set. Ensure the project's .env file is present and loaded."
+  );
+}
+
+// Detect dialect from URL prefix.
+export type Dialect = "postgresql" | "mysql" | "sqlite";
+
+export const DIALECT: Dialect = (() => {
+  if (
+    DATABASE_URL.startsWith("postgresql://") ||
+    DATABASE_URL.startsWith("postgres://")
+  ) {
+    return "postgresql";
+  }
+  if (DATABASE_URL.startsWith("mysql://")) {
+    return "mysql";
+  }
+  if (DATABASE_URL.startsWith("file:") || DATABASE_URL === ":memory:") {
+    return "sqlite";
+  }
+  throw new Error(
+    `Cannot detect dialect from DATABASE_URL: ${DATABASE_URL.slice(0, 30)}...`
+  );
+})();

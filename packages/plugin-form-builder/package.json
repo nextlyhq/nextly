@@ -1,0 +1,87 @@
+{
+  "name": "@revnixhq/plugin-form-builder",
+  "version": "0.0.139",
+  "description": "Visual form builder plugin for Nextly with Code-First and Schema Builder support",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./admin": {
+      "types": "./dist/admin/index.d.ts",
+      "import": "./dist/admin/index.js"
+    },
+    "./components": {
+      "types": "./dist/components/index.d.ts",
+      "import": "./dist/components/index.js"
+    },
+    "./styles/builder.css": "./dist/styles/form-builder.css",
+    "./styles/submissions-filter.css": "./dist/styles/submissions-filter.css"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup src/index.ts src/admin/index.ts src/components/index.ts --format esm --dts --watch",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.1.0",
+    "@dnd-kit/sortable": "^8.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "zod": "^3.22.4",
+    "react-hook-form": "^7.50.0",
+    "@hookform/resolvers": "^3.3.4"
+  },
+  "peerDependencies": {
+    "@revnixhq/admin": ">=0.0.139",
+    "@revnixhq/nextly": ">=0.0.139",
+    "@revnixhq/ui": ">=0.0.139",
+    "@tanstack/react-query": ">=5.0.0",
+    "lucide-react": ">=0.400.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "next": "^14.0.0 || ^15.0.0 || ^16.0.0"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "19.2.0",
+    "lucide-react": "^0.469.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0",
+    "@nextly/tsconfig": "workspace:*",
+    "@revnixhq/admin": "workspace:*",
+    "@revnixhq/nextly": "workspace:*",
+    "@revnixhq/ui": "workspace:*"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "plugin",
+    "forms",
+    "form-builder",
+    "cms",
+    "headless-cms",
+    "app-framework"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nextlyhq/nextly",
+    "directory": "packages/plugin-form-builder"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

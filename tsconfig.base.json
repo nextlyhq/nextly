@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "declaration": true,
+    "declarationMap": true,
+    "composite": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "esModuleInterop": false,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@nextly/*": ["packages/*/src"],
+      "nextly": ["packages/nextly/src"]
+    }
+  }
+}

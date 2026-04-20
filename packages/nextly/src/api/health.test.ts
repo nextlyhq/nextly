@@ -1,0 +1,240 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+import { GET, HEAD } from "./health";
+
+// Mock the health check function
+vi.mock("../database/health", () => ({
+  healthCheck: vi.fn(),
+}));
+
+describe("Health Check Route Handlers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe("GET handler", () => {
+    it("should return 200 with JSON body when database is healthy", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: true,
+          dialect: "postgresql",
+          latencyMs: 5,
+        },
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await GET(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("application/json");
+      expect(response.headers.get("Cache-Control")).toBe(
+        "public, max-age=60, stale-while-revalidate=30"
+      );
+
+      const json = await response.json();
+      expect(json.ok).toBe(true);
+      expect(json.database.connected).toBe(true);
+      expect(json.database.latencyMs).toBe(5);
+    });
+
+    it("should return 503 with JSON body when database is unhealthy", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: false,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: false,
+          dialect: "postgresql",
+          latencyMs: 5002,
+        },
+        error: "Connection timeout",
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await GET(request);
+
+      // Assert
+      expect(response.status).toBe(503);
+      const json = await response.json();
+      expect(json.ok).toBe(false);
+      expect(json.error).toBe("Connection timeout");
+    });
+
+    it("should include cache headers", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: true,
+          dialect: "postgresql",
+          latencyMs: 3,
+        },
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await GET(request);
+
+      // Assert
+      expect(response.headers.get("Cache-Control")).toBe(
+        "public, max-age=60, stale-while-revalidate=30"
+      );
+    });
+
+    it("should return proper JSON structure", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      const mockHealth = {
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: true,
+          dialect: "postgresql",
+          latencyMs: 7,
+        },
+      };
+      (healthCheck as any).mockResolvedValueOnce(mockHealth);
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await GET(request);
+
+      // Assert
+      const json = await response.json();
+      expect(json).toEqual(mockHealth);
+    });
+  });
+
+  describe("HEAD handler", () => {
+    it("should return 200 with no body when database is healthy", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: true,
+          dialect: "postgresql",
+          latencyMs: 4,
+        },
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await HEAD(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(response.body).toBeNull();
+    });
+
+    it("should return 503 with no body when database is unhealthy", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: false,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: false,
+          dialect: "postgresql",
+          latencyMs: 5000,
+        },
+        error: "Database unreachable",
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await HEAD(request);
+
+      // Assert
+      expect(response.status).toBe(503);
+      expect(response.body).toBeNull();
+    });
+
+    it("should include cache headers", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: true,
+          dialect: "mysql",
+          latencyMs: 6,
+        },
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await HEAD(request);
+
+      // Assert
+      expect(response.headers.get("Cache-Control")).toBe(
+        "public, max-age=60, stale-while-revalidate=30"
+      );
+    });
+
+    it("should not return body content", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: {
+          connected: true,
+          dialect: "postgresql",
+          latencyMs: 2,
+        },
+      });
+
+      // Act
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await HEAD(request);
+
+      // Assert
+      expect(response.body).toBeNull();
+    });
+  });
+
+  describe("Route handler contract", () => {
+    it("GET should accept Request parameter", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: { connected: true, dialect: "postgresql", latencyMs: 3 },
+      });
+
+      // Act & Assert - should not throw
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await GET(request);
+      expect(response).toBeInstanceOf(Response);
+    });
+
+    it("HEAD should accept Request parameter", async () => {
+      // Arrange
+      const { healthCheck } = await import("../database/health");
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: { connected: true, dialect: "postgresql", latencyMs: 3 },
+      });
+
+      // Act & Assert - should not throw
+      const request = new Request("http://localhost:3000/api/health");
+      const response = await HEAD(request);
+      expect(response).toBeInstanceOf(Response);
+    });
+  });
+});

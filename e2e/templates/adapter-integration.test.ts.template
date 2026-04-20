@@ -1,0 +1,307 @@
+// Task 2 §3.6 — Per-project adapter integration smoke test.
+//
+// This file is COPIED into each test project's src/__tests__/ directory
+// during the per-project workflow. It is the source of truth — do not edit
+// the copies inside e2e/projects/testing/<project>/ because they are
+// gitignored and ephemeral.
+//
+// Source of truth: e2e/templates/adapter-integration.test.ts.template
+// Copy (ephemeral):  <project>/src/__tests__/adapter.integration.test.ts
+//
+// Reads DATABASE_URL + DIALECT from test-setup.ts (colocated). Exercises the
+// full adapter class surface (factory + connect + setTableResolver + CRUD +
+// transactions) against the project's live database. Mirrors the way
+// production consumer projects use the adapter packages.
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import {
+  pgTable,
+  varchar as pgVarchar,
+  doublePrecision,
+  jsonb,
+  boolean as pgBoolean,
+  timestamp as pgTimestamp,
+} from "drizzle-orm/pg-core";
+import {
+  mysqlTable,
+  varchar as mysqlVarchar,
+  double,
+  json as mysqlJson,
+  boolean as mysqlBoolean,
+  timestamp as mysqlTimestamp,
+} from "drizzle-orm/mysql-core";
+import {
+  sqliteTable,
+  text,
+  real,
+  integer,
+} from "drizzle-orm/sqlite-core";
+
+import { DATABASE_URL, DIALECT } from "./test-setup";
+
+// ============================================================
+// Minimal adapter surface used by this test. Keeps the template
+// independent of the per-dialect exports so it compiles cleanly
+// inside any of the 6 projects regardless of which adapter is
+// actually installed.
+// ============================================================
+
+interface AnyAdapter {
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+  setTableResolver: (resolver: {
+    getTable: (name: string) => unknown | null;
+  }) => void;
+  executeQuery: <T = unknown>(sql: string, params?: unknown[]) => Promise<T[]>;
+  select: <T = unknown>(table: string, options?: unknown) => Promise<T[]>;
+  insert: <T = unknown>(
+    table: string,
+    data: Record<string, unknown>,
+    options?: unknown
+  ) => Promise<T>;
+  update: <T = unknown>(
+    table: string,
+    data: Record<string, unknown>,
+    where: unknown,
+    options?: unknown
+  ) => Promise<T[]>;
+  delete: (table: string, where: unknown, options?: unknown) => Promise<number>;
+  transaction: <T>(callback: (tx: unknown) => Promise<T>) => Promise<T>;
+}
+
+// ============================================================
+// Dialect-specific test table definitions.
+// Task 2 exercises a single table with common column types across all three
+// dialects: id (varchar/text), title (varchar/text), price (numeric), is_active
+// (boolean), metadata (JSON/JSONB/text), created_at (timestamp/integer).
+// ============================================================
+
+function buildTestTable(): unknown {
+  if (DIALECT === "postgresql") {
+    return pgTable("task2_smoke", {
+      id: pgVarchar("id", { length: 36 }).primaryKey(),
+      title: pgVarchar("title", { length: 255 }).notNull(),
+      price: doublePrecision("price"),
+      is_active: pgBoolean("is_active"),
+      metadata: jsonb("metadata"),
+      created_at: pgTimestamp("created_at").defaultNow(),
+    });
+  }
+  if (DIALECT === "mysql") {
+    return mysqlTable("task2_smoke", {
+      id: mysqlVarchar("id", { length: 36 }).primaryKey(),
+      title: mysqlVarchar("title", { length: 255 }).notNull(),
+      price: double("price"),
+      is_active: mysqlBoolean("is_active"),
+      metadata: mysqlJson("metadata"),
+      created_at: mysqlTimestamp("created_at").defaultNow(),
+    });
+  }
+  // sqlite: stores JSON as TEXT, booleans as integer(0/1), timestamps as unix ms
+  return sqliteTable("task2_smoke", {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    price: real("price"),
+    is_active: integer("is_active", { mode: "boolean" }),
+    metadata: text("metadata"),
+    created_at: integer("created_at", { mode: "timestamp" }),
+  });
+}
+
+// DDL for each dialect. Uses adapter.executeQuery() as a raw-SQL escape
+// hatch for test-infrastructure setup only. This is the documented pattern
+// for the existing adapter-mysql and adapter-sqlite integration tests
+// because drizzle-kit push requires TTY and cannot run inside vitest.
+function getCreateTableDDL(): string {
+  if (DIALECT === "postgresql") {
+    return `CREATE TABLE IF NOT EXISTS task2_smoke (
+      id          VARCHAR(36)  PRIMARY KEY,
+      title       VARCHAR(255) NOT NULL,
+      price       DOUBLE PRECISION,
+      is_active   BOOLEAN,
+      metadata    JSONB,
+      created_at  TIMESTAMP DEFAULT NOW()
+    )`;
+  }
+  if (DIALECT === "mysql") {
+    return `CREATE TABLE IF NOT EXISTS task2_smoke (
+      id          VARCHAR(36)  PRIMARY KEY,
+      title       VARCHAR(255) NOT NULL,
+      price       DOUBLE,
+      is_active   BOOLEAN,
+      metadata    JSON,
+      created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`;
+  }
+  // sqlite
+  return `CREATE TABLE IF NOT EXISTS task2_smoke (
+    id          TEXT  PRIMARY KEY,
+    title       TEXT  NOT NULL,
+    price       REAL,
+    is_active   INTEGER,
+    metadata    TEXT,
+    created_at  INTEGER
+  )`;
+}
+
+// ============================================================
+// Test suite
+// ============================================================
+
+describe(`Task 2 §3.6 — Per-project adapter smoke test (${DIALECT})`, async () => {
+  let adapter: AnyAdapter;
+  const table = buildTestTable();
+
+  beforeAll(async () => {
+    // Dynamically import the dialect-specific adapter factory. The top-level
+    // static imports would fail in projects that don't install every driver.
+    if (DIALECT === "postgresql") {
+      const mod = await import("@revnixhq/adapter-postgres");
+      adapter = mod.createPostgresAdapter({ url: DATABASE_URL }) as unknown as AnyAdapter;
+    } else if (DIALECT === "mysql") {
+      const mod = await import("@revnixhq/adapter-mysql");
+      adapter = mod.createMySqlAdapter({ url: DATABASE_URL }) as unknown as AnyAdapter;
+    } else {
+      const mod = await import("@revnixhq/adapter-sqlite");
+      adapter = mod.createSqliteAdapter({ url: DATABASE_URL }) as unknown as AnyAdapter;
+    }
+
+    await adapter.connect();
+
+    // Create the test table via raw SQL (DDL bypass). Required because the
+    // adapter's CRUD methods need a table resolver, but the resolver wants a
+    // Drizzle table object that matches a physical table that already exists.
+    await adapter.executeQuery(getCreateTableDDL());
+
+    // Wire a minimal TableResolver that maps "task2_smoke" to our Drizzle
+    // table object. This unlocks adapter.select/insert/update/delete — they
+    // throw "not found in schema registry" without a resolver.
+    adapter.setTableResolver({
+      getTable: (name: string) => (name === "task2_smoke" ? table : null),
+    });
+  });
+
+  afterAll(async () => {
+    try {
+      await adapter.executeQuery(`DROP TABLE IF EXISTS task2_smoke`);
+    } catch {
+      // Ignore cleanup errors — the connection may already be closed.
+    }
+    await adapter.disconnect();
+  });
+
+  // ============================================================
+  // Test 1: INSERT + SELECT round-trip via the adapter's CRUD API
+  // ============================================================
+
+  it("INSERT + SELECT: persists a row through adapter.insert and reads it back via adapter.select", async () => {
+    const now = new Date();
+    await adapter.insert("task2_smoke", {
+      id: "smoke-1",
+      title: "Smoke Test",
+      price: 19.99,
+      is_active: true,
+      // SQLite's text column needs a JSON-encoded string; PG's JSONB and
+      // MySQL's JSON accept JS objects directly.
+      metadata:
+        DIALECT === "sqlite" ? JSON.stringify({ tag: "smoke" }) : { tag: "smoke" },
+      created_at: now,
+    });
+
+    const rows = await adapter.select<{
+      id: string;
+      title: string;
+      price: number;
+    }>("task2_smoke", {
+      where: { and: [{ column: "id", op: "=", value: "smoke-1" }] },
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("Smoke Test");
+    expect(rows[0].price).toBeCloseTo(19.99);
+  });
+
+  // ============================================================
+  // Test 2: UPDATE via the adapter's CRUD API
+  // ============================================================
+
+  it("UPDATE: modifies a row via adapter.update and verifies via select", async () => {
+    await adapter.update(
+      "task2_smoke",
+      { title: "Smoke Test Updated", price: 29.99 },
+      { and: [{ column: "id", op: "=", value: "smoke-1" }] }
+    );
+
+    const rows = await adapter.select<{ title: string; price: number }>(
+      "task2_smoke",
+      { where: { and: [{ column: "id", op: "=", value: "smoke-1" }] } }
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("Smoke Test Updated");
+    expect(rows[0].price).toBeCloseTo(29.99);
+  });
+
+  // ============================================================
+  // Test 3: DELETE via the adapter's CRUD API
+  // ============================================================
+
+  it("DELETE: removes a row via adapter.delete and verifies absence", async () => {
+    await adapter.delete("task2_smoke", {
+      and: [{ column: "id", op: "=", value: "smoke-1" }],
+    });
+
+    const remaining = await adapter.select("task2_smoke", {
+      where: { and: [{ column: "id", op: "=", value: "smoke-1" }] },
+    });
+    expect(remaining).toHaveLength(0);
+  });
+
+  // ============================================================
+  // Test 4: Transaction commits when callback succeeds
+  // ============================================================
+
+  it("TRANSACTION: commits when the callback succeeds", async () => {
+    await adapter.transaction(async () => {
+      await adapter.insert("task2_smoke", {
+        id: "smoke-tx-commit",
+        title: "TX Commit",
+        price: 1,
+        is_active: true,
+        metadata: null,
+        created_at: new Date(),
+      });
+    });
+
+    const rows = await adapter.select("task2_smoke", {
+      where: { and: [{ column: "id", op: "=", value: "smoke-tx-commit" }] },
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  // ============================================================
+  // Test 5: Transaction rolls back when callback throws
+  // ============================================================
+
+  it("TRANSACTION: rolls back when the callback throws", async () => {
+    await expect(
+      adapter.transaction(async () => {
+        await adapter.insert("task2_smoke", {
+          id: "smoke-tx-rollback",
+          title: "TX Rollback",
+          price: 2,
+          is_active: false,
+          metadata: null,
+          created_at: new Date(),
+        });
+        throw new Error("deliberate rollback");
+      })
+    ).rejects.toThrow("deliberate rollback");
+
+    const rows = await adapter.select("task2_smoke", {
+      where: { and: [{ column: "id", op: "=", value: "smoke-tx-rollback" }] },
+    });
+    expect(rows).toHaveLength(0);
+  });
+});

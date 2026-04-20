@@ -1,0 +1,66 @@
+# Docker Compose configuration for test databases
+#
+# This file provides ephemeral PostgreSQL and MySQL databases for integration testing.
+# Uses tmpfs for fast, in-memory storage that's automatically cleaned up.
+#
+# Usage:
+#   # Start test databases
+#   docker compose -f docker-compose.test.yml up -d
+#
+#   # Stop and remove test databases
+#   docker compose -f docker-compose.test.yml down
+#
+#   # View logs
+#   docker compose -f docker-compose.test.yml logs -f
+#
+# Environment variables for tests:
+#   TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5433/nextly_test
+#   TEST_MYSQL_URL=mysql://root:root@localhost:3307/nextly_test
+#
+# Note: Uses ports 5433 and 3307 to avoid conflicts with development databases.
+
+services:
+  # PostgreSQL Test Database
+  # Image: postgres:16
+  # Port: 5433 (mapped from container 5432)
+  # Credentials: postgres/postgres
+  # Database: nextly_test
+  postgres-test:
+    image: postgres:16
+    container_name: nextly-postgres-test
+    environment:
+      POSTGRES_DB: nextly_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nextly_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # MySQL Test Database
+  # Image: mysql:8
+  # Port: 3307 (mapped from container 3306)
+  # Credentials: root/root
+  # Database: nextly_test
+  mysql-test:
+    image: mysql:8
+    container_name: nextly-mysql-test
+    environment:
+      MYSQL_DATABASE: nextly_test
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

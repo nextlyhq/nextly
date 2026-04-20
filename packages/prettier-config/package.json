@@ -1,0 +1,16 @@
+{
+  "name": "@nextly/prettier-config",
+  "version": "0.0.1",
+  "description": "Shared Prettier configuration for Nextly",
+  "type": "module",
+  "private": true,
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": "./index.js",
+  "peerDependencies": {
+    "prettier": ">=3.0.0"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

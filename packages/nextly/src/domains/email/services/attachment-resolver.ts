@@ -1,0 +1,106 @@
+/**
+ * Attachment Resolver
+ *
+ * Converts caller-facing `EmailAttachmentInput[]` into `ResolvedAttachment[]`
+ * (bytes in memory, ready to forward to a provider adapter).
+ *
+ * Validation runs in order, fails fast:
+ * 1. Count ≤ `limits.maxCount`
+ * 2. Each `mediaId` resolves to a record (else MEDIA_NOT_FOUND)
+ * 3. Each file reads cleanly from storage (else STORAGE_READ_FAILED)
+ * 4. Total bytes ≤ `limits.maxTotalBytes`
+ *
+ * Injected `findMedia` and `readBytes` keep the resolver agnostic of
+ * the concrete `MediaService` / `IStorageAdapter` shapes — easy to mock
+ * in tests and easy to swap if either dependency is refactored.
+ *
+ * @module domains/email/services/attachment-resolver
+ */
+
+import { EmailAttachmentError, EmailErrorCode } from "../errors";
+import type { EmailAttachmentInput, ResolvedAttachment } from "../types";
+
+import type { AttachmentLimits } from "./attachment-limits";
+
+/**
+ * Minimal media record needed to resolve an attachment. Subset of
+ * `MediaFile` so the resolver doesn't need the full type surface.
+ */
+export interface AttachmentMediaRecord {
+  /** Storage path/key — what `readBytes` expects. */
+  filename: string;
+  /** User-facing filename; used when the input doesn't override. */
+  originalFilename: string;
+  /** MIME type forwarded to the provider. */
+  mimeType: string;
+}
+
+export interface ResolveAttachmentsDeps {
+  limits: AttachmentLimits;
+  /**
+   * Look up a media record by ID. Returns `null` for not-found (the resolver
+   * converts that into `EMAIL_ATTACHMENT_MEDIA_NOT_FOUND`).
+   */
+  findMedia: (mediaId: string) => Promise<AttachmentMediaRecord | null>;
+  /**
+   * Read raw bytes from storage. Should throw on any failure — the resolver
+   * wraps into `EMAIL_ATTACHMENT_STORAGE_READ_FAILED`.
+   */
+  readBytes: (storagePath: string) => Promise<Buffer>;
+}
+
+export async function resolveAttachments(
+  inputs: EmailAttachmentInput[],
+  deps: ResolveAttachmentsDeps
+): Promise<ResolvedAttachment[]> {
+  if (inputs.length > deps.limits.maxCount) {
+    throw new EmailAttachmentError(
+      EmailErrorCode.ATTACHMENT_COUNT_EXCEEDED,
+      `Attachment count ${inputs.length} exceeds maximum ${deps.limits.maxCount}`,
+      { given: inputs.length, max: deps.limits.maxCount }
+    );
+  }
+
+  const resolved: ResolvedAttachment[] = [];
+  for (const input of inputs) {
+    const media = await deps.findMedia(input.mediaId);
+    if (!media) {
+      throw new EmailAttachmentError(
+        EmailErrorCode.ATTACHMENT_MEDIA_NOT_FOUND,
+        `Media not found: ${input.mediaId}`,
+        { mediaId: input.mediaId }
+      );
+    }
+
+    let content: Buffer;
+    try {
+      content = await deps.readBytes(media.filename);
+    } catch (err) {
+      throw new EmailAttachmentError(
+        EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+        `Failed to read storage for media ${input.mediaId}`,
+        {
+          mediaId: input.mediaId,
+          cause: err instanceof Error ? err.message : String(err),
+        }
+      );
+    }
+
+    resolved.push({
+      filename: input.filename ?? media.originalFilename,
+      mimeType: media.mimeType,
+      content,
+    });
+  }
+
+  const totalBytes = resolved.reduce((sum, a) => sum + a.content.length, 0);
+  if (totalBytes > deps.limits.maxTotalBytes) {
+    throw new EmailAttachmentError(
+      EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+      `Total attachment size ${totalBytes} exceeds maximum ${deps.limits.maxTotalBytes}`,
+      { totalBytes, max: deps.limits.maxTotalBytes }
+    );
+  }
+
+  return resolved;
+}

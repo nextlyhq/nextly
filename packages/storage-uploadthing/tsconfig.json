@@ -1,0 +1,14 @@
+{
+  "extends": "@nextly/tsconfig/base-bundler.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@revnixhq/nextly": ["../nextly/dist/index.d.ts"],
+      "@revnixhq/nextly/storage": ["../nextly/dist/storage/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.spec.ts"]
+}

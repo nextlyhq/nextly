@@ -1,0 +1,53 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    # Title format: "chore(deps): bump zod from 4.1.0 to 4.2.0"
+    # `include: scope` was REMOVED — it appended a second scope after the
+    # one already in `prefix`, producing invalid "chore(deps)(deps): ..."
+    # titles that fail the Conventional Commits PR-title check.
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps)"
+    groups:
+      all-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major-updates:
+        update-types:
+          - major
+    reviewers:
+      - aqib-rx
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    # Title format: "chore(ci): bump the all-actions group with N updates"
+    # `include: scope` was REMOVED — it appended a second scope after the
+    # one already in `prefix`, producing invalid "chore(ci)(deps): ..."
+    # titles that fail the Conventional Commits PR-title check.
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      all-actions:
+        patterns:
+          - "*"
+    reviewers:
+      - aqib-rx
+    labels:
+      - dependencies
+      - github-actions

@@ -1,0 +1,14 @@
+{
+  "name": "blank",
+  "label": "Blank",
+  "description": "Start fresh with an empty config",
+  "hint": "Empty project, define your own schemas",
+  "approaches": [],
+  "defaultApproach": null,
+  "collections": [],
+  "singles": [],
+  "hasDemoData": false,
+  "hasFrontendPages": false,
+  "recommendedDatabase": "any",
+  "release": "alpha"
+}
