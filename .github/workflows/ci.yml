@@ -100,36 +100,3 @@ jobs:
           attw --pack . --ignore-rules false-esm no-resolution cjs-resolves-to-esm
         env:
           TURBO_CACHE_DIR: .turbo
-
-  changeset-check:
-    name: Changeset check
-    runs-on: ubuntu-latest
-    # Skip on Version Packages PR (changeset bot) — it has no changeset files by design
-    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'changeset-release/')
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
-
-      - name: Check changeset exists
-        # Fails if any publishable package changed but has no changeset file
-        run: pnpm changeset status --since=origin/${{ github.base_ref }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
