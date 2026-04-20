@@ -1,0 +1,226 @@
+import { Card, CardContent, Skeleton } from "@revnixhq/ui";
+import {
+  AlertCircle,
+  ChevronRight,
+  Database,
+  FileCheck,
+  Layers,
+  Layout,
+  Puzzle,
+} from "lucide-react";
+import React, { useMemo } from "react";
+
+import * as Icons from "@admin/components/icons";
+import { Link } from "@admin/components/ui/link";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
+import { useCollections, useDashboardStats } from "@admin/hooks/queries";
+import { cn } from "@admin/lib/utils";
+import type { CollectionCount } from "@admin/types/dashboard/stats";
+import type { ApiCollection } from "@admin/types/entities";
+
+interface CollectionGroup {
+  name: string | null;
+  collections: CollectionCount[];
+}
+
+function getGroupDefaultIcon(group: string | null) {
+  switch (group) {
+    case "Forms":
+      return FileCheck;
+    case "Content":
+      return Layout;
+    case "Custom":
+      return Puzzle;
+    default:
+      return Database;
+  }
+}
+
+function groupCollections(counts: CollectionCount[]): CollectionGroup[] {
+  const grouped = new Map<string | null, CollectionCount[]>();
+
+  for (const item of counts) {
+    // Everything except "Forms" is treated as "Collections" (null)
+    const effectiveGroup = item.group === "Forms" ? "Forms" : null;
+    if (!grouped.has(effectiveGroup)) {
+      grouped.set(effectiveGroup, []);
+    }
+    grouped.get(effectiveGroup)!.push(item);
+  }
+
+  // Priorities: null (Collections) -> Forms
+  const getPriority = (name: string | null) => {
+    if (name === null) return 0;
+    if (name === "Forms") return 1;
+    return 2;
+  };
+
+  return Array.from(grouped.entries())
+    .map(([name, collections]) => ({ name, collections }))
+    .sort((a, b) => getPriority(a.name) - getPriority(b.name));
+}
+
+function CollectionCard({
+  item,
+  collectionConfig,
+}: {
+  item: CollectionCount;
+  collectionConfig?: ApiCollection;
+}) {
+  // Resolve Icon:
+  // 1. From collection metadata (admin.icon)
+  // 2. From group default
+  const Icon = useMemo(() => {
+    if (collectionConfig?.admin?.icon) {
+      const ConfiguredIcon = (Icons as Record<string, React.ElementType>)[
+        collectionConfig.admin.icon
+      ];
+      if (ConfiguredIcon) return ConfiguredIcon;
+    }
+    return getGroupDefaultIcon(item.group);
+  }, [collectionConfig?.admin?.icon, item.group]);
+
+  return (
+    <Link
+      href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
+      className="block group h-full rounded-md overflow-hidden border border-border bg-card transition-colors duration-200 hover-unified-dashboard-card hover:border-primary/60"
+    >
+      <Card
+        variant="interactive"
+        className={cn(
+          "h-full !border-0 !bg-transparent transition-colors duration-200 rounded-md overflow-hidden relative"
+        )}
+      >
+        <CardContent className="p-4 relative z-10">
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div
+                className={cn(
+                  "p-2 rounded-md transition-colors ring-1 ring-inset group-hover:bg-white/10 group-hover:text-white group-hover:ring-white/30",
+                  "bg-primary/5 text-primary ring-primary/20"
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-xl font-bold tabular-nums tracking-tight text-foreground/80 leading-none group-hover:text-white">
+                  {item.count}
+                </span>
+                <span className="text-[8px] font-bold uppercase tracking-wider text-muted-foreground/40 mt-1 group-hover:text-white">
+                  Items
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <h5 className="font-bold text-sm tracking-tight transition-colors leading-tight group-hover:text-white">
+                {item.label}
+              </h5>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {Array.from({ length: 4 }, (_, i) => (
+        <Skeleton
+          key={i}
+          className="h-32 rounded-md bg-muted/10 border border-border"
+        />
+      ))}
+    </div>
+  );
+}
+
+export const CollectionQuickLinks: React.FC = () => {
+  const {
+    data: statsData,
+    isLoading: statsLoading,
+    error: statsError,
+  } = useDashboardStats();
+  const { data: collectionsData, isLoading: collectionsLoading } =
+    useCollections({
+      pagination: { page: 0, pageSize: 100 },
+    });
+
+  const counts = useMemo(() => {
+    const raw = statsData?.collectionCounts ?? [];
+    const allowed = new Set((collectionsData?.data ?? []).map(col => col.name));
+    if (allowed.size === 0) return raw;
+    return raw.filter(item => allowed.has(item.slug));
+  }, [statsData?.collectionCounts, collectionsData?.data]);
+  const groups = useMemo(() => groupCollections(counts), [counts]);
+
+  const collectionsMap = useMemo(() => {
+    const map = new Map<string, ApiCollection>();
+    collectionsData?.data?.forEach(col => {
+      map.set(col.name, col);
+    });
+    return map;
+  }, [collectionsData?.data]);
+
+  const isLoading = statsLoading || collectionsLoading;
+
+  return (
+    <div className="space-y-12 pb-16">
+      {isLoading ? (
+        <LoadingSkeleton />
+      ) : statsError ? (
+        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-md border border-destructive/10">
+          <AlertCircle className="h-4 w-4" />
+          <span>Connection Error</span>
+        </div>
+      ) : counts.length === 0 ? (
+        <div className="py-12 flex flex-col items-center gap-6 bg-muted/5 rounded-md border border-dashed border-border">
+          <div className="p-6 rounded-md bg-muted/20 border border-border/10">
+            <Layers className="h-8 w-8 text-muted-foreground/10" />
+          </div>
+          <div className="space-y-2 text-center">
+            <p className="text-lg font-bold text-foreground tracking-tight">
+              No Collections
+            </p>
+            <Link
+              href={ROUTES.COLLECTIONS_CREATE}
+              className="text-[10px] font-bold uppercase tracking-widest text-primary hover-unified flex items-center justify-center gap-2 transition-all"
+            >
+              Create Collection <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-12">
+          {groups.map(group => (
+            <div key={group.name ?? "__ungrouped"} className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4 flex-1">
+                  <h4 className="text-[11px] font-bold text-foreground uppercase tracking-wider whitespace-nowrap">
+                    {group.name || "Collections"}
+                  </h4>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+                <span className="ml-4 text-[9px] font-bold tabular-nums text-muted-foreground/30 uppercase tracking-widest bg-muted/5 px-2 py-0.5 rounded-md border border-border">
+                  {group.collections.length}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {group.collections.map(item => (
+                  <CollectionCard
+                    key={item.slug}
+                    item={item}
+                    collectionConfig={collectionsMap.get(item.slug)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};

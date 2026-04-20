@@ -1,0 +1,65 @@
+{
+  "name": "@revnixhq/storage-uploadthing",
+  "version": "0.0.139",
+  "description": "Uploadthing storage adapter for Nextly",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
+    "clean": "rimraf dist"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "uploadthing": "^7.6.0"
+  },
+  "devDependencies": {
+    "@nextly/eslint-config": "workspace:*",
+    "@nextly/tsconfig": "workspace:*",
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.0.8",
+    "@vitest/ui": "^4.0.8",
+    "@revnixhq/nextly": "workspace:*",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.0.8"
+  },
+  "keywords": [
+    "nextly",
+    "storage",
+    "uploadthing",
+    "media",
+    "upload"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nextlyhq/nextly",
+    "directory": "packages/storage-uploadthing"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

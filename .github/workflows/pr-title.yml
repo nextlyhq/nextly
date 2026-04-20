@@ -1,0 +1,88 @@
+name: PR Title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  # amannn/action-semantic-pull-request calls GitHub's commit-statuses
+  # API; without statuses:write the action exits with
+  # "Resource not accessible by integration" before validation.
+  statuses: write
+
+jobs:
+  lint:
+    name: Validate PR title follows Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate
+        id: lint_pr_title
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          scopes: |
+            nextly
+            admin
+            client
+            ui
+            adapter-postgres
+            adapter-mysql
+            adapter-sqlite
+            adapter-drizzle
+            storage-s3
+            storage-vercel-blob
+            storage-uploadthing
+            plugin-form-builder
+            create-nextly-app
+            eslint-config
+            prettier-config
+            tsconfig
+            playground
+            root
+            ci
+            docs
+            deps
+            release
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" starts with an uppercase character. Rewrite it lowercase to match Conventional Commits.
+          wip: true
+
+      - name: Post sticky comment on failure
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: always() && (steps.lint_pr_title.outputs.error_message != null)
+        with:
+          header: pr-title-lint-error
+          message: |
+            ### PR title fails Conventional Commits check
+
+            ```
+            ${{ steps.lint_pr_title.outputs.error_message }}
+            ```
+
+            Examples of valid titles:
+            - `feat(admin): add role manager dialog`
+            - `fix(adapter-postgres): handle connection pool exhaustion`
+            - `chore(deps): bump zod to 4.2.0`
+
+      - name: Clear sticky comment on success
+        if: ${{ steps.lint_pr_title.outputs.error_message == null }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-title-lint-error
+          delete: true

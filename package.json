@@ -1,0 +1,132 @@
+{
+  "name": "nextly-project-setup",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "_comment_build": "=== Build & Development ===",
+    "build": "turbo run build --filter=./packages/*",
+    "build:all": "turbo run build",
+    "dev": "turbo run dev --concurrency=20",
+    "dev:parallel": "turbo run dev --parallel --concurrency=20",
+    "dev:packages": "turbo run dev --filter=@nextly/* --filter=nextly",
+    "dev:core": "turbo run dev --filter=nextly",
+    "dev:admin": "turbo run dev --filter=@nextly/admin",
+    "dev:app": "turbo run dev --filter=playground",
+    "_comment_quality": "=== Code Quality ===",
+    "check-types": "turbo run check-types",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint -- --fix",
+    "_comment_testing": "=== Testing ===",
+    "test": "turbo run test",
+    "test:watch": "turbo run test:watch",
+    "test:coverage": "turbo run test:coverage",
+    "test:ui": "turbo run test:ui",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "_comment_cleaning": "=== Cleaning ===",
+    "clean": "turbo run clean",
+    "clean:cache": "turbo daemon clean && rm -rf .turbo node_modules/.cache",
+    "clean:tsbuildinfo": "find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete",
+    "clean:all": "pnpm clean && pnpm clean:cache && pnpm clean:tsbuildinfo",
+    "fresh": "pnpm clean:all && pnpm install && pnpm build",
+    "_comment_docker": "=== Docker Development Environment ===",
+    "docker:up": "bash scripts/docker-dev.sh up",
+    "docker:down": "bash scripts/docker-dev.sh down",
+    "docker:restart": "bash scripts/docker-dev.sh restart",
+    "docker:reset": "bash scripts/docker-dev.sh reset",
+    "docker:test": "bash scripts/docker-dev.sh test",
+    "docker:logs": "bash scripts/docker-dev.sh logs",
+    "docker:backup": "bash scripts/docker-dev.sh backup",
+    "docker:restore": "bash scripts/docker-dev.sh restore",
+    "docker:shell": "bash scripts/docker-dev.sh shell",
+    "docker:status": "bash scripts/docker-dev.sh status",
+    "_comment_migration": "=== Migration Scripts ===",
+    "migrate:imports": "node scripts/migrate-imports.mjs",
+    "migrate:aliases": "node scripts/migrate-to-aliases.mjs",
+    "_comment_yalc": "=== Yalc Local Testing ===",
+    "yalc:publish": "bash scripts/yalc-publish.sh",
+    "yalc:publish:fast": "bash scripts/yalc-publish.sh --skip-build",
+    "_comment_hooks": "=== Git Hooks & Post-Install ===",
+    "prepare": "husky",
+    "postinstall": "node scripts/postinstall.js",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "_comment_release": "=== Release & Versioning ===",
+    "changeset": "changeset",
+    "release:version": "changeset version && pnpm install --no-frozen-lockfile",
+    "release:publish": "turbo build --filter='./packages/*' && changeset publish",
+    "release:status": "changeset status",
+    "release:dry-run": "changeset publish --dry-run"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
+    "@aws-sdk/client-s3": "^3.966.0",
+    "@aws-sdk/lib-storage": "^3.966.0",
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.27.10",
+    "@chromatic-com/storybook": "^4.1.2",
+    "@commitlint/cli": "^20.1.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@playwright/test": "^1.56.1",
+    "@storybook/addon-docs": "^10.0.6",
+    "@storybook/addon-onboarding": "^10.0.6",
+    "@storybook/nextjs": "^10.0.6",
+    "@storybook/react": "10.0.6",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitejs/plugin-react": "^5.1.0",
+    "@vitest/coverage-v8": "^4.0.8",
+    "@vitest/ui": "^4.0.8",
+    "@vueless/storybook-dark-mode": "^10.0.2",
+    "eslint-plugin-storybook": "^10.0.6",
+    "glob": "^13.0.0",
+    "husky": "^9.1.7",
+    "jsdom": "^27.1.0",
+    "lint-staged": "^16.2.6",
+    "prettier": "^3.6.2",
+    "publint": "^0.3.18",
+    "storybook": "^10.0.6",
+    "tsx": "^4.20.5",
+    "turbo": "^2.6.0",
+    "typescript": "5.9.3",
+    "vitest": "^4.0.8"
+  },
+  "prettier": "@nextly/prettier-config",
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,scss,md}": [
+      "prettier --write"
+    ]
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "zod": "^4.1.12"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": ">=0.25.0",
+      "@next/swc-darwin-arm64": "16.0.0",
+      "@next/swc-darwin-x64": "16.0.0",
+      "@next/swc-linux-arm64-gnu": "16.0.0",
+      "@next/swc-linux-arm64-musl": "16.0.0",
+      "@next/swc-linux-x64-gnu": "16.0.0",
+      "@next/swc-linux-x64-musl": "16.0.0",
+      "@next/swc-win32-arm64-msvc": "16.0.0",
+      "@next/swc-win32-x64-msvc": "16.0.0"
+    },
+    "neverBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}

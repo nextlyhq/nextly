@@ -1,0 +1,354 @@
+{
+  "seedMedia": {
+    "baseUrl": "https://raw.githubusercontent.com/nextlyhq/nextly/main/templates/blog/seed/media/"
+  },
+  "authors": [
+    {
+      "name": "Jane Smith",
+      "slug": "jane-smith",
+      "bio": "Tech writer and Next.js enthusiast. Writing about modern web development and open-source tools.",
+      "avatar": "author-jane.svg",
+      "social": {
+        "twitter": "https://twitter.com/janesmith",
+        "github": "https://github.com/janesmith",
+        "linkedin": "",
+        "website": ""
+      }
+    },
+    {
+      "name": "John Doe",
+      "slug": "john-doe",
+      "bio": "Full-stack developer and CMS architecture nerd. Building better content experiences.",
+      "avatar": "author-john.svg",
+      "social": {
+        "twitter": "https://twitter.com/johndoe",
+        "github": "https://github.com/johndoe",
+        "linkedin": "https://linkedin.com/in/johndoe",
+        "website": "https://johndoe.dev"
+      }
+    }
+  ],
+  "categories": [
+    {
+      "name": "Technology",
+      "slug": "technology",
+      "description": "Latest in web technology and development tools."
+    },
+    {
+      "name": "Tutorials",
+      "slug": "tutorials",
+      "description": "Step-by-step guides and how-to articles."
+    },
+    {
+      "name": "Opinion",
+      "slug": "opinion",
+      "description": "Thoughts and perspectives on the web ecosystem."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Next.js",
+      "slug": "nextjs",
+      "description": "Posts about the Next.js framework."
+    },
+    {
+      "name": "React",
+      "slug": "react",
+      "description": "React patterns, components, and architecture."
+    },
+    {
+      "name": "TypeScript",
+      "slug": "typescript",
+      "description": "TypeScript usage, tips, and gotchas."
+    },
+    {
+      "name": "Performance",
+      "slug": "performance",
+      "description": "Web performance techniques and deep-dives."
+    }
+  ],
+  "posts": [
+    {
+      "title": "How to Build a Blog with Nextly",
+      "slug": "how-to-build-a-blog-with-nextly",
+      "excerpt": "Learn how to set up a complete blog using Nextly CMS with Next.js, from schema definition to frontend rendering.",
+      "author": "jane-smith",
+      "categories": ["technology", "tutorials"],
+      "tags": ["nextjs", "typescript"],
+      "featured": true,
+      "seo": {
+        "metaTitle": "Build a Production Blog in 2 Minutes with Nextly",
+        "metaDescription": "The complete walkthrough: install Nextly, pick the blog template, and go from empty repo to published blog without writing boilerplate."
+      },
+      "publishedAt": "2026-04-10T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-nextly-cms.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Nextly is an open-source CMS built specifically for Next.js. Unlike traditional headless CMS platforms, Nextly runs inside your Next.js application, giving you direct access to your content without any API overhead."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Why Nextly?" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Most CMS platforms force you to choose between two approaches: code-first (like Payload CMS) or visual (like Strapi and WordPress). Nextly gives you both. Define your schemas in TypeScript for type safety and version control, or create them through the Admin Panel for quick iteration."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Getting Started" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The fastest way to get started is using the CLI. Run the create command, pick the blog template, choose your preferred approach, and you'll have a fully functional blog in under two minutes."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Your blog comes with collections for posts, authors, and categories. Each post supports rich text content, featured images, and relationships to authors and categories. The frontend is built with Server Components and uses Nextly's Direct API for zero-overhead data fetching."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Understanding Server Components in Next.js",
+      "slug": "understanding-server-components",
+      "excerpt": "A practical guide to React Server Components and how they change the way we build web applications.",
+      "author": "jane-smith",
+      "categories": ["technology"],
+      "tags": ["react", "nextjs", "performance"],
+      "publishedAt": "2026-04-08T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-server-components.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Server Components are one of the most significant changes to React in years. They let you render components on the server, reducing the amount of JavaScript shipped to the browser and enabling direct access to server-side resources like databases."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "The Key Benefit" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "With Server Components, you can fetch data directly in your components without building API endpoints. This means less code, better performance, and a simpler mental model. Your data fetching logic lives right next to the components that use it."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "In a Nextly blog, every page is a Server Component by default. The blog listing page fetches posts directly from the database using the Direct API. No REST calls, no loading spinners, no waterfall requests. The HTML is ready before it reaches the browser."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "TypeScript Tips for CMS Development",
+      "slug": "typescript-tips-for-cms-development",
+      "excerpt": "Practical TypeScript patterns that make working with content management systems more productive and type-safe.",
+      "author": "john-doe",
+      "categories": ["tutorials"],
+      "tags": ["typescript"],
+      "publishedAt": "2026-04-05T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-typescript-tips.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "TypeScript and CMS development go hand in hand. When your content schemas are defined in TypeScript, you get autocompletion, compile-time validation, and refactoring support across your entire project."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "Type-Safe Collection Definitions" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Nextly's defineCollection function provides full type inference for your schemas. When you define a field as required, TypeScript knows it will always be present when you query that collection. This eliminates an entire class of null-check bugs."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The auto-generated types from your config file give you end-to-end type safety from schema definition to frontend rendering. Change a field name in your config, and TypeScript tells you every place in your frontend that needs updating."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Building with Tailwind CSS: A Practical Guide",
+      "slug": "building-with-tailwind-css",
+      "excerpt": "How to use Tailwind CSS effectively for building modern, responsive web interfaces without fighting the framework.",
+      "author": "john-doe",
+      "categories": ["tutorials", "technology"],
+      "tags": ["react", "nextjs"],
+      "publishedAt": "2026-04-02T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-tailwind-guide.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Tailwind CSS has become the default styling choice for modern Next.js applications. Its utility-first approach might feel unusual at first, but once you internalize the patterns, you'll find yourself building interfaces faster than ever."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "Why Utility-First Works" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The traditional approach of writing semantic CSS classes often leads to abstraction anxiety. You spend time naming things instead of building things. Tailwind removes that friction. The class names describe what they do, not what they mean."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "This blog template itself is built entirely with Tailwind CSS. No component libraries, no custom CSS files. Just utility classes that compose into a clean, responsive design. Dark mode support comes from Tailwind's dark: variant with zero additional effort."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Why Open Source CMS Matters",
+      "slug": "why-open-source-cms-matters",
+      "excerpt": "The case for using open-source content management systems and why developer freedom leads to better products.",
+      "author": "jane-smith",
+      "categories": ["opinion"],
+      "publishedAt": "2026-03-28T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-open-source.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The CMS landscape has changed dramatically in the past few years. Proprietary platforms that once dominated are being challenged by open-source alternatives that offer more flexibility, better developer experience, and no vendor lock-in."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Freedom to Customize" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "With an open-source CMS, you own your content infrastructure. You can modify the admin panel, extend the API, add custom field types, and deploy wherever you want. When the CMS is part of your codebase, not a separate service, the possibilities are unlimited."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Nextly takes this a step further by being designed specifically for Next.js. Instead of bolting a CMS onto your framework, it integrates natively. Your CMS collections become your data layer. Your admin panel is just another route in your app."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "siteSettings": {
+    "siteName": "My Blog",
+    "tagline": "Thoughts on web development",
+    "siteDescription": "A blog built with Nextly CMS and Next.js. Explore posts about web development, tutorials, and the open-source ecosystem.",
+    "logo": "logo.svg",
+    "social": {
+      "twitter": "https://twitter.com/nextlyhq",
+      "github": "https://github.com/nextlyhq/nextly"
+    }
+  }
+}

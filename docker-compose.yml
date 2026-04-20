@@ -1,0 +1,179 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: nextly-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-nextly_dev}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      # WARNING: Change this password in production! This is a DEV-ONLY default.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password_change_in_production}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-nextly_dev}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nextly-network
+
+  # MySQL Database (for multi-adapter testing)
+  mysql:
+    image: mysql:8.0
+    container_name: nextly-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-dev_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-nextly_dev}
+      MYSQL_USER: ${MYSQL_USER:-nextly}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-dev_password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-dev_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - nextly-network
+    profiles:
+      - mysql
+      - all-databases
+
+  # Adminer - Database Management UI
+  adminer:
+    image: adminer:latest
+    container_name: nextly-adminer
+    restart: unless-stopped
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "file_get_contents('http://localhost:8080');"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - nextly-network
+
+  # MinIO - S3-compatible object storage (for storage adapter testing)
+  minio:
+    image: minio/minio:latest
+    container_name: nextly-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nextly-network
+    profiles:
+      - with-minio
+      - storage-testing
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: nextly-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/nextly-media --ignore-existing;
+      mc anonymous set public myminio/nextly-media;
+      echo 'Bucket nextly-media created and set to public';
+      "
+    networks:
+      - nextly-network
+    profiles:
+      - with-minio
+      - storage-testing
+
+  # Redis (Optional - for caching)
+  redis:
+    image: redis:7-alpine
+    container_name: nextly-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - nextly-network
+    profiles:
+      - with-redis
+
+  # Mailpit -- local SMTP test inbox for auth email flows. Web UI on 8025,
+  # SMTP on 1025, no auth. Dev-only; gated behind a profile so it does
+  # not auto-start with `docker compose up`. Start explicitly with:
+  #   docker compose --profile with-mailpit up -d mailpit
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: nextly-mailpit
+    restart: unless-stopped
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    networks:
+      - nextly-network
+    profiles:
+      - with-mailpit
+
+volumes:
+  postgres_data:
+    driver: local
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  nextly-network:
+    driver: bridge

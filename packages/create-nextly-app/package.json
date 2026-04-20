@@ -1,0 +1,78 @@
+{
+  "name": "@revnixhq/create-nextly-app",
+  "version": "0.0.139",
+  "description": "CLI to scaffold Nextly in your Next.js project",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "create-nextly-app": "./bin/create-nextly-app.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "commander": "^14.0.2",
+    "execa": "^9.6.0",
+    "fs-extra": "^11.3.0",
+    "ora": "^9.0.0",
+    "picocolors": "^1.1.1",
+    "tar": "^7.4.0"
+  },
+  "devDependencies": {
+    "@nextly/eslint-config": "workspace:*",
+    "@nextly/telemetry": "workspace:*",
+    "@nextly/tsconfig": "workspace:*",
+    "@types/fs-extra": "^11.0.4",
+    "@types/tar": "^6.1.13",
+    "@types/node": "^20.19.17",
+    "@vitest/coverage-v8": "^4.0.8",
+    "@vitest/ui": "^4.0.8",
+    "eslint": "^9.34.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.0.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "cms",
+    "nextjs",
+    "cli",
+    "scaffold",
+    "create-nextly-app",
+    "create-app"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nextlyhq/nextly",
+    "directory": "packages/create-nextly-app"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

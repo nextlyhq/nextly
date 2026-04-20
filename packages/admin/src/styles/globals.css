@@ -1,0 +1,2170 @@
+/**
+ * Nextly Admin CSS - Complete Isolation Strategy
+ *
+ * This file uses CSS @layer to scope ALL Tailwind utilities within .adminapp
+ * This ensures zero style leakage between admin package and consumer app.
+ *
+ * How it works:
+ * 1. Import Tailwind normally
+ * 2. Use CSS @layer to control cascade order
+ * 3. Wrap utilities with .adminapp scope in build-css.mjs post-processing
+ */
+@import "tailwindcss";
+
+/* Scan @revnixhq/ui source so Tailwind includes utility classes used by extracted components */
+@source "../../../ui/src";
+
+/**
+ * Override Tailwind v4 default dark mode strategy.
+ *
+ * By default, Tailwind v4 compiles `dark:` utilities inside
+ * `@media (prefers-color-scheme: dark)`, which responds to the OS system
+ * theme and IGNORES the `.dark` class toggled by ThemeProvider on `.adminapp`.
+ *
+ * This @custom-variant overrides that behaviour so that `dark:` utilities
+ * activate when:
+ *   - The element itself is `.dark`  (handles `.adminapp.dark`)
+ *   - OR the element is a descendant of `.dark`  (handles all children)
+ *
+ * This means light-mode selection always wins over OS dark preference.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Scope overflow fix to adminapp only */
+.adminapp {
+  overflow-x: hidden;
+}
+
+/**
+ * Nextly Admin Styles - Tailwind CSS v4.1
+ *
+ * This file contains custom CSS styles for the Nextly admin panel.
+ * Using Tailwind CSS v4.1 CSS-first configuration with @theme blocks.
+ * All design tokens are defined here (no tailwind.config.js needed).
+ */
+
+/**
+ * Tailwind CSS v4.1 Theme Configuration
+ *
+ * All Tailwind customizations are defined in this @theme block.
+ * This replaces the old tailwind.config.js approach.
+ */
+@theme {
+  /* ============================================
+   * ANIMATIONS (Tailwind v4.1)
+   * ============================================ */
+  --animate-accordion-down: accordion-down 0.3s cubic-bezier(0.87, 0, 0.13, 1);
+  --animate-accordion-up: accordion-up 0.3s cubic-bezier(0.87, 0, 0.13, 1);
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-fade-out: fade-out 0.2s ease-in;
+  --animate-zoom-in-95: zoom-in-95 0.1s ease-out;
+  --animate-zoom-out-95: zoom-out-95 0.1s ease-in;
+  --animate-slide-in-from-top-2: slide-in-from-top-2 0.2s ease-out;
+  --animate-slide-in-from-bottom-2: slide-in-from-bottom-2 0.2s ease-out;
+  --animate-slide-in-from-left-2: slide-in-from-left-2 0.2s ease-out;
+  --animate-slide-in-from-right-2: slide-in-from-right-2 0.2s ease-out;
+
+  /* ============================================
+   * COLOR PALETTE (Tailwind v4.1)
+   * Blue-Cyan Professional Design System
+   * WCAG 2.2 AA Compliant
+   *
+   * Color Format Strategy:
+   * - Palette colors: HEX format for clarity and readability
+   * - Semantic tokens: HSL format for Tailwind compatibility and easy manipulation
+   * - No legacy colors reference these palette colors to avoid drift
+   *
+   * Verified: Zero references to removed legacy colors (--color-leaf,
+   * --color-admin-*, --color-status-*) exist in the codebase.
+   * ============================================ */
+
+  /* Blue Scale - Primary Brand Color */
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-300: #93c5fd;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+  --color-blue-800: #1e40af;
+  --color-blue-900: #1e3a8a;
+  --color-blue-950: #172554;
+
+  /* Cyan Scale - Accent Color */
+  --color-cyan-50: #ecfeff;
+  --color-cyan-100: #cffafe;
+  --color-cyan-200: #a5f3fc;
+  --color-cyan-300: #67e8f9;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-500: #06b6d4;
+  --color-cyan-600: #0891b2;
+  --color-cyan-700: #0e7490;
+  --color-cyan-800: #155e75;
+  --color-cyan-900: #164e63;
+  --color-cyan-950: #083344;
+
+  /* Green Scale - Success Color */
+  --color-green-50: #f0fdf4;
+  --color-green-100: #dcfce7;
+  --color-green-200: #bbf7d0;
+  --color-green-300: #86efac;
+  --color-green-400: #4ade80;
+  --color-green-500: #22c55e;
+  --color-green-600: #16a34a;
+  --color-green-700: #15803d;
+  --color-green-800: #166534;
+  --color-green-900: #14532d;
+  --color-green-950: #052e16;
+
+  /* Amber Scale - Warning Color */
+  --color-amber-50: #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #92400e;
+  --color-amber-900: #78350f;
+  --color-amber-950: #451a03;
+
+  /* Red Scale - Error/Destructive Color */
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-200: #fecaca;
+  --color-red-300: #fca5a5;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-red-700: #b91c1c;
+  --color-red-800: #991b1b;
+  --color-red-900: #7f1d1d;
+  --color-red-950: #450a0a;
+
+  /* Slate Scale - Neutral Colors */
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+  --color-slate-950: #020617;
+
+  /* ============================================
+   * SEMANTIC COLOR TOKENS (Tailwind v4.1)
+   * Reference color scales defined above
+   * ============================================ */
+
+  /* shadcn/ui semantic colors - reference CSS variables defined below */
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-50: color-mix(in srgb, var(--color-primary), white 95%);
+  --color-primary-100: color-mix(in srgb, var(--color-primary), white 90%);
+  --color-primary-200: color-mix(in srgb, var(--color-primary), white 70%);
+  --color-primary-300: color-mix(in srgb, var(--color-primary), white 50%);
+  --color-primary-400: color-mix(in srgb, var(--color-primary), white 30%);
+  --color-primary-500: var(--color-primary);
+  --color-primary-600: color-mix(in srgb, var(--color-primary), black 10%);
+  --color-primary-700: color-mix(in srgb, var(--color-primary), black 30%);
+  --color-primary-800: color-mix(in srgb, var(--color-primary), black 50%);
+  --color-primary-900: color-mix(in srgb, var(--color-primary), black 70%);
+  --color-primary-950: color-mix(in srgb, var(--color-primary), black 85%);
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-50: color-mix(in srgb, var(--color-accent), white 95%);
+  --color-accent-100: color-mix(in srgb, var(--color-accent), white 90%);
+  --color-accent-200: color-mix(in srgb, var(--color-accent), white 70%);
+  --color-accent-300: color-mix(in srgb, var(--color-accent), white 50%);
+  --color-accent-400: color-mix(in srgb, var(--color-accent), white 30%);
+  --color-accent-500: var(--color-accent);
+  --color-accent-600: color-mix(in srgb, var(--color-accent), black 10%);
+  --color-accent-700: color-mix(in srgb, var(--color-accent), black 30%);
+  --color-accent-800: color-mix(in srgb, var(--color-accent), black 50%);
+  --color-accent-900: color-mix(in srgb, var(--color-accent), black 70%);
+  --color-accent-950: color-mix(in srgb, var(--color-accent), black 85%);
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  /* Sidebar semantic tokens */
+  --color-sidebar: hsl(var(--sidebar-background));
+  --color-sidebar-background: hsl(var(--sidebar-background));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-background: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  /* ============================================
+   * TYPOGRAPHY (Tailwind v4.1)
+   * Perfect Fourth Scale (1.333 ratio) - WCAG 2.2 AA Compliant
+   * ============================================ */
+
+  /* Font Families */
+  --font-sans: var(--font-inter), Inter, sans-serif;
+  --font-mono: var(--font-mono), monospace;
+
+  /* Type Scale - Base Size: 16px (1rem) */
+  --text-xs: 0.75rem;
+  /* 12px */
+  --text-sm: 0.875rem;
+  /* 14px */
+  --text-base: 1rem;
+  /* 16px - body text (WCAG minimum) */
+  --text-lg: 1.125rem;
+  /* 18px */
+  --text-xl: 1.25rem;
+  /* 20px */
+  --text-2xl: 1.5rem;
+  /* 24px */
+  --text-3xl: 1.875rem;
+  /* 30px */
+  --text-4xl: 2.25rem;
+  /* 36px */
+  --text-5xl: 3rem;
+  /* 48px */
+  --text-6xl: 3.75rem;
+  /* 60px */
+
+  /* Font Weights */
+  --font-normal: 400;
+  /* Body text, captions */
+  --font-medium: 500;
+  /* Subheadings, emphasis */
+  --font-semibold: 600;
+  /* Headings, buttons */
+  --font-bold: 700;
+  /* Strong emphasis (rarely used) */
+
+  /* Line Heights (Leading) */
+  --leading-none: 1;
+  /* Large display text */
+  --leading-tight: 1.25;
+  /* Headings */
+  --leading-snug: 1.375;
+  /* Tight UI elements */
+  --leading-normal: 1.5;
+  /* Default for UI text */
+  --leading-relaxed: 1.625;
+  /* Long-form content */
+  --leading-loose: 2;
+  /* Very spacious text */
+
+  /* Letter Spacing (Tracking) */
+  --tracking-tighter: -0.05em;
+  /* -0.8px at 16px */
+  --tracking-tight: -0.025em;
+  /* -0.4px at 16px - for large headings */
+  --tracking-normal: 0em;
+  /* Default */
+  --tracking-wide: 0.025em;
+  /* +0.4px at 16px - for small text */
+  --tracking-wider: 0.05em;
+  /* +0.8px at 16px - for uppercase */
+  --tracking-widest: 0.1em;
+  /* +1.6px at 16px */
+
+  /* ============================================
+   * SPACING & LAYOUT (Tailwind v4.1)
+   * 8px Grid System - Industry Standard
+   * ============================================ */
+
+  /* Spacing Scale (8px base unit) */
+  --space-0: 0rem;
+  /* 0px */
+  --space-px: 0.0625rem;
+  /* 1px - for fine borders */
+  --space-0-5: 0.125rem;
+  /* 2px */
+  --space-1: 0.25rem;
+  /* 4px - icon padding, tiny gaps */
+  --space-1-5: 0.375rem;
+  /* 6px */
+  --space-2: 0.5rem;
+  /* 8px - tight spacing, inline elements */
+  --space-2-5: 0.625rem;
+  /* 10px */
+  --space-3: 0.75rem;
+  /* 12px - between related elements */
+  --space-3-5: 0.875rem;
+  /* 14px */
+  --space-4: 1rem;
+  /* 16px - standard element spacing */
+  --space-5: 1.25rem;
+  /* 20px */
+  --space-6: 1.5rem;
+  /* 24px - between form fields */
+  --space-7: 1.75rem;
+  /* 28px */
+  --space-8: 2rem;
+  /* 32px - between sections */
+  --space-9: 2.25rem;
+  /* 36px */
+  --space-10: 2.5rem;
+  /* 40px */
+  --space-11: 2.75rem;
+  /* 44px - minimum touch target */
+  --space-12: 3rem;
+  /* 48px - between major sections */
+  --space-14: 3.5rem;
+  /* 56px */
+  --space-16: 4rem;
+  /* 64px - page margins */
+  --space-20: 5rem;
+  /* 80px */
+  --space-24: 6rem;
+  /* 96px - large section breaks */
+
+  /* ============================================
+   * BORDER RADIUS (Tailwind v4.1)
+   * ============================================ */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+
+  /* ============================================
+   * BOX SHADOWS (Tailwind v4.1)
+   * ============================================ */
+  --: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl:
+    0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* ============================================
+ * RESPONSIVE TYPOGRAPHY (Desktop)
+ * Scale up larger text sizes on desktop screens
+ * Must be outside @theme block due to Tailwind v4.1 restrictions
+ * ============================================ */
+@media (min-width: 768px) {
+  @theme {
+    --text-2xl: 1.75rem;
+    /* 28px on desktop (from 24px) */
+    --text-3xl: 2.25rem;
+    /* 36px on desktop (from 30px) */
+    --text-4xl: 3rem;
+    /* 48px on desktop (from 36px) */
+    --text-5xl: 4rem;
+    /* 64px on desktop (from 48px) */
+  }
+}
+
+/* Accordion Animation Classes for Tailwind */
+.animate-accordion-down {
+  animation: accordion-down 0.3s cubic-bezier(0.87, 0, 0.13, 1);
+}
+
+.animate-accordion-up {
+  animation: accordion-up 0.3s cubic-bezier(0.87, 0, 0.13, 1);
+}
+
+/* Enhanced Calendar Styling */
+[data-slot="calendar"] {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+}
+
+[data-slot="calendar"] button[role="gridcell"] {
+  transition: all 0.2s ease-in-out;
+}
+
+[data-slot="calendar"] button[role="gridcell"][aria-selected="true"] {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  font-weight: 500;
+}
+
+[data-slot="calendar"] button[role="gridcell"][data-today="true"] {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+  border: 1px solid hsl(var(--primary) / 0.2);
+  font-weight: 500;
+}
+
+/* DatePicker specific styling */
+[data-slot="date-picker-trigger"] {
+  background-color: hsl(var(--background));
+  border-color: hsl(var(--border));
+}
+
+/* Enhanced Accordion Content Styling */
+[data-slot="accordion-content"] {
+  overflow: hidden;
+  will-change: height;
+  transform: translateZ(0);
+  /* Force hardware acceleration */
+}
+
+/* [data-slot="accordion-content"][data-state="open"] {
+  animation: accordion-down 0.3s cubic-bezier(0.87, 0, 0.13, 1);
+}
+
+[data-slot="accordion-content"][data-state="closed"] {
+  animation: accordion-up 0.3s cubic-bezier(0.87, 0, 0.13, 1);
+} */
+
+/* Smooth accordion trigger animations */
+[data-slot="accordion-trigger"] {
+  will-change: transform;
+}
+
+[data-slot="accordion-trigger"] svg {
+  will-change: transform;
+}
+
+/* Keyframes for custom animations */
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+
+  to {
+    height: 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes zoom-in-95 {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes zoom-out-95 {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes slide-in-from-top-2 {
+  from {
+    transform: translateY(-0.5rem);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-from-bottom-2 {
+  from {
+    transform: translateY(0.5rem);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-from-left-2 {
+  from {
+    transform: translateX(-0.5rem);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slide-in-from-right-2 {
+  from {
+    transform: translateX(0.5rem);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+.adminapp {
+  /* Base colors - using Slate neutral scale */
+  --background: 210 20% 98%;
+  /* off-white #f9fafb per Antigravity standards */
+  --foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+
+  /* Component colors */
+  --card: 0 0% 100%;
+  /* pure white for cards to pop on off-white bg */
+  --card-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+  --popover: 0 0% 100%;
+  /* white */
+  --popover-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+
+  /* Brand colors - Blue-Cyan Professional Palette */
+  --primary: 0 0% 0%;
+  /* Black for premium minimalist aesthetic */
+  --primary-foreground: 0 0% 100%;
+  /* white */
+
+  /* Secondary colors - using slate-100 for subtle backgrounds */
+  --secondary: 210 40% 96.1%;
+  /* slate-100 */
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+
+  /* Utility colors */
+  --muted: 210 40% 96.1%;
+  /* slate-100 */
+  --muted-foreground: 215.4 16.3% 46.9%;
+  /* slate-500 */
+  --accent: 215.4 16.3% 46.9%;
+  /* Slate-500 per user request #64748b */
+  --accent-foreground: 0 0% 100%;
+  /* white */
+
+  /* State colors - WCAG 2.2 AA Compliant */
+  --destructive: 0 84.2% 60.2%;
+  /* red-500 (#ef4444) */
+  --destructive-foreground: 0 0% 100%;
+  /* white */
+  --success: 142.1 76.2% 36.3%;
+  /* green-600 (#16a34a) - AA compliant */
+  --success-foreground: 0 0% 100%;
+  /* white */
+  --warning: 37.7 92.1% 50.2%;
+  /* amber-500 (#f59e0b) */
+  --warning-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
+
+  /* Element colors - using Slate scale */
+  --border: 214.3 31.8% 91.4%;
+  /* slate-200 */
+  --input: 214.3 31.8% 91.4%;
+  /* slate-200 */
+  --ring: var(--primary);
+
+  /* Chart colors for data visualization */
+  --chart-1: var(--primary);
+  --chart-2: 186.2 100% 42%;
+  /* cyan-500 */
+  --chart-3: 142.1 76.2% 36.3%;
+  /* green-600 */
+  --chart-4: 37.7 92.1% 50.2%;
+  /* amber-500 */
+  --chart-5: 0 84.2% 60.2%;
+  /* red-500 */
+
+  /* Design tokens */
+  --radius: 0px;
+
+  /* Focus ring colors */
+  --focus-ring: var(--primary);
+  --focus-ring-offset: 0 0% 100%;
+  /* white */
+
+  /* Sidebar specific colors - using Slate scale */
+  --sidebar-background: 210 40% 98%;
+  /* slate-50 */
+  --sidebar-foreground: 215.3 25% 26.7%;
+  /* slate-700 */
+  --sidebar-primary: 222.2 47.4% 11.2%;
+  /* slate-900 */
+  --sidebar-primary-foreground: 210 40% 98%;
+  /* slate-50 */
+  --sidebar-accent: 210 40% 96.1%;
+  /* slate-100 */
+  --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+  --sidebar-border: 214.3 31.8% 91.4%;
+  /* slate-200 */
+  --sidebar-ring: var(--primary);
+
+  /* Data table specific colors */
+  --table-row-hover: 210 40% 98%;
+  /* slate-50 */
+  --table-row-selected: var(--primary);
+  --table-border: 214.3 31.8% 91.4%;
+  /* slate-200 */
+
+  /* Fix Tailwind v4 color evaluation with color-mix */
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+}
+
+/* Dark theme overrides when using class-based theming */
+.adminapp.dark {
+  /* Base colors - using Slate dark scale */
+  --background: 222 47% 4%;
+  /* ultra deep dark background (darker than slate-950) */
+  --foreground: 210 40% 98%;
+  /* slate-50 */
+
+  /* Component colors */
+  --card: 222 51% 4%;
+  /* slate-900 per user request (matches deep background) */
+  --card-foreground: 210 40% 98%;
+  /* slate-50 */
+  --popover: 215.4 16.3% 25.9%;
+  /* slate-800 */
+  --popover-foreground: 210 40% 98%;
+  /* slate-50 */
+
+  /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
+  --primary: 0 0% 100%; /* High contrast White for dark mode */
+  --primary-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+
+  /* Secondary colors - using slate-800 for dark backgrounds */
+  --secondary: 217.2 32.6% 17.5%;
+  /* slate-800 */
+  --secondary-foreground: 210 40% 98%;
+  /* slate-50 */
+
+  /* Utility colors */
+  --muted: 217.2 32.6% 17.5%;
+  /* slate-800 */
+  --muted-foreground: 215 20.2% 65.1%;
+  /* slate-400 */
+  --accent: 215.4 16.3% 46.9%; /* Slate-500 per user request #64748b */
+  --accent-foreground: 0 0% 100%;
+  /* white */
+
+  /* State colors - WCAG 2.2 AA Compliant (Dark Mode) */
+  --destructive: 0 84.2% 60.2%;
+  /* red-500 */
+  --destructive-foreground: 0 0% 100%;
+  /* white */
+  --success: 142.1 70.6% 45.3%;
+  /* green-500 - brighter for dark mode */
+  --success-foreground: 0 0% 100%;
+  /* white */
+  --warning: 37.7 92.1% 50.2%;
+  /* amber-500 */
+  --warning-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+
+  /* Element colors - using dark Slate scale */
+  --border: 215.4 16.3% 12%;
+  /* subtle slate-900 */
+  --input: 215.4 16.3% 12%;
+  /* subtle slate-900 */
+  --ring: var(--primary);
+
+  /* Chart colors for data visualization (same as light mode) */
+  --chart-1: var(--primary);
+  --chart-2: 186.2 100% 42%;
+  /* cyan-500 */
+  --chart-3: 142.1 70.6% 45.3%;
+  /* green-500 */
+  --chart-4: 37.7 92.1% 50.2%;
+  /* amber-500 */
+  --chart-5: 0 84.2% 60.2%;
+  /* red-500 */
+
+  /* Sidebar specific colors - dark mode */
+  --sidebar-background: 222.2 47.4% 11.2%;
+  /* slate-900 (#0f172a) - matches cards for consistent depth */
+  --sidebar-foreground: 210 40% 98%;
+  /* slate-50 */
+  --sidebar-primary: 210 40% 98%;
+  /* slate-50 */
+  --sidebar-primary-foreground: 222.2 47.4% 11.2%;
+  /* slate-900 */
+  --sidebar-accent: 217.2 32.6% 17.5%;
+  /* slate-800 */
+  --sidebar-accent-foreground: 210 40% 98%;
+  /* slate-50 */
+  --sidebar-border: 215.4 16.3% 12%;
+  /* subtle slate-900 */
+  --sidebar-ring: var(--primary);
+
+  /* Data table specific colors - dark mode */
+  --table-row-hover: 217.2 32.6% 17.5%;
+  /* slate-800 */
+  --table-row-selected: var(--primary);
+  --table-border: 215.4 16.3% 12%;
+  /* subtle slate-900 */
+
+  /* Fix Tailwind v4 color evaluation with color-mix */
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+}
+
+/**
+    * Base Styles
+    *
+    * Scoped styles for adminapp elements only
+    */
+.adminapp * {
+  border-color: hsl(var(--border));
+}
+
+.adminapp {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  /* Font handled by CSS variable override in globals.css */
+}
+
+/**
+ * Table Header & Footer Background + Border System
+ *
+ * Color ladder (light → dark):
+ *   Page container:    hsl(210 40% 96.1%) = #f1f5f9  (slate-100)
+ *   Table header/foot: hsl(214 32% 94%)   = #edf0f5  (subtle gray)
+ *   Table borders:     hsl(214 32% 87%)   = #d8dfe8  (clearly visible)
+ *
+ * Each step is distinct enough to read as a separate zone without
+ * any harsh contrast — subtle but structured.
+ */
+.adminapp {
+  /* --table-header-bg: 0 0% 94%;*/
+  --table-border-color: 0 0% 88%;
+}
+
+.adminapp.dark {
+  /* Dark mode table colors - ensuring readable contrast */
+  /* Header/Footer: slate-800/muted (dark but distinct from bg) */
+  /* --table-header-bg: 217.2 32.6% 17.5%; */
+  /* Borders: slate-700/border (visible against dark bg) */
+  --table-border-color: 215.4 16.3% 25.9%;
+}
+
+.adminapp thead {
+  background-color: hsl(var(--table-header-bg));
+}
+
+.adminapp tfoot {
+  background-color: hsl(var(--table-header-bg));
+}
+
+.adminapp .table-footer {
+  background-color: hsl(var(--table-header-bg));
+}
+
+/* Table borders — darker than header/footer bg and page container */
+.adminapp table,
+.adminapp th,
+.adminapp td,
+.adminapp tr {
+  border-color: hsl(var(--table-border-color));
+}
+
+/* Table wrapper outer border — same as row borders for visual consistency */
+.adminapp .table-wrapper {
+  border-color: hsl(var(--table-border-color));
+}
+
+/**
+ * Text Selection Styling
+ * 
+ * Ensures text selection is visible and matches brand colors
+ * Scoped to adminapp to prevent leakage
+ */
+.adminapp *::selection {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+/**
+    * Button Reset Override
+    * 
+    * Fix for Tailwind's preflight setting background-color: transparent on buttons
+    * This ensures our button components display their intended background colors
+    * 
+    * Reference: https://github.com/tailwindlabs/tailwindcss/discussions/12063
+    */
+
+/* Override Tailwind's button preflight styles for backgrounds */
+button[data-slot^="button"].bg-primary,
+[data-slot^="button"].bg-primary {
+  background-color: hsl(var(--primary)) !important;
+}
+
+button[data-slot^="button"].bg-destructive,
+[data-slot^="button"].bg-destructive,
+.bg-destructive {
+  background-color: hsl(var(--destructive)) !important;
+  color: hsl(var(--destructive-foreground)) !important;
+}
+
+button[data-slot^="button"].bg-secondary,
+[data-slot^="button"].bg-secondary {
+  background-color: hsl(var(--secondary)) !important;
+}
+
+/* Ensure text colors work for destructive buttons */
+.text-destructive-foreground {
+  color: hsl(var(--destructive-foreground)) !important;
+}
+
+/* Global cursor pointer for interactive elements */
+[data-slot*="trigger"],
+[data-slot*="button"],
+[data-slot*="item"]:not([data-disabled="true"]),
+[data-slot="checkbox"],
+[data-slot="switch"],
+[data-slot="radio-group-item"],
+[data-slot="accordion-trigger"],
+[data-slot="tabs-trigger"],
+[data-slot="label"],
+[data-slot="date-picker-trigger"] {
+  cursor: pointer !important;
+}
+
+/* Disabled state cursor */
+[data-slot*="trigger"][disabled],
+[data-slot*="button"][disabled],
+[data-slot*="item"][data-disabled="true"],
+[data-slot="checkbox"][disabled],
+[data-slot="switch"][disabled],
+[data-slot="radio-group-item"][disabled] {
+  cursor: not-allowed !important;
+}
+
+/* Override text colors for buttons to ensure proper contrast */
+button[data-slot^="button"].text-primary-foreground,
+[data-slot^="button"].text-primary-foreground {
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+button[data-slot^="button"].text-destructive-foreground,
+[data-slot^="button"].text-destructive-foreground {
+  color: hsl(var(--destructive-foreground)) !important;
+}
+
+button[data-slot^="button"].text-secondary-foreground,
+[data-slot^="button"].text-secondary-foreground {
+  color: hsl(var(--secondary-foreground)) !important;
+}
+
+/* Ensure badge backgrounds work properly */
+[data-slot^="badge"].bg-primary {
+  background-color: hsl(var(--primary)) !important;
+}
+
+[data-slot^="badge"].bg-destructive {
+  background-color: hsl(var(--destructive)) !important;
+}
+
+[data-slot^="badge"].bg-secondary {
+  background-color: hsl(var(--secondary)) !important;
+}
+
+[data-slot^="badge"].bg-success {
+  background-color: hsl(var(--success)) !important;
+}
+
+[data-slot^="badge"].bg-warning {
+  background-color: hsl(var(--warning)) !important;
+}
+
+/* Ensure badge text colors work properly */
+[data-slot^="badge"].text-primary-foreground {
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+[data-slot^="badge"].text-destructive-foreground {
+  color: hsl(var(--destructive-foreground)) !important;
+}
+
+[data-slot^="badge"].text-secondary-foreground {
+  color: hsl(var(--secondary-foreground)) !important;
+}
+
+[data-slot^="badge"].text-success-foreground {
+  color: hsl(var(--success-foreground)) !important;
+}
+
+[data-slot^="badge"].text-warning-foreground {
+  color: hsl(var(--warning-foreground)) !important;
+}
+
+/* Auth form icon containers - ensure primary background is applied */
+.bg-primary {
+  background-color: hsl(var(--primary)) !important;
+}
+
+.text-white {
+  color: white !important;
+}
+
+/* Ensure checkbox and switch components work properly with stronger specificity */
+button[data-slot="checkbox"][data-state="checked"],
+[data-slot="checkbox"][data-state="checked"] {
+  background-color: hsl(var(--primary)) !important;
+  border-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+button[data-slot="checkbox"][data-state="indeterminate"],
+[data-slot="checkbox"][data-state="indeterminate"] {
+  background-color: hsl(var(--primary)) !important;
+  border-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+/* Switch component fixes */
+button[data-slot="switch"][data-state="checked"],
+[data-slot="switch"][data-state="checked"] {
+  background-color: hsl(var(--primary)) !important;
+}
+
+button[data-slot="switch"][data-state="unchecked"],
+[data-slot="switch"][data-state="unchecked"] {
+  background-color: hsl(var(--input)) !important;
+}
+
+/* Switch thumb should remain white/background color */
+[data-slot="switch-thumb"] {
+  background-color: hsl(var(--background)) !important;
+}
+
+/* Additional fixes for Radix UI state attributes */
+[data-state="checked"][data-slot="checkbox"] {
+  background-color: hsl(var(--primary)) !important;
+  border-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+[data-state="checked"][data-slot="switch"] {
+  background-color: hsl(var(--primary)) !important;
+}
+
+[data-state="unchecked"][data-slot="switch"] {
+  background-color: hsl(var(--input)) !important;
+}
+
+/* Force checkbox indicator visibility */
+[data-slot="checkbox"][data-state="checked"] svg,
+[data-slot="checkbox"][data-state="indeterminate"] svg {
+  color: hsl(var(--primary-foreground)) !important;
+  opacity: 1 !important;
+}
+
+/* Additional Radix UI state fixes with maximum specificity */
+button[role="checkbox"][data-state="checked"],
+button[role="checkbox"][data-state="indeterminate"] {
+  background-color: hsl(var(--primary)) !important;
+  border-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+button[role="switch"][data-state="checked"] {
+  background-color: hsl(var(--primary)) !important;
+}
+
+button[role="switch"][data-state="unchecked"] {
+  background-color: hsl(var(--input)) !important;
+}
+
+/* Ensure switch thumb visibility */
+span[data-slot="switch-thumb"] {
+  background-color: hsl(var(--background)) !important;
+  /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important; */
+}
+
+/* Radio button fixes */
+button[role="radio"][data-state="checked"] {
+  border-color: hsl(var(--primary)) !important;
+}
+
+button[role="radio"][data-state="checked"] svg {
+  fill: hsl(var(--primary)) !important;
+  color: hsl(var(--primary)) !important;
+}
+
+/* Radio group item indicator should use primary color when checked */
+[data-slot="radio-group-item"][data-state="checked"] svg {
+  fill: hsl(var(--primary)) !important;
+  color: hsl(var(--primary)) !important;
+}
+
+/* Ensure radio group selection uses primary color */
+button[data-slot="radio-group-item"][data-state="checked"],
+[data-slot="radio-group-item"][data-state="checked"] {
+  border-color: hsl(var(--primary)) !important;
+}
+
+[data-slot="radio-group-item"][data-state="checked"] .lucide-circle {
+  fill: hsl(var(--primary)) !important;
+  color: hsl(var(--primary)) !important;
+}
+
+/* Popover and Dropdown Menu Background Fixes */
+/* These components render in portals and need explicit background enforcement */
+.bg-popover {
+  background-color: hsl(var(--popover)) !important;
+}
+
+.text-popover-foreground {
+  color: hsl(var(--popover-foreground)) !important;
+}
+
+/* Ensure dropdown menu content has proper background */
+[data-slot="dropdown-menu-content"],
+[role="menu"] {
+  background-color: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+}
+
+/* Ensure popover content has proper background */
+[data-slot="popover-content"] {
+  background-color: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+}
+
+/* Ensure select content has proper background */
+[data-slot="select-content"],
+[role="listbox"] {
+  background-color: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+}
+
+/* Ensure dialog content has proper background */
+[data-slot="dialog-content"],
+[role="dialog"] {
+  background-color: hsl(var(--card)) !important;
+  color: hsl(var(--card-foreground)) !important;
+}
+
+/* Ensure alert dialog content has proper background */
+[role="alertdialog"] {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Force background class to work in portals */
+.bg-background {
+  background-color: hsl(var(--background)) !important;
+}
+
+.bg-card {
+  background-color: hsl(var(--card)) !important;
+}
+
+/**
+    * Layout Components
+    * 
+    * Styles for layout-specific components like sidebars, headers, and containers
+    */
+
+/* Admin sidebar */
+.nextly-admin-sidebar {
+  height: 100vh;
+  /* border-right: 1px solid hsl(var(--sidebar-border)); */
+  /* background-color: hsl(var(--sidebar)); */
+  /* color: hsl(var(--sidebar-foreground)); */
+}
+
+/* Admin header */
+.nextly-admin-header {
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom-width: 1px;
+  /* border-color: hsl(var(--border)); */
+  /* background-color: hsl(var(--background)); */
+}
+
+/**
+    * Auth Pages
+    *
+    * Special styles for authentication pages (login, signup, etc.)
+    */
+.adminapp[data-auth-page] {
+  width: 100vw;
+  min-height: 100vh;
+  background-color: hsl(var(--muted));
+}
+
+/**
+    * Sidebar Components
+    * 
+    * Styles for elements within the sidebar navigation
+    */
+
+/* Explicitly disable all sidebar transitions and animations */
+[data-sidebar="menu-button"],
+[data-sidebar="menu-sub-button"],
+[data-sidebar="menu-item"],
+[data-sidebar="menu-sub"],
+[data-sidebar="menu-content"] {
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
+}
+
+/* Prevent global data-state animations from affecting sidebar */
+.adminapp [data-sidebar] [data-state="open"],
+.adminapp [data-sidebar] [data-state="closed"],
+.adminapp [data-sidebar] [data-state="expanded"],
+.adminapp [data-sidebar] [data-state="collapsed"] {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Explicitly force Active State styles to resolve non-implementation */
+[data-sidebar="menu-button"][data-active="true"],
+[data-sidebar="menu-sub-button"][data-active="true"],
+[data-sidebar="menu-item"][data-active="true"] .peer\/menu-button,
+[data-sidebar="menu-item"][data-active="true"] [data-sidebar="menu-button"] {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+[data-sidebar="menu-button"][data-active="true"] svg,
+[data-sidebar="menu-sub-button"][data-active="true"] svg,
+[data-sidebar="menu-item"][data-active="true"] .peer\/menu-button svg,
+[data-sidebar="menu-item"][data-active="true"]
+  [data-sidebar="menu-button"]
+  svg {
+  color: #ffffff !important;
+}
+
+[data-sidebar="group"] {
+  padding: 0.375rem;
+}
+
+[data-sidebar="menu-sub"] {
+  margin-left: 0.75rem;
+  margin-right: 0.75rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+/**
+    * Card Components
+    * 
+    * Styles for card UI components
+    */
+.admin-card {
+  border-radius: 0.75rem;
+  border-width: 1px;
+  background-color: hsl(var(--card));
+  padding: 1.25rem;
+  /* box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); */
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* .admin-card:hover {
+  box-shadow:
+    0 1px 3px 0 rgba(0, 0, 0, 0.1),
+    0 1px 2px -1px rgba(0, 0, 0, 0.1);
+} */
+
+/**
+    * Typography
+    * 
+    * Enhanced text styles with better hierarchy and readability
+    */
+.admin-heading {
+  font-weight: 500;
+  line-height: 1.25;
+  color: hsl(var(--foreground));
+}
+
+.admin-heading-xl {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.admin-heading-lg {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.admin-heading-md {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  font-weight: 500;
+}
+
+.admin-heading-sm {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-weight: 500;
+}
+
+.admin-text {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.admin-text-sm {
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.admin-text-xs {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: hsl(var(--muted-foreground));
+}
+
+/**
+    * Component States & Animations
+    * 
+    * Enhanced state styles for interactive components
+    */
+/* [data-state="open"] {
+  animation: fade-in 200ms ease-out;
+} */
+
+/* [data-state="closed"] {
+  animation: fade-out 200ms ease-in;
+} */
+
+/* @keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+} */
+
+/* Loading spinner animation */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.admin-spinner {
+  animation: spin 1s linear infinite;
+}
+
+/**
+    * Enhanced Data-Slot Component Styles
+    * 
+    * Styles targeting our data-slot attributes from Phase 2
+    */
+
+/* Button enhancements */
+[data-slot^="button"] {
+  transition: all 0.2s ease;
+}
+
+/* [data-slot^="button"]:focus-visible {
+  outline: 2px solid hsl(var(--focus-ring));
+  outline-offset: 2px;
+} */
+
+/* Form component enhancements */
+[data-slot="input"]:focus,
+[data-slot="textarea"]:focus {
+  border-color: hsl(var(--ring));
+  /* box-shadow: 0 0 0 2px hsla(var(--ring) / 0.2); */
+}
+
+[data-slot="input"][aria-invalid="true"],
+[data-slot="textarea"][aria-invalid="true"] {
+  border-color: hsl(var(--destructive));
+  /* box-shadow: 0 0 0 2px hsla(var(--destructive) / 0.2); */
+}
+
+/* Dialog enhancements */
+[data-slot="dialog-overlay"] {
+  backdrop-filter: blur(2px);
+}
+
+[data-slot="dialog-content"] {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid hsl(var(--border));
+  /* box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05); */
+  opacity: 1 !important;
+}
+
+/* Ensure dialog overlay is properly dark */
+[data-slot="dialog-overlay"] {
+  background-color: rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Select dropdown background fixes */
+[data-slot="select-content"] {
+  background-color: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  opacity: 1 !important;
+}
+
+/* Popover content background fixes */
+[data-slot="popover-content"] {
+  background-color: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  opacity: 1 !important;
+}
+
+/* Ensure all dropdown/overlay components have solid backgrounds */
+[data-radix-popper-content-wrapper] {
+  background-color: transparent !important;
+}
+
+/* Command palette and other dropdown content */
+[data-slot="command-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="context-menu-content"] {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  opacity: 1 !important;
+}
+
+/* Sheet content background fixes */
+[data-slot="sheet-content"] {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+  opacity: 1 !important;
+}
+
+/* Card enhancements */
+[data-slot="card"] {
+  transition: all 0.2s ease;
+}
+
+/* [data-slot="card"]:hover {
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+} */
+
+/* Badge enhancements */
+[data-slot="badge"] {
+  font-weight: 500;
+  font-size: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+/* Alert enhancements */
+[data-slot="alert"] {
+  border-left: 4px solid;
+}
+
+[data-slot="alert"][data-variant="destructive"] {
+  border-left-color: hsl(var(--destructive));
+}
+
+[data-slot="alert"][data-variant="warning"] {
+  border-left-color: hsl(var(--warning));
+}
+
+[data-slot="alert"][data-variant="success"] {
+  border-left-color: hsl(var(--success));
+}
+
+/**
+    * Form & Input Enhancements
+    * 
+    * Enhanced form styling with better focus states
+    */
+
+/* Neutralize browser-forced autocomplete highlights (the "yellow" box) */
+.adminapp input:-webkit-autofill,
+.adminapp input:-webkit-autofill:hover,
+.adminapp input:-webkit-autofill:focus,
+.adminapp textarea:-webkit-autofill,
+.adminapp textarea:-webkit-autofill:hover,
+.adminapp textarea:-webkit-autofill:focus,
+.adminapp select:-webkit-autofill,
+.adminapp select:-webkit-autofill:hover,
+.adminapp select:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--color-foreground) !important;
+  /* Use a box-shadow inset to effectively "replace" the background color */
+  box-shadow: 0 0 0px 1000px white inset !important;
+  /* Very long transition delay to prevent the background-color from changing */
+  transition: background-color 5000s ease-in-out 0s;
+  background-clip: content-box !important;
+}
+
+/* Specific background handling for Dark Mode */
+.adminapp.dark input:-webkit-autofill,
+.adminapp.dark textarea:-webkit-autofill,
+.adminapp.dark select:-webkit-autofill {
+  -webkit-text-fill-color: #f8fafc !important; /* slate-50 */
+  box-shadow: 0 0 0px 1000px #0f172a inset !important; /* Deep dark background */
+}
+
+.form-field-wrapper {
+  margin-bottom: 1rem;
+}
+
+.form-field-wrapper:last-child {
+  margin-bottom: 0;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  color: hsl(var(--foreground));
+  margin-bottom: 0.375rem;
+}
+
+.form-description {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: hsl(var(--muted-foreground));
+  margin-top: 0.25rem;
+}
+
+.form-error {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: hsl(var(--destructive));
+  margin-top: 0.25rem;
+  font-weight: 500;
+}
+
+/**
+    * Enhanced Data Table Styles
+    * 
+    * Comprehensive styling for data table layouts and interactions
+    */
+.data-table-compact th,
+.data-table-compact td {
+  padding-top: 0.375rem;
+  /* 6px */
+  padding-bottom: 0.375rem;
+  /* 6px */
+  padding-left: 0.5rem;
+  /* 8px */
+  padding-right: 0.5rem;
+  /* 8px */
+  font-size: 0.8125rem;
+  /* 13px */
+  line-height: 1.125rem;
+}
+
+.data-table-comfortable th,
+.data-table-comfortable td {
+  padding-top: 0.75rem;
+  /* 12px */
+  padding-bottom: 0.75rem;
+  /* 12px */
+  padding-left: 1rem;
+  /* 16px */
+  padding-right: 1rem;
+  /* 16px */
+  font-size: 1rem;
+  /* 16px */
+  line-height: 1.5rem;
+}
+
+/* Enhanced data table specific styles */
+[data-slot="data-table"] {
+  --table-row-hover: hsl(var(--table-row-hover));
+  --table-row-selected: hsl(var(--table-row-selected));
+  --table-border: hsl(var(--table-border));
+}
+
+[data-slot="data-table-container"] {
+  border: 1px solid var(--table-border);
+  border-radius: 0rem;
+  overflow: hidden;
+}
+
+/* [data-slot="data-table-row"]:hover {
+  background-color: var(--table-row-hover);
+} */
+
+/* [data-slot="data-table-row"][data-state="selected"] {
+  background-color: var(--table-row-selected);
+} */
+
+[data-slot="data-table-toolbar"] {
+  background-color: hsl(var(--background));
+  /* background-color: hsl(var(--background)); */
+  border: 1px solid hsl(var(--border));
+  border-radius: 0rem;
+}
+
+/* [data-slot="data-table-search"] input {
+  transition: all 0.2s ease;
+} */
+
+[data-slot="data-table-search"] input:focus {
+  border-color: hsl(var(--ring));
+  /* box-shadow: 0 0 0 2px hsla(var(--ring) / 0.2); */
+}
+
+[data-slot="data-table-pagination"] {
+  background-color: hsl(var(--background));
+  /* background-color: hsl(var(--background)); */
+  border: 1px solid hsl(var(--border));
+  border-radius: 0rem;
+}
+
+/**
+    * Spacing & Layout Utilities
+    * 
+    * Consistent spacing scale and layout patterns
+    */
+
+/* Admin spacing utilities */
+.admin-space-y-1 > * + * {
+  margin-top: 0.25rem;
+}
+
+.admin-space-y-2 > * + * {
+  margin-top: 0.5rem;
+}
+
+.admin-space-y-3 > * + * {
+  margin-top: 0.75rem;
+}
+
+.admin-space-y-4 > * + * {
+  margin-top: 1rem;
+}
+
+.admin-space-y-6 > * + * {
+  margin-top: 1.5rem;
+}
+
+.admin-space-y-8 > * + * {
+  margin-top: 2rem;
+}
+
+/* Admin gap utilities */
+.admin-gap-2 {
+  gap: 0.5rem;
+}
+
+.admin-gap-3 {
+  gap: 0.75rem;
+}
+
+.admin-gap-4 {
+  gap: 1rem;
+}
+
+.admin-gap-6 {
+  gap: 1.5rem;
+}
+
+/* Admin padding utilities */
+.admin-p-2 {
+  padding: 0.5rem;
+}
+
+.admin-p-3 {
+  padding: 0.75rem;
+}
+
+.admin-p-4 {
+  padding: 1rem;
+}
+
+.admin-p-6 {
+  padding: 1.5rem;
+}
+
+.admin-px-3 {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.admin-px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.admin-py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.admin-py-3 {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+/**
+    * Responsive & Layout Enhancements
+    * 
+    * Better responsive behavior and container queries
+    */
+.admin-container {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .admin-container {
+    max-width: 640px;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .admin-container {
+    max-width: 768px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .admin-container {
+    max-width: 1024px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .admin-container {
+    max-width: 1280px;
+  }
+}
+
+/* Admin grid utilities */
+.admin-grid {
+  display: grid;
+}
+
+.admin-grid-cols-1 {
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
+.admin-grid-cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-grid-cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (min-width: 768px) {
+  .admin-grid-cols-md-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-grid-cols-md-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .border-input {
+    border-color: hsl(var(--input));
+  }
+}
+
+.text-primary {
+  color: hsl(var(--primary));
+}
+
+.ring-offset-background {
+  --tw-ring-offset-color: hsl(var(--background));
+}
+
+/* .focus-visible\:ring-ring:focus-visible {
+  --tw-ring-color: hsl(var(--ring));
+} */
+
+/**
+ * Lexical Editor Typeahead Styles
+ *
+ * Styles for the slash command menu and other typeahead components
+ */
+.typeahead-popover {
+  background: hsl(var(--popover));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0rem;
+  /* box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05); */
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 200px;
+  z-index: 9999;
+}
+
+.typeahead-popover.slash-menu {
+  min-width: 220px;
+}
+
+.typeahead-popover ul {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+}
+
+.typeahead-popover .item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: hsl(var(--foreground));
+  transition: background-color 0.15s ease;
+}
+
+.typeahead-popover .item.selected {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.typeahead-popover .item .icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.typeahead-popover .item.selected .icon {
+  color: hsl(var(--accent-foreground));
+}
+
+.typeahead-popover .item .text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Page Container Dark Mode Fix */
+.adminapp .admin-page-container {
+  background-color: hsl(var(--secondary));
+}
+
+.adminapp.dark .admin-page-container {
+  background-color: transparent;
+}
+
+/* Admin Dropdown Styling (Antigravity Standard: 0px Radius) */
+.adminapp .admin-dropdown-content {
+  background-color: hsla(var(--background), 0.95);
+  backdrop-filter: blur(12px);
+  border-radius: 0px !important;
+}
+
+.adminapp.dark .admin-dropdown-content {
+  background-color: hsl(var(--card)) !important;
+  border-color: hsl(var(--border));
+}
+
+/* Dropdown Item Styles */
+.adminapp .admin-dropdown-item {
+  border-radius: 0px !important;
+}
+
+/* Dropdown Item Interaction States */
+.adminapp .admin-dropdown-item[data-highlighted],
+.adminapp .admin-dropdown-item[data-active="true"],
+.adminapp .admin-dropdown-item:focus,
+.adminapp .admin-dropdown-item:focus-visible {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+.adminapp .admin-dropdown-item:focus svg,
+.adminapp .admin-dropdown-item[data-active="true"] svg {
+  color: #ffffff !important;
+}
+
+.adminapp.dark .admin-dropdown-item[data-highlighted],
+.adminapp.dark .admin-dropdown-item[data-active="true"],
+.adminapp.dark .admin-dropdown-item:focus,
+.adminapp.dark .admin-dropdown-item:focus-visible {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+.adminapp.dark .admin-dropdown-item:focus svg,
+.adminapp.dark .admin-dropdown-item[data-active="true"] svg {
+  color: #ffffff !important;
+}
+
+/* Destructive Dropdown Item */
+.adminapp .admin-dropdown-item-destructive {
+  border-radius: 0px !important;
+}
+
+.adminapp .admin-dropdown-item-destructive:focus {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+.adminapp .admin-dropdown-item-destructive:focus svg {
+  color: #ffffff !important;
+}
+
+.adminapp.dark .admin-dropdown-item-destructive:focus {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+.adminapp.dark .admin-dropdown-item-destructive:focus svg {
+  color: #ffffff !important;
+}
+/* Mobile Safe Bottom for FABs and Sticky Actions */
+.mobile-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 24px);
+}
+
+/* Mobile Sticky Header with Glass Effect */
+.mobile-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(12px);
+  background-color: hsla(var(--background), 0.8);
+  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  transition: all 0.2s ease-in-out;
+}
+
+/* App Container for Standardized Mobile Padding */
+.app-container {
+  padding-left: 1rem;
+  padding-right: 1rem;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (min-width: 768px) {
+  .app-container {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/* Responsive Grid for Cards */
+.responsive-card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .responsive-card-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-card-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1536px) {
+  .responsive-card-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ============================================
+ * CENTRALIZED HOVER STATE MANAGEMENT
+ * 
+ * These classes define all hover interactions across the dashboard.
+ * Update these classes to change hover behavior globally.
+ * Used by components: pagination, dropdowns, tables, buttons, breadcrumbs, icons.
+ * ============================================ */
+
+/*
+ * ONE UNIFIED HOVER CLASS
+ * Target class for all component hover states.
+ */
+.hover-unified {
+  @apply hover:bg-black hover:text-white transition-colors;
+}
+
+.hover-unified:hover svg {
+  color: #ffffff !important;
+}
+
+/**
+ * SUBTLE ROW HOVER
+ * Specifically for lists/rows where the solid black is too harsh.
+ */
+.hover-subtle-row {
+  @apply hover:bg-black/5 dark:hover:bg-white/5 transition-colors;
+}
+
+.hover-subtle-row:hover * {
+  color: inherit !important;
+}
+
+.hover-subtle-row:hover svg {
+  color: inherit !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .adminapp.dark .hover-unified {
+    @apply hover:bg-black hover:text-white transition-colors;
+  }
+}
+
+.group-hover-unified {
+  @apply group-hover:bg-black group-hover:text-white;
+}
+
+.group-hover-subtle-row {
+  @apply group-hover:bg-black/5 dark:group-hover:bg-white/5 transition-colors;
+}
+
+.group:hover .group-hover-unified svg {
+  color: #ffffff !important;
+}
+
+.group:hover .group-hover-subtle-row svg {
+  color: inherit !important;
+}
+
+/* Dedicated hover for dashboard cards: full black surface + white content */
+.hover-unified-dashboard-card {
+  @apply hover:!bg-black hover:!text-white transition-colors;
+}
+
+.hover-unified-dashboard-card:hover * {
+  color: inherit;
+}
+
+.hover-unified-dashboard-card:hover svg {
+  color: #ffffff !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .adminapp.dark .hover-unified-dashboard-card {
+    @apply hover:!bg-black hover:!text-white transition-colors;
+  }
+}
+
+/*
+ * TABLE ROW HOVER (DEDICATED)
+ * Use for all data-table rows where hover should be subtle.
+ */
+.hover-unified-table-row {
+  @apply hover:bg-black/5 hover:text-black transition-colors;
+}
+
+.hover-unified-table-row:hover * {
+  color: inherit;
+}
+
+.hover-unified-table-row:hover svg {
+  color: inherit !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .adminapp.dark .hover-unified-table-row {
+    @apply hover:bg-white/5 hover:text-white transition-colors;
+  }
+}
+
+/* Table icon covers: flat shape with unified neutral background */
+.table-row-icon-cover {
+  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-black/20 text-black;
+}
+
+@media (prefers-color-scheme: dark) {
+  .adminapp.dark .table-row-icon-cover {
+    @apply bg-white/20 text-white;
+  }
+}
+
+/* Normalize table pills/badges to one monochrome look across all tables */
+.adminapp table [data-slot^="badge."] {
+  background-color: rgb(0 0 0 / 0.06) !important;
+  color: #000000 !important;
+  border-color: rgb(0 0 0 / 0.08) !important;
+  box-shadow: none !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .adminapp.dark table [data-slot^="badge."] {
+    background-color: rgb(255 255 255 / 0.12) !important;
+    color: #ffffff !important;
+    border-color: rgb(255 255 255 / 0.2) !important;
+    box-shadow: none !important;
+  }
+}
+
+.hover-muted,
+.hover-primary,
+.hover-foreground,
+.hover-primary-light,
+.hover-accent,
+.hover-bg-muted,
+.hover-underline-primary,
+.hover-transparent-bg {
+  @apply hover:bg-black hover:text-white transition-colors;
+}
+
+.hover-muted:hover svg,
+.hover-primary:hover svg,
+.hover-foreground:hover svg,
+.hover-primary-light:hover svg,
+.hover-accent:hover svg,
+.hover-bg-muted:hover svg,
+.hover-underline-primary:hover svg,
+.hover-transparent-bg:hover svg {
+  color: #ffffff !important;
+}
+
+.group-hover-primary {
+  @apply group-hover:bg-black group-hover:text-white;
+}
+
+@media (prefers-color-scheme: dark) {
+  .adminapp.dark .hover-muted,
+  .adminapp.dark .hover-primary,
+  .adminapp.dark .hover-foreground,
+  .adminapp.dark .hover-primary-light,
+  .adminapp.dark .hover-accent,
+  .adminapp.dark .hover-bg-muted,
+  .adminapp.dark .hover-underline-primary,
+  .adminapp.dark .hover-transparent-bg {
+    @apply hover:bg-black hover:text-white transition-colors;
+  }
+}

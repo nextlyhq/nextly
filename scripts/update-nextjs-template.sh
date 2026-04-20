@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+#
+# Regenerate the base Next.js template from the latest create-next-app.
+#
+# Usage:
+#   ./scripts/update-nextjs-template.sh              # update in-place
+#   ./scripts/update-nextjs-template.sh --dry-run     # show diff without writing
+#   ./scripts/update-nextjs-template.sh --next-version 16.1.0  # pin a version
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+TEMPLATE_DIR="$ROOT_DIR/packages/create-nextly-app/templates/base"
+TMP_DIR=""
+DRY_RUN=false
+NEXT_VERSION="latest"
+
+# ── Parse flags ───────────────────────────────────────────────────────────────
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --next-version)
+      NEXT_VERSION="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown flag: $1"
+      echo "Usage: $0 [--dry-run] [--next-version VERSION]"
+      exit 1
+      ;;
+  esac
+done
+
+# ── Cleanup on exit ──────────────────────────────────────────────────────────
+
+cleanup() {
+  if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
+    rm -rf "$TMP_DIR"
+  fi
+}
+trap cleanup EXIT
+
+# ── Step 1: Scaffold a fresh Next.js project ─────────────────────────────────
+
+echo "==> Scaffolding fresh Next.js project (version: $NEXT_VERSION)..."
+TMP_DIR="$(mktemp -d)"
+PROJ_DIR="$TMP_DIR/ref-project"
+
+npx "create-next-app@$NEXT_VERSION" "$PROJ_DIR" \
+  --typescript \
+  --eslint \
+  --tailwind \
+  --src-dir \
+  --app \
+  --skip-install \
+  --disable-git \
+  --yes
+
+echo "==> Scaffold complete."
+
+# ── Step 2: Remove files we don't need ────────────────────────────────────────
+
+echo "==> Cleaning scaffold output..."
+rm -rf "$PROJ_DIR/node_modules" \
+       "$PROJ_DIR/package-lock.json" \
+       "$PROJ_DIR/package.json" \
+       "$PROJ_DIR/README.md" \
+       "$PROJ_DIR/.next" \
+       "$PROJ_DIR/.git"
+
+# ── Step 3: Copy to staging area ─────────────────────────────────────────────
+
+STAGING_DIR="$TMP_DIR/staging"
+mkdir -p "$STAGING_DIR"
+cp -a "$PROJ_DIR/." "$STAGING_DIR/"
+
+# ── Step 4: Apply Nextly patches ─────────────────────────────────────────────
+
+echo "==> Applying Nextly patches..."
+
+# 4a. Pre-patched next.config.ts
+cat > "$STAGING_DIR/next.config.ts" << 'NEXTCONFIG'
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  serverExternalPackages: [
+    "@revnixhq/nextly",
+    "@revnixhq/adapter-drizzle",
+    "@revnixhq/adapter-postgres",
+    "@revnixhq/adapter-mysql",
+    "@revnixhq/adapter-sqlite",
+    "@revnixhq/storage-s3",
+    "@revnixhq/storage-vercel-blob",
+    "pg",
+    "mysql2",
+    "better-sqlite3",
+    "bcryptjs",
+  ],
+};
+
+export default nextConfig;
+NEXTCONFIG
+
+# 4b. Admin page
+mkdir -p "$STAGING_DIR/src/app/admin/[[...params]]"
+cat > "$STAGING_DIR/src/app/admin/[[...params]]/page.tsx" << 'ADMINPAGE'
+"use client";
+
+import { ErrorBoundary, QueryProvider, RootLayout } from "@revnixhq/admin";
+
+export default function AdminPage() {
+  return (
+    <ErrorBoundary>
+      <QueryProvider>
+        <RootLayout />
+      </QueryProvider>
+    </ErrorBoundary>
+  );
+}
+ADMINPAGE
+
+cat > "$STAGING_DIR/src/app/admin/[[...params]]/layout.tsx" << 'ADMINLAYOUT'
+import type { Metadata } from "next";
+
+import { getBrandingCss } from "@revnixhq/admin";
+
+import config from "../../../../nextly.config";
+
+export const metadata: Metadata = {
+  title: config.admin?.branding?.appName || "Nextly Admin",
+};
+
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <head>
+        <style dangerouslySetInnerHTML={{ __html: getBrandingCss(config) }} />
+      </head>
+      <body>{children}</body>
+    </html>
+  );
+}
+ADMINLAYOUT
+
+# 4c. Admin API route
+mkdir -p "$STAGING_DIR/src/app/admin/api/[[...params]]"
+cat > "$STAGING_DIR/src/app/admin/api/[[...params]]/route.ts" << 'ADMINAPI'
+import { createDynamicHandlers } from "@revnixhq/nextly/api";
+
+import config from "../../../../../nextly.config";
+
+export const { GET, POST, PUT, PATCH, DELETE } = createDynamicHandlers(config);
+ADMINAPI
+
+# 4d. Media route
+mkdir -p "$STAGING_DIR/src/app/api/media/[[...path]]"
+cat > "$STAGING_DIR/src/app/api/media/[[...path]]/route.ts" << 'MEDIAROUTE'
+import { createMediaHandlers } from "@revnixhq/nextly/api";
+
+import config from "../../../../../nextly.config";
+
+export const { GET, POST, DELETE } = createMediaHandlers(config);
+MEDIAROUTE
+
+# 4e. Health route
+mkdir -p "$STAGING_DIR/src/app/api/health"
+cat > "$STAGING_DIR/src/app/api/health/route.ts" << 'HEALTHROUTE'
+export { GET, HEAD } from "@revnixhq/nextly/api/health";
+HEALTHROUTE
+
+# 4f. Types directory
+mkdir -p "$STAGING_DIR/src/types/generated"
+touch "$STAGING_DIR/src/types/generated/.gitkeep"
+cat > "$STAGING_DIR/src/types/generated/nextly-types.ts" << 'TYPESFILE'
+/**
+ * Auto-generated Nextly types.
+ * Run `npx @revnixhq/nextly generate:types` to regenerate.
+ *
+ * DO NOT EDIT THIS FILE MANUALLY.
+ */
+
+export {};
+TYPESFILE
+
+# 4g. .env.example with placeholders
+cat > "$STAGING_DIR/.env.example" << 'ENVEXAMPLE'
+# ============================================
+# Database Configuration
+# ============================================
+DB_DIALECT={{databaseDialect}}
+DATABASE_URL={{databaseUrl}}
+
+# ============================================
+# Authentication
+# ============================================
+# Generate with: openssl rand -base64 32
+AUTH_SECRET=your-secret-key-here
+
+# ============================================
+# Application URLs
+# ============================================
+NEXTAUTH_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# ============================================
+# Storage Configuration
+# ============================================
+{{storageEnvVars}}
+ENVEXAMPLE
+
+echo "==> Patches applied."
+
+# ── Step 5: Diff or copy ─────────────────────────────────────────────────────
+
+if $DRY_RUN; then
+  echo ""
+  echo "==> Dry run — showing diff:"
+  echo ""
+  diff -rq "$TEMPLATE_DIR" "$STAGING_DIR" || true
+  echo ""
+  diff -ru "$TEMPLATE_DIR" "$STAGING_DIR" || true
+  echo ""
+  echo "==> Dry run complete. No files were changed."
+else
+  echo "==> Copying updated template to $TEMPLATE_DIR..."
+  rm -rf "$TEMPLATE_DIR"
+  mkdir -p "$TEMPLATE_DIR"
+  cp -a "$STAGING_DIR/." "$TEMPLATE_DIR/"
+  echo "==> Template updated successfully."
+  echo ""
+  echo "Next steps:"
+  echo "  1. Review changes: git diff packages/create-nextly-app/templates/base/"
+  echo "  2. Update PINNED_VERSIONS in src/utils/template.ts if Next.js version changed"
+  echo "  3. Run tests: pnpm --filter create-nextly-app test"
+  echo "  4. Commit changes"
+fi

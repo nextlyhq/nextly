@@ -1,0 +1,15 @@
+{
+  "extends": "@nextly/tsconfig/react-library-bundler.json",
+  "compilerOptions": {
+    "target": "ES2020",
+    "emitDeclarationOnly": false,
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "nextly": ["../nextly/src"],
+      "@admin/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

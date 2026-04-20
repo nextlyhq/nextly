@@ -1,0 +1,73 @@
+{
+  "name": "@revnixhq/adapter-drizzle",
+  "version": "0.0.139",
+  "description": "Shared Drizzle ORM adapter logic for Nextly database adapters",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.mjs",
+      "require": "./dist/types/index.cjs"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.mjs",
+      "require": "./dist/schema/index.cjs"
+    },
+    "./migrations": {
+      "types": "./dist/migrations.d.ts",
+      "import": "./dist/migrations.mjs",
+      "require": "./dist/migrations.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
+    "clean": "rimraf dist"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@nextly/eslint-config": "workspace:*",
+    "@nextly/tsconfig": "workspace:*",
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.0.8",
+    "@vitest/ui": "^4.0.8",
+    "eslint": "^9.34.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.0.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nextlyhq/nextly",
+    "directory": "packages/adapter-drizzle"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

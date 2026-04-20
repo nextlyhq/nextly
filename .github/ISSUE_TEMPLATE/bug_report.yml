@@ -1,0 +1,126 @@
+name: Bug Report
+description: Report something that isn't working as expected.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the form below so we can reproduce and triage quickly.
+
+        Before submitting, please:
+        - Search [existing issues](https://github.com/revnix/nextly-dev/issues?q=is%3Aissue) to avoid duplicates.
+        - Confirm you're on the latest version of the affected package.
+        - For security issues, use the [private advisory form](https://github.com/revnix/nextly-dev/security/advisories/new) instead.
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Affected package
+      description: Which package is affected? Pick the closest match.
+      options:
+        - "@revnixhq/nextly"
+        - "@revnixhq/admin"
+        - "@revnixhq/client"
+        - "@revnixhq/ui"
+        - "@revnixhq/adapter-postgres"
+        - "@revnixhq/adapter-mysql"
+        - "@revnixhq/adapter-sqlite"
+        - "@revnixhq/adapter-drizzle"
+        - "@revnixhq/storage-s3"
+        - "@revnixhq/storage-vercel-blob"
+        - "@revnixhq/storage-uploadthing"
+        - "@revnixhq/plugin-form-builder"
+        - "@revnixhq/create-nextly-app"
+        - "Repo tooling / CI / build"
+        - "Other / not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: package-version
+    attributes:
+      label: Package version
+      description: Version of the affected package (e.g. `0.0.129-alpha.0`). Run `pnpm list <pkg>` if unsure.
+      placeholder: "0.0.129"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: When I do X, Y happens instead of Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, deterministic steps. A link to a minimal reproduction repo dramatically speeds up triage.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: reproduction-link
+    attributes:
+      label: Reproduction repo (optional but encouraged)
+      description: Link to a minimal reproduction (StackBlitz, GitHub repo, etc.)
+      placeholder: "https://github.com/your-username/repro"
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: I expected ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, stack traces, screenshots, or logs.
+      placeholder: Instead, ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Runtime details. Run `npx envinfo --system --binaries --browsers --npmPackages` and paste here.
+      render: shell
+      placeholder: |
+        - OS:
+        - Node:
+        - pnpm:
+        - Browser (if relevant):
+        - Database / driver (if relevant):
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else? Workarounds tried, related issues, recent changes, etc.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I'm using the latest version of the affected package.
+          required: true
+        - label: This is not a security vulnerability (those go to the private advisory form).
+          required: true

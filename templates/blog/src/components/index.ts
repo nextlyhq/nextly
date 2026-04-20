@@ -1,0 +1,9 @@
+// Blog template components barrel export
+export { AuthorCard } from "./AuthorCard";
+export { CategoryBadge } from "./CategoryBadge";
+export { Footer } from "./Footer";
+export { Header } from "./Header";
+export { Pagination } from "./Pagination";
+export { PostCard } from "./PostCard";
+export { PostGrid } from "./PostGrid";
+export { RichTextRenderer } from "./RichTextRenderer";

@@ -1,0 +1,103 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+.pnpm-store
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Ignore migrations & schema for local development
+# Ignore all files in migrations and schemas
+apps/playground/src/db/migrations/**/*
+apps/playground/src/db/schemas/**/*
+
+# But keep the folder structure and empty index.ts
+!apps/playground/src/db/migrations/dynamic/
+!apps/playground/src/db/migrations/dynamic/.gitkeep
+!apps/playground/src/db/schemas/dynamic/
+!apps/playground/src/db/schemas/dynamic/.gitkeep
+!apps/playground/src/db/schemas/dynamic/index.ts
+
+# Ignore generated collection schemas (but keep index.ts)
+apps/playground/src/db/schemas/dynamic/*.ts
+!apps/playground/src/db/schemas/dynamic/index.ts
+
+# UI files of Dynamic collection
+# /apps/playground/src/app/test-collections
+# /apps/playground/src/app/content
+
+# claude
+.claude/
+
+# Internal docs (not published)
+packages/nextly/docs/
+
+# Testing
+coverage
+
+# Turbo
+.turbo
+
+# Vercel
+.vercel
+
+# Build Outputs
+.next/
+out/
+build
+dist
+
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+.DS_Store
+*.pem
+*.tsbuildinfo
+.tsbuildinfo
+
+# Docker (local overrides and generated files)
+.env.docker.local
+backups/
+docker/postgres/data/
+
+# SQLite database files
+apps/playground/data/
+
+# SQLite integration test data (created and cleaned up by tests, but gitignore
+# in case a test run is interrupted before afterAll deletes the files)
+test-data/
+
+*storybook.log
+storybook-static
+
+.history/
+
+
+.history/
+
+.agents/skills/
+.agents/e2e/projects/
+
+# E2E test scaffolds (created by adapter testing sessions, never committed)
+e2e/projects/
+# Auth E2E sandbox is scaffolded on demand; reports are auto-generated
+e2e/auth-e2e/.sandbox/
+e2e/auth-e2e/playwright-report/
+e2e/auth-e2e/test-results/
+
+# Superpowers brainstorm session artifacts
+.superpowers/
+
+# Template testing scaffolds (created during E2E testing, never committed)
+templates-testing/

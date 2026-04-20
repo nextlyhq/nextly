@@ -1,0 +1,31 @@
+{
+  "extends": "@nextly/tsconfig/base-bundler.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@nextly/actions": ["./src/actions/index.ts"],
+      "@nextly/api/*": ["./src/api/*"],
+      "@nextly/auth/*": ["./src/auth/*"],
+      "@nextly/collections": ["./src/collections/index.ts"],
+      "@nextly/collections/*": ["./src/collections/*"],
+      "@nextly/database/*": ["./src/database/*"],
+      "@nextly/di/*": ["./src/di/*"],
+      "@nextly/errors": ["./src/errors/index.ts"],
+      "@nextly/hooks/*": ["./src/hooks/*"],
+      "@nextly/lib/*": ["./src/lib/*"],
+      "@nextly/schemas/*": ["./src/schemas/*"],
+      "@nextly/scripts/*": ["./src/scripts/*"],
+      "@nextly/services/*": ["./src/services/*"],
+      "@nextly/storage": ["./src/storage/index.ts"],
+      "@nextly/storage/*": ["./src/storage/*"],
+      "@nextly/types/*": ["./src/types/*"],
+      "@nextly/validation": ["./src/validation/index.ts"],
+      "@nextly/validation/*": ["./src/validation/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.spec.ts"]
+}

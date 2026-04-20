@@ -1,0 +1,13 @@
+{
+  "name": "@nextly/tsconfig",
+  "version": "0.0.1",
+  "description": "Shared TypeScript configuration for Nextly",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "//": "Config-only package - no build/dev/test scripts needed"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

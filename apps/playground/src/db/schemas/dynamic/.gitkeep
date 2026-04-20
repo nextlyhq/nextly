@@ -1,0 +1,2 @@
+# This file ensures the dynamic schemas folder is created in git
+# Dynamic schema files are generated at runtime and are not committed

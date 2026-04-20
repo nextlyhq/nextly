@@ -1,0 +1,332 @@
+{
+  // Turborepo Task Configuration for Nextly
+  //
+  // Nextly is an NPM package that provides a headless CMS for Next.js applications.
+  //
+  // NPM Publishing Workflow:
+  //   - nextly → npm (core CMS functionality - database, RBAC, collections)
+  //   - @nextly/admin → npm (UI components - forms, tables, dashboard)
+  //   - apps/playground → NOT published (development/testing only)
+  //
+  // Tech Stack:
+  //   - Next.js 16 (App Router, Server Components, Server Actions)
+  //   - React 19.2 (latest features, hooks, best practices)
+  //   - Turborepo for monorepo task orchestration
+  //   - TypeScript strict mode
+  //   - Vitest for testing, Playwright for E2E
+  //
+  // Quick Start:
+  //   - Package maintainers: pnpm dev (starts all dev servers)
+  //   - Contributors: pnpm build && pnpm test (validate changes)
+  //   - CI/CD: pnpm check-types && pnpm lint && pnpm test (parallel validation)
+  //
+  // Task Execution Patterns:
+  //   - dependsOn: ["^build"] = Build workspace dependencies FIRST (^ = dependencies)
+  //   - cache: false = Never cache (for dev servers, formatters, destructive operations)
+  //   - cache: true = Reuses results if inputs unchanged (test, build, lint)
+  //   - persistent: true = Long-running process (dev servers, watch modes)
+  //
+  // Cache Behavior:
+  //   - Cache location: .turbo/cache/ (gitignored)
+  //   - Cache invalidation: Automatic when inputs change
+  //   - Cache hits = FULL TURBO (near-instant execution)
+  //
+  // Dependency Graph:
+  //   nextly (builds first)
+  //     ↓
+  //   @nextly/admin (depends on nextly)
+  //     ↓
+  //   apps/playground (depends on both)
+  //
+  // Documentation: https://turborepo.com/docs/reference/configuration
+
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "tui", // Terminal UI for better task visualization
+
+  // Runtime env vars referenced from package source (not build-time inputs).
+  // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
+  "globalPassThroughEnv": [
+    "BLOB_READ_WRITE_TOKEN", // @revnixhq/storage-vercel-blob runtime config
+    "S3_BUCKET",
+    "S3_ENDPOINT",
+    "S3_REGION",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "R2_BUCKET",
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "UPLOADTHING_TOKEN",
+    "UPLOADTHING_SECRET",
+    "DATABASE_URL",
+    "DB_DIALECT",
+    "DEBUG",
+    "DEBUG_CACHE",
+    "DEBUG_RBAC",
+    "FORCE_PATH_STYLE",
+    "HEALTH_CHECK_CACHE_SECONDS",
+    "INIT_CWD",
+    "NEXTLY_ACCEPT_DATA_LOSS",
+    "NEXTLY_DEBUG_TIMEZONE",
+    "NEXTLY_EMAIL_MAX_ATTACHMENT_COUNT",
+    "NEXTLY_EMAIL_MAX_ATTACHMENT_TOTAL_BYTES",
+    "NEXTLY_ENV_LOADED",
+    "NEXTLY_IPC_PORT",
+    "NEXTLY_IPC_TOKEN",
+    "NEXTLY_SKIP_AUTO_SYNC",
+    "NEXTLY_SKIP_SCHEMA_FILES",
+    "PERMISSION_CACHE_ENABLED",
+    "PERMISSION_CACHE_MEMORY_SIZE",
+    "PERMISSION_CACHE_TTL_SECONDS",
+    "PUBLIC_URL",
+    "TEST_DATABASE_URL",
+    "TEST_MYSQL_URL",
+    "TEST_POSTGRES_URL",
+    "TEST_SQLITE_URL"
+  ],
+
+  "tasks": {
+    // ==================== BUILD TASKS ====================
+    // Prepare packages for npm publishing and app deployment
+
+    // build - Compile TypeScript and bundle packages for npm distribution
+    //
+    // This is the MOST IMPORTANT task for Nextly as an npm package.
+    // It prepares nextly and @nextly/admin for publishing.
+    //
+    // Execution Order:
+    //   1. Build workspace dependencies first (^build = dependencies)
+    //   2. Build current package
+    //   Example: nextly must build before apps/playground (which depends on it)
+    //
+    // Outputs:
+    //   - dist/ = Compiled package code for npm
+    //   - .next/ = Next.js build output (for apps/playground)
+    //   - .tsbuildinfo = TypeScript incremental build cache
+    //
+    // Environment Variables:
+    //   - NODE_ENV affects build output (production vs development)
+    "build": {
+      "dependsOn": ["^build"], // Build dependencies first (critical for npm packages)
+      "inputs": ["$TURBO_DEFAULT$", ".env*"], // Source files + env files
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "**/*.tsbuildinfo"],
+      "env": ["NODE_ENV"] // Build output changes based on NODE_ENV
+    },
+
+    // ==================== TYPE CHECKING ====================
+    // Validate TypeScript types across all packages
+
+    // check-types - Run TypeScript compiler for type validation
+    //
+    // Fast Parallel Execution:
+    //   - NO "^build" dependency (optimized in TASK-MONO-007)
+    //   - Can run in parallel with builds for faster CI/CD
+    //   - Validates source code directly (doesn't need built artifacts)
+    //
+    // Why This Matters:
+    //   - Catches type errors early in development
+    //   - Runs faster than full build (type-check only, no emit)
+    //   - Can lint and type-check while builds run in parallel
+    //
+    // Note: Uses incremental compilation (.tsbuildinfo) for speed
+    "check-types": {
+      "dependsOn": [], // Optimized: No build dependency for faster parallel execution
+      "inputs": ["src/**/*.{ts,tsx}", "*.{ts,tsx}", "tsconfig.json"],
+      "outputs": ["**/*.tsbuildinfo"] // TypeScript incremental cache
+    },
+
+    // ==================== DEVELOPMENT TASKS ====================
+    // Local development servers for package testing
+
+    // dev - Start development servers for packages and apps
+    //
+    // Usage:
+    //   - pnpm dev             = Start all dev servers
+    //   - pnpm dev:core        = Start nextly in watch mode
+    //   - pnpm dev:app         = Start apps/playground Next.js server
+    //
+    // Configuration:
+    //   - cache: false = Dev servers always start fresh (no stale state)
+    //   - persistent: true = Long-running process (doesn't exit)
+    //   - dependsOn: ["^build"] = Needs built dependencies to run
+    //
+    // Why Build Dependencies First:
+    //   - apps/playground imports from nextly and @nextly/admin
+    //   - Those packages must be built for apps/playground to resolve imports
+    //   - After first build, watch mode handles incremental updates
+    "dev": {
+      "cache": false, // Never cache dev servers (always start fresh)
+      "persistent": true, // Long-running process (dev server stays alive)
+      "dependsOn": ["^build"] // Build workspace dependencies first
+    },
+
+    // ==================== CODE QUALITY TASKS ====================
+    // Linting, formatting, and code style enforcement
+
+    // lint - Run ESLint to check code quality and style issues
+    //
+    // Fast Parallel Execution:
+    //   - NO build dependency (lints source code directly)
+    //   - Can run alongside builds for faster CI/CD
+    //
+    // Usage:
+    //   - pnpm lint        = Check all packages for issues
+    //   - pnpm lint:fix    = Auto-fix issues (see below)
+    "lint": {
+      "dependsOn": [], // No build needed (lints source directly)
+      "inputs": [
+        "src/**/*.{ts,tsx,js,jsx}",
+        "*.{ts,tsx,js,jsx}",
+        "eslint.config.*",
+        "tsconfig.json"
+      ],
+      "outputs": [] // Linting produces no artifacts
+    },
+
+    // lint:fix - Auto-fix ESLint issues (formatting, simple errors)
+    //
+    // Difference from 'lint':
+    //   - lint = Read-only check (reports issues)
+    //   - lint:fix = Writes fixes to source files
+    //
+    // Why cache: false:
+    //   - Modifies source files (destructive operation)
+    //   - Each run should attempt fixes (not skip based on cache)
+    //
+    // Usage: Pre-commit hook or manual cleanup before PR
+    "lint:fix": {
+      "dependsOn": [], // No build needed
+      "inputs": [
+        "src/**/*.{ts,tsx,js,jsx}",
+        "*.{ts,tsx,js,jsx}",
+        "eslint.config.*",
+        "tsconfig.json"
+      ],
+      "outputs": [], // Modifies inputs (doesn't produce separate output)
+      "cache": false // Always run (fixes should attempt every time)
+    },
+
+    // format - Run Prettier to format all files
+    //
+    // Why cache: false:
+    //   - Modifies source files in place
+    //   - Should always check for formatting (not skip based on cache)
+    //
+    // Note: Pre-commit hook (lint-staged) handles formatting automatically
+    // This task is for manual formatting or CI checks
+    "format": {
+      "cache": false, // Always run (formatting is fast anyway)
+      "inputs": ["**/*.{ts,tsx,js,jsx,json,md}"]
+    },
+
+    // ==================== TESTING TASKS ====================
+    // Unit tests, component tests, and coverage reporting
+
+    // test - Run Vitest unit and component tests
+    //
+    // Coverage Status (as of January 2025):
+    //   - nextly: 368 tests (~37% coverage) - RBAC, auth, collections, migrations
+    //   - @nextly/admin: 227 tests (~37% coverage) - forms, tables, UI components
+    //   - Total: 595 tests, 37% overall coverage
+    //   - Target: 60% by Phase 2 end, 80% by Phase 3 end
+    //
+    // Why dependsOn: ["^build"]:
+    //   - Tests import from workspace dependencies
+    //   - Those dependencies must be built first
+    //   - Example: @nextly/admin tests import from nextly
+    //
+    // Usage:
+    //   - pnpm test              = Run all tests once
+    //   - pnpm test:watch        = Watch mode (auto-rerun on changes)
+    //   - pnpm test:coverage     = Generate HTML coverage report
+    //   - pnpm test:ui           = Interactive test UI (localhost:51204)
+    "test": {
+      "dependsOn": ["^build"], // Need built dependencies for imports
+      "inputs": [
+        "src/**/*.{ts,tsx}",
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.spec.{ts,tsx}",
+        "vitest.config.ts",
+        "tsconfig.json"
+      ],
+      "outputs": ["coverage/**"], // Coverage reports
+      "cache": true // Cache test results (only re-run if inputs change)
+    },
+
+    // test:coverage - Generate and display code coverage report
+    //
+    // Same as 'test' but with coverage reporting enabled.
+    // Outputs HTML and terminal coverage reports.
+    "test:coverage": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"],
+      "cache": true
+    },
+
+    // test:ui - Open Vitest UI for interactive test development
+    //
+    // Interactive test runner with:
+    //   - Visual test execution
+    //   - Component preview
+    //   - Coverage visualization
+    //   - File explorer
+    //
+    // Configuration:
+    //   - cache: false = UI always opens fresh
+    //   - persistent: true = Stays running (dev tool)
+    //
+    // Access: http://localhost:51204 (default Vitest UI port)
+    "test:ui": {
+      "cache": false, // Never cache UI (always open fresh)
+      "persistent": true // Long-running dev tool
+    },
+
+    // test:watch - Run tests in watch mode (auto-rerun on changes)
+    //
+    // Developer workflow:
+    //   1. Start watch mode: pnpm test:watch
+    //   2. Edit source or test files
+    //   3. Tests automatically re-run
+    //   4. See instant feedback in terminal
+    //
+    // Configuration:
+    //   - cache: false = Watch mode manages its own state
+    //   - persistent: true = Stays running until Ctrl+C
+    "test:watch": {
+      "cache": false, // Watch mode doesn't use Turbo cache
+      "persistent": true // Long-running dev tool
+    },
+
+    // ==================== UTILITY TASKS ====================
+    // Cleanup and maintenance tasks
+
+    // clean - Remove build artifacts and caches
+    //
+    // Execution Order:
+    //   - Clean dependencies first (^clean)
+    //   - Then clean current package
+    //
+    // Why cache: false:
+    //   - Destructive operation (deletes files)
+    //   - Should always run (not skip based on cache)
+    //
+    // Usage:
+    //   - pnpm clean           = Clean all packages
+    //   - pnpm clean:cache     = Clean Turbo daemon cache
+    //   - pnpm clean:all       = Full cleanup (node_modules too)
+    //   - pnpm fresh           = clean:all + install + build
+    //
+    // What Gets Cleaned:
+    //   - dist/ folders (built package code)
+    //   - .next/ folders (Next.js build cache)
+    //   - .turbo/ folders (Turbo cache)
+    //   - .tsbuildinfo files (TypeScript incremental cache)
+    "clean": {
+      "dependsOn": ["^clean"], // Clean dependencies first
+      "cache": false // Never cache (destructive operation)
+    }
+  }
+}

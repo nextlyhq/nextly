@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    branches: [dev]
+
+# Only one release can run at a time — never cancel a running publish
+concurrency:
+  group: release-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version & Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Block publishing from forks
+    if: github.repository == 'revnix/nextly-dev'
+
+    # Reads NPM_AUTH_TOKEN + RELEASE_BOT_TOKEN from the Production environment.
+    # Also enables environment protection rules (required reviewers, wait timers).
+    environment: Production
+
+    permissions:
+      contents: write       # create git tags + GitHub Releases
+      pull-requests: write  # open "Version Packages" PR
+      id-token: write       # npm provenance attestation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use bot token so the Version PR it opens can trigger CI
+          # GITHUB_TOKEN cannot trigger workflow runs on PR creation
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          # Writes ~/.npmrc with the registry URL for publishing
+          registry-url: https://registry.npmjs.org
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create Release PR or Publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          # Run when Version PR is merged — builds then publishes
+          publish: pnpm release:publish
+          # Run when changesets exist — creates the Version PR
+          version: pnpm release:version
+          commit: "chore: version packages"
+          title: "chore: version packages"
+          # Disabled: per-package GitHub Releases (one for every @revnixhq/*
+          # package, 13 per cycle) made the Releases sidebar noisy and put
+          # whichever package timestamped last as "Latest". The consolidated
+          # release step below creates ONE `vX.Y.Z` release per cycle that
+          # matches our `fixed[]` lockstep model and Payload's release style.
+          createGithubReleases: false
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Create consolidated GitHub Release
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
+        run: |
+          set -euo pipefail
+
+          # All 13 packages share a version via `fixed[]`, so the first
+          # entry's version is the canonical monorepo version.
+          VERSION=$(echo "$PUBLISHED" | jq -r '.[0].version')
+          TAG="v${VERSION}"
+
+          # Build the release notes by extracting each package's CHANGELOG
+          # section for this version and concatenating them under one
+          # "What's changed" heading.
+          NOTES_FILE=$(mktemp)
+          {
+            echo "Released all 13 \`@revnixhq/*\` packages at \`${VERSION}\` in lockstep."
+            echo
+            echo "## What's changed"
+            echo
+            for pkg in $(echo "$PUBLISHED" | jq -r '.[].name'); do
+              pkg_dir="packages/${pkg#@revnixhq/}"
+              CHANGELOG="${pkg_dir}/CHANGELOG.md"
+              if [[ -f "$CHANGELOG" ]]; then
+                # Extract everything between "## $VERSION" and the next "## "
+                section=$(awk -v ver="## ${VERSION}" '
+                  $0 == ver { found = 1; next }
+                  found && /^## / { exit }
+                  found { print }
+                ' "$CHANGELOG")
+                # Skip packages whose CHANGELOG didn't actually change for
+                # this version (can happen for purely internal-dependency
+                # bumps where changesets writes only "Patch Changes" with
+                # no human-authored entry — still worth listing).
+                if [[ -n "$section" ]]; then
+                  echo "### ${pkg}"
+                  echo
+                  echo "$section"
+                fi
+              fi
+            done
+          } > "$NOTES_FILE"
+
+          # Configure git for the bot so we can push the unified tag
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Idempotent: skip if the release already exists (e.g. a previous
+          # workflow run partially completed)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping creation"
+          else
+            # Create the unified tag pointing at the publish commit, then
+            # the GitHub Release on top of it
+            git tag "$TAG"
+            git push origin "$TAG"
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "$NOTES_FILE"
+          fi
+
+          # Mirror the notes into the workflow run summary for visibility
+          echo "## Released $TAG" >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.changesets.outputs.publishedPackages }}' \
+            | jq -r '.[] | "- **\(.name)** @ `\(.version)`"' \
+            >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat "$NOTES_FILE" >> $GITHUB_STEP_SUMMARY
