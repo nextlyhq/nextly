@@ -33,4 +33,3 @@ export { dc_tratra } from './tratra';
 export { dc_adminrefactor } from './adminrefactor';
 export { dc_course } from './course';
 export { dc_test } from './test';
-export { dc_testone } from './testone';
