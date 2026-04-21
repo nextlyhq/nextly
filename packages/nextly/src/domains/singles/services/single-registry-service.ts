@@ -48,6 +48,8 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 
+import { resolveSingleTableName } from "./resolve-single-table-name";
+
 // ============================================================
 // Types
 // ============================================================
@@ -505,7 +507,13 @@ export class SingleRegistryService extends BaseRegistryService<
           await this.registerSingle({
             slug: config.slug,
             label: config.label,
-            tableName: config.tableName ?? this.generateTableName(config.slug),
+            // Route through the canonical resolver so registry and DDL paths
+            // never disagree on the single's physical table name, even when
+            // an explicit dbName/tableName is provided without the prefix.
+            tableName: resolveSingleTableName({
+              slug: config.slug,
+              dbName: config.tableName,
+            }),
             description: config.description,
             fields: config.fields,
             admin: config.admin,
@@ -666,7 +674,13 @@ export class SingleRegistryService extends BaseRegistryService<
     schemaHash: string
   ): Record<string, unknown> {
     const now = new Date();
-    const tableName = this.ensureTableNamePrefix(data.tableName);
+    // Resolve through the canonical helper so a stale or legacy tableName
+    // (e.g. missing the "single_" prefix) is corrected at the last write
+    // barrier, keeping the registry rows and the physical DDL in sync.
+    const tableName = resolveSingleTableName({
+      slug: data.slug,
+      dbName: data.tableName,
+    });
     return {
       id: this.generateId(),
       slug: data.slug,
@@ -720,33 +734,15 @@ export class SingleRegistryService extends BaseRegistryService<
       return { status: "unchanged" };
     }
 
-    const disambiguatedTableName = `ds_${config.slug.replace(/-/g, "_")}_cf`;
-    try {
-      const schemaHash = calculateSchemaHash(config.fields);
-      await this.registerSingle({
-        slug: config.slug,
-        label: config.label,
-        tableName: disambiguatedTableName,
-        description: config.description,
-        fields: config.fields,
-        admin: config.admin,
-        source: "code",
-        locked: true,
-        configPath: config.configPath,
-        schemaHash,
-      });
-      this.logger.warn(
-        `Code-first sync: "${config.slug}" had table_name conflict — registered with table "${disambiguatedTableName}"`,
-        { slug: config.slug, tableName: disambiguatedTableName }
-      );
-      return { status: "created" };
-    } catch (retryError) {
-      const retryMessage =
-        retryError instanceof Error ? retryError.message : String(retryError);
-      return {
-        status: "error",
-        error: `table_name conflict (tried "${disambiguatedTableName}"): ${retryMessage}`,
-      };
-    }
+    // Historically this branch fell back to registering the single under
+    // a disambiguated "ds_<slug>_cf" table name. That produced a third
+    // naming scheme on top of the registry/DDL drift we are fixing, and
+    // masked genuine conflicts behind a silent rename. We now surface the
+    // error so the operator can resolve the conflict upstream (typically
+    // by running reconcile on startup, which is the correct mitigation).
+    return {
+      status: "error",
+      error: `Single "${config.slug}" has a table_name conflict in the registry and the expected row could not be refetched: ${message}`,
+    };
   }
 }

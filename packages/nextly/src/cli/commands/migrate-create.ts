@@ -38,6 +38,7 @@ import {
   type SchemaDiff,
 } from "../../domains/schema/services/migration-generator.js";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types.js";
 import { ComponentSchemaService } from "../../services/components/component-schema-service.js";
 import { UserExtSchemaService } from "../../services/users/user-ext-schema-service.js";
@@ -46,11 +47,7 @@ import {
   toPluralLabel,
 } from "../../shared/lib/pluralization.js";
 import type { SingleConfig } from "../../singles/config/types.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import { createContext, type CommandContext } from "../program.js";
 import {
   createAdapter,
   validateDatabaseEnv,
@@ -1005,8 +1002,12 @@ function convertToSingleRecords(
       singular: single.label?.singular ?? toTitleCase(single.slug),
       plural: single.label?.singular ?? toTitleCase(single.slug), // Singles don't need plural
     },
-    // Singles use `single_` prefix for table names
-    tableName: single.dbName ?? `single_${single.slug.replace(/-/g, "_")}`,
+    // Route through the canonical resolver so migration generation
+    // produces the same physical table name the registry and DDL paths do.
+    tableName: resolveSingleTableName({
+      slug: single.slug,
+      dbName: single.dbName,
+    }),
     fields: single.fields,
     // Singles have updatedAt only (not createdAt), but we set timestamps: true
     // since the migration generator will add both columns.
@@ -1161,7 +1162,7 @@ export function registerMigrateCreateCommand(program: Command): void {
         cmdOptions: MigrateCreateCommandOptions,
         cmd: Command
       ) => {
-        const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+        const globalOpts = cmd.optsWithGlobals();
         const context = createContext(globalOpts);
 
         const resolvedOptions: ResolvedMigrateCreateOptions = {

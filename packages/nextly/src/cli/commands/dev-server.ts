@@ -21,7 +21,9 @@ import {
   SchemaPushService,
   type SchemaPushResult,
 } from "../../domains/schema/services/schema-push-service.js";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
 import type { FieldDefinition } from "../../schemas/dynamic-collections.js";
+import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service.js";
 import {
   type ComponentRegistryService,
   type SyncComponentResult,
@@ -31,7 +33,6 @@ import {
   type SingleRegistryService,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service.js";
-import { type SupportedDialect } from "../../services/users/user-ext-schema-service.js";
 import type { CommandContext } from "../program.js";
 import type { CLIDatabaseAdapter } from "../utils/adapter.js";
 import type { LoadConfigResult } from "../utils/config-loader.js";
@@ -62,7 +63,7 @@ export async function ensureCoreTables(
 ): Promise<void> {
   const { logger } = context;
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-  const dialect = drizzleAdapter.getCapabilities().dialect as SupportedDialect;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
 
   // Quick check: if the "users" table already exists, core tables are present
   try {
@@ -162,7 +163,7 @@ export async function ensureCoreTables(
 export async function performAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  syncResult: import("../../services/collections/collection-sync-service.js").CollectionSyncResultWithValidation,
+  syncResult: CollectionSyncResultWithValidation,
   options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
@@ -207,7 +208,7 @@ export async function performAutoSync(
   // This replaces the per-table raw SQL approach with a single pushSchema call.
   // Falls back to legacy sync if pushSchema fails (e.g., no TTY for prompts).
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-  const dialect = drizzleAdapter.getCapabilities().dialect as SupportedDialect;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
 
   try {
     const schemaRegistry = new SchemaRegistry(dialect);
@@ -314,7 +315,9 @@ export async function performAutoSync(
           collectionsToSync.push(slug);
         }
       } catch (error) {
-        logger.warn(`Failed to check if table ${tableName} exists: ${error}`);
+        logger.warn(
+          `Failed to check if table ${tableName} exists: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
   }
@@ -506,14 +509,14 @@ export async function performSinglesAutoSync(
       continue;
     }
 
-    // Generate table name using the same convention as the registry
-    // Defined outside try block so it's accessible in catch for verification
-    const tableName =
-      singleConfig.dbName ??
-      `single_${slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`;
+    // Route through the canonical resolver so DDL and the dynamic_singles
+    // registry row always agree on the physical table name, regardless of
+    // whether the single config specifies dbName explicitly.
+    // Defined outside the try block so it's accessible in catch for verification.
+    const tableName = resolveSingleTableName({
+      slug,
+      dbName: singleConfig.dbName,
+    });
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);
@@ -696,7 +699,7 @@ export async function performComponentsAutoSync(
         );
         const addedColumns = await pushService.addMissingColumnsForFields(
           tableName,
-          componentConfig.fields as unknown as FieldConfig[],
+          componentConfig.fields,
           { timestamps: true }
         );
 
