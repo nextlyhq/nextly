@@ -168,6 +168,10 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         }
       );
 
+      if (!submissionEntry.success) {
+        return submissionEntry;
+      }
+
       const submissionId =
         submissionEntry.data &&
         typeof submissionEntry.data === "object" &&

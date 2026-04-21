@@ -486,6 +486,22 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // All collections have a title column (NOT NULL) in their database table,
+      // so ensure we always have a title value — fall back to the name field or
+      // the generated slug if the caller didn't provide one.
+      if (
+        !finalData.title ||
+        typeof finalData.title !== "string" ||
+        finalData.title.trim() === ""
+      ) {
+        const nameValue = finalData.name;
+        if (typeof nameValue === "string" && nameValue.trim()) {
+          finalData.title = nameValue.trim();
+        } else {
+          finalData.title = finalData.slug as string;
+        }
+      }
+
       // Final safety pass: ensure upload field values are IDs, not populated objects.
       fields.forEach(field => {
         if (field.type === "upload" && finalData[field.name] != null) {
