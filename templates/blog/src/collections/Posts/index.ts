@@ -33,7 +33,10 @@ export const Posts = defineCollection({
     text({ name: "slug", required: true, unique: true }),
     richText({ name: "content" }),
     upload({ name: "featuredImage", relationTo: "media" }),
-    relationship({ name: "author", relationTo: "authors" }),
+    // Author: the post belongs to a user. Public-facing author profile
+    // at `/authors/[slug]` resolves to a user by their `slug` extension
+    // field. See blog/configs/codefirst.config.ts for the user extension.
+    relationship({ name: "author", relationTo: "users" }),
     relationship({
       name: "categories",
       relationTo: "categories",

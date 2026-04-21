@@ -20,18 +20,27 @@ export interface Media {
   altText?: string | null;
 }
 
+/**
+ * Author: the public-facing identity a post is attributed to.
+ *
+ * Backed by the `users` collection under the hood - the template
+ * migrated from a standalone `authors` collection to users-as-authors
+ * in Task 17. Fields here are the subset of User we surface on the
+ * frontend. Auth fields (email, password, roles) are intentionally
+ * omitted: they are admin-only and must not leak through the Direct API.
+ *
+ * The `avatarUrl` is a plain text URL (user-extension fields support
+ * only scalar types in the current Nextly core). If you want to upgrade
+ * to an upload-backed avatar, either add a top-level `avatar` upload
+ * field on the users collection in core, or swap this type for `Media`
+ * and update the admin flow.
+ */
 export interface Author {
   id: string;
   name: string;
   slug: string;
   bio?: string | null;
-  avatar?: Media | null;
-  social?: {
-    twitter?: string | null;
-    github?: string | null;
-    linkedin?: string | null;
-    website?: string | null;
-  } | null;
+  avatarUrl?: string | null;
 }
 
 export interface Category {

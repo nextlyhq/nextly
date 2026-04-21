@@ -5,8 +5,19 @@ import type { Author } from "@/lib/queries/types";
 
 /**
  * AuthorCard - displays author avatar, name, and bio.
+ *
  * Used on single post pages (compact variant) and author profile pages
- * (full variant).
+ * (full variant). Avatar is a plain URL string (not an uploaded Media
+ * record) because user-extension fields only support scalar types today.
+ *
+ * `unoptimized` is set on the Image because avatarUrl can point at any
+ * remote host (gravatar, external CDN, GitHub raw) - not necessarily one
+ * listed in `next.config.images.remotePatterns`. Users who want
+ * optimized avatars can either add their avatar host to that allowlist
+ * and drop `unoptimized`, or swap avatarUrl for an upload-backed media
+ * relation.
+ *
+ * Falls back to an initial-letter chip when no URL is provided.
  */
 
 interface AuthorCardProps {
@@ -16,18 +27,18 @@ interface AuthorCardProps {
 }
 
 export function AuthorCard({ author, variant = "compact" }: AuthorCardProps) {
-  const { name, slug, bio, avatar } = author;
+  const { name, slug, bio, avatarUrl } = author;
 
   if (variant === "full") {
     return (
       <div className="flex flex-col items-center text-center">
-        {avatar?.url ? (
+        {avatarUrl ? (
           <Image
-            src={avatar.url}
-            alt={avatar.altText || name}
+            src={avatarUrl}
+            alt={name}
             width={96}
             height={96}
-            sizes="96px"
+            unoptimized
             className="mb-4 rounded-full object-cover"
           />
         ) : (
@@ -53,13 +64,13 @@ export function AuthorCard({ author, variant = "compact" }: AuthorCardProps) {
       href={`/authors/${slug}`}
       className="flex items-center gap-3 rounded-lg border border-neutral-200 p-4 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900"
     >
-      {avatar?.url ? (
+      {avatarUrl ? (
         <Image
-          src={avatar.url}
-          alt={avatar.altText || name}
+          src={avatarUrl}
+          alt={name}
           width={48}
           height={48}
-          sizes="48px"
+          unoptimized
           className="rounded-full object-cover"
         />
       ) : (

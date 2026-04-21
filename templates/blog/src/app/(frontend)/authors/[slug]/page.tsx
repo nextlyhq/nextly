@@ -68,14 +68,8 @@ export default async function AuthorPage({
     "@type": "Person",
     name: author.name,
     description: author.bio ?? undefined,
-    image: author.avatar?.url,
+    image: author.avatarUrl ?? undefined,
     url: absoluteUrl(`/authors/${slug}`),
-    sameAs: [
-      author.social?.website,
-      author.social?.twitter,
-      author.social?.github,
-      author.social?.linkedin,
-    ].filter(Boolean),
   };
 
   // Two-item breadcrumb (Home → Author). Intentionally no middle

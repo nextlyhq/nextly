@@ -26,17 +26,18 @@ interface SeedData {
   // Optional. Lets the template fetch missing media from a public URL when
   // the local file is absent (e.g. user deleted it, scaffold skipped it).
   seedMedia?: SeedMediaConfig;
-  authors: Array<{
+  // Users double as authors in this template (users-as-authors pattern
+  // from Task 17). `slug`, `bio`, and `avatarUrl` are user-extension
+  // scalar fields (see ../configs/codefirst.config.ts). `avatarUrl` can
+  // be either a full URL or a filename; relative filenames get prefixed
+  // with `seedMedia.baseUrl` at seed time.
+  users: Array<{
     name: string;
+    email: string;
+    password: string;
     slug: string;
     bio: string;
-    avatar: string;
-    social?: {
-      twitter?: string;
-      github?: string;
-      linkedin?: string;
-      website?: string;
-    };
+    avatarUrl?: string;
   }>;
   categories: Array<{
     name: string;
@@ -266,32 +267,53 @@ export default async function seed(): Promise<void> {
     }
   };
 
-  for (const author of seedData.authors) {
-    await uploadAndTrack(author.avatar, `${author.name} avatar`);
-  }
+  // Post cover images go through the media upload path.
+  // User avatars are text URLs (resolved below) so they don't get
+  // uploaded here; they stay as raw URLs in the `avatarUrl` user field.
   for (const post of seedData.posts) {
     if (post.featuredImage) {
       await uploadAndTrack(post.featuredImage, post.title);
     }
   }
 
+  // Resolve an avatarUrl to a full URL. Absolute URLs pass through; bare
+  // filenames are prefixed with seedMedia.baseUrl so GitHub-hosted seed
+  // assets work without uploading into the media collection.
+  const resolveAvatarUrl = (raw: string | undefined): string | null => {
+    if (!raw) return null;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    const base = seedMedia?.baseUrl;
+    if (!base) return null;
+    return base.endsWith("/") ? base + raw : `${base}/${raw}`;
+  };
+
   // Step 2: Create content entries, linking media IDs where we have them.
-  console.log("  Creating authors...");
-  const authorIdMap: Record<string, string> = {};
-  for (const author of seedData.authors) {
-    const avatarId = mediaIdByFilename.get(author.avatar);
-    const created = await nextly.create({
-      collection: "authors",
+  console.log("  Creating users...");
+  const userIdMap: Record<string, string> = {};
+  for (const user of seedData.users) {
+    // Skip if user already exists (idempotency: a re-run shouldn't
+    // collide on the unique email index).
+    const existing = await nextly.find({
+      collection: "users",
+      where: { email: { equals: user.email } },
+      limit: 1,
+      depth: 0,
+    });
+    if (existing.totalDocs > 0) {
+      userIdMap[user.slug] = existing.docs[0].id as string;
+      continue;
+    }
+    const created = await nextly.users.create({
+      email: user.email,
+      password: user.password,
       data: {
-        title: author.name,
-        name: author.name,
-        slug: author.slug,
-        bio: author.bio,
-        social: author.social,
-        ...(avatarId ? { avatar: avatarId } : {}),
+        name: user.name,
+        slug: user.slug,
+        bio: user.bio,
+        avatarUrl: resolveAvatarUrl(user.avatarUrl),
       },
     });
-    authorIdMap[author.slug] = created.id as string;
+    userIdMap[user.slug] = created.id as string;
   }
 
   console.log("  Creating categories...");
@@ -326,7 +348,7 @@ export default async function seed(): Promise<void> {
 
   console.log("  Creating posts...");
   for (const post of seedData.posts) {
-    const authorId = authorIdMap[post.author];
+    const authorId = userIdMap[post.author];
     const categoryIds = post.categories
       .map(slug => categoryIdMap[slug])
       .filter(Boolean);
