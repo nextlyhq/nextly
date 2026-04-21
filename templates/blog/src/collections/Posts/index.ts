@@ -20,6 +20,8 @@ import {
   group,
 } from "@revnixhq/nextly/config";
 
+import { authenticated } from "@/access/authenticated";
+import { isAuthorOrEditor } from "@/access/is-author-or-editor";
 import { autoSlug } from "@/hooks/auto-slug";
 
 import { computeReadingTime } from "./hooks/reading-time";
@@ -81,6 +83,18 @@ export const Posts = defineCollection({
   admin: {
     useAsTitle: "title",
     defaultColumns: ["title", "status", "author", "publishedAt"],
+  },
+  // Access control: reads are public (frontend queries filter by
+  // status=published for visitors); any logged-in user can draft a
+  // post; content-role users (admin/editor/author) can update or
+  // delete. Row-level "authors can only edit their own posts" is
+  // enforced by the RBAC permission rules on the `author` role - the
+  // AccessControlFunction signature does not receive the target doc.
+  access: {
+    read: true,
+    create: authenticated,
+    update: isAuthorOrEditor,
+    delete: isAuthorOrEditor,
   },
   hooks: {
     beforeValidate: [autoSlug, requireFeaturedAlt],

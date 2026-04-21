@@ -15,6 +15,8 @@ import path from "path";
 
 import { getNextly } from "@revnixhq/nextly";
 
+import { seedRoles } from "./roles";
+
 // Approach is replaced by the CLI during scaffolding
 const APPROACH = "{{approach}}";
 
@@ -38,6 +40,13 @@ interface SeedData {
     slug: string;
     bio: string;
     avatarUrl?: string;
+    /**
+     * Role slug to assign. Must match a role seeded by `seedRoles`
+     * (`admin`, `editor`, or `author`). Missing role silently falls
+     * through without assignment - the user still exists but has
+     * no content role.
+     */
+    role?: "admin" | "editor" | "author";
   }>;
   categories: Array<{
     name: string;
@@ -287,7 +296,11 @@ export default async function seed(): Promise<void> {
     return base.endsWith("/") ? base + raw : `${base}/${raw}`;
   };
 
-  // Step 2: Create content entries, linking media IDs where we have them.
+  // Step 2a: Seed roles first so user creation can assign them.
+  console.log("  Seeding roles...");
+  const roleIdBySlug = await seedRoles(nextly);
+
+  // Step 2b: Create content entries, linking media IDs where we have them.
   console.log("  Creating users...");
   const userIdMap: Record<string, string> = {};
   for (const user of seedData.users) {
@@ -299,21 +312,46 @@ export default async function seed(): Promise<void> {
       limit: 1,
       depth: 0,
     });
+    // Build role IDs array if seed-data declares one. Nextly's user
+    // mutation service accepts `roles: string[]` in the create/update
+    // payload and handles the `user_roles` join rows automatically.
+    const roleSlug = user.role;
+    const roleIds =
+      roleSlug && roleIdBySlug[roleSlug] ? [roleIdBySlug[roleSlug]] : [];
+
+    let userId: string;
     if (existing.totalDocs > 0) {
-      userIdMap[user.slug] = existing.docs[0].id as string;
-      continue;
+      userId = existing.docs[0].id as string;
+      if (roleIds.length > 0) {
+        // Re-running seed against an existing user: update roles.
+        // Wrapped in try/catch so a role-assignment failure doesn't
+        // block the rest of the seed.
+        try {
+          await nextly.users.update({
+            id: userId,
+            data: { roles: roleIds },
+          });
+        } catch (err) {
+          console.log(
+            `  Warning: could not update role "${roleSlug}" on ${user.email}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+    } else {
+      const created = await nextly.users.create({
+        email: user.email,
+        password: user.password,
+        data: {
+          name: user.name,
+          slug: user.slug,
+          bio: user.bio,
+          avatarUrl: resolveAvatarUrl(user.avatarUrl),
+          ...(roleIds.length > 0 ? { roles: roleIds } : {}),
+        },
+      });
+      userId = created.id as string;
     }
-    const created = await nextly.users.create({
-      email: user.email,
-      password: user.password,
-      data: {
-        name: user.name,
-        slug: user.slug,
-        bio: user.bio,
-        avatarUrl: resolveAvatarUrl(user.avatarUrl),
-      },
-    });
-    userIdMap[user.slug] = created.id as string;
+    userIdMap[user.slug] = userId;
   }
 
   console.log("  Creating categories...");
