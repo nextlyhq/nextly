@@ -4,7 +4,7 @@ An open-source CMS and app framework for Next.js. Define your content schema wit
 
 ## Packages
 
-### Core
+### Core 
 
 | Package            | Description                                             |
 | ------------------ | ------------------------------------------------------- |
