@@ -276,9 +276,10 @@ export async function PATCH(
       };
 
       if (labels.singular !== undefined) {
+        const singular = labels.singular.trim();
         updateData.labels = {
-          singular: labels.singular,
-          plural: labels.plural?.trim() || simplePluralize(labels.singular),
+          singular,
+          plural: labels.plural?.trim() || simplePluralize(singular),
         };
       } else {
         updateData.labels = labels;
@@ -309,6 +310,7 @@ export async function PATCH(
       "sidebarGroup",
       "hidden",
       "useAsTitle",
+      "defaultColumns",
     ] as const;
 
     // Collect admin field overrides from both nested admin object and flat top-level fields

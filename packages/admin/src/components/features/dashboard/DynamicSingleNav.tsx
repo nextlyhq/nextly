@@ -1,8 +1,5 @@
 "use client";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
-import React from "react";
-
 import * as Icons from "@admin/components/icons";
 import { Bookmark, Globe, type LucideIcon } from "@admin/components/icons";
 import {
@@ -16,9 +13,10 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useSidebarPins } from "@admin/hooks/useSidebarPins";
-import { simplePluralize } from "@admin/lib/fields";
 import { filterSingleItems } from "@admin/lib/permissions/authorization";
 import { cn } from "@admin/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
+import React from "react";
 
 interface DynamicSingleNavProps {
   isActive: (href?: string) => boolean;
@@ -75,7 +73,7 @@ export function DynamicSingleNav({
 
   const getDisplayName = (single: { label?: string; slug: string }) => {
     const baseLabel = single.label || single.slug;
-    return capitalizeFirstLetter(simplePluralize(baseLabel));
+    return capitalizeFirstLetter(baseLabel);
   };
 
   // Filter to singles belonging to the "Singles" sidebar group

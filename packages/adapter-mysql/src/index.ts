@@ -596,11 +596,13 @@ export class MySqlAdapter extends DrizzleAdapter {
     // Cast needed because mysql2/promise Pool type differs from drizzle's expected type
     // MySQL requires mode when schema is provided
 
+    /* eslint-disable @typescript-eslint/no-explicit-any */
     return (
       schema
         ? drizzle({ client: pool as any, schema, mode: "default" })
         : drizzle(pool as any)
     ) as T;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   /**
@@ -713,13 +715,11 @@ export class MySqlAdapter extends DrizzleAdapter {
   private createTransactionContext(
     connection: PoolConnection
   ): TransactionContext {
-    const adapter = this;
-
     return {
-      async execute<T = unknown>(
+      execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []
-      ): Promise<T[]> {
+      ): Promise<T[]> => {
         const [rows] = await connection.query<RowDataPacket[]>(
           sql,
           params as unknown[]
@@ -727,16 +727,16 @@ export class MySqlAdapter extends DrizzleAdapter {
         return rows as T[];
       },
 
-      async insert<T = unknown>(
+      insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         _options?: InsertOptions
-      ): Promise<T> {
+      ): Promise<T> => {
         const columns = Object.keys(data);
         const values = Object.values(data);
-        const placeholders = adapter.buildPlaceholders(values.length, 0);
+        const placeholders = this.buildPlaceholders(values.length, 0);
 
-        const sql = `INSERT INTO ${adapter.escapeIdentifier(table)} (${columns.map(c => adapter.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
+        const sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
         const [result] = await connection.query<ResultSetHeader>(sql, values);
 
@@ -744,7 +744,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         // Use insertId if available (auto-increment), otherwise use all inserted values
         if (result.insertId) {
           const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT * FROM ${adapter.escapeIdentifier(table)} WHERE id = ?`,
+            `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
             [result.insertId]
           );
           return rows[0] as T;
@@ -752,20 +752,20 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // Fallback: SELECT by all inserted values
         const whereClauses = columns.map(
-          c => `${adapter.escapeIdentifier(c)} = ?`
+          c => `${this.escapeIdentifier(c)} = ?`
         );
         const [rows] = await connection.query<RowDataPacket[]>(
-          `SELECT * FROM ${adapter.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
+          `SELECT * FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
         return rows[0] as T;
       },
 
-      async insertMany<T = unknown>(
+      insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
         _options?: InsertOptions
-      ): Promise<T[]> {
+      ): Promise<T[]> => {
         if (data.length === 0) return [];
 
         const columns = Object.keys(data[0]);
@@ -781,7 +781,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           valuesClauses.push(`(${placeholders.join(", ")})`);
         }
 
-        const sql = `INSERT INTO ${adapter.escapeIdentifier(table)} (${columns.map(c => adapter.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
+        const sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
         const [result] = await connection.query<ResultSetHeader>(
           sql,
@@ -797,7 +797,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           }
           const placeholders = ids.map(() => "?").join(", ");
           const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT * FROM ${adapter.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
+            `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
           return rows as T[];
@@ -809,45 +809,43 @@ export class MySqlAdapter extends DrizzleAdapter {
 
       // TransactionContext CRUD methods delegate to the adapter's CRUD
       // which uses Drizzle query API via the TableResolver.
-      // Removed references to buildSelectQuery/buildUpdateQuery/buildDeleteQuery/buildUpsertQuery
-      // which no longer exist on DrizzleAdapter.
-      async select<T = unknown>(
+      select: async <T = unknown>(
         table: string,
         options?: SelectOptions
-      ): Promise<T[]> {
-        return adapter.select<T>(table, options);
+      ): Promise<T[]> => {
+        return this.select<T>(table, options);
       },
 
-      async selectOne<T = unknown>(
+      selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
-      ): Promise<T | null> {
-        return adapter.selectOne<T>(table, options);
+      ): Promise<T | null> => {
+        return this.selectOne<T>(table, options);
       },
 
-      async update<T = unknown>(
+      update: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         where: WhereClause,
         options?: UpdateOptions
-      ): Promise<T[]> {
-        return adapter.update<T>(table, data, where, options);
+      ): Promise<T[]> => {
+        return this.update<T>(table, data, where, options);
       },
 
-      async delete(
+      delete: async (
         table: string,
         where: WhereClause,
         _options?: DeleteOptions
-      ): Promise<number> {
-        return adapter.delete(table, where);
+      ): Promise<number> => {
+        return this.delete(table, where);
       },
 
-      async upsert<T = unknown>(
+      upsert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         options: UpsertOptions
-      ): Promise<T> {
-        return adapter.upsert<T>(table, data, options);
+      ): Promise<T> => {
+        return this.upsert<T>(table, data, options);
       },
 
       // Savepoints disabled per approved approach

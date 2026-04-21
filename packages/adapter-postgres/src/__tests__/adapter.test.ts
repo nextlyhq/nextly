@@ -16,6 +16,23 @@ import {
 } from "../index";
 import type { PostgresAdapterConfig } from "../index";
 
+type PgErrorLike = Error & {
+  code?: string;
+  constraint?: string;
+  table?: string;
+  column?: string;
+  detail?: string;
+  hint?: string;
+  severity?: string;
+};
+
+type MockPoolClass = {
+  new (config: unknown): unknown;
+  lastConfig: Record<string, unknown> | null;
+  instanceCount: number;
+  reset: () => void;
+};
+
 // Create mock objects
 const mockClient = {
   query: vi.fn(),
@@ -44,13 +61,13 @@ vi.mock("pg", () => {
       idleCount = mockPool.idleCount;
       waitingCount = mockPool.waitingCount;
 
-      constructor(public config: any) {
+      constructor(public config: Record<string, unknown>) {
         // Store config for inspection
         MockPool.lastConfig = config;
         MockPool.instanceCount++;
       }
 
-      static lastConfig: any = null;
+      static lastConfig: Record<string, unknown> | null = null;
       static instanceCount = 0;
 
       static reset() {
@@ -63,7 +80,7 @@ vi.mock("pg", () => {
 
 describe("PostgresAdapter", () => {
   let adapter: PostgresAdapter;
-  let MockPool: any;
+  let MockPool: MockPoolClass;
 
   const testConfig: PostgresAdapterConfig = {
     url: "postgres://user:pass@localhost:5432/testdb",
@@ -88,7 +105,7 @@ describe("PostgresAdapter", () => {
 
     // Get mock class and reset
     const pgModule = await import("pg");
-    MockPool = pgModule.Pool;
+    MockPool = pgModule.Pool as unknown as MockPoolClass;
     MockPool.reset();
 
     adapter = new PostgresAdapter(testConfig);
@@ -302,7 +319,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify query errors", async () => {
-      const pgError = new Error("syntax error") as any;
+      const pgError = new Error("syntax error") as PgErrorLike;
       pgError.code = "42601"; // syntax_error
       mockPool.query.mockRejectedValueOnce(pgError);
 
@@ -320,7 +337,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify unique violation (23505)", async () => {
-      const pgError = new Error("duplicate key") as any;
+      const pgError = new Error("duplicate key") as PgErrorLike;
       pgError.code = "23505";
       pgError.constraint = "users_email_key";
       pgError.table = "users";
@@ -337,7 +354,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify foreign key violation (23503)", async () => {
-      const pgError = new Error("foreign key violation") as any;
+      const pgError = new Error("foreign key violation") as PgErrorLike;
       pgError.code = "23503";
       pgError.constraint = "posts_user_id_fkey";
       mockPool.query.mockRejectedValueOnce(pgError);
@@ -351,7 +368,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify not null violation (23502)", async () => {
-      const pgError = new Error("null value not allowed") as any;
+      const pgError = new Error("null value not allowed") as PgErrorLike;
       pgError.code = "23502";
       pgError.column = "email";
       mockPool.query.mockRejectedValueOnce(pgError);
@@ -366,7 +383,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify deadlock (40P01)", async () => {
-      const pgError = new Error("deadlock detected") as any;
+      const pgError = new Error("deadlock detected") as PgErrorLike;
       pgError.code = "40P01";
       mockPool.query.mockRejectedValueOnce(pgError);
 
@@ -379,7 +396,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify serialization failure (40001)", async () => {
-      const pgError = new Error("could not serialize access") as any;
+      const pgError = new Error("could not serialize access") as PgErrorLike;
       pgError.code = "40001";
       mockPool.query.mockRejectedValueOnce(pgError);
 
@@ -392,7 +409,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify connection errors (08xxx)", async () => {
-      const pgError = new Error("connection refused") as any;
+      const pgError = new Error("connection refused") as PgErrorLike;
       pgError.code = "08006";
       mockPool.query.mockRejectedValueOnce(pgError);
 
@@ -403,7 +420,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should classify timeout (57014)", async () => {
-      const pgError = new Error("query cancelled") as any;
+      const pgError = new Error("query cancelled") as PgErrorLike;
       pgError.code = "57014";
       mockPool.query.mockRejectedValueOnce(pgError);
 
@@ -509,7 +526,9 @@ describe("PostgresAdapter", () => {
 
     describe("retry logic", () => {
       it("should retry on serialization failure (40001)", async () => {
-        const serializationError = new Error("serialization failure") as any;
+        const serializationError = new Error(
+          "serialization failure"
+        ) as PgErrorLike;
         serializationError.code = "40001";
 
         let callCount = 0;
@@ -528,7 +547,7 @@ describe("PostgresAdapter", () => {
       });
 
       it("should retry on deadlock (40P01)", async () => {
-        const deadlockError = new Error("deadlock detected") as any;
+        const deadlockError = new Error("deadlock detected") as PgErrorLike;
         deadlockError.code = "40P01";
 
         let callCount = 0;
@@ -547,7 +566,7 @@ describe("PostgresAdapter", () => {
       });
 
       it("should not retry non-retryable errors", async () => {
-        const uniqueError = new Error("unique violation") as any;
+        const uniqueError = new Error("unique violation") as PgErrorLike;
         uniqueError.code = "23505";
 
         const callback = vi.fn().mockRejectedValue(uniqueError);
@@ -560,7 +579,9 @@ describe("PostgresAdapter", () => {
       });
 
       it("should respect retryCount limit", async () => {
-        const serializationError = new Error("serialization failure") as any;
+        const serializationError = new Error(
+          "serialization failure"
+        ) as PgErrorLike;
         serializationError.code = "40001";
 
         const callback = vi.fn().mockRejectedValue(serializationError);
@@ -769,7 +790,7 @@ describe("PostgresAdapter", () => {
       });
       await adapter.connect();
 
-      expect(MockPool.lastConfig.ssl).toMatchObject({
+      expect(MockPool.lastConfig?.ssl).toMatchObject({
         rejectUnauthorized: true,
         ca: "cert-content",
       });
@@ -863,7 +884,7 @@ describe("PostgresAdapter", () => {
 
       // Simulate pool error event
       const errorHandler = mockPool.on.mock.calls.find(
-        (call: any) => call[0] === "error"
+        (call: unknown[]) => call[0] === "error"
       )?.[1];
       expect(errorHandler).toBeDefined();
 

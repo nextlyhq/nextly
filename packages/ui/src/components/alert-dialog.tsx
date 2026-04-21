@@ -58,8 +58,9 @@ const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
 
 const AlertDialogPortal = AlertDialogPrimitive.Portal;
 
-export interface AlertDialogOverlayProps
-  extends ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Overlay> {}
+export type AlertDialogOverlayProps = ComponentPropsWithoutRef<
+  typeof AlertDialogPrimitive.Overlay
+>;
 
 /**
  * AlertDialogOverlay - The backdrop overlay behind the dialog content.
@@ -79,8 +80,9 @@ const AlertDialogOverlay = forwardRef<
 ));
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName;
 
-export interface AlertDialogContentProps
-  extends ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content> {}
+export type AlertDialogContentProps = ComponentPropsWithoutRef<
+  typeof AlertDialogPrimitive.Content
+>;
 
 /**
  * AlertDialogContent - The main dialog content container.
@@ -107,8 +109,7 @@ const AlertDialogContent = forwardRef<
 });
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName;
 
-export interface AlertDialogHeaderProps
-  extends HTMLAttributes<HTMLDivElement> {}
+export type AlertDialogHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * AlertDialogHeader - Container for dialog title and description.
@@ -127,8 +128,7 @@ const AlertDialogHeader = forwardRef<HTMLDivElement, AlertDialogHeaderProps>(
 );
 AlertDialogHeader.displayName = "AlertDialogHeader";
 
-export interface AlertDialogFooterProps
-  extends HTMLAttributes<HTMLDivElement> {}
+export type AlertDialogFooterProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * AlertDialogFooter - Container for dialog action buttons.
@@ -147,8 +147,9 @@ const AlertDialogFooter = forwardRef<HTMLDivElement, AlertDialogFooterProps>(
 );
 AlertDialogFooter.displayName = "AlertDialogFooter";
 
-export interface AlertDialogTitleProps
-  extends ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Title> {}
+export type AlertDialogTitleProps = ComponentPropsWithoutRef<
+  typeof AlertDialogPrimitive.Title
+>;
 
 /**
  * AlertDialogTitle - The title of the alert dialog.
@@ -168,8 +169,9 @@ const AlertDialogTitle = forwardRef<
 ));
 AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName;
 
-export interface AlertDialogDescriptionProps
-  extends ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Description> {}
+export type AlertDialogDescriptionProps = ComponentPropsWithoutRef<
+  typeof AlertDialogPrimitive.Description
+>;
 
 /**
  * AlertDialogDescription - The description text of the alert dialog.
@@ -187,8 +189,9 @@ const AlertDialogDescription = forwardRef<
 AlertDialogDescription.displayName =
   AlertDialogPrimitive.Description.displayName;
 
-export interface AlertDialogActionProps
-  extends ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> {}
+export type AlertDialogActionProps = ComponentPropsWithoutRef<
+  typeof AlertDialogPrimitive.Action
+>;
 
 /**
  * AlertDialogAction - The primary action button (e.g., "Delete", "Confirm").
@@ -208,8 +211,9 @@ const AlertDialogAction = forwardRef<
 ));
 AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName;
 
-export interface AlertDialogCancelProps
-  extends ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel> {}
+export type AlertDialogCancelProps = ComponentPropsWithoutRef<
+  typeof AlertDialogPrimitive.Cancel
+>;
 
 /**
  * AlertDialogCancel - The cancel button.

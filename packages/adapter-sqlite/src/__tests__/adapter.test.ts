@@ -14,6 +14,9 @@ import {
   VERSION,
 } from "../index";
 
+type SqliteErrorLike = Error & { code?: string };
+type DatabaseErrorLike = { kind?: string; code?: string; message?: string };
+
 // Mock better-sqlite3
 const mockPrepare = vi.fn();
 const mockExec = vi.fn();
@@ -353,7 +356,7 @@ describe("SqliteAdapter", () => {
       await adapter.connect();
 
       const sqliteError = new Error("UNIQUE constraint failed");
-      (sqliteError as any).code = "SQLITE_CONSTRAINT_UNIQUE";
+      (sqliteError as SqliteErrorLike).code = "SQLITE_CONSTRAINT_UNIQUE";
       // INSERT without RETURNING uses .run()
       mockStatement.run.mockImplementation(() => {
         throw sqliteError;
@@ -364,8 +367,8 @@ describe("SqliteAdapter", () => {
           "dup@test.com",
         ]);
         expect.fail("Should have thrown");
-      } catch (error: any) {
-        expect(error.kind).toBe("unique_violation");
+      } catch (error: unknown) {
+        expect((error as DatabaseErrorLike).kind).toBe("unique_violation");
       }
     });
 
@@ -374,7 +377,7 @@ describe("SqliteAdapter", () => {
       await adapter.connect();
 
       const sqliteError = new Error("FOREIGN KEY constraint failed");
-      (sqliteError as any).code = "SQLITE_CONSTRAINT_FOREIGNKEY";
+      (sqliteError as SqliteErrorLike).code = "SQLITE_CONSTRAINT_FOREIGNKEY";
       // INSERT without RETURNING uses .run()
       mockStatement.run.mockImplementation(() => {
         throw sqliteError;
@@ -385,8 +388,8 @@ describe("SqliteAdapter", () => {
           999,
         ]);
         expect.fail("Should have thrown");
-      } catch (error: any) {
-        expect(error.kind).toBe("foreign_key_violation");
+      } catch (error: unknown) {
+        expect((error as DatabaseErrorLike).kind).toBe("foreign_key_violation");
       }
     });
 
@@ -395,7 +398,7 @@ describe("SqliteAdapter", () => {
       await adapter.connect();
 
       const sqliteError = new Error("NOT NULL constraint failed");
-      (sqliteError as any).code = "SQLITE_CONSTRAINT_NOTNULL";
+      (sqliteError as SqliteErrorLike).code = "SQLITE_CONSTRAINT_NOTNULL";
       // INSERT without RETURNING uses .run()
       mockStatement.run.mockImplementation(() => {
         throw sqliteError;
@@ -406,8 +409,8 @@ describe("SqliteAdapter", () => {
           null,
         ]);
         expect.fail("Should have thrown");
-      } catch (error: any) {
-        expect(error.kind).toBe("not_null_violation");
+      } catch (error: unknown) {
+        expect((error as DatabaseErrorLike).kind).toBe("not_null_violation");
       }
     });
 
@@ -416,7 +419,7 @@ describe("SqliteAdapter", () => {
       await adapter.connect();
 
       const sqliteError = new Error("database is locked");
-      (sqliteError as any).code = "SQLITE_BUSY";
+      (sqliteError as SqliteErrorLike).code = "SQLITE_BUSY";
       // SELECT uses .all()
       mockStatement.all.mockImplementation(() => {
         throw sqliteError;
@@ -425,8 +428,8 @@ describe("SqliteAdapter", () => {
       try {
         await adapter.executeQuery("SELECT * FROM users");
         expect.fail("Should have thrown");
-      } catch (error: any) {
-        expect(error.kind).toBe("timeout");
+      } catch (error: unknown) {
+        expect((error as DatabaseErrorLike).kind).toBe("timeout");
       }
     });
 
@@ -435,7 +438,7 @@ describe("SqliteAdapter", () => {
       await adapter.connect();
 
       const sqliteError = new Error("unable to open database file");
-      (sqliteError as any).code = "SQLITE_CANTOPEN";
+      (sqliteError as SqliteErrorLike).code = "SQLITE_CANTOPEN";
       // SELECT uses .all()
       mockStatement.all.mockImplementation(() => {
         throw sqliteError;
@@ -444,8 +447,8 @@ describe("SqliteAdapter", () => {
       try {
         await adapter.executeQuery("SELECT 1");
         expect.fail("Should have thrown");
-      } catch (error: any) {
-        expect(error.kind).toBe("connection");
+      } catch (error: unknown) {
+        expect((error as DatabaseErrorLike).kind).toBe("connection");
       }
     });
 
@@ -464,8 +467,8 @@ describe("SqliteAdapter", () => {
           "dup@test.com",
         ]);
         expect.fail("Should have thrown");
-      } catch (error: any) {
-        expect(error.kind).toBe("unique_violation");
+      } catch (error: unknown) {
+        expect((error as DatabaseErrorLike).kind).toBe("unique_violation");
       }
     });
   });
@@ -544,7 +547,7 @@ describe("SqliteAdapter", () => {
 
       mockStatement.all.mockReturnValue([{ id: 1 }]);
 
-      let txResult: any;
+      let txResult: unknown;
       await adapter.transaction(async tx => {
         txResult = await tx.execute("SELECT * FROM users WHERE id = $1", [1]);
       });
@@ -563,7 +566,7 @@ describe("SqliteAdapter", () => {
         { id: 1, email: "test@test.com", name: "Test" },
       ]);
 
-      let insertedRow: any;
+      let insertedRow: unknown;
       await adapter.transaction(async tx => {
         insertedRow = await tx.insert("users", {
           email: "test@test.com",

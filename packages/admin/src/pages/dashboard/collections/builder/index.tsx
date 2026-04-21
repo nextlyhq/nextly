@@ -33,9 +33,10 @@ import type { FieldDefinition } from "@admin/types/collection";
 const collectionFormSchema = z.object({
   singularName: z
     .string()
+    .trim()
     .min(1, "Name is required")
     .max(255, "Name is too long"),
-  pluralName: z.string().max(255, "Plural name is too long").optional(),
+  pluralName: z.string().trim().max(255, "Plural name is too long").optional(),
 });
 
 type FormData = z.infer<typeof collectionFormSchema>;
@@ -89,18 +90,20 @@ export default function CollectionBuilderPage(): React.ReactElement {
     }
 
     const formData = builder.form.getValues();
+    const singularName = formData.singularName.trim();
+    const pluralName = formData.pluralName?.trim() || undefined;
     const fieldDefinitions: FieldDefinition[] = userFields.map(
       convertToFieldDefinition
     );
     const storedHooks = convertHooksToStoredFormat(hooks);
-    const derivedSlug = toSnakeName(formData.singularName);
+    const derivedSlug = toSnakeName(singularName);
 
     createCollection(
       {
         name: derivedSlug,
         labels: {
-          singular: formData.singularName,
-          plural: formData.pluralName?.trim() || undefined,
+          singular: singularName,
+          plural: pluralName,
         },
         description: collectionSettings.description,
         icon: collectionSettings.admin?.icon,

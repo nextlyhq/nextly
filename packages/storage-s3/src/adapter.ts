@@ -58,6 +58,7 @@ import {
   HeadObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
+  type PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -71,7 +72,7 @@ import type {
   BulkDeleteResult,
 } from "@revnixhq/nextly/storage";
 
-import type { S3StorageConfig, ResolvedS3Config, S3ObjectACL } from "./types";
+import type { S3StorageConfig, ResolvedS3Config } from "./types";
 
 // ============================================================
 // S3 Storage Adapter
@@ -176,7 +177,7 @@ export class S3StorageAdapter implements IStorageAdapter {
     const key = this.generateKey(options.filename, options.folder);
 
     // Build upload parameters
-    const uploadParams: Record<string, unknown> = {
+    const uploadParams: PutObjectCommandInput = {
       Bucket: this.resolvedConfig.bucket,
       Key: key,
       Body: buffer,
@@ -208,7 +209,7 @@ export class S3StorageAdapter implements IStorageAdapter {
     // Use Upload for automatic multipart handling
     const upload = new Upload({
       client: this.client,
-      params: uploadParams as any,
+      params: uploadParams,
     });
 
     await upload.done();
@@ -451,7 +452,7 @@ export class S3StorageAdapter implements IStorageAdapter {
     const expiration = expiresIn ?? this.resolvedConfig.signedUrlExpiresIn;
 
     // Build PutObject command parameters
-    const commandParams: Record<string, unknown> = {
+    const commandParams: PutObjectCommandInput = {
       Bucket: this.resolvedConfig.bucket,
       Key: key,
       ContentType: mimeType,
@@ -463,7 +464,7 @@ export class S3StorageAdapter implements IStorageAdapter {
       commandParams.ACL = this.resolvedConfig.acl;
     }
 
-    const command = new PutObjectCommand(commandParams as any);
+    const command = new PutObjectCommand(commandParams);
 
     const uploadUrl = await getSignedUrl(this.client, command, {
       expiresIn: expiration,

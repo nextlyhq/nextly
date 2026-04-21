@@ -48,9 +48,10 @@ import {
 const collectionFormSchema = z.object({
   singularName: z
     .string()
+    .trim()
     .min(1, "Name is required")
     .max(255, "Name is too long"),
-  pluralName: z.string().max(255, "Plural name is too long").optional(),
+  pluralName: z.string().trim().max(255, "Plural name is too long").optional(),
 });
 
 type FormData = z.infer<typeof collectionFormSchema>;
@@ -227,14 +228,16 @@ export default function CollectionBuilderEditPage({
     (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
       const formData = builder.form.getValues();
+      const singularName = formData.singularName.trim();
+      const pluralName = formData.pluralName?.trim() || undefined;
       const storedHooks = convertHooksToStoredFormat(hooks);
       updateCollection(
         {
           collectionName: slug,
           updates: {
             labels: {
-              singular: formData.singularName,
-              plural: formData.pluralName?.trim() || undefined,
+              singular: singularName,
+              plural: pluralName,
             },
             icon: collectionSettings.admin?.icon,
             group: collectionSettings.admin?.group,

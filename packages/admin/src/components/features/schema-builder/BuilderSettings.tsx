@@ -83,6 +83,30 @@ export function BuilderSettings({
             </FormItem>
           )}
         />
+
+        {/* Plural Name input (collections only) */}
+        {entityType === "collection" && (
+          <FormField
+            control={form.control}
+            name="pluralName"
+            render={({ field }) => (
+              <FormItem className="space-y-1.5">
+                <FormLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Plural Name
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    {...field}
+                    placeholder="e.g., Blog Posts"
+                    disabled={isSaving}
+                    className="bg-muted/30 border-border/50 focus:bg-background transition-all"
+                  />
+                </FormControl>
+                <FormMessage className="text-[11px]" />
+              </FormItem>
+            )}
+          />
+        )}
       </div>
 
       {/* Main Settings Content */}

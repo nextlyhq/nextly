@@ -1,4 +1,4 @@
-import { config } from "@nextly/eslint-config/base";
+import { config } from "@nextly/eslint-config/react-internal";
 
 export default [
   ...config,
@@ -8,15 +8,12 @@ export default [
       "dist/**",
       ".turbo/**",
       "node_modules/**",
-      "test-*.ts",
-      "tsup.config.js",
-      "scripts/*.cjs",
-      "scripts/*.js",
+      "tsup.config.{ts,js,mjs}",
     ],
   },
   {
-    // reason: build scripts and config files use Node globals + CJS requires
-    files: ["tsup.config.{js,ts,mjs}", "*.config.{js,ts,mjs}", "scripts/**/*"],
+    // reason: build scripts use Node globals
+    files: ["*.config.{ts,js,mjs}"],
     languageOptions: {
       globals: {
         console: "readonly",
@@ -27,10 +24,6 @@ export default [
         module: "readonly",
         Buffer: "readonly",
       },
-    },
-    rules: {
-      "@typescript-eslint/no-require-imports": "off",
-      "import-x/no-unresolved": "off",
     },
   },
 ];

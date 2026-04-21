@@ -15,17 +15,13 @@
  * @since 1.0.0
  */
 
-import { Card, CardContent } from "@revnixhq/ui";
-import React, { useEffect } from "react";
-
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
-import { useAutoSave } from "@admin/hooks/useAutoSave";
-import { useDraftRecovery } from "@admin/hooks/useDraftRecovery";
 import { useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
+import { Card, CardContent } from "@revnixhq/ui";
+import React from "react";
 
-import { DraftRecoveryDialog } from "./DraftRecoveryDialog";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -33,7 +29,6 @@ import { EntryFormHeader } from "./EntryFormHeader";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { FormErrorSummary } from "./FormErrorSummary";
-import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import {
   useEntryForm,
   getCollectionFields,
@@ -178,7 +173,6 @@ export function EntryForm({
     entry,
     mode,
     onSuccess: data => {
-      autoSave.clearDraft();
       onSuccess?.(data);
     },
     onError,
@@ -226,82 +220,6 @@ export function EntryForm({
     entry: entry as Record<string, unknown> | null | undefined,
     getFormValues: () => form.getValues(),
   });
-
-  // ---------------------------------------------------------------------------
-  // Auto-Save & Draft Recovery (standalone mode only)
-  // ---------------------------------------------------------------------------
-
-  // Generate storage key for this entry
-  const storageKey = `${collection.name}-${entry?.id || "new"}`;
-
-  // Watch form values for auto-save
-  const formValues = form.watch();
-
-  // Auto-save hook (only enabled in standalone mode when dirty)
-  const autoSave = useAutoSave({
-    storageKey,
-    data: formValues,
-    enabled: !embedded && isDirty,
-    debounceMs: 2000,
-  });
-
-  // Draft recovery hook (only enabled in standalone mode)
-  const draftRecovery = useDraftRecovery({
-    storageKey,
-    currentData: entry as Record<string, unknown> | undefined,
-    onRecover: data => {
-      form.reset(data);
-    },
-    enabled: !embedded,
-  });
-
-  // Clear stale draft on mount if form loads clean (no draft recovery shown)
-  useEffect(() => {
-    if (!isDirty && !draftRecovery.showRecoveryDialog && autoSave.hasDraft) {
-      autoSave.clearDraft();
-    }
-    // Reason: intentionally runs only on mount — checks initial state to clear
-    // stale drafts; values are captured from the first render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Force save before page unload (tab close, refresh, etc.)
-  useEffect(() => {
-    if (embedded) return;
-
-    const handleBeforeUnload = () => {
-      if (isDirty) {
-        autoSave.forceSave();
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-    };
-  }, [embedded, isDirty, autoSave]);
-
-  // Clear draft when form is successfully submitted or reset
-  const { clearDraft, hasDraft } = autoSave;
-  useEffect(() => {
-    if (!isSubmitting && !isDirty && hasDraft) {
-      clearDraft();
-    }
-  }, [isSubmitting, isDirty, clearDraft, hasDraft]);
-
-  // Clear draft on unmount if form is clean (no actual changes made)
-  useEffect(() => {
-    return () => {
-      // Use direct form state check since we can't rely on captured isDirty
-      const currentFormState = form.formState.isDirty;
-      if (!currentFormState) {
-        autoSave.clearDraft();
-      }
-    };
-    // Reason: cleanup-only effect that must run exactly once on unmount;
-    // reads live form state via form.formState rather than captured deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // ---------------------------------------------------------------------------
   // Keyboard Shortcuts (standalone mode only)
@@ -355,104 +273,84 @@ export function EntryForm({
       collectionSlug={collection.name}
       isCreateMode={mode === "create"}
     >
-      <UnsavedChangesGuard isDirty={isDirty} disabled={isSubmitting}>
-        <div className={cn("space-y-6", className)}>
-          {/* Draft Recovery Dialog */}
-          {draftRecovery.draft && (
-            <DraftRecoveryDialog
-              open={draftRecovery.showRecoveryDialog}
-              savedAt={new Date(draftRecovery.draft.savedAt)}
-              onRecover={draftRecovery.recover}
-              onDiscard={() => {
-                draftRecovery.dismiss();
-                autoSave.clearDraft();
-                form.reset();
-              }}
-            />
-          )}
+      <div className={cn("space-y-6", className)}>
+        {/* Main Form */}
+        <EntryFormProvider form={form} onSubmit={handleSubmit}>
+          {/* Error summary at top of form */}
+          <FormErrorSummary errors={errors} className="mb-6" />
 
-          {/* Main Form */}
-          <EntryFormProvider form={form} onSubmit={handleSubmit}>
-            {/* Error summary at top of form */}
-            <FormErrorSummary errors={errors} className="mb-6" />
+          <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+            {/* Main Content */}
+            <div className="flex-1 space-y-6 lg:p-8 pt-6">
+              {headerContent}
+              <EntryFormHeader
+                collectionSlug={collection.name}
+                singularLabel={singularLabel}
+                mode={mode}
+                entry={entry}
+                isDeleting={isDeleting}
+                onDelete={handleDelete}
+                isDirty={isDirty}
+              />
+              {/* Custom Title & Slug row */}
+              {(titleField || slugField) && (
+                <Card>
+                  <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                    {titleField && (
+                      <div className="w-full">
+                        <FieldRenderer
+                          field={titleField}
+                          disabled={isSubmitting}
+                          readOnly={false}
+                        />
+                      </div>
+                    )}
+                    {slugField && (
+                      <div className="w-full">
+                        <FieldRenderer
+                          field={slugField}
+                          disabled={isSubmitting}
+                          readOnly={false}
+                        />
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
 
-            <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
-              {/* Main Content */}
-              <div className="flex-1 space-y-6 lg:p-8 pt-6">
-                {headerContent}
-                <EntryFormHeader
-                  collectionSlug={collection.name}
-                  singularLabel={singularLabel}
+              {mainFields.length > 0 && (
+                <EntryFormContent
+                  fields={mainFields}
+                  disabled={isSubmitting}
+                  withCard
+                />
+              )}
+            </div>
+
+            {/* Sidebar */}
+            <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-background flex flex-col relative z-10">
+              <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                <EntryFormSidebar
                   mode={mode}
                   entry={entry}
-                  isDeleting={isDeleting}
-                  onDelete={handleDelete}
-                  autoSave={{
-                    lastSavedAt: autoSave.lastSavedAt,
-                    isSaving: autoSave.isSaving,
-                  }}
-                  isDirty={isDirty}
+                  fields={sidebarFields}
+                  seoField={seoField}
+                  actions={
+                    <EntryFormActions
+                      mode={mode}
+                      isSubmitting={isSubmitting}
+                      onCancel={handleCancel}
+                      isPreviewAvailable={isPreviewAvailable}
+                      onPreview={openPreview}
+                      previewLabel={previewLabel}
+                    />
+                  }
                 />
-                {/* Custom Title & Slug row */}
-                {(titleField || slugField) && (
-                  <Card>
-                    <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                      {titleField && (
-                        <div className="w-full">
-                          <FieldRenderer
-                            field={titleField}
-                            disabled={isSubmitting}
-                            readOnly={false}
-                          />
-                        </div>
-                      )}
-                      {slugField && (
-                        <div className="w-full">
-                          <FieldRenderer
-                            field={slugField}
-                            disabled={isSubmitting}
-                            readOnly={false}
-                          />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                )}
-
-                {mainFields.length > 0 && (
-                  <EntryFormContent
-                    fields={mainFields}
-                    disabled={isSubmitting}
-                    withCard
-                  />
-                )}
-              </div>
-
-              {/* Sidebar */}
-              <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-background flex flex-col relative z-10">
-                <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                  <EntryFormSidebar
-                    mode={mode}
-                    entry={entry}
-                    fields={sidebarFields}
-                    seoField={seoField}
-                    actions={
-                      <EntryFormActions
-                        mode={mode}
-                        isSubmitting={isSubmitting}
-                        onCancel={handleCancel}
-                        isPreviewAvailable={isPreviewAvailable}
-                        onPreview={openPreview}
-                        previewLabel={previewLabel}
-                      />
-                    }
-                  />
-                </div>
               </div>
             </div>
-          </EntryFormProvider>
-        </div>
-      </UnsavedChangesGuard>
+          </div>
+        </EntryFormProvider>
+      </div>
     </EntryFormContextProvider>
   );
 }

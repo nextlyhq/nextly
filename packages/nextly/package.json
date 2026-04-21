@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/nextly",
-  "version": "0.0.139",
+  "version": "0.0.140",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",

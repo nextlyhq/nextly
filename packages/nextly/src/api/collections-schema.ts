@@ -107,8 +107,8 @@ const createCollectionSchema = z.object({
       "Slug must start with a letter and contain only lowercase letters, numbers, and underscores"
     ),
   labels: z.object({
-    singular: z.string().min(1, "Singular label is required"),
-    plural: z.string().min(1, "Plural label is required").optional(),
+    singular: z.string().trim().min(1, "Singular label is required"),
+    plural: z.string().trim().min(1, "Plural label is required").optional(),
   }),
   description: z.string().optional(),
   fields: z.array(z.any()), // Field validation is complex, handled by service
@@ -308,7 +308,7 @@ export async function POST(request: Request): Promise<Response> {
     const schemaHash = calculateSchemaHash(validated.fields);
 
     const normalizedLabels = {
-      singular: validated.labels.singular,
+      singular: validated.labels.singular.trim(),
       plural:
         validated.labels.plural?.trim() ||
         simplePluralize(validated.labels.singular),

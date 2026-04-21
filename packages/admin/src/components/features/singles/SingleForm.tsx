@@ -19,24 +19,19 @@
  * @since 1.0.0
  */
 
+import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
+import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
+import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { generateClientSchema } from "@admin/lib/field-validation";
+import { cn } from "@admin/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "@revnixhq/nextly/config";
 import { Card, CardContent } from "@revnixhq/ui";
 import React, { useEffect, useMemo, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-
-import { DraftRecoveryDialog } from "@admin/components/features/entries/EntryForm/DraftRecoveryDialog";
-import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
-import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
-import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
-import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
-import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
-import { useAutoSave } from "@admin/hooks/useAutoSave";
-import { useDraftRecovery } from "@admin/hooks/useDraftRecovery";
-import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { generateClientSchema } from "@admin/lib/field-validation";
-import { cn } from "@admin/lib/utils";
 
 import { SingleFormActions } from "./SingleFormActions";
 import { SingleFormHeader } from "./SingleFormHeader";
@@ -317,75 +312,6 @@ export function SingleForm({
   const isDirty = form.formState.isDirty;
 
   // ---------------------------------------------------------------------------
-  // Auto-Save & Draft Recovery
-  // ---------------------------------------------------------------------------
-
-  const storageKey = `single-${schema.slug}`;
-  const formValues = form.watch();
-
-  const autoSave = useAutoSave({
-    storageKey,
-    data: formValues,
-    enabled: isDirty,
-    debounceMs: 2000,
-  });
-
-  const draftRecovery = useDraftRecovery({
-    storageKey,
-    currentData: document as Record<string, unknown>,
-    onRecover: data => {
-      form.reset(data);
-    },
-    enabled: true,
-  });
-
-  // Clear stale draft on mount if form loads clean (no draft recovery shown)
-  useEffect(() => {
-    if (!isDirty && !draftRecovery.showRecoveryDialog && autoSave.hasDraft) {
-      autoSave.clearDraft();
-    }
-    // Reason: intentionally runs only on mount — checks initial state to clear
-    // stale drafts; values are captured from the first render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Force save before page unload
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (isDirty) {
-        autoSave.forceSave();
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-    };
-  }, [isDirty, autoSave]);
-
-  // Clear draft when form is successfully submitted or reset
-  const { clearDraft, hasDraft } = autoSave;
-  useEffect(() => {
-    if (!isSubmitting && !isDirty && hasDraft) {
-      clearDraft();
-    }
-  }, [isSubmitting, isDirty, clearDraft, hasDraft]);
-
-  // Clear draft on unmount if form is clean (no actual changes made)
-  useEffect(() => {
-    return () => {
-      // Use a ref check or direct state access since we can't rely on captured isDirty
-      const currentFormState = form.formState.isDirty;
-      if (!currentFormState) {
-        autoSave.clearDraft();
-      }
-    };
-    // Reason: cleanup-only effect that must run exactly once on unmount;
-    // reads live form state via form.formState rather than captured deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
 
@@ -396,15 +322,13 @@ export function SingleForm({
       await form.handleSubmit(async data => {
         try {
           await onSubmit(data);
-          // Clear draft and reset form to mark as clean
-          autoSave.clearDraft();
           form.reset(data);
         } catch (error) {
           console.error("Form submission error:", error);
         }
       })(e);
     },
-    [form, onSubmit, autoSave]
+    [form, onSubmit]
   );
 
   const handleCancel = useCallback(() => {
@@ -453,97 +377,77 @@ export function SingleForm({
   );
 
   return (
-    <UnsavedChangesGuard isDirty={isDirty} disabled={isSubmitting}>
-      <div className={cn("space-y-6", className)}>
-        {/* Draft Recovery Dialog */}
-        {draftRecovery.draft && (
-          <DraftRecoveryDialog
-            open={draftRecovery.showRecoveryDialog}
-            savedAt={new Date(draftRecovery.draft.savedAt)}
-            onRecover={draftRecovery.recover}
-            onDiscard={() => {
-              draftRecovery.dismiss();
-              autoSave.clearDraft();
-              form.reset(defaultValues);
-            }}
-          />
-        )}
+    <div className={cn("space-y-6", className)}>
+      {/* Main Form */}
+      <EntryFormProvider form={form} onSubmit={handleSubmit}>
+        {/* Error summary at top of form */}
+        <FormErrorSummary errors={errors} className="mb-6" />
 
-        {/* Main Form */}
-        <EntryFormProvider form={form} onSubmit={handleSubmit}>
-          {/* Error summary at top of form */}
-          <FormErrorSummary errors={errors} className="mb-6" />
+        <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+          {/* Main Content */}
+          <div className="flex-1 space-y-6 lg:p-8 pt-6">
+            {headerContent}
+            <SingleFormHeader
+              label={schema.label}
+              description={schema.description}
+              updatedAt={document?.updatedAt}
+              isDirty={isDirty}
+              actions={headerActions}
+            />
+            {/* Custom Title & Slug row */}
+            {(titleField || slugField) && (
+              <Card>
+                <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                  {titleField && (
+                    <div className="w-full">
+                      <FieldRenderer
+                        field={titleField}
+                        disabled={isSubmitting}
+                        readOnly={false}
+                      />
+                    </div>
+                  )}
+                  {slugField && (
+                    <div className="w-full">
+                      <FieldRenderer
+                        field={slugField}
+                        disabled={isSubmitting}
+                        readOnly={false}
+                      />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
-          <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
-            {/* Main Content */}
-            <div className="flex-1 space-y-6 lg:p-8 pt-6">
-              {headerContent}
-              <SingleFormHeader
-                label={schema.label}
-                description={schema.description}
-                updatedAt={document?.updatedAt}
-                autoSave={{
-                  lastSavedAt: autoSave.lastSavedAt,
-                  isSaving: autoSave.isSaving,
-                }}
-                isDirty={isDirty}
-                actions={headerActions}
+            {mainFields.length > 0 && (
+              <EntryFormContent
+                fields={mainFields}
+                disabled={isSubmitting}
+                withCard
               />
-              {/* Custom Title & Slug row */}
-              {(titleField || slugField) && (
-                <Card>
-                  <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                    {titleField && (
-                      <div className="w-full">
-                        <FieldRenderer
-                          field={titleField}
-                          disabled={isSubmitting}
-                          readOnly={false}
-                        />
-                      </div>
-                    )}
-                    {slugField && (
-                      <div className="w-full">
-                        <FieldRenderer
-                          field={slugField}
-                          disabled={isSubmitting}
-                          readOnly={false}
-                        />
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
+            )}
+          </div>
 
-              {mainFields.length > 0 && (
-                <EntryFormContent
-                  fields={mainFields}
-                  disabled={isSubmitting}
-                  withCard
-                />
-              )}
-            </div>
-
-            {/* Sidebar */}
-            <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-background flex flex-col relative z-10">
-              <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                <SingleFormSidebar
-                  document={document}
-                  schema={schema}
-                  seoField={seoField}
-                  fields={sidebarFields}
-                  actions={
-                    <SingleFormActions
-                      isSubmitting={isSubmitting}
-                      onCancel={handleCancel}
-                    />
-                  }
-                />
-              </div>
+          {/* Sidebar */}
+          <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-background flex flex-col relative z-10">
+            <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+              <SingleFormSidebar
+                document={document}
+                schema={schema}
+                seoField={seoField}
+                fields={sidebarFields}
+                actions={
+                  <SingleFormActions
+                    isSubmitting={isSubmitting}
+                    onCancel={handleCancel}
+                  />
+                }
+              />
             </div>
           </div>
-        </EntryFormProvider>
-      </div>
-    </UnsavedChangesGuard>
+        </div>
+      </EntryFormProvider>
+    </div>
   );
 }

@@ -96,13 +96,15 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
         successful: filePaths,
         failed: [],
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       // If bulk delete fails entirely, report all as failed
+      const message =
+        error instanceof Error ? error.message : "Bulk delete failed";
       return {
         successful: [],
         failed: filePaths.map(fp => ({
           filePath: fp,
-          error: error?.message ?? "Bulk delete failed",
+          error: message,
         })),
       };
     }

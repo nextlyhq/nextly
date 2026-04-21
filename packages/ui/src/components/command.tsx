@@ -48,8 +48,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - WCAG 2.2 AA compliant (verified contrast ratios)
  */
 
-export interface CommandProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive> {}
+export type CommandProps = ComponentPropsWithoutRef<typeof CommandPrimitive>;
 
 /**
  * Command - Root container for the command palette.
@@ -69,7 +68,7 @@ const Command = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
 );
 Command.displayName = "Command";
 
-export interface CommandDialogProps extends DialogPrimitive.DialogProps {}
+export type CommandDialogProps = DialogPrimitive.DialogProps;
 
 /**
  * CommandDialogOverlay - Custom overlay for CommandDialog with proper z-index.
@@ -159,8 +158,9 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
   );
 };
 
-export interface CommandInputProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive.Input> {}
+export type CommandInputProps = ComponentPropsWithoutRef<
+  typeof CommandPrimitive.Input
+>;
 
 /**
  * CommandInput - Search input field for filtering commands.
@@ -197,8 +197,9 @@ const CommandInput = forwardRef<
 ));
 CommandInput.displayName = "CommandInput";
 
-export interface CommandListProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive.List> {}
+export type CommandListProps = ComponentPropsWithoutRef<
+  typeof CommandPrimitive.List
+>;
 
 /**
  * CommandList - Scrollable container for command results.
@@ -222,8 +223,9 @@ const CommandList = forwardRef<
 ));
 CommandList.displayName = "CommandList";
 
-export interface CommandEmptyProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive.Empty> {}
+export type CommandEmptyProps = ComponentPropsWithoutRef<
+  typeof CommandPrimitive.Empty
+>;
 
 /**
  * CommandEmpty - Empty state message when no results found.
@@ -241,8 +243,9 @@ const CommandEmpty = forwardRef<
 ));
 CommandEmpty.displayName = "CommandEmpty";
 
-export interface CommandGroupProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive.Group> {}
+export type CommandGroupProps = ComponentPropsWithoutRef<
+  typeof CommandPrimitive.Group
+>;
 
 /**
  * CommandGroup - Grouped section of commands with optional heading.
@@ -266,8 +269,9 @@ const CommandGroup = forwardRef<
 ));
 CommandGroup.displayName = "CommandGroup";
 
-export interface CommandSeparatorProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive.Separator> {}
+export type CommandSeparatorProps = ComponentPropsWithoutRef<
+  typeof CommandPrimitive.Separator
+>;
 
 /**
  * CommandSeparator - Visual divider between command groups.
@@ -285,8 +289,9 @@ const CommandSeparator = forwardRef<
 ));
 CommandSeparator.displayName = "CommandSeparator";
 
-export interface CommandItemProps
-  extends ComponentPropsWithoutRef<typeof CommandPrimitive.Item> {}
+export type CommandItemProps = ComponentPropsWithoutRef<
+  typeof CommandPrimitive.Item
+>;
 
 /**
  * CommandItem - Individual selectable command item.
@@ -324,7 +329,7 @@ const CommandItem = forwardRef<
 ));
 CommandItem.displayName = "CommandItem";
 
-export interface CommandShortcutProps extends HTMLAttributes<HTMLSpanElement> {}
+export type CommandShortcutProps = HTMLAttributes<HTMLSpanElement>;
 
 /**
  * CommandShortcut - Keyboard shortcut display (e.g., "⌘K", "↵ Enter").

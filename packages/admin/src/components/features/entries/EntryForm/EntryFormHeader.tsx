@@ -8,6 +8,7 @@
  * @since 1.0.0
  */
 
+import { MoreHorizontal, Trash2, Loader2, Code } from "@admin/components/icons";
 import {
   Button,
   DropdownMenu,
@@ -17,9 +18,6 @@ import {
   DropdownMenuTrigger,
 } from "@revnixhq/ui";
 
-import { MoreHorizontal, Trash2, Loader2, Code } from "@admin/components/icons";
-
-import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
@@ -42,11 +40,6 @@ export interface EntryFormHeaderProps {
   isDeleting?: boolean;
   /** Whether form is embedded (modal) - hides header in this mode */
   embedded?: boolean;
-  /** Auto-save state */
-  autoSave?: {
-    lastSavedAt: Date | null;
-    isSaving: boolean;
-  };
   /** Whether form has unsaved changes */
   isDirty?: boolean;
 }
@@ -85,7 +78,6 @@ export function EntryFormHeader({
   onDelete,
   isDeleting = false,
   embedded = false,
-  autoSave,
   isDirty = false,
 }: EntryFormHeaderProps) {
   // Don't render header in embedded mode (modal)
@@ -108,15 +100,6 @@ export function EntryFormHeader({
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        {autoSave && (
-          <div className="flex items-center text-xs mr-2">
-            <AutoSaveIndicator
-              lastSavedAt={autoSave.lastSavedAt}
-              isSaving={autoSave.isSaving}
-              isDirty={isDirty}
-            />
-          </div>
-        )}
         {showActions && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

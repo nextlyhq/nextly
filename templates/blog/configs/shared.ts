@@ -180,6 +180,7 @@ export const posts = defineCollection({
   ],
   admin: {
     useAsTitle: "title",
+    defaultColumns: ["title", "status", "author", "publishedAt"],
   },
   hooks: {
     beforeValidate: [autoSlug, requireFeaturedImageAlt],

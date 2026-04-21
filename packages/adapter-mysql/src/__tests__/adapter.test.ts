@@ -687,10 +687,8 @@ describe("@nextly/adapter-mysql", () => {
 
     it("should insert record in transaction and return result", async () => {
       const insertedRow = { id: 1, name: "Test" };
-      let queryCount = 0;
 
       mockConnection.query.mockImplementation((sql: string) => {
-        queryCount++;
         if (sql.startsWith("INSERT INTO")) {
           return Promise.resolve([{ insertId: 1, affectedRows: 1 }, []]);
         }

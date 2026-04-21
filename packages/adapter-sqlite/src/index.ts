@@ -326,11 +326,8 @@ export class SqliteAdapter extends DrizzleAdapter {
       // Determine if this is a SELECT query or a modifying query
       const trimmedSql = convertedSql.trim().toUpperCase();
 
-      // Check for PRAGMA statements - distinguish between query and setting PRAGMAs
-      // Setting PRAGMAs (e.g., "PRAGMA foreign_keys = OFF") don't return data
-      // Query PRAGMAs (e.g., "PRAGMA foreign_keys") return data
-      const isPragmaSetting =
-        trimmedSql.startsWith("PRAGMA") && trimmedSql.includes("=");
+      // Check for PRAGMA query statements (e.g., "PRAGMA foreign_keys").
+      // Setting PRAGMAs (e.g., "PRAGMA foreign_keys = OFF") don't return data.
       const isPragmaQuery =
         trimmedSql.startsWith("PRAGMA") && !trimmedSql.includes("=");
 
@@ -573,14 +570,12 @@ export class SqliteAdapter extends DrizzleAdapter {
    * Creates a TransactionContext for the given database connection.
    */
   private createTransactionContext(db: Database.Database): TransactionContext {
-    const adapter = this;
-
     return {
-      async execute<T = unknown>(
+      execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []
-      ): Promise<T[]> {
-        const convertedSql = adapter.convertPlaceholders(sql);
+      ): Promise<T[]> => {
+        const convertedSql = this.convertPlaceholders(sql);
         const trimmedSql = convertedSql.trim().toUpperCase();
         const isSelect =
           trimmedSql.startsWith("SELECT") || trimmedSql.includes("RETURNING");
@@ -600,23 +595,23 @@ export class SqliteAdapter extends DrizzleAdapter {
         }
       },
 
-      async insert<T = unknown>(
+      insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         options?: InsertOptions
-      ): Promise<T> {
+      ): Promise<T> => {
         const columns = Object.keys(data);
         const values = Object.values(data);
         const placeholders = values.map(() => "?").join(", ");
 
-        let sql = `INSERT INTO ${adapter.escapeIdentifier(table)} (${columns.map(c => adapter.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
+        let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
         if (options?.returning) {
           const returning =
             options.returning === "*"
               ? "*"
               : options.returning
-                  .map(col => adapter.escapeIdentifier(col))
+                  .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
         } else {
@@ -628,11 +623,11 @@ export class SqliteAdapter extends DrizzleAdapter {
         return rows[0];
       },
 
-      async insertMany<T = unknown>(
+      insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
         options?: InsertOptions
-      ): Promise<T[]> {
+      ): Promise<T[]> => {
         if (data.length === 0) return [];
 
         const columns = Object.keys(data[0]);
@@ -648,14 +643,14 @@ export class SqliteAdapter extends DrizzleAdapter {
           valuesClauses.push(`(${placeholders.join(", ")})`);
         }
 
-        let sql = `INSERT INTO ${adapter.escapeIdentifier(table)} (${columns.map(c => adapter.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
+        let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
         if (options?.returning) {
           const returning =
             options.returning === "*"
               ? "*"
               : options.returning
-                  .map(col => adapter.escapeIdentifier(col))
+                  .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
         } else {
@@ -668,57 +663,55 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       // TransactionContext CRUD methods delegate to the adapter's CRUD
       // which uses Drizzle query API via the TableResolver.
-      // Removed references to buildSelectQuery/buildUpdateQuery/buildDeleteQuery/buildUpsertQuery
-      // which no longer exist on DrizzleAdapter.
-      async select<T = unknown>(
+      select: async <T = unknown>(
         table: string,
         options?: SelectOptions
-      ): Promise<T[]> {
-        return adapter.select<T>(table, options);
+      ): Promise<T[]> => {
+        return this.select<T>(table, options);
       },
 
-      async selectOne<T = unknown>(
+      selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
-      ): Promise<T | null> {
-        return adapter.selectOne<T>(table, options);
+      ): Promise<T | null> => {
+        return this.selectOne<T>(table, options);
       },
 
-      async update<T = unknown>(
+      update: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         where: WhereClause,
         options?: UpdateOptions
-      ): Promise<T[]> {
-        return adapter.update<T>(table, data, where, options);
+      ): Promise<T[]> => {
+        return this.update<T>(table, data, where, options);
       },
 
-      async delete(
+      delete: async (
         table: string,
         where: WhereClause,
         _options?: DeleteOptions
-      ): Promise<number> {
-        return adapter.delete(table, where);
+      ): Promise<number> => {
+        return this.delete(table, where);
       },
 
-      async upsert<T = unknown>(
+      upsert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         options: UpsertOptions
-      ): Promise<T> {
-        return adapter.upsert<T>(table, data, options);
+      ): Promise<T> => {
+        return this.upsert<T>(table, data, options);
       },
 
-      async savepoint(name: string): Promise<void> {
-        db.exec(`SAVEPOINT ${adapter.escapeIdentifier(name)}`);
+      savepoint: async (name: string): Promise<void> => {
+        db.exec(`SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
 
-      async rollbackToSavepoint(name: string): Promise<void> {
-        db.exec(`ROLLBACK TO SAVEPOINT ${adapter.escapeIdentifier(name)}`);
+      rollbackToSavepoint: async (name: string): Promise<void> => {
+        db.exec(`ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
 
-      async releaseSavepoint(name: string): Promise<void> {
-        db.exec(`RELEASE SAVEPOINT ${adapter.escapeIdentifier(name)}`);
+      releaseSavepoint: async (name: string): Promise<void> => {
+        db.exec(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
     };
   }

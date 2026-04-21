@@ -488,7 +488,7 @@ describe("validateMigrations", () => {
       {
         id: "001",
         name: "Test",
-        timestamp: "invalid" as any,
+        timestamp: "invalid" as unknown as number,
         up: "SQL",
       },
     ];
@@ -509,7 +509,7 @@ describe("validateMigrations", () => {
 describe("migrationHelpers", () => {
   // Mock adapter for testing
   const createMockAdapter = () => {
-    const storage = new Map<string, any[]>();
+    const storage = new Map<string, Record<string, unknown>[]>();
 
     return {
       getCapabilities: () => ({
@@ -540,17 +540,17 @@ describe("migrationHelpers", () => {
         const data = storage.get(table) || [];
         return [...data];
       },
-      insert: async (table: string, data: any) => {
+      insert: async (table: string, data: Record<string, unknown>) => {
         const tableData = storage.get(table) || [];
         tableData.push(data);
         storage.set(table, tableData);
       },
-      delete: async (table: string, where: any) => {
+      delete: async (table: string, where: { and: { value: unknown }[] }) => {
         const tableData = storage.get(table) || [];
         const filtered = tableData.filter(row => row.id !== where.and[0].value);
         storage.set(table, filtered);
       },
-    } as any;
+    } as unknown as Parameters<typeof createMigrationsTable>[0];
   };
 
   describe("createMigrationsTable", () => {

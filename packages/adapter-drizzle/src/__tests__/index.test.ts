@@ -49,19 +49,33 @@ describe("@nextly/adapter-drizzle - Main Index Exports", () => {
     });
 
     it("should not export QueryBuilder from main index", () => {
-      expect((indexExports as any).QueryBuilder).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).QueryBuilder
+      ).toBeUndefined();
     });
 
     it("should not export migration utilities from main index", () => {
-      expect((indexExports as any).calculateChecksum).toBeUndefined();
-      expect((indexExports as any).sortMigrations).toBeUndefined();
-      expect((indexExports as any).migrationHelpers).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).calculateChecksum
+      ).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).sortMigrations
+      ).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).migrationHelpers
+      ).toBeUndefined();
     });
 
     it("should not export type utilities from main index", () => {
-      expect((indexExports as any).DatabaseCapabilities).toBeUndefined();
-      expect((indexExports as any).TransactionContext).toBeUndefined();
-      expect((indexExports as any).WhereClause).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).DatabaseCapabilities
+      ).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).TransactionContext
+      ).toBeUndefined();
+      expect(
+        (indexExports as Record<string, unknown>).WhereClause
+      ).toBeUndefined();
     });
   });
 });

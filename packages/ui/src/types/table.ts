@@ -15,7 +15,7 @@ export interface SortInfo {
 // Search/filter information for server
 export interface FilterInfo {
   search?: string;
-  filters?: Record<string, any>;
+  filters?: Record<string, unknown>;
 }
 
 // Combined parameters for API calls
@@ -40,7 +40,7 @@ export interface PaginationConfig {
 }
 
 // Action callbacks
-export interface ActionCallbacks<TData = any> {
+export interface ActionCallbacks<TData = unknown> {
   onEdit?: (item: TData) => void;
   onDelete?: (item: TData) => void;
   onView?: (item: TData) => void;

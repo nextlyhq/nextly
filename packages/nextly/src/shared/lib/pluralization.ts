@@ -176,22 +176,25 @@ function isLikelySingular(word: string): boolean {
  * ```
  */
 export function simplePluralize(singular: string): string {
+  const normalized = singular.trim();
+  if (!normalized) return "";
+
   // If already plural, return as-is
-  if (isAlreadyPlural(singular)) {
-    return singular;
+  if (isAlreadyPlural(normalized)) {
+    return normalized;
   }
 
   if (
-    singular.endsWith("s") ||
-    singular.endsWith("x") ||
-    singular.endsWith("z")
+    normalized.endsWith("s") ||
+    normalized.endsWith("x") ||
+    normalized.endsWith("z")
   ) {
-    return singular + "es";
+    return normalized + "es";
   }
-  if (singular.endsWith("y") && !/[aeiou]y$/i.test(singular)) {
-    return singular.slice(0, -1) + "ies";
+  if (normalized.endsWith("y") && !/[aeiou]y$/i.test(normalized)) {
+    return normalized.slice(0, -1) + "ies";
   }
-  return singular + "s";
+  return normalized + "s";
 }
 
 /**

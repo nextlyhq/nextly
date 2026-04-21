@@ -812,34 +812,32 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Creates a TransactionContext for the given client.
    */
   private createTransactionContext(client: PoolClient): TransactionContext {
-    const adapter = this;
-
     return {
-      async execute<T = unknown>(
+      execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []
-      ): Promise<T[]> {
+      ): Promise<T[]> => {
         const result = await client.query(sql, params as unknown[]);
         return result.rows as T[];
       },
 
-      async insert<T = unknown>(
+      insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         options?: InsertOptions
-      ): Promise<T> {
+      ): Promise<T> => {
         const columns = Object.keys(data);
         const values = Object.values(data);
         const placeholders = values.map((_, i) => `$${i + 1}`).join(", ");
 
-        let sql = `INSERT INTO ${adapter.escapeIdentifier(table)} (${columns.map(c => adapter.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
+        let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
 
         if (options?.returning) {
           const returning =
             options.returning === "*"
               ? "*"
               : options.returning
-                  .map(col => adapter.escapeIdentifier(col))
+                  .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
         } else {
@@ -850,11 +848,11 @@ export class PostgresAdapter extends DrizzleAdapter {
         return result.rows[0] as T;
       },
 
-      async insertMany<T = unknown>(
+      insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
         options?: InsertOptions
-      ): Promise<T[]> {
+      ): Promise<T[]> => {
         if (data.length === 0) return [];
 
         const columns = Object.keys(data[0]);
@@ -870,14 +868,14 @@ export class PostgresAdapter extends DrizzleAdapter {
           valuesClauses.push(`(${placeholders.join(", ")})`);
         }
 
-        let sql = `INSERT INTO ${adapter.escapeIdentifier(table)} (${columns.map(c => adapter.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
+        let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES ${valuesClauses.join(", ")}`;
 
         if (options?.returning) {
           const returning =
             options.returning === "*"
               ? "*"
               : options.returning
-                  .map(col => adapter.escapeIdentifier(col))
+                  .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
         } else {
@@ -891,59 +889,57 @@ export class PostgresAdapter extends DrizzleAdapter {
       // TransactionContext CRUD methods delegate to the adapter's CRUD
       // which uses Drizzle query API via the TableResolver.
       // The Drizzle transaction is handled at a higher level.
-      async select<T = unknown>(
+      select: async <T = unknown>(
         table: string,
         options?: SelectOptions
-      ): Promise<T[]> {
-        return adapter.select<T>(table, options);
+      ): Promise<T[]> => {
+        return this.select<T>(table, options);
       },
 
-      async selectOne<T = unknown>(
+      selectOne: async <T = unknown>(
         table: string,
         options?: SelectOptions
-      ): Promise<T | null> {
-        return adapter.selectOne<T>(table, options);
+      ): Promise<T | null> => {
+        return this.selectOne<T>(table, options);
       },
 
-      async update<T = unknown>(
+      update: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         where: WhereClause,
         options?: UpdateOptions
-      ): Promise<T[]> {
-        return adapter.update<T>(table, data, where, options);
+      ): Promise<T[]> => {
+        return this.update<T>(table, data, where, options);
       },
 
-      async delete(
+      delete: async (
         table: string,
         where: WhereClause,
         _options?: DeleteOptions
-      ): Promise<number> {
-        return adapter.delete(table, where);
+      ): Promise<number> => {
+        return this.delete(table, where);
       },
 
-      async upsert<T = unknown>(
+      upsert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         options: UpsertOptions
-      ): Promise<T> {
-        return adapter.upsert<T>(table, data, options);
+      ): Promise<T> => {
+        return this.upsert<T>(table, data, options);
       },
 
-      async savepoint(name: string): Promise<void> {
-        await client.query(`SAVEPOINT ${adapter.escapeIdentifier(name)}`);
+      savepoint: async (name: string): Promise<void> => {
+        await client.query(`SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
 
-      async rollbackToSavepoint(name: string): Promise<void> {
+      rollbackToSavepoint: async (name: string): Promise<void> => {
         await client.query(
-          `ROLLBACK TO SAVEPOINT ${adapter.escapeIdentifier(name)}`
+          `ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`
         );
       },
 
-      async releaseSavepoint(name: string): Promise<void> {
-        await client.query(
-          `RELEASE SAVEPOINT ${adapter.escapeIdentifier(name)}`
-        );
+      releaseSavepoint: async (name: string): Promise<void> => {
+        await client.query(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
     };
   }

@@ -362,12 +362,6 @@ export interface CopyTemplateOptions {
 }
 
 /**
- * Files/directories in template directories that are handled separately
- * and should NOT be copied during the overlay step.
- */
-const TEMPLATE_INTERNAL_DIRS = new Set(["configs", "seed", "template.json"]);
-
-/**
  * Copy templates to the target directory, handle approach-specific config,
  * seed files, and placeholder replacement.
  *

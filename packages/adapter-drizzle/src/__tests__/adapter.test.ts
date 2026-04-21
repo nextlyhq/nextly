@@ -22,7 +22,7 @@ import type {
 class MockAdapter extends DrizzleAdapter {
   readonly dialect: SupportedDialect = "postgresql";
   private connected = false;
-  private mockData: Map<string, any[]> = new Map();
+  private mockData: Map<string, unknown[]> = new Map();
 
   async connect(): Promise<void> {
     this.connected = true;
@@ -52,7 +52,7 @@ class MockAdapter extends DrizzleAdapter {
 
   async transaction<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
-    options?: TransactionOptions
+    _options?: TransactionOptions
   ): Promise<T> {
     // Mock transaction context
     const ctx: TransactionContext = {
@@ -91,22 +91,22 @@ class MockAdapter extends DrizzleAdapter {
       update: async <U = unknown>(
         table: string,
         data: Record<string, unknown>,
-        where: any,
-        options?: any
+        where: Parameters<typeof this.update>[2],
+        options?: Parameters<typeof this.update>[3]
       ): Promise<U[]> => {
         return this.update<U>(table, data, where, options);
       },
       delete: async (
         table: string,
-        where: any,
-        options?: any
+        where: Parameters<typeof this.delete>[1],
+        options?: Parameters<typeof this.delete>[2]
       ): Promise<number> => {
         return this.delete(table, where, options);
       },
       upsert: async <U = unknown>(
         table: string,
         data: Record<string, unknown>,
-        options: any
+        options: Parameters<typeof this.upsert>[2]
       ): Promise<U> => {
         return this.upsert<U>(table, data, options);
       },
@@ -217,7 +217,7 @@ describe("DrizzleAdapter", () => {
     });
 
     it("should execute transaction callback", async () => {
-      const result = await adapter.transaction(async ctx => {
+      const result = await adapter.transaction(async _ctx => {
         return "transaction result";
       });
 

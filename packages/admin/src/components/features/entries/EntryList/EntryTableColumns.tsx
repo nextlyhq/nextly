@@ -42,6 +42,8 @@ export interface CollectionForColumns {
   fields: FieldConfig[];
   /** Admin UI configuration */
   admin?: {
+    /** Default columns to display in list view */
+    defaultColumns?: string[];
     /** Field to use as the document title */
     useAsTitle?: string;
   };
@@ -81,7 +83,7 @@ const SORTABLE_FIELD_TYPES: readonly string[] = [
 ];
 
 /**
- * Default number of data columns to show in the auto-generated list view.
+ * Default number of data columns to show when defaultColumns is not specified.
  */
 const DEFAULT_COLUMN_COUNT = 4;
 
@@ -179,8 +181,8 @@ function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
 }
 
 /**
- * Gets the default columns to display for a collection.
- * Returns the first N data fields plus built-in columns.
+ * Gets the default columns to display when admin.defaultColumns is not specified.
+ * Returns the first N data fields plus updatedAt.
  *
  * @param fields - Array of field configurations
  * @returns Array of field names to display as columns
@@ -223,6 +225,7 @@ export function getAvailableColumns(
 
 /**
  * Gets the default visible columns for a collection.
+ * Uses admin.defaultColumns if defined, otherwise auto-generates defaults.
  *
  * @param collection - Collection configuration
  * @returns Array of column IDs that should be visible by default
@@ -232,7 +235,9 @@ export function getDefaultVisibleColumns(
 ): string[] {
   // Always include structural columns
   const structural = ["select", "actions"];
-  const dataColumns = getDefaultColumns(collection.fields);
+  // Get data columns from config or auto-generate
+  const dataColumns =
+    collection.admin?.defaultColumns || getDefaultColumns(collection.fields);
 
   // Filter out the columns we want to explicitly position
   const coreColumns = ["id", "title", "slug", "updatedAt"];

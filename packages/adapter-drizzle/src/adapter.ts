@@ -758,7 +758,7 @@ export abstract class DrizzleAdapter {
   async delete(
     table: string,
     where: WhereClause,
-    options?: DeleteOptions
+    _options?: DeleteOptions
   ): Promise<number> {
     // Drizzle query API path
     const tableObj = this.getTableObject(table);
@@ -917,7 +917,7 @@ export abstract class DrizzleAdapter {
    *
    * @throws {DatabaseError} If migration fails
    */
-  async migrate(migrations: Migration[]): Promise<MigrationResult> {
+  async migrate(_migrations: Migration[]): Promise<MigrationResult> {
     // Base implementation: migrate() requires dialect-specific migrator import.
     // Dialect adapters (PostgresAdapter, MySqlAdapter, SqliteAdapter) should
     // override this with their specific drizzle-orm migrator.

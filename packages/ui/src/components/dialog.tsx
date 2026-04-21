@@ -67,8 +67,9 @@ const DialogPortal = DialogPrimitive.Portal;
 
 const DialogClose = DialogPrimitive.Close;
 
-export interface DialogOverlayProps
-  extends ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay> {}
+export type DialogOverlayProps = ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Overlay
+>;
 
 /**
  * DialogOverlay - The backdrop overlay behind the dialog content.
@@ -114,9 +115,10 @@ const dialogContentVariants = cva("", {
   },
 });
 
-export interface DialogContentProps
-  extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
-    VariantProps<typeof dialogContentVariants> {}
+export type DialogContentProps = ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Content
+> &
+  VariantProps<typeof dialogContentVariants>;
 
 /**
  * DialogContent - The main dialog content container.
@@ -163,7 +165,7 @@ const DialogContent = forwardRef<
 });
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
-export interface DialogHeaderProps extends HTMLAttributes<HTMLDivElement> {}
+export type DialogHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * DialogHeader - Container for dialog title and description.
@@ -183,7 +185,7 @@ const DialogHeader = forwardRef<HTMLDivElement, DialogHeaderProps>(
 );
 DialogHeader.displayName = "DialogHeader";
 
-export interface DialogFooterProps extends HTMLAttributes<HTMLDivElement> {}
+export type DialogFooterProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * DialogFooter - Container for dialog action buttons.
@@ -211,8 +213,9 @@ const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(
 );
 DialogFooter.displayName = "DialogFooter";
 
-export interface DialogTitleProps
-  extends ComponentPropsWithoutRef<typeof DialogPrimitive.Title> {}
+export type DialogTitleProps = ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Title
+>;
 
 /**
  * DialogTitle - The title of the dialog.
@@ -235,8 +238,9 @@ const DialogTitle = forwardRef<
 ));
 DialogTitle.displayName = DialogPrimitive.Title.displayName;
 
-export interface DialogDescriptionProps
-  extends ComponentPropsWithoutRef<typeof DialogPrimitive.Description> {}
+export type DialogDescriptionProps = ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Description
+>;
 
 /**
  * DialogDescription - The description text of the dialog.

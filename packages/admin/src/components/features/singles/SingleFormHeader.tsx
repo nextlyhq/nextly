@@ -8,13 +8,12 @@
  * - Has no actions dropdown (Singles can't be deleted/duplicated)
  * - Shows last updated timestamp prominently
  * - Displays the Single's description if available
- * - Displays an auto-save indicator
  *
  * @module components/singles/SingleFormHeader
  * @since 1.0.0
  */
 
-import { AutoSaveIndicator } from "@admin/components/features/entries/EntryForm/AutoSaveIndicator";
+import React from "react";
 
 // ============================================================================
 // Helpers
@@ -57,11 +56,6 @@ export interface SingleFormHeaderProps {
   description?: string;
   /** Last time the document was updated */
   updatedAt?: string;
-  /** Auto-save state for indicator */
-  autoSave?: {
-    lastSavedAt: Date | null;
-    isSaving: boolean;
-  };
   /** Whether form has unsaved changes */
   isDirty?: boolean;
   /** Custom action buttons to display next to the title */
@@ -96,7 +90,6 @@ export function SingleFormHeader({
   label,
   description,
   updatedAt,
-  autoSave,
   isDirty,
   actions,
 }: SingleFormHeaderProps) {
@@ -111,17 +104,8 @@ export function SingleFormHeader({
             <p className="text-sm text-muted-foreground mt-1">{description}</p>
           )}
         </div>
-        {/* Right side: Auto save indicator + actions */}
-        <div className="flex items-center gap-3">
-          {autoSave && isDirty !== undefined && (
-            <div className="flex items-center text-xs shrink-0 mt-1">
-              <AutoSaveIndicator
-                lastSavedAt={autoSave.lastSavedAt}
-                isSaving={autoSave.isSaving}
-                isDirty={isDirty}
-              />
-            </div>
-          )}
+        {/* Right side: actions */}
+        <div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </div>
       </div>

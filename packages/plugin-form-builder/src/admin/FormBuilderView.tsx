@@ -213,7 +213,6 @@ function FormBuilderViewInner({
       return;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { id: _id, ...formDataWithoutId } = formData;
     const saveData = {
       ...formDataWithoutId,
@@ -248,12 +247,12 @@ function FormBuilderViewInner({
       }
       const result = await response.json();
       const savedEntry = result.data || result;
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["entries", "list", collectionSlug],
       });
-      queryClient.invalidateQueries({ queryKey: ["entries", "count"] });
+      void queryClient.invalidateQueries({ queryKey: ["entries", "count"] });
       if (!isCreating && entryId) {
-        queryClient.invalidateQueries({
+        void queryClient.invalidateQueries({
           queryKey: ["entries", "detail", collectionSlug, entryId],
         });
       }
@@ -369,7 +368,9 @@ function FormBuilderViewInner({
           <Button
             type="button"
             size="sm"
-            onClick={handleSave}
+            onClick={() => {
+              void handleSave();
+            }}
             disabled={isSaving}
             className="flex items-center gap-1.5"
           >
