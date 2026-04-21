@@ -165,12 +165,14 @@ export async function resolveLocalTemplate(
  *
  * Decision logic:
  * 1. If --local-template is provided: read from filesystem (dev / yalc).
- * 2. If useYalc is true without --local-template: refuse with a clear
- *    error. Pre-alpha there is no public GitHub repo to download from,
- *    and shipping the ~500KB templates dir inside the CLI package bloats
- *    every install. Callers must pass --local-template alongside
- *    --use-yalc while working against the monorepo.
- * 3. Otherwise: download from GitHub Codeload (production npm install).
+ * 2. Otherwise: download from GitHub Codeload.
+ *
+ * Template source is independent of --use-yalc. --use-yalc only controls
+ * how the scaffolded project's dependencies are installed (yalc store vs
+ * npm registry); it does not force the template to be local. Use
+ * --use-yalc alone to pair yalc-linked packages with the live GitHub
+ * template; add --local-template only when you also want to test a
+ * template change that's not yet pushed to the public repo.
  *
  * @param templateName - Template to resolve (e.g., "blog")
  * @param options - Resolution options
@@ -180,25 +182,12 @@ export async function resolveTemplateSource(
   options: {
     localTemplatePath?: string;
     branch?: string;
-    useYalc?: boolean;
   } = {}
 ): Promise<TemplateSource> {
-  const { localTemplatePath, branch = "main", useYalc = false } = options;
+  const { localTemplatePath, branch = "main" } = options;
 
   if (localTemplatePath) {
     return resolveLocalTemplate(localTemplatePath, templateName);
-  }
-
-  if (useYalc) {
-    throw new Error(
-      `--use-yalc requires --local-template <path-to-nextly-dev/templates> ` +
-        `because templates are not bundled in the published CLI. Example:\n` +
-        `  npx create-nextly-app my-app --use-yalc \\\n` +
-        `    --local-template /path/to/nextly-dev/templates \\\n` +
-        `    --template blog\n` +
-        `Once the public template repo is published, you can omit both ` +
-        `flags and templates will be downloaded from GitHub.`
-    );
   }
 
   return downloadTemplate(templateName, branch);
