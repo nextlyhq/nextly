@@ -287,19 +287,18 @@ export async function createNextly(
     let templateSource: TemplateSource | undefined;
 
     try {
-      // Resolve template source (download from GitHub or use local path)
-      // For "blank" template without --local-template, we use the bundled fallback
-      // For content templates (blog), we download or resolve locally.
-      // When --use-yalc is set, we also need a local source for the "blank"
-      // template's variant-specific content (if any) and for whichever
-      // template the user picked, because pre-alpha there is no public
-      // GitHub repo to download from.
+      // Resolve template source (download from GitHub or use local path).
+      // For "blank" template without --local-template, we use the bundled
+      // fallback embedded in the CLI. For content templates (blog) we
+      // resolve via GitHub or a local path. --use-yalc also triggers
+      // resolution for the blank template so local-dev runs always pair
+      // yalc-linked packages with the live template rather than a
+      // potentially-stale bundled copy.
       if (projectType !== "blank" || options.localTemplatePath || useYalc) {
         s.start("Resolving template...");
         templateSource = await resolveTemplateSource(projectType, {
           localTemplatePath: options.localTemplatePath,
           branch: options.branch,
-          useYalc,
         });
         s.stop("Template ready");
         s.start("Scaffolding project...");
