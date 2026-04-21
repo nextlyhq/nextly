@@ -21,7 +21,10 @@ import {
   SchemaPushService,
   type SchemaPushResult,
 } from "../../domains/schema/services/schema-push-service.js";
+import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables.js";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
 import type { FieldDefinition } from "../../schemas/dynamic-collections.js";
+import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service.js";
 import {
   type ComponentRegistryService,
   type SyncComponentResult,
@@ -31,7 +34,6 @@ import {
   type SingleRegistryService,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service.js";
-import { type SupportedDialect } from "../../services/users/user-ext-schema-service.js";
 import type { CommandContext } from "../program.js";
 import type { CLIDatabaseAdapter } from "../utils/adapter.js";
 import type { LoadConfigResult } from "../utils/config-loader.js";
@@ -62,7 +64,7 @@ export async function ensureCoreTables(
 ): Promise<void> {
   const { logger } = context;
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-  const dialect = drizzleAdapter.getCapabilities().dialect as SupportedDialect;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
 
   // Quick check: if the "users" table already exists, core tables are present
   try {
@@ -162,7 +164,7 @@ export async function ensureCoreTables(
 export async function performAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  syncResult: import("../../services/collections/collection-sync-service.js").CollectionSyncResultWithValidation,
+  syncResult: CollectionSyncResultWithValidation,
   options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
@@ -207,7 +209,7 @@ export async function performAutoSync(
   // This replaces the per-table raw SQL approach with a single pushSchema call.
   // Falls back to legacy sync if pushSchema fails (e.g., no TTY for prompts).
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-  const dialect = drizzleAdapter.getCapabilities().dialect as SupportedDialect;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
 
   try {
     const schemaRegistry = new SchemaRegistry(dialect);
@@ -314,7 +316,9 @@ export async function performAutoSync(
           collectionsToSync.push(slug);
         }
       } catch (error) {
-        logger.warn(`Failed to check if table ${tableName} exists: ${error}`);
+        logger.warn(
+          `Failed to check if table ${tableName} exists: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
   }
@@ -506,14 +510,14 @@ export async function performSinglesAutoSync(
       continue;
     }
 
-    // Generate table name using the same convention as the registry
-    // Defined outside try block so it's accessible in catch for verification
-    const tableName =
-      singleConfig.dbName ??
-      `single_${slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`;
+    // Route through the canonical resolver so DDL and the dynamic_singles
+    // registry row always agree on the physical table name, regardless of
+    // whether the single config specifies dbName explicitly.
+    // Defined outside the try block so it's accessible in catch for verification.
+    const tableName = resolveSingleTableName({
+      slug,
+      dbName: singleConfig.dbName,
+    });
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);
@@ -622,6 +626,116 @@ export async function performSinglesAutoSync(
 }
 
 // ============================================================================
+// Singles Reconcile (Startup Safety Net)
+// ============================================================================
+
+/**
+ * Reconcile single tables against the registry.
+ *
+ * Ensures "registry row implies physical table exists" holds on every dev
+ * startup. Runs unconditionally after `performSinglesAutoSync`, which only
+ * iterates over newly created/updated singles. This catches the gaps:
+ *
+ * 1. DB reset while registry metadata was preserved (table rows dropped).
+ * 2. Manually dropped tables.
+ * 3. Aborted migrations that committed the registry row but failed DDL.
+ * 4. Visual-Schema-Builder-created singles whose tables are missing on
+ *    restart (code-first sync never sees them).
+ *
+ * The create path mirrors `performSinglesAutoSync`: build migration SQL
+ * via `DynamicCollectionSchemaService`, execute statements one at a time,
+ * verify the table now exists, update migration status.
+ */
+export async function performSinglesReconcile(
+  config: LoadConfigResult["config"],
+  adapter: CLIDatabaseAdapter,
+  singleRegistry: SingleRegistryService,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+
+  // Load the schema service lazily so the import cost is paid only when
+  // we have work to do.
+  const { DynamicCollectionSchemaService } = await import(
+    "../../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+  );
+  const schemaService = new DynamicCollectionSchemaService();
+
+  const reconciledSlugs: string[] = [];
+
+  await reconcileSingleTables({
+    registeredSingles: async () => {
+      const records = await singleRegistry.getAllSingles();
+      return records.map(r => ({ slug: r.slug, tableName: r.tableName }));
+    },
+    existingTableNames: async () => {
+      const tables = await drizzleAdapter.listTables();
+      return new Set(tables);
+    },
+    createTable: async single => {
+      // Prefer code-first config (source of truth) but fall back to the
+      // registry's stored fields for UI-created singles.
+      const codeFirstConfig = config.singles?.find(s => s.slug === single.slug);
+      let fields: FieldDefinition[];
+      if (codeFirstConfig) {
+        fields = codeFirstConfig.fields as unknown as FieldDefinition[];
+      } else {
+        const record = await singleRegistry.getSingleBySlug(single.slug);
+        if (!record) {
+          throw new Error(
+            `Cannot reconcile "${single.slug}": registry row disappeared between list and fetch`
+          );
+        }
+        fields = record.fields as unknown as FieldDefinition[];
+      }
+
+      const migrationSQL = schemaService.generateMigrationSQL(
+        single.tableName,
+        fields,
+        { isSingle: true }
+      );
+
+      const statements = migrationSQL
+        .split("--> statement-breakpoint")
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 0);
+
+      for (const statement of statements) {
+        const cleanStatement = statement
+          .split("\n")
+          .filter((line: string) => !line.trim().startsWith("--"))
+          .join("\n")
+          .trim();
+        if (cleanStatement) {
+          await drizzleAdapter.executeQuery(cleanStatement);
+        }
+      }
+
+      const tableExists = await drizzleAdapter.tableExists(single.tableName);
+      if (tableExists) {
+        await singleRegistry.updateMigrationStatus(single.slug, "applied");
+        reconciledSlugs.push(single.slug);
+        logger.info(
+          `Reconciled missing single table: ${single.slug} -> ${single.tableName}`
+        );
+      } else {
+        await singleRegistry.updateMigrationStatus(single.slug, "failed");
+        throw new Error(
+          `Reconcile ran DDL for "${single.slug}" but table "${single.tableName}" still missing`
+        );
+      }
+    },
+  });
+
+  if (reconciledSlugs.length > 0) {
+    logger.success(
+      `Reconciled ${reconciledSlugs.length} missing single table(s): ${reconciledSlugs.join(", ")}`
+    );
+  }
+}
+
+// ============================================================================
 // Components Auto-Sync (Table Creation)
 // ============================================================================
 
@@ -696,7 +810,7 @@ export async function performComponentsAutoSync(
         );
         const addedColumns = await pushService.addMissingColumnsForFields(
           tableName,
-          componentConfig.fields as unknown as FieldConfig[],
+          componentConfig.fields,
           { timestamps: true }
         );
 

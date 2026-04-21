@@ -19,6 +19,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -205,7 +206,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         throw new Error("Single fields array is required");
 
       const schemaHash = calculateSchemaHash(b.fields);
-      const tableName = `single_${b.slug.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+      // Canonical resolver keeps the UI-create path in sync with registry
+      // and DDL so every call site writes and reads the same physical table.
+      const tableName = resolveSingleTableName({ slug: b.slug });
 
       // Generate migration SQL for the Single's data table. Passing
       // isSingle: true skips the slug column and auto-adds updated_at.
@@ -287,9 +290,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         tableName,
         description: b.description,
         fields: b.fields,
-        admin: b.admin as Parameters<
-          typeof svc.registry.registerSingle
-        >[0]["admin"],
+        admin: b.admin,
         source: "ui",
         locked: false,
         schemaHash,
@@ -352,7 +353,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const single = await svc.registry.getSingleBySlug(slug);
         if (single?.fields && Array.isArray(single.fields)) {
           result.data = transformRichTextFields(
-            result.data as Record<string, unknown>,
+            result.data,
             single.fields,
             richTextFormat
           ) as typeof result.data;
@@ -543,8 +544,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // so the diff doesn't try to ADD COLUMN for columns that already
         // exist in the physical table.
         const systemFields: FieldDefinition[] = [
-          { name: "title", type: "text", required: true } as FieldDefinition,
-          { name: "slug", type: "text", required: true } as FieldDefinition,
+          { name: "title", type: "text", required: true },
+          { name: "slug", type: "text", required: true },
         ];
 
         const existingFields = (existing.fields ??
@@ -557,7 +558,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             name: "updatedAt",
             type: "date",
             required: false,
-          } as FieldDefinition,
+          },
         ];
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
@@ -569,7 +570,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             name: "updatedAt",
             type: "date",
             required: false,
-          } as FieldDefinition,
+          },
         ];
 
         const migrationSQL = schemaService.generateAlterTableMigration(
@@ -657,11 +658,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         updateData.migrationStatus = migrationStatus;
       }
 
-      const updated = await svc.registry.updateSingle(
-        slug,
-        updateData as Parameters<typeof svc.registry.updateSingle>[1],
-        { source: "ui" }
-      );
+      const updated = await svc.registry.updateSingle(slug, updateData, {
+        source: "ui",
+      });
 
       return {
         success: true,

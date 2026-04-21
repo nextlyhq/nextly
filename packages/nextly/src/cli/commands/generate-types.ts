@@ -36,6 +36,7 @@ import {
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator.js";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator.js";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types.js";
 import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types.js";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types.js";
@@ -46,11 +47,7 @@ import {
 } from "../../shared/lib/pluralization.js";
 import type { SingleConfig } from "../../singles/config/types.js";
 import type { UserFieldConfig } from "../../users/config/types.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import { createContext, type CommandContext } from "../program.js";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
 import { formatDuration, formatCount } from "../utils/logger.js";
 
@@ -340,7 +337,10 @@ function convertToSingleRecords(
     id: single.slug, // Use slug as temporary ID
     slug: single.slug,
     label: single.label?.singular ?? toTitleCase(single.slug),
-    tableName: single.dbName ?? `single_${single.slug.replace(/-/g, "_")}`,
+    tableName: resolveSingleTableName({
+      slug: single.slug,
+      dbName: single.dbName,
+    }),
     fields: single.fields,
     description: single.description ?? single.admin?.description,
     admin: single.admin,
@@ -533,7 +533,7 @@ export function registerGenerateTypesCommand(program: Command): void {
     .option("--no-declare", "Skip module declaration/augmentation")
     .option("--no-zod", "Skip Zod schema generation")
     .action(async (cmdOptions: GenerateTypesCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+      const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
       const resolvedOptions: ResolvedGenerateTypesOptions = {
