@@ -39,7 +39,12 @@ export async function handleSession(
       ...LEGACY_COOKIE_NAMES.map(name => serializeClearCookie(name, "/admin"))
     );
   }
-  if (result.reason !== "no_token") {
+  // Only clear the access cookie when the JWT is tampered/malformed. For an
+  // expired JWT we want the cookie to stay so the client can still receive
+  // TOKEN_EXPIRED on parallel in-flight requests and participate in the
+  // single coalesced refresh — clearing here forces sibling requests into
+  // the no_token → UNAUTHENTICATED branch, which bypasses refresh.
+  if (result.reason === "invalid") {
     clearCookies.push(clearAccessTokenCookie());
   }
 

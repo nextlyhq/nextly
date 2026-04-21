@@ -1,12 +1,14 @@
 import { BASE_URL } from "./fetcher";
 import { parseApiError } from "./parseApiError";
+import { authFetch } from "./refreshInterceptor";
 
 export async function enhancedFetcher<T = unknown, M = unknown>(
   path: string,
   options: RequestInit = {},
   isProtected = false
 ): Promise<{ data: T; meta?: M }> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const fullUrl = `${BASE_URL}${path}`;
+  const fetchOptions: RequestInit = {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
@@ -14,7 +16,11 @@ export async function enhancedFetcher<T = unknown, M = unknown>(
     },
     credentials: isProtected ? "include" : "same-origin",
     ...options,
-  });
+  };
+
+  const res = isProtected
+    ? await authFetch(fullUrl, fetchOptions)
+    : await fetch(fullUrl, fetchOptions);
 
   if (!res.ok) {
     const json = await res.json().catch(() => null);

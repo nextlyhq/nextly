@@ -1,4 +1,5 @@
 import { BASE_URL } from "../api/fetcher";
+import { authFetch } from "../api/refreshInterceptor";
 
 // ─── In-memory session cache ───────────────────────────────────────────────
 // Shared across all callers (React Query, imperative checks, etc.)
@@ -34,7 +35,7 @@ export async function getSession(): Promise<Session | null> {
   }
 
   try {
-    const response = await fetch(`${BASE_URL}/auth/session`, {
+    const response = await authFetch(`${BASE_URL}/auth/session`, {
       method: "GET",
       credentials: "include",
       headers: {

@@ -31,13 +31,14 @@ import {
 import * as React from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
-import { Info, Loader2, Plus } from "@admin/components/icons";
+import { Info, Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { ActionColumn } from "@admin/components/ui/table/ActionColumn";
+import { authFetch } from "@admin/lib/api/refreshInterceptor";
 
 // ============================================================
 // Types (matching the backend ImageSize interface)
@@ -60,15 +61,18 @@ interface ImageSize {
 // ============================================================
 
 async function fetchImageSizes(): Promise<ImageSize[]> {
-  const res = await fetch("/admin/api/image-sizes");
+  const res = await authFetch("/admin/api/image-sizes", {
+    credentials: "include",
+  });
   if (!res.ok) return [];
   const data = await res.json();
   return data.data ?? data ?? [];
 }
 
 async function createImageSize(input: Partial<ImageSize>): Promise<void> {
-  const res = await fetch("/admin/api/image-sizes", {
+  const res = await authFetch("/admin/api/image-sizes", {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
@@ -82,8 +86,9 @@ async function updateImageSize(
   id: string,
   input: Partial<ImageSize>
 ): Promise<void> {
-  const res = await fetch(`/admin/api/image-sizes/${id}`, {
+  const res = await authFetch(`/admin/api/image-sizes/${id}`, {
     method: "PATCH",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
@@ -94,7 +99,10 @@ async function updateImageSize(
 }
 
 async function deleteImageSize(id: string): Promise<void> {
-  const res = await fetch(`/admin/api/image-sizes/${id}`, { method: "DELETE" });
+  const res = await authFetch(`/admin/api/image-sizes/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Failed to delete" }));
     throw new Error(err.error?.message ?? "Failed to delete image size");

@@ -137,7 +137,7 @@ export async function handleSetup(
   });
 
   const cookies = [
-    setAccessTokenCookie(accessToken, deps.accessTokenTTL, deps.isProduction),
+    setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
     setRefreshTokenCookie(
       rawRefreshToken,
       deps.refreshTokenTTL,
