@@ -329,7 +329,6 @@ export function formsCollection(
       group: "Forms",
       order: 50,
       useAsTitle: "name",
-      defaultColumns: ["name", "slug", "status", "createdAt"],
       description:
         "Create and manage your form templates using the visual form builder. Create and manage forms for collecting user submissions",
 

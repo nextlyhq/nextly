@@ -716,7 +716,6 @@ export const dynamicCollections = mysqlTable(
       group?: string;
       icon?: string;
       hidden?: boolean;
-      defaultColumns?: string[];
       useAsTitle?: string;
       order?: number;
       sidebarGroup?: string;

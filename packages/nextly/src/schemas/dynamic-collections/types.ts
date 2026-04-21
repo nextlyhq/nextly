@@ -87,7 +87,6 @@ export interface CollectionLabels {
  *   group: 'Content',
  *   icon: 'file-text',
  *   useAsTitle: 'title',
- *   defaultColumns: ['title', 'status', 'createdAt'],
  *   pagination: {
  *     defaultLimit: 25,
  *     limits: [10, 25, 50, 100],
@@ -113,12 +112,6 @@ export interface CollectionAdminConfig {
    * The collection is still accessible via direct URL.
    */
   hidden?: boolean;
-
-  /**
-   * Field names to display as columns in the list view.
-   * If not specified, defaults to showing the first few fields.
-   */
-  defaultColumns?: string[];
 
   /**
    * Field name to use as the document title in the Admin UI.

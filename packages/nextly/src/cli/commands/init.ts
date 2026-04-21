@@ -523,7 +523,6 @@ export default defineCollection({
   // Admin UI configuration
   admin: {
     useAsTitle: "title",
-    defaultColumns: ["title", "status", "author", "updatedAt"],
     group: "Content",
     description: "Blog posts and articles",
   },

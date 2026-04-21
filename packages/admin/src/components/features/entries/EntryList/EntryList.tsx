@@ -99,7 +99,7 @@ function toCollectionForColumns(
         label?: string;
         schemaDefinition?: { fields: Array<{ name?: string; type?: string }> };
         fields?: Array<{ name?: string; type?: string }>;
-        admin?: { defaultColumns?: string[]; useAsTitle?: string };
+        admin?: { useAsTitle?: string };
       }
     | undefined,
   slug: string
@@ -119,31 +119,6 @@ function toCollectionForColumns(
     collection.schemaDefinition?.fields || collection.fields || [];
   const fields = rawFields as CollectionForColumns["fields"];
 
-  // Determine default columns: use admin config or auto-generate from first few fields
-  // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = [
-    "tabs",
-    "collapsible",
-    "row",
-    "ui",
-    "group",
-    "relationship",
-    "repeater",
-    "array",
-    "blocks",
-    "component",
-  ];
-  const dataFields = rawFields.filter(
-    (f): f is { name: string; type: string } =>
-      typeof f.name === "string" &&
-      f.name.length > 0 &&
-      typeof f.type === "string" &&
-      !layoutTypes.includes(f.type)
-  );
-
-  const defaultColumns =
-    collection.admin?.defaultColumns || dataFields.slice(0, 4).map(f => f.name);
-
   const labels = getCollectionLabels(collection, slug);
 
   return {
@@ -152,14 +127,6 @@ function toCollectionForColumns(
     fields,
     admin: {
       useAsTitle: collection.admin?.useAsTitle,
-      defaultColumns: [
-        "title",
-        ...defaultColumns.filter(
-          c => c !== "title" && c !== "slug" && c !== "updatedAt"
-        ),
-        "slug",
-        "updatedAt",
-      ],
     },
   };
 }

@@ -39,7 +39,6 @@ export interface CollectionArtifacts {
       group?: string;
       icon?: string;
       hidden?: boolean;
-      defaultColumns?: string[];
       useAsTitle?: string;
     };
     source: "code" | "ui" | "built-in";
@@ -59,7 +58,6 @@ export interface CreateCollectionInput {
   icon?: string;
   group?: string;
   useAsTitle?: string;
-  defaultColumns?: string[];
   hidden?: boolean;
   order?: number;
   sidebarGroup?: string;
@@ -75,7 +73,6 @@ export interface UpdateCollectionInput {
   icon?: string;
   group?: string;
   useAsTitle?: string;
-  defaultColumns?: string[];
   hidden?: boolean;
   order?: number;
   sidebarGroup?: string;
@@ -166,7 +163,6 @@ export class DynamicCollectionService extends BaseService {
         icon: data.icon,
         group: data.group?.toLowerCase(),
         useAsTitle: data.useAsTitle,
-        defaultColumns: data.defaultColumns,
         hidden: data.hidden,
         order: data.order,
         sidebarGroup: data.sidebarGroup,
@@ -230,7 +226,6 @@ export class DynamicCollectionService extends BaseService {
       updates.icon !== undefined ||
       updates.group !== undefined ||
       updates.useAsTitle !== undefined ||
-      updates.defaultColumns !== undefined ||
       updates.hidden !== undefined ||
       updates.order !== undefined ||
       updates.sidebarGroup !== undefined
@@ -244,8 +239,6 @@ export class DynamicCollectionService extends BaseService {
         nextAdmin.group = updates.group?.toLowerCase();
       if (updates.useAsTitle !== undefined)
         nextAdmin.useAsTitle = updates.useAsTitle;
-      if (updates.defaultColumns !== undefined)
-        nextAdmin.defaultColumns = updates.defaultColumns;
       if (updates.hidden !== undefined) nextAdmin.hidden = updates.hidden;
       if (updates.order !== undefined) nextAdmin.order = updates.order;
       if (updates.sidebarGroup !== undefined)

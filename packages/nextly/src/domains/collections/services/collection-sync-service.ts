@@ -701,7 +701,6 @@ export class CollectionSyncService extends BaseService {
             group: config.admin.group,
             icon: config.admin.icon,
             hidden: config.admin.hidden,
-            defaultColumns: config.admin.defaultColumns,
             useAsTitle: config.admin.useAsTitle,
             isPlugin: config.admin.isPlugin,
             pagination: config.admin.pagination
@@ -987,7 +986,6 @@ export {};
               group: config.admin.group,
               icon: config.admin.icon,
               hidden: config.admin.hidden,
-              defaultColumns: config.admin.defaultColumns,
               useAsTitle: config.admin.useAsTitle,
               isPlugin: config.admin.isPlugin,
               pagination: config.admin.pagination

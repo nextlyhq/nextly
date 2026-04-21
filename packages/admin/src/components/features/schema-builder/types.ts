@@ -490,8 +490,6 @@ export interface CollectionAdminConfig {
   sidebarGroup?: string;
   /** Field name to use as entry title */
   useAsTitle?: string;
-  /** Default columns to show in list view */
-  defaultColumns?: string[];
 }
 
 /**
