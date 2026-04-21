@@ -218,7 +218,6 @@ export class CollectionMetadataService extends BaseService {
     icon?: string;
     group?: string;
     useAsTitle?: string;
-    defaultColumns?: string[];
     hidden?: boolean;
     order?: number;
     sidebarGroup?: string;
@@ -523,7 +522,6 @@ export class CollectionMetadataService extends BaseService {
       icon?: string;
       group?: string;
       useAsTitle?: string;
-      defaultColumns?: string[];
       hidden?: boolean;
       order?: number;
       sidebarGroup?: string;

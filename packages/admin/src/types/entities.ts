@@ -167,7 +167,6 @@ export interface ApiCollection {
     order?: number;
     /** Custom sidebar group slug. When set, item moves from its default section to this custom group */
     sidebarGroup?: string;
-    defaultColumns?: string[];
     useAsTitle?: string;
     /** Whether this collection is provided by a plugin */
     isPlugin?: boolean;

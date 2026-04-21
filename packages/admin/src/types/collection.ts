@@ -203,7 +203,6 @@ export interface Collection {
     group?: string;
     icon?: string;
     hidden?: boolean;
-    defaultColumns?: string[];
     useAsTitle?: string;
     /** Whether this collection is provided by a plugin */
     isPlugin?: boolean;

@@ -184,7 +184,6 @@ export function submissionsCollection(
       group: "Forms",
       order: 51,
       useAsTitle: "id",
-      defaultColumns: ["form", "status", "submittedAt"],
       description: "View and manage form submissions",
 
       // Custom components for submissions list

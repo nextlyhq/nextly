@@ -291,7 +291,6 @@ export class CollectionsHandler {
       order?: number;
       sidebarGroup?: string;
       useAsTitle?: string;
-      defaultColumns?: string[];
       hidden?: boolean;
       fields?: FieldDefinition[];
     }

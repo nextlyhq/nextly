@@ -118,7 +118,6 @@ const createCollectionSchema = z.object({
       group: z.string().optional(),
       icon: z.string().optional(),
       hidden: z.boolean().optional(),
-      defaultColumns: z.array(z.string()).optional(),
       useAsTitle: z.string().optional(),
       isPlugin: z.boolean().optional(),
       order: z.number().optional(),

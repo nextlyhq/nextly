@@ -221,7 +221,7 @@ function saveToStorage(
  * ```tsx
  * function EntryTable({ collection, columns }) {
  *   const availableColumns = columns.map(c => c.id);
- *   const defaultVisible = collection.admin?.defaultColumns ?? availableColumns;
+ *   const defaultVisible = getDefaultVisibleColumns(collection);
  *
  *   const {
  *     columnVisibility,
@@ -377,7 +377,6 @@ export function useColumnVisibility({
 
   /**
    * Reset to default visibility.
-   * Uses collection's defaultColumns if defined, otherwise shows all columns.
    */
   const resetToDefault = useCallback(() => {
     setVisibleColumns(defaultColumns);

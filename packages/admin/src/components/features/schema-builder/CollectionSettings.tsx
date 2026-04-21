@@ -17,7 +17,6 @@
 
 import {
   Button,
-  Checkbox,
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -321,18 +320,6 @@ export function CollectionSettings({
     [settings.admin, handleUpdate]
   );
 
-  // Handle default column toggle
-  const handleDefaultColumnToggle = useCallback(
-    (fieldName: string, checked: boolean) => {
-      const current = settings.admin?.defaultColumns || [];
-      const updated = checked
-        ? [...current, fieldName]
-        : current.filter(col => col !== fieldName);
-      handleAdminUpdate({ defaultColumns: updated });
-    },
-    [settings.admin?.defaultColumns, handleAdminUpdate]
-  );
-
   // Handle sidebar group selection
   const handleSidebarGroupChange = useCallback(
     (value: string) => {
@@ -577,42 +564,6 @@ export function CollectionSettings({
               }
             />
           </div>
-        </div>
-
-        {/* Default Columns */}
-        <div className="space-y-2 mt-4">
-          <FormLabelWithTooltip
-            className="text-sm font-medium mb-4"
-            label="Default Columns"
-            description="Columns to show in list view"
-          />
-          {namedFields.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic py-2">
-              Add fields with names to select columns
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 gap-4">
-              {namedFields.map(field => (
-                <label
-                  key={field.id}
-                  className="flex items-center gap-2 cursor-pointer group"
-                >
-                  <Checkbox
-                    checked={
-                      settings.admin?.defaultColumns?.includes(field.name) ||
-                      false
-                    }
-                    onCheckedChange={checked =>
-                      handleDefaultColumnToggle(field.name, checked === true)
-                    }
-                  />
-                  <span className="text-sm group-hover-subtle-row transition-colors">
-                    {field.label || field.name}
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
         </div>
       </div>
     </div>

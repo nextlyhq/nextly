@@ -309,7 +309,6 @@ export async function PATCH(
       "sidebarGroup",
       "hidden",
       "useAsTitle",
-      "defaultColumns",
     ] as const;
 
     // Collect admin field overrides from both nested admin object and flat top-level fields

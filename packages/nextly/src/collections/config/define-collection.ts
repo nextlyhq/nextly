@@ -260,7 +260,6 @@ export interface CollectionAdminComponents {
  *   group: 'Content',
  *   icon: 'FileText',
  *   useAsTitle: 'title',
- *   defaultColumns: ['title', 'status', 'createdAt'],
  *   pagination: {
  *     defaultLimit: 25,
  *   },
@@ -331,14 +330,6 @@ export interface CollectionAdminOptions {
 
   /** Custom sidebar group slug. When set, item moves from its default section to this custom group */
   sidebarGroup?: string;
-
-  /**
-   * Field names to display as columns in the list view.
-   * If not specified, default columns are used.
-   *
-   * @example ['title', 'status', 'author', 'createdAt']
-   */
-  defaultColumns?: string[];
 
   /**
    * Field name to use as the document title in the Admin UI.
@@ -923,7 +914,6 @@ function toTitleCase(str: string): string {
  *     group: 'Content',
  *     icon: 'FileText',
  *     useAsTitle: 'title',
- *     defaultColumns: ['title', 'status', 'author', 'createdAt'],
  *   },
  *   access: {
  *     read: () => true,
