@@ -1,5 +1,5 @@
 /**
- * Shared `beforeValidate` hook used by Posts, Categories, Tags, and Authors.
+ * Shared `beforeValidate` hook used by Posts, Categories, and Tags.
  *
  * Derives a URL-safe slug from `title` or `name` when the slug field is
  * blank. Lives in `src/hooks/` rather than inside a collection because

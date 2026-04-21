@@ -6,9 +6,19 @@ A complete blog starter with posts, authors, categories, and a clean frontend bu
 
 ### Collections
 
-- **Posts** - Title, slug, rich text content, featured image, author, categories, excerpt, publish date, status (draft/published). Auto-generates slug from title.
-- **Authors** - Name, slug, bio, avatar. Separate from admin users so guest authors don't need admin accounts.
+- **Posts** - Title, slug, rich text content, featured image, author (relates to users), categories, tags, excerpt, publish date, featured flag, SEO group, status (draft/published). Auto-generates slug from title; computes reading time and word count on save.
 - **Categories** - Name, slug, description. Simple taxonomy for organizing posts.
+- **Tags** - Name, slug, description. Granular cross-cutting taxonomy.
+
+### Users as authors
+
+The template uses the built-in `users` collection as the author identity: posts relate directly to users via the `author` relationship field. Each user has additional scalar fields defined in `configs/codefirst.config.ts`:
+
+- `bio` (textarea): short author bio shown on post footers and `/authors/[slug]`.
+- `avatarUrl` (text): URL of an avatar image. Plain text (not an uploaded media record) because user-extension fields support only scalar types today. Full URL or a filename served from your seed-media base URL.
+- `slug` (text): the URL slug for `/authors/[slug]`. Unique per user.
+
+No separate `authors` collection; no duplicated profile data.
 
 ### Singles
 

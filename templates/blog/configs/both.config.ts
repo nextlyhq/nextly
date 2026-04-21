@@ -5,17 +5,24 @@
 // UI-created schemas are stored in the database and managed via the
 // Admin Panel. This gives you the best of both worlds: version-controlled
 // core schemas with the flexibility to extend via the UI.
-import { defineConfig } from "@revnixhq/nextly/config";
+import { defineConfig, text, textarea } from "@revnixhq/nextly/config";
 
-import { Authors } from "../src/collections/Authors";
 import { Categories } from "../src/collections/Categories";
 import { Posts } from "../src/collections/Posts";
 import { Tags } from "../src/collections/Tags";
 import { SiteSettings } from "../src/globals/SiteSettings";
 
 export default defineConfig({
-  collections: [Posts, Authors, Categories, Tags],
+  collections: [Posts, Categories, Tags],
   singles: [SiteSettings],
+
+  users: {
+    fields: [
+      textarea({ name: "bio", maxLength: 500 }),
+      text({ name: "avatarUrl" }),
+      text({ name: "slug" }),
+    ],
+  },
 
   // TypeScript type generation
   typescript: {

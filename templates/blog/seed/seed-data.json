@@ -2,30 +2,22 @@
   "seedMedia": {
     "baseUrl": "https://raw.githubusercontent.com/nextlyhq/nextly/main/templates/blog/seed/media/"
   },
-  "authors": [
+  "users": [
     {
       "name": "Jane Smith",
+      "email": "jane@example.com",
+      "password": "ChangeMe@123",
       "slug": "jane-smith",
       "bio": "Tech writer and Next.js enthusiast. Writing about modern web development and open-source tools.",
-      "avatar": "author-jane.svg",
-      "social": {
-        "twitter": "https://twitter.com/janesmith",
-        "github": "https://github.com/janesmith",
-        "linkedin": "",
-        "website": ""
-      }
+      "avatarUrl": "author-jane.svg"
     },
     {
       "name": "John Doe",
+      "email": "john@example.com",
+      "password": "ChangeMe@123",
       "slug": "john-doe",
       "bio": "Full-stack developer and CMS architecture nerd. Building better content experiences.",
-      "avatar": "author-john.svg",
-      "social": {
-        "twitter": "https://twitter.com/johndoe",
-        "github": "https://github.com/johndoe",
-        "linkedin": "https://linkedin.com/in/johndoe",
-        "website": "https://johndoe.dev"
-      }
+      "avatarUrl": "author-john.svg"
     }
   ],
   "categories": [
