@@ -1,0 +1,68 @@
+---
+title: Database
+description: Choose and configure a database for your Nextly application. Supports PostgreSQL, MySQL, and SQLite through dedicated adapter packages.
+---
+
+Nextly supports multiple databases through its adapter system. Each adapter is a separate `@nextlyhq/` package built on a shared [Drizzle ORM](https://orm.drizzle.team/) foundation, so you get type-safe queries and consistent behavior regardless of which database you choose.
+
+## Supported Databases
+
+| Database | Package | Driver | Best For |
+|----------|---------|--------|----------|
+| [PostgreSQL](/docs/database/postgres) | `@nextlyhq/adapter-postgres` | `pg` | Production apps, complex queries, full feature support |
+| [MySQL](/docs/database/mysql) | `@nextlyhq/adapter-mysql` | `mysql2` | Teams with existing MySQL infrastructure |
+| [SQLite](/docs/database/sqlite) | `@nextlyhq/adapter-sqlite` | `better-sqlite3` | Local development, small projects, zero setup |
+
+## Feature Comparison
+
+Not every database supports every feature. Nextly handles the differences automatically, but it helps to know what each adapter provides.
+
+| Feature | PostgreSQL | MySQL | SQLite |
+|---------|-----------|-------|--------|
+| JSONB columns | Yes | No (JSON only) | No (JSON as TEXT) |
+| Array columns | Yes | No | No |
+| RETURNING clause | Yes | No (uses extra SELECT) | Yes |
+| ILIKE (case-insensitive) | Native | LOWER() LIKE fallback | LOWER() LIKE fallback |
+| Savepoints (nested transactions) | Yes | No | Yes |
+| Full-text search | Native (tsvector) | FULLTEXT indexes | FTS5 extension |
+| ON CONFLICT / upsert | ON CONFLICT DO UPDATE | ON DUPLICATE KEY UPDATE | ON CONFLICT DO UPDATE |
+| Connection pooling | Yes | Yes | No (single connection) |
+| Generated columns | Yes | Yes | Yes |
+| Max query params | 65,535 | 65,535 | 999 |
+
+## How It Works Under the Hood
+
+All adapters extend a shared `DrizzleAdapter` base class from `@nextlyhq/adapter-drizzle`. This base class provides:
+
+- **Database-agnostic CRUD** -- `select()`, `insert()`, `update()`, `delete()`, `upsert()` methods that work identically across databases
+- **Query builder** -- Builds WHERE clauses, ORDER BY, LIMIT/OFFSET, and JOINs with dialect-aware SQL generation
+- **Migration system** -- Tracks applied migrations in a `nextly_migrations` table with checksum validation
+- **Error classification** -- Translates database-specific error codes into structured `DatabaseError` types (e.g., `unique_violation`, `foreign_key_violation`, `timeout`)
+- **Transaction support** -- Automatic commit on success, rollback on error, with retry logic for deadlocks
+
+Each dialect adapter overrides the base where needed. For example, MySQL uses `?` placeholders and backtick-escaped identifiers, while PostgreSQL uses `$1` placeholders and double-quote-escaped identifiers.
+
+## Choosing a Database
+
+**For production**, use PostgreSQL. It has the most comprehensive feature set and the best hosting options (Neon, Supabase, Railway, Vercel Postgres).
+
+**For development**, use SQLite. It requires zero setup -- no database server, no Docker, just a file on disk. Your database is a single file you can delete and recreate at will.
+
+**For existing infrastructure**, use MySQL if your team or infrastructure already uses it. Nextly handles the differences (like missing RETURNING clause) automatically.
+
+A common pattern is to use SQLite locally and PostgreSQL in production. Nextly's adapter system makes switching straightforward -- just change the adapter and connection string in your config.
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes (PostgreSQL/MySQL) | Connection URL for your database |
+| `DB_DIALECT` | No | Database type: `postgresql`, `mysql`, or `sqlite`. Auto-detected from URL if omitted. |
+
+## Next Steps
+
+- [PostgreSQL setup](/docs/database/postgres) -- Install, configure, and run PostgreSQL locally with Docker
+- [MySQL setup](/docs/database/mysql) -- Install and configure the MySQL adapter
+- [SQLite setup](/docs/database/sqlite) -- Zero-setup database for development
+- [Environment Variables](/docs/configuration/environment) -- Database-related environment variables
+- [Deployment](/docs/guides/deployment) -- Production database configuration

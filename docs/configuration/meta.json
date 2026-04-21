@@ -1,0 +1,12 @@
+{
+  "title": "Configuration",
+  "pages": [
+    "index",
+    "nextly-config",
+    "collections",
+    "singles",
+    "components",
+    "fields",
+    "environment"
+  ]
+}

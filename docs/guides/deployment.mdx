@@ -1,0 +1,332 @@
+---
+title: Deployment
+description: Deploy your Nextly application to Vercel, Docker, or any Node.js host with production-ready configuration.
+---
+
+Nextly applications are standard Next.js apps, so they can be deployed anywhere Next.js runs. This guide covers the key deployment targets and the production configuration checklist.
+
+## Vercel (Recommended)
+
+Vercel is the recommended platform for Nextly since it provides first-class Next.js support, and the Vercel Blob storage adapter integrates seamlessly.
+
+### Steps
+
+1. Push your project to GitHub, GitLab, or Bitbucket
+2. Import the repository in the [Vercel Dashboard](https://vercel.com/new)
+3. Set all required environment variables (see checklist below)
+4. Deploy
+
+Vercel automatically detects Next.js and configures the build pipeline. No custom build settings are needed.
+
+### Vercel-Specific Notes
+
+- **Storage**: Use `@nextlyhq/storage-vercel-blob` with the `BLOB_READ_WRITE_TOKEN` from Vercel Dashboard > Storage > Blob
+- **Database**: Use a managed PostgreSQL service (Vercel Postgres, Neon, Supabase, PlanetScale for MySQL)
+- **Body size limit**: Vercel serverless functions have a 4.5MB body size limit. Enable `clientUploads: true` on your storage collections for larger files
+- **Environment variables**: Set them in Vercel Dashboard > Settings > Environment Variables (not in `.env` files)
+
+```typescript
+// nextly.config.ts -- Vercel deployment
+import { defineConfig } from "@nextlyhq/nextly/config";
+import { vercelBlobStorage } from "@nextlyhq/storage-vercel-blob";
+
+export default defineConfig({
+  storage: process.env.BLOB_READ_WRITE_TOKEN
+    ? [
+        vercelBlobStorage({
+          token: process.env.BLOB_READ_WRITE_TOKEN,
+          collections: {
+            media: {
+              clientUploads: true, // bypass 4.5MB serverless limit
+            },
+          },
+        }),
+      ]
+    : [],
+});
+```
+
+## Self-Hosted (Node.js)
+
+Deploy to any server or cloud VM that supports Node.js 18+.
+
+### Build and Start
+
+```bash
+# Install dependencies
+pnpm install
+
+# Build the Next.js application
+pnpm build
+
+# Start in production mode
+pnpm start
+```
+
+### Process Manager
+
+Use a process manager like PM2 to keep the application running:
+
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start with PM2
+pm2 start pnpm --name "nextly-app" -- start
+
+# Save PM2 process list for auto-restart on reboot
+pm2 save
+pm2 startup
+```
+
+### Reverse Proxy
+
+Place nginx or Caddy in front as a reverse proxy for SSL termination:
+
+```nginx
+# /etc/nginx/sites-available/nextly
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    ssl_certificate /etc/ssl/certs/example.com.pem;
+    ssl_certificate_key /etc/ssl/private/example.com-key.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+## Database Setup for Production
+
+Nextly supports PostgreSQL, MySQL, and SQLite. **PostgreSQL is recommended for production**.
+
+### PostgreSQL (Recommended)
+
+Use a managed service like Neon, Supabase, AWS RDS, or DigitalOcean Managed Databases:
+
+```bash
+DB_DIALECT=postgresql
+DATABASE_URL=postgresql://user:password@host:5432/nextly_prod
+```
+
+### MySQL
+
+```bash
+DB_DIALECT=mysql
+DATABASE_URL=mysql://user:password@host:3306/nextly_prod
+```
+
+### SQLite (Development Only)
+
+SQLite works for local development but is not recommended for production deployments:
+
+```bash
+DB_DIALECT=sqlite
+DATABASE_URL=file:./prod.db
+```
+
+### Connection Pool Settings
+
+For production, tune the connection pool:
+
+```bash
+DB_POOL_MAX=20
+DB_POOL_MIN=2
+DB_CONNECTION_TIMEOUT=30000
+DB_QUERY_TIMEOUT=15000
+```
+
+### Running Migrations
+
+Before starting the app for the first time in production, run database migrations:
+
+```bash
+pnpm db:push
+```
+
+## Storage Setup for Production
+
+Choose a storage adapter based on your deployment platform:
+
+| Deployment   | Recommended Storage                     |
+|--------------|-----------------------------------------|
+| Vercel       | Vercel Blob (`@nextlyhq/storage-vercel-blob`) |
+| Self-hosted  | S3, R2, or MinIO (`@nextlyhq/storage-s3`)     |
+
+See the [Media & Storage guide](/docs/guides/media-storage) for detailed configuration of each adapter.
+
+### Quick Environment Setup
+
+**Vercel Blob:**
+
+```bash
+STORAGE_ADAPTER=vercel
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxxxxxxx
+```
+
+**AWS S3:**
+
+```bash
+STORAGE_ADAPTER=s3
+S3_BUCKET=my-nextly-bucket
+S3_REGION=us-east-1
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+```
+
+**Cloudflare R2:**
+
+```bash
+STORAGE_ADAPTER=s3
+S3_BUCKET=my-r2-bucket
+S3_REGION=auto
+AWS_ACCESS_KEY_ID=your-r2-access-key
+AWS_SECRET_ACCESS_KEY=your-r2-secret-key
+S3_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
+S3_PUBLIC_URL=https://pub-xxxx.r2.dev
+```
+
+## Security Configuration
+
+### CORS
+
+By default, Nextly uses same-origin only (no CORS headers). For production with a separate frontend domain, configure CORS in `defineConfig()`:
+
+```typescript
+// nextly.config.ts
+export default defineConfig({
+  security: {
+    cors: {
+      origin: ["https://example.com", "https://app.example.com"],
+      credentials: true,
+    },
+  },
+});
+```
+
+### Rate Limiting
+
+Rate limiting is enabled by default (100 read / 30 write requests per minute). Customize or disable it:
+
+```typescript
+// nextly.config.ts
+export default defineConfig({
+  rateLimit: {
+    enabled: true,
+    readLimit: 200,
+    writeLimit: 50,
+    windowMs: 60000, // 1 minute
+  },
+});
+```
+
+### Security Headers
+
+Nextly sets secure response headers by default (CSP, X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy). You can customize them:
+
+```typescript
+// nextly.config.ts
+export default defineConfig({
+  security: {
+    headers: {
+      contentSecurityPolicy: "default-src 'self'",
+      strictTransportSecurity: "max-age=63072000; includeSubDomains",
+    },
+  },
+});
+```
+
+## Email Provider for Production
+
+Configure an email provider so password resets and verification emails work in production. Without one, tokens are returned in API responses (a development-only fallback).
+
+See the [Email guide](/docs/guides/email) for provider setup.
+
+```bash
+# Resend (recommended)
+RESEND_API_KEY=re_xxxxxxxxxxxx
+
+# Or SMTP
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=your-user
+SMTP_PASS=your-password
+SMTP_FROM=noreply@example.com
+```
+
+## Environment Variables Checklist
+
+Use this checklist when setting up a production deployment:
+
+### Required
+
+| Variable                 | Description                                         |
+|--------------------------|-----------------------------------------------------|
+| `NODE_ENV`               | Set to `production`                                 |
+| `DB_DIALECT`             | `postgresql`, `mysql`, or `sqlite`                  |
+| `DATABASE_URL`           | Database connection string                          |
+| `AUTH_SECRET`            | JWT signing secret (min 32 chars)                   |
+| `NEXTAUTH_URL`           | Public URL of your application                      |
+| `NEXT_PUBLIC_APP_URL`    | Public URL (used in client-side code)               |
+
+### Storage (choose one)
+
+| Variable                 | Description                                         |
+|--------------------------|-----------------------------------------------------|
+| `STORAGE_ADAPTER`        | `vercel` or `s3`                                    |
+| `BLOB_READ_WRITE_TOKEN`  | Vercel Blob token                                   |
+| `S3_BUCKET`              | S3 bucket name                                      |
+| `S3_REGION`              | S3 region                                           |
+| `AWS_ACCESS_KEY_ID`      | S3 access key                                       |
+| `AWS_SECRET_ACCESS_KEY`  | S3 secret key                                       |
+| `S3_ENDPOINT`            | Custom S3 endpoint (R2, MinIO)                      |
+| `S3_PUBLIC_URL`          | Public URL for file access                          |
+
+### Optional
+
+| Variable                 | Description                                         |
+|--------------------------|-----------------------------------------------------|
+| `AUTH_TRUST_HOST`        | Trust host header (default: `true`)                 |
+| `RESEND_API_KEY`         | Resend API key for emails                           |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | SMTP email config |
+| `DB_POOL_MAX`            | Max database connections (default: `20`)            |
+| `DB_POOL_MIN`            | Min database connections (default: `2`)             |
+
+### Generating Secrets
+
+```bash
+# Generate AUTH_SECRET
+openssl rand -base64 32
+```
+
+## Production Checklist
+
+Before going live, verify:
+
+- [ ] `NODE_ENV=production`
+- [ ] `AUTH_SECRET` is at least 32 characters (generated with `openssl rand -base64 32`)
+- [ ] `DATABASE_URL` points to a production database (not localhost)
+- [ ] `NEXTAUTH_URL` and `NEXT_PUBLIC_APP_URL` point to your public domain
+- [ ] Storage adapter is configured (`BLOB_READ_WRITE_TOKEN` or S3 credentials)
+- [ ] Email provider is configured (Resend, SMTP, or SendLayer)
+- [ ] Database migrations have been run (`pnpm db:push`)
+- [ ] `.env` file is not committed to version control
+- [ ] CORS is configured if frontend runs on a different domain
+- [ ] Rate limiting is tuned for your expected traffic
+
+## Next Steps
+
+- [Authentication](/docs/guides/authentication) -- configure RBAC for production
+- [Media & Storage](/docs/guides/media-storage) -- detailed storage adapter configuration
+- [Email](/docs/guides/email) -- production email provider setup
+- [Environment Variables](/docs/configuration/environment) -- full environment variable reference
+- [Database](/docs/database) -- database adapter setup and configuration
