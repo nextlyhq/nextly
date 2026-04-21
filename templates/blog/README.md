@@ -20,6 +20,23 @@ The template uses the built-in `users` collection as the author identity: posts 
 
 No separate `authors` collection; no duplicated profile data.
 
+### Roles
+
+Three roles seeded by the template on first run:
+
+- **Administrator** (`admin`) - full access to content, taxonomy, media, and users.
+- **Editor** (`editor`) - can create, edit, and publish any post; manages categories, tags, and media.
+- **Author** (`author`) - can draft and edit their own posts; reads published content.
+
+Fine-grained permissions are not pre-assigned by the template. The three roles exist as labeled buckets; configure their permission rules via `/admin/roles/<slug>` or programmatically with `nextly.roles.setPermissions({...})`. The `super-admin` role (seeded by Nextly core) bypasses all access checks.
+
+Collection access policies in `src/access/` gate who can reach each CRUD operation:
+
+- Posts: public can read; any logged-in user can create a draft; `admin`/`editor`/`author` can update or delete.
+- Categories and Tags: public can read; `admin`/`editor`/`author` can edit.
+
+Row-level checks (authors only editing their own posts) live at the database permission layer, not in the access functions - the `AccessControlFunction` signature doesn't receive the target document.
+
 ### Singles
 
 - **Site Settings** - Site name, tagline, description, logo, social links (Twitter, GitHub, LinkedIn). Used by the Header and Footer components.

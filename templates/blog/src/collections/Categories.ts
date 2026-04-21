@@ -5,6 +5,7 @@
  */
 import { defineCollection, text, textarea } from "@revnixhq/nextly/config";
 
+import { isAuthorOrEditor } from "@/access/is-author-or-editor";
 import { autoSlug } from "@/hooks/auto-slug";
 
 export const Categories = defineCollection({
@@ -16,5 +17,12 @@ export const Categories = defineCollection({
     textarea({ name: "description" }),
   ],
   admin: { useAsTitle: "name" },
+  // Public can read categories; content roles can curate them.
+  access: {
+    read: true,
+    create: isAuthorOrEditor,
+    update: isAuthorOrEditor,
+    delete: isAuthorOrEditor,
+  },
   hooks: { beforeValidate: [autoSlug] },
 });
