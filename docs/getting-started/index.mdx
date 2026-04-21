@@ -1,0 +1,101 @@
+---
+title: Getting Started
+description: Learn what Nextly is, understand its core concepts, and get up and running quickly.
+---
+
+Nextly is an open-source app framework that embeds directly into your Next.js application. Instead of running a separate server, Nextly lives alongside your frontend code -- same repo, same deployment, same database.
+
+## Two Ways to Build
+
+Nextly supports two approaches to defining your content model. You can use either one, or mix them in the same project.
+
+### Code-First
+
+Define collections and singles in TypeScript. Your content schema lives in `nextly.config.ts`, is version-controlled, and generates types automatically.
+
+```typescript title="nextly.config.ts"
+import { defineConfig, defineCollection, text, richText, select } from "@nextlyhq/nextly/config";
+
+const posts = defineCollection({
+  slug: "posts",
+  labels: { singular: "Post", plural: "Posts" },
+  fields: [
+    text({ name: "title", required: true }),
+    richText({ name: "content" }),
+    select({
+      name: "status",
+      options: [
+        { label: "Draft", value: "draft" },
+        { label: "Published", value: "published" },
+      ],
+    }),
+  ],
+});
+
+export default defineConfig({
+  collections: [posts],
+});
+```
+
+### Visual (Builder)
+
+Create and modify collections visually through the admin panel at `/admin`. The Schema Builder lets you add fields with drag-and-drop, configure validation, and set up relationships -- all without writing config code. Collections created via the Schema Builder generate database tables dynamically and are immediately available through the same API.
+
+### Same API, Either Way
+
+Regardless of how you create a collection, you query it the same way:
+
+```typescript title="app/blog/page.tsx"
+import { nextly } from "@nextlyhq/nextly";
+
+export default async function BlogPage() {
+  const { docs: posts } = await nextly.find({
+    collection: "posts",
+    limit: 10,
+  });
+
+  return (
+    <ul>
+      {posts.map((post) => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+## Core Concepts
+
+### Collections
+
+Collections are repeatable content types -- like blog posts, products, or team members. Each collection gets its own database table and admin UI for managing entries.
+
+### Singles (formerly Globals)
+
+Singles store one-of-a-kind content -- site settings, navigation menus, footer content. They work like collections but hold a single document instead of many.
+
+### Fields
+
+Fields define the shape of your content. Nextly provides field types including `text`, `richText`, `number`, `select`, `date`, `relationship`, `upload`, `array`, `group`, `component`, and more. See [Fields](/docs/configuration/fields) for the full list.
+
+### Components
+
+Components are reusable field groups that can be embedded in collections, singles, or other components. Define a component once (like an SEO block or a CTA section), then use it across multiple content types.
+
+### Admin Panel
+
+Nextly includes a full admin interface at `/admin` with role-based access control, a media library, and rich text editing. The admin panel works with both code-first and Schema Builder-created content.
+
+## Prerequisites
+
+- **Node.js 18** or later
+- **Next.js 14, 15, or 16**
+- A supported database: **PostgreSQL** (recommended), **MySQL**, or **SQLite**
+- Basic familiarity with Next.js and TypeScript
+
+## Next Steps
+
+- [Installation](/docs/getting-started/installation) -- Install Nextly in your project
+- [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
+- [Project Structure](/docs/getting-started/project-structure) -- Understand how a Nextly project is organized
+- [Configuration](/docs/configuration) -- Full configuration reference for collections, singles, and fields

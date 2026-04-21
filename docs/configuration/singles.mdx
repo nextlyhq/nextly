@@ -1,0 +1,285 @@
+---
+title: Singles
+description: Define single-document content like site settings, headers, and footers.
+---
+
+A single is a one-off document -- content that exists as exactly one instance. Site settings, navigation headers, footers, and homepage configurations are typical singles. Unlike [collections](/docs/configuration/collections), singles have no list view, no create/delete operations, and are auto-created on first access.
+
+<Tabs items={["Code-First", "Builder (Visual)"]}>
+<Tab value="Code-First">
+
+## Defining a Single
+
+Create a file for each single and use `defineSingle()`:
+
+```typescript title="src/singles/site-settings.ts"
+import {
+  defineSingle,
+  text,
+  upload,
+  group,
+  array,
+} from '@nextlyhq/nextly';
+
+export default defineSingle({
+  slug: 'site-settings',
+  label: { singular: 'Site Settings' },
+  admin: {
+    group: 'Settings',
+    icon: 'Settings',
+    description: 'Global site configuration',
+  },
+  fields: [
+    text({ name: 'siteName', required: true, label: 'Site Name' }),
+    text({ name: 'tagline', label: 'Tagline' }),
+    upload({ name: 'logo', relationTo: 'media', label: 'Logo' }),
+    upload({ name: 'favicon', relationTo: 'media', label: 'Favicon' }),
+    group({
+      name: 'seo',
+      label: 'SEO Defaults',
+      fields: [
+        text({ name: 'metaTitle', label: 'Default Meta Title' }),
+        text({ name: 'metaDescription', label: 'Default Meta Description' }),
+      ],
+    }),
+    array({
+      name: 'socialLinks',
+      label: 'Social Links',
+      fields: [
+        text({ name: 'platform', required: true }),
+        text({ name: 'url', required: true }),
+      ],
+    }),
+  ],
+  access: {
+    read: true,
+    update: ({ roles }) => roles.includes('admin'),
+  },
+  hooks: {
+    afterChange: [
+      async ({ doc }) => {
+        await fetch('/api/revalidate?tag=site-settings', { method: 'POST' });
+      },
+    ],
+  },
+});
+```
+
+Then register it in your config:
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from '@nextlyhq/nextly';
+import SiteSettings from './src/singles/site-settings';
+import Header from './src/singles/header';
+import Footer from './src/singles/footer';
+
+export default defineConfig({
+  singles: [SiteSettings, Header, Footer],
+});
+```
+
+</Tab>
+<Tab value="Builder (Visual)">
+
+## Creating a Single in the Schema Builder
+
+The Nextly admin panel includes a visual Schema Builder for creating singles without writing code.
+
+1. Open your admin panel and navigate to **Builder > Singles**
+2. Click **Create Single**
+3. Enter a slug (e.g., `site-settings`) and a display label
+4. Add fields using the drag-and-drop field editor
+5. Configure access control and hooks through the UI
+6. Click **Save** to generate the single
+
+The Schema Builder produces the same `SingleConfig` that code-first singles use. You can export a Schema Builder-created single to TypeScript at any time.
+
+</Tab>
+</Tabs>
+
+## How Singles Differ from Collections
+
+| | Collections | Singles |
+|---|---|---|
+| **Entries** | Multiple documents | Exactly one document |
+| **List view** | Yes | No |
+| **Create/Delete** | Yes | No (auto-created on first access) |
+| **Access control** | `create`, `read`, `update`, `delete` | `read`, `update` only |
+| **Hooks** | 8 hooks | 4 hooks (`beforeRead`, `afterRead`, `beforeChange`, `afterChange`) |
+| **Timestamps** | Configurable (`createdAt` + `updatedAt`) | Always has `updatedAt` |
+| **Table naming** | Uses slug directly | Prefixed with `single_` (e.g., `single_site_settings`) |
+| **API endpoint** | `/api/[slug]` | `/api/singles/[slug]` |
+
+## Single Options
+
+Only `slug` and `fields` are required. Everything else has sensible defaults.
+
+### `slug`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Required** | Yes |
+
+Unique identifier. Must be unique across all singles **and** collections. Used as the API endpoint and database table name (with `single_` prefix). Must be lowercase and URL-friendly.
+
+### `fields`
+
+| | |
+|---|---|
+| **Type** | `FieldConfig[]` |
+| **Required** | Yes |
+
+Array of field definitions. Singles support all the same field types as collections. See [Fields](/docs/configuration/fields).
+
+### `label`
+
+| | |
+|---|---|
+| **Type** | `{ singular: string }` |
+| **Default** | Auto-generated from slug |
+
+Display name in the admin UI sidebar, breadcrumbs, and page titles. Unlike collections, singles only need a singular label since there is always exactly one document.
+
+### `dbName`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | `single_[slug]` (e.g., `single_site_settings`) |
+
+Custom database table name.
+
+### `description`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | `undefined` |
+
+Description displayed in the admin UI.
+
+### `sanitize`
+
+| | |
+|---|---|
+| **Type** | `boolean` |
+| **Default** | `true` |
+
+When enabled, HTML tags are stripped from plain-text fields before storage. Only disable if the single intentionally stores HTML in text fields.
+
+### `custom`
+
+| | |
+|---|---|
+| **Type** | `Record<string, unknown>` |
+| **Default** | `undefined` |
+
+Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
+
+## Admin Options
+
+Configure how the single appears in the admin panel via the `admin` property.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `group` | `string` | None | Sidebar group name |
+| `icon` | `string` | None | Lucide icon name (e.g., `'Settings'`, `'Menu'`, `'Home'`) |
+| `hidden` | `boolean` | `false` | Hide from admin navigation |
+| `order` | `number` | `100` | Sort order within sidebar group (lower = higher) |
+| `sidebarGroup` | `string` | None | Custom sidebar group slug |
+| `description` | `string` | None | Help text below the single title |
+
+## Access Control
+
+Singles only support `read` and `update` operations -- there is no create or delete since the document is auto-created on first access and cannot be removed.
+
+```typescript
+access: {
+  read: true,
+  update: ({ roles }) => roles.includes('admin'),
+}
+```
+
+Each operation accepts a boolean or a function receiving an `AccessControlContext` (same context as [collections](/docs/configuration/collections#access-control)). Code-defined access takes precedence over database permissions. Super-admin always bypasses all checks.
+
+## Hooks
+
+Singles support four lifecycle hooks -- a subset of the eight available on collections.
+
+### Hook Execution Order (Read)
+
+1. `beforeRead` -- Before fetching from database
+2. **Database read**
+3. `afterRead` -- After fetching, can transform data
+
+### Hook Execution Order (Update)
+
+1. `beforeChange` -- Before validation and database write
+2. **Database update**
+3. `afterChange` -- After database write, for side effects
+
+### Available Hooks
+
+| Hook | Trigger | Can Modify Data |
+|------|---------|-----------------|
+| `beforeRead` | Before database read | Yes (query params) |
+| `afterRead` | After database read | Yes (transform output) |
+| `beforeChange` | Before database write | Yes |
+| `afterChange` | After database write | No (side effects) |
+
+### Example: Cache Invalidation
+
+```typescript title="src/singles/site-settings.ts"
+hooks: {
+  afterChange: [
+    async ({ doc }) => {
+      // Invalidate CDN/ISR cache when settings change
+      await fetch('/api/revalidate?tag=site-settings', { method: 'POST' });
+    },
+  ],
+  afterRead: [
+    async ({ doc }) => {
+      // Add computed property
+      return { ...doc, fullTitle: `${doc.siteName} - ${doc.tagline}` };
+    },
+  ],
+}
+```
+
+## Example: Header Navigation
+
+```typescript title="src/singles/header.ts"
+import { defineSingle, array, text, relationship } from '@nextlyhq/nextly';
+
+export default defineSingle({
+  slug: 'header',
+  label: { singular: 'Header Navigation' },
+  admin: {
+    group: 'Navigation',
+    icon: 'Menu',
+  },
+  fields: [
+    array({
+      name: 'navItems',
+      label: 'Navigation Items',
+      fields: [
+        text({ name: 'label', required: true }),
+        text({ name: 'url' }),
+        relationship({ name: 'page', relationTo: 'pages' }),
+      ],
+    }),
+  ],
+  access: {
+    read: true,
+    update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
+  },
+});
+```
+
+## Next Steps
+
+- **[Collections](/docs/configuration/collections)** -- Content types with multiple entries
+- **[Fields](/docs/configuration/fields)** -- All field types and validation options
+- **[Components](/docs/configuration/components)** -- Reusable field groups for collections and singles
+- **[Schema Builder](/docs/admin/builder)** -- Create singles visually with drag-and-drop

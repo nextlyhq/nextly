@@ -1,0 +1,254 @@
+---
+title: "Quick Start: Build a Blog in 5 Minutes"
+description: Create a blog with posts and categories using Nextly. Define content with code or build it visually.
+---
+
+This guide walks you through building a blog with posts and categories. You will define a content model, run migrations, create content in the admin panel, and query it in a Next.js page.
+
+**Prerequisites:** Complete the [Installation](/docs/getting-started/installation) steps first.
+
+## 1. Define Your Collections
+
+<Tabs items={["Code-First", "Builder (Visual)"]}>
+<Tab value="Code-First">
+
+Open `nextly.config.ts` and define a `posts` collection and a `categories` collection:
+
+```typescript title="nextly.config.ts"
+import {
+  defineConfig,
+  defineCollection,
+  text,
+  richText,
+  select,
+  relationship,
+  date,
+} from "@nextlyhq/nextly/config";
+
+const posts = defineCollection({
+  slug: "posts",
+  labels: { singular: "Post", plural: "Posts" },
+  fields: [
+    text({ name: "title", required: true }),
+    text({ name: "slug", required: true, unique: true }),
+    richText({ name: "content" }),
+    relationship({ name: "category", relationTo: "categories" }),
+    select({
+      name: "status",
+      options: [
+        { label: "Draft", value: "draft" },
+        { label: "Published", value: "published" },
+      ],
+      defaultValue: "draft",
+    }),
+    date({ name: "publishedAt" }),
+  ],
+});
+
+const categories = defineCollection({
+  slug: "categories",
+  labels: { singular: "Category", plural: "Categories" },
+  fields: [
+    text({ name: "name", required: true }),
+    text({ name: "slug", required: true, unique: true }),
+  ],
+});
+
+export default defineConfig({
+  collections: [posts, categories],
+  singles: [],
+
+  typescript: {
+    outputFile: "./src/types/nextly-types.ts",
+  },
+});
+```
+
+After saving, run the CLI to sync your schema to the database:
+
+```bash
+npx @nextlyhq/nextly migrate
+```
+
+</Tab>
+<Tab value="Builder (Visual)">
+
+1. Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admin)
+2. Navigate to **Collections** in the sidebar
+3. Click **Create Collection**
+4. Name it `Posts` (slug: `posts`)
+5. Add fields:
+   - `title` -- Text, required
+   - `slug` -- Text, required, unique
+   - `content` -- Rich Text
+   - `status` -- Select with options: Draft, Published
+   - `publishedAt` -- Date
+6. Click **Save**
+7. Repeat to create a `Categories` collection with fields:
+   - `name` -- Text, required
+   - `slug` -- Text, required, unique
+
+The Schema Builder creates the database tables automatically. No migration step needed.
+
+</Tab>
+</Tabs>
+
+## 2. Add Content
+
+Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admin).
+
+1. Go to **Categories** and create a few categories (e.g., "Technology", "Design")
+2. Go to **Posts** and create a post:
+   - Set a title and slug
+   - Write some content in the rich text editor
+   - Select a category
+   - Set status to "Published"
+   - Set a publish date
+
+## 3. Query Content in Your App
+
+Use the Direct API to fetch posts in a Server Component. The Direct API runs on the server -- no HTTP requests, no REST endpoints needed.
+
+```typescript title="src/app/blog/page.tsx"
+import { nextly } from "@nextlyhq/nextly";
+
+export default async function BlogPage() {
+  const { docs: posts } = await nextly.find({
+    collection: "posts",
+    where: {
+      status: { equals: "published" },
+    },
+    sort: "-publishedAt",
+    limit: 10,
+  });
+
+  return (
+    <div>
+      <h1>Blog</h1>
+      {posts.map((post) => (
+        <article key={post.id}>
+          <h2>{post.title}</h2>
+          <time>{new Date(post.publishedAt).toLocaleDateString()}</time>
+        </article>
+      ))}
+    </div>
+  );
+}
+```
+
+### Fetch a Single Post
+
+```typescript title="src/app/blog/[slug]/page.tsx"
+import { nextly } from "@nextlyhq/nextly";
+import { notFound } from "next/navigation";
+
+export default async function PostPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+
+  const { docs } = await nextly.find({
+    collection: "posts",
+    where: {
+      slug: { equals: slug },
+      status: { equals: "published" },
+    },
+    limit: 1,
+  });
+
+  const post = docs[0];
+  if (!post) notFound();
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: post.content }} />
+    </article>
+  );
+}
+```
+
+## 4. Add a Single (formerly Global)
+
+Singles are perfect for site-wide settings. Add a blog settings single to your config:
+
+<Tabs items={["Code-First", "Builder (Visual)"]}>
+<Tab value="Code-First">
+
+```typescript title="nextly.config.ts"
+import { defineSingle, text, number } from "@nextlyhq/nextly/config";
+
+const blogSettings = defineSingle({
+  slug: "blog-settings",
+  labels: { singular: "Blog Settings" },
+  fields: [
+    text({ name: "blogTitle", required: true, label: "Blog Title" }),
+    text({ name: "tagline", label: "Tagline" }),
+    number({ name: "postsPerPage", defaultValue: 10 }),
+  ],
+});
+
+export default defineConfig({
+  collections: [posts, categories],
+  singles: [blogSettings],
+  // ... rest of config
+});
+```
+
+Run `npx @nextlyhq/nextly migrate` to sync the schema.
+
+</Tab>
+<Tab value="Builder (Visual)">
+
+1. In the admin panel, go to **Singles**
+2. Click **Create Single**
+3. Name it `Blog Settings` (slug: `blog-settings`)
+4. Add fields: `blogTitle` (Text, required), `tagline` (Text), `postsPerPage` (Number, default: 10)
+5. Click **Save**
+
+</Tab>
+</Tabs>
+
+Query the single in your layout:
+
+```typescript title="src/app/blog/layout.tsx"
+import { nextly } from "@nextlyhq/nextly";
+
+export default async function BlogLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const settings = await nextly.findGlobal({
+    slug: "blog-settings",
+  });
+
+  return (
+    <div>
+      <header>
+        <h1>{settings?.blogTitle}</h1>
+        <p>{settings?.tagline}</p>
+      </header>
+      {children}
+    </div>
+  );
+}
+```
+
+## What You Built
+
+In 5 minutes, you have:
+
+- Two collections (`posts` and `categories`) with typed fields
+- A single (`blog-settings`) for site-wide configuration
+- An admin panel to manage all content at `/admin`
+- Server-rendered pages that query content directly with the Direct API
+
+## Next Steps
+
+- [Project Structure](/docs/getting-started/project-structure) -- Understand how the project is organized
+- [Fields](/docs/configuration/fields) -- Explore all available field types
+- [Direct API](/docs/api-reference/direct-api) -- Full API reference for querying content
+- [Media Storage](/docs/guides/media-storage) -- Set up image and file uploads

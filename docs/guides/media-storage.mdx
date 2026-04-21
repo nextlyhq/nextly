@@ -1,0 +1,387 @@
+---
+title: Media & Storage
+description: Configure storage adapters for file uploads and named image sizes.
+---
+
+Nextly uses a plugin-based storage system for media uploads. You can use local disk storage for development (zero configuration) and switch to cloud storage for production.
+
+## Storage Adapters
+
+| Package                          | Services                                          | When to Use |
+|----------------------------------|---------------------------------------------------|-------------|
+| Built-in (local disk)            | Local filesystem via `./public/uploads`           | Development, testing |
+| `@nextlyhq/storage-s3`          | AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, Supabase Storage | Production (AWS/S3-compatible) |
+| `@nextlyhq/storage-vercel-blob` | Vercel Blob Storage                               | Production on Vercel |
+| `@nextlyhq/storage-uploadthing` | Uploadthing                                       | Production (Uploadthing users) |
+
+## How Storage Works
+
+Each storage adapter is a **plugin** that you add to the `storage` array in your config. Plugins declare which collections they handle, and the `MediaStorage` manager routes uploads accordingly:
+
+```
+Upload Request -> MediaStorage -> resolve collection -> plugin adapter -> storage backend
+```
+
+If no storage is explicitly configured, Nextly auto-detects the best option from your environment variables, falling back to local disk storage.
+
+## Auto-Detection (Zero Config)
+
+The easiest way to configure storage is to let Nextly auto-detect it:
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from "@nextlyhq/nextly/config";
+import { getStorageFromEnv } from "@nextlyhq/nextly/storage";
+
+export default defineConfig({
+  storage: await getStorageFromEnv(),
+});
+```
+
+Nextly checks your environment variables in this order (first match wins):
+
+1. `BLOB_READ_WRITE_TOKEN` found -> **Vercel Blob**
+2. `S3_BUCKET` found -> **S3** (also R2, MinIO, Supabase)
+3. `UPLOADTHING_TOKEN` found -> **Uploadthing**
+4. Nothing found -> **Local disk** (`./public/uploads`)
+
+This means development works immediately with no cloud credentials needed. Just run `pnpm dev` and uploads go to your local filesystem.
+
+## Local Disk Storage (Default)
+
+Local storage is built into the core package. No extra installation needed.
+
+Files are stored in `./public/uploads/{year}/{month}/` and served via Next.js static file serving at `/uploads/...`. On first upload, Nextly auto-adds `public/uploads/` to your `.gitignore`.
+
+### Explicit Configuration (Optional)
+
+If you want to customize the local storage paths:
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from "@nextlyhq/nextly/config";
+import { localStorage } from "@nextlyhq/nextly/storage";
+
+export default defineConfig({
+  storage: [
+    localStorage({
+      basePath: "./public/media",  // default: ./public/uploads
+      baseUrl: "/media",           // default: /uploads
+      collections: { media: true },
+    }),
+  ],
+});
+```
+
+**Note:** Local storage is for development only. Use cloud storage for production deployments.
+
+## S3 Storage Adapter
+
+Works with any S3-compatible service. Install it:
+
+```bash
+pnpm add @nextlyhq/storage-s3
+```
+
+### AWS S3
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from "@nextlyhq/nextly/config";
+import { s3Storage } from "@nextlyhq/storage-s3";
+
+export default defineConfig({
+  storage: [
+    s3Storage({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.AWS_REGION!,
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      collections: {
+        media: true,
+      },
+    }),
+  ],
+});
+```
+
+### Cloudflare R2
+
+R2 requires a custom endpoint and a public URL (R2 doesn't have default public URLs):
+
+```typescript
+s3Storage({
+  bucket: process.env.R2_BUCKET!,
+  region: "auto",
+  accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  publicUrl: process.env.R2_PUBLIC_URL,
+  collections: { media: true },
+})
+```
+
+### MinIO (Self-Hosted)
+
+MinIO requires `forcePathStyle: true` for path-style URLs:
+
+```typescript
+s3Storage({
+  bucket: "my-bucket",
+  region: "us-east-1",
+  accessKeyId: process.env.MINIO_ACCESS_KEY!,
+  secretAccessKey: process.env.MINIO_SECRET_KEY!,
+  endpoint: "http://localhost:9000",
+  forcePathStyle: true,
+  collections: { media: true },
+})
+```
+
+### DigitalOcean Spaces
+
+```typescript
+s3Storage({
+  bucket: process.env.SPACES_BUCKET!,
+  region: process.env.SPACES_REGION!,
+  accessKeyId: process.env.SPACES_KEY!,
+  secretAccessKey: process.env.SPACES_SECRET!,
+  endpoint: `https://${process.env.SPACES_REGION}.digitaloceanspaces.com`,
+  collections: { media: true },
+})
+```
+
+### Supabase Storage
+
+Supabase Storage is S3-compatible. No separate adapter needed:
+
+```typescript
+s3Storage({
+  bucket: "my-bucket",
+  region: "us-east-1",
+  accessKeyId: process.env.SUPABASE_S3_ACCESS_KEY!,
+  secretAccessKey: process.env.SUPABASE_S3_SECRET_KEY!,
+  endpoint: `https://${process.env.SUPABASE_PROJECT_ID}.supabase.co/storage/v1/s3`,
+  forcePathStyle: true,
+  collections: { media: true },
+})
+```
+
+### S3 Configuration Reference
+
+| Option              | Type     | Default                          | Description                                   |
+|---------------------|----------|----------------------------------|-----------------------------------------------|
+| `bucket`            | `string` | required                         | S3 bucket name                                |
+| `region`            | `string` | required                         | AWS region (use `'auto'` for R2)              |
+| `accessKeyId`       | `string` | optional                         | AWS access key (or via env)                   |
+| `secretAccessKey`   | `string` | optional                         | AWS secret key (or via env)                   |
+| `endpoint`          | `string` | --                               | Custom endpoint for S3-compatible services    |
+| `publicUrl`         | `string` | --                               | CDN or custom domain URL for serving files    |
+| `forcePathStyle`    | `boolean`| `false`                          | Use path-style URLs (required for MinIO, Supabase) |
+| `acl`               | `string` | `'public-read'`                  | Object ACL (`'private'`, `'public-read'`, etc)|
+| `cacheControl`      | `string` | `'public, max-age=31536000'`     | Cache-Control header for uploaded files       |
+| `signedUrlExpiresIn`| `number` | `3600`                           | Signed URL expiry in seconds                  |
+
+## Vercel Blob Storage Adapter
+
+Optimized for Vercel deployments with built-in CDN. Install it:
+
+```bash
+pnpm add @nextlyhq/storage-vercel-blob
+```
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from "@nextlyhq/nextly/config";
+import { vercelBlobStorage } from "@nextlyhq/storage-vercel-blob";
+
+export default defineConfig({
+  storage: [
+    vercelBlobStorage({
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+      collections: { media: true },
+    }),
+  ],
+});
+```
+
+If `token` is omitted, the adapter reads from the `BLOB_READ_WRITE_TOKEN` environment variable automatically.
+
+## Uploadthing Storage Adapter
+
+Popular in the Next.js ecosystem for simple file uploads. Install it:
+
+```bash
+pnpm add @nextlyhq/storage-uploadthing
+```
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from "@nextlyhq/nextly/config";
+import { uploadthingStorage } from "@nextlyhq/storage-uploadthing";
+
+export default defineConfig({
+  storage: [
+    uploadthingStorage({
+      token: process.env.UPLOADTHING_TOKEN,
+      collections: { media: true },
+    }),
+  ],
+});
+```
+
+Files are served via Uploadthing's CDN (`utfs.io`).
+
+## Collection-Specific Storage
+
+You can configure storage behavior per collection. Pass an object instead of `true` to customize:
+
+```typescript
+s3Storage({
+  // ...
+  collections: {
+    media: true,
+    "private-docs": {
+      prefix: "private/",
+      signedDownloads: true,
+      signedUrlExpiresIn: 900,
+      clientUploads: true,
+    },
+  },
+})
+```
+
+| Option               | Type      | Default | Description                                        |
+|----------------------|-----------|---------|----------------------------------------------------|
+| `prefix`             | `string`  | --      | Folder prefix for this collection's uploads        |
+| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads                  |
+| `signedDownloads`    | `boolean` | `false` | Generate signed URLs for private file access       |
+| `signedUrlExpiresIn` | `number`  | `3600`  | Signed URL expiry in seconds                       |
+
+## Named Image Sizes
+
+Nextly can automatically generate resized variants for every uploaded image. Configure sizes in `nextly.config.ts` (code-first) or via the admin Settings page (Visual).
+
+### Code-First Configuration
+
+```typescript
+// nextly.config.ts
+export default defineConfig({
+  media: {
+    imageSizes: [
+      { name: "thumbnail", width: 150, height: 150, fit: "cover", format: "webp", quality: 80 },
+      { name: "small", width: 480, fit: "inside", format: "auto", quality: 80 },
+      { name: "medium", width: 768, fit: "inside", format: "auto", quality: 80 },
+      { name: "large", width: 1200, fit: "inside", format: "auto", quality: 80 },
+      { name: "og", width: 1200, height: 630, fit: "cover", format: "jpeg", quality: 90 },
+    ],
+  },
+  storage: [
+    // ... your storage config
+  ],
+});
+```
+
+### Size Options
+
+| Option    | Type     | Default    | Description |
+|-----------|----------|------------|-------------|
+| `name`    | `string` | required   | Unique name (used as key in API response) |
+| `width`   | `number` | --         | Target width in pixels (omit to auto-calculate from height) |
+| `height`  | `number` | --         | Target height in pixels (omit to auto-calculate from width) |
+| `fit`     | `string` | `"inside"` | `"inside"` (shrink to fit), `"cover"` (crop to fill), `"contain"`, `"fill"` |
+| `quality` | `number` | `80`       | Image quality 1-100 |
+| `format`  | `string` | `"auto"`   | `"auto"` (WebP when possible), `"webp"`, `"jpeg"`, `"png"`, `"avif"` |
+
+### Visual Configuration
+
+Go to **Settings > Image Sizes** in the admin panel to manage sizes through the UI. Code-defined sizes appear as read-only; UI-created sizes can be fully edited.
+
+### Using Sizes in Your Frontend
+
+The media API response includes all generated sizes:
+
+```json
+{
+  "id": "abc-123",
+  "url": "/uploads/2026/04/photo.jpg",
+  "width": 3000,
+  "height": 2000,
+  "sizes": {
+    "thumbnail": { "url": "...", "width": 150, "height": 150 },
+    "medium": { "url": "...", "width": 768, "height": 512 },
+    "large": { "url": "...", "width": 1200, "height": 800 }
+  }
+}
+```
+
+Use with `next/image`:
+
+```tsx
+import Image from "next/image";
+
+// Use the size that best matches your layout
+const media = await nextly.media.findById("abc-123");
+const large = media.sizes?.large;
+
+<Image
+  src={large?.url ?? media.url}
+  width={large?.width ?? media.width}
+  height={large?.height ?? media.height}
+  alt={media.altText ?? ""}
+/>
+```
+
+## Crop Point
+
+Each image can have a crop point (focal point) that controls how it's cropped when using the `"cover"` fit mode. Set it in the admin media library by clicking on the image in the edit dialog.
+
+The crop point is stored as `focalX` (0-100, left to right) and `focalY` (0-100, top to bottom) on the media record. Frontend developers can use these values with CSS `object-position` for responsive cropping:
+
+```tsx
+<img
+  src={media.url}
+  style={{ objectFit: "cover", objectPosition: `${media.focalX}% ${media.focalY}%` }}
+/>
+```
+
+## Environment Variables Reference
+
+### Auto-Detection Cascade
+
+| Variable              | Triggers          |
+|-----------------------|-------------------|
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob      |
+| `S3_BUCKET`           | S3 adapter        |
+| `UPLOADTHING_TOKEN`   | Uploadthing       |
+| (none)                | Local disk        |
+
+### S3 / R2 / MinIO / Supabase
+
+| Variable               | Description                                     |
+|------------------------|-------------------------------------------------|
+| `S3_BUCKET`            | Bucket name                                     |
+| `S3_REGION`            | AWS region (use `auto` for R2)                  |
+| `AWS_ACCESS_KEY_ID`    | Access key                                      |
+| `AWS_SECRET_ACCESS_KEY`| Secret key                                      |
+| `S3_ENDPOINT`          | Custom endpoint (R2, MinIO, Supabase, Spaces)   |
+| `S3_PUBLIC_URL`        | Public URL for serving files                    |
+| `S3_FORCE_PATH_STYLE`  | Set to `true` for MinIO and Supabase            |
+
+## Migrating Between Adapters
+
+When switching storage adapters (e.g., from local to S3 for production):
+
+1. Existing files stay in the old storage. New uploads go to the new adapter.
+2. URLs stored in the database still point to the old storage.
+3. For a full migration, you'll need to copy files and update URLs in the database.
+
+A common pattern is to use environment variables to switch automatically:
+
+- Development: no cloud env vars -> local disk
+- Staging/Production: set `S3_BUCKET` etc. -> S3
+
+## Next Steps
+
+- [Deployment](/docs/guides/deployment) -- configure storage for production
+- [Configuration Reference](/docs/configuration/nextly-config) -- full `defineConfig()` options
+- [Collections](/docs/configuration/collections) -- define collections with upload fields

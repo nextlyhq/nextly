@@ -1,0 +1,215 @@
+---
+title: PostgreSQL
+description: Set up Nextly with PostgreSQL. Covers installation, configuration, connection pooling, SSL, Docker setup, and production recommendations.
+---
+
+PostgreSQL is the recommended database for production Nextly deployments. It provides the most comprehensive feature set of all supported databases, including JSONB, array types, full-text search, ILIKE, savepoints, and RETURNING clause support.
+
+## Installation
+
+Install the PostgreSQL adapter alongside its peer dependency:
+
+{/* prettier-ignore */}
+```bash
+@nextlyhq/adapter-postgres pg
+```
+
+## Configuration
+
+Add the adapter to your `nextly.config.ts`:
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from '@nextlyhq/nextly';
+
+export default defineConfig({
+  database: {
+    adapter: 'postgres',
+    url: process.env.DATABASE_URL,
+  },
+});
+```
+
+### Programmatic Usage
+
+You can also create the adapter directly:
+
+```typescript title="adapter.ts"
+import { createPostgresAdapter } from '@nextlyhq/adapter-postgres';
+
+const adapter = createPostgresAdapter({
+  url: process.env.DATABASE_URL!,
+});
+
+await adapter.connect();
+```
+
+## Connection String
+
+PostgreSQL connection strings follow this format:
+
+```
+postgres://user:password@host:port/database
+```
+
+For example:
+
+```bash title=".env"
+DATABASE_URL=postgres://nextly:nextly@localhost:5432/nextly_dev
+```
+
+You can also specify connection details individually instead of a URL:
+
+```typescript title="nextly.config.ts"
+export default defineConfig({
+  database: {
+    adapter: 'postgres',
+    host: 'localhost',
+    port: 5432,
+    database: 'nextly_dev',
+    user: 'nextly',
+    password: 'nextly',
+  },
+});
+```
+
+## Connection Pool
+
+The adapter uses `pg.Pool` for connection pooling. Default pool settings are conservative to work well with cloud databases like Neon:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `pool.min` | `0` | Minimum connections. Set to 0 to avoid issues with cold-starting cloud databases. |
+| `pool.max` | `5` | Maximum connections. Conservative to stay under cloud database limits. |
+| `pool.idleTimeoutMs` | `30000` | Close idle connections after 30 seconds. |
+| `pool.connectionTimeoutMs` | `15000` | Timeout when waiting for a connection from the pool. |
+
+To customize:
+
+```typescript title="nextly.config.ts"
+export default defineConfig({
+  database: {
+    adapter: 'postgres',
+    url: process.env.DATABASE_URL,
+    pool: {
+      min: 2,
+      max: 20,
+      idleTimeoutMs: 30000,
+      connectionTimeoutMs: 10000,
+    },
+  },
+});
+```
+
+## SSL Configuration
+
+For production databases, enable SSL:
+
+```typescript title="nextly.config.ts"
+export default defineConfig({
+  database: {
+    adapter: 'postgres',
+    url: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: true,
+      ca: process.env.CA_CERT,
+    },
+  },
+});
+```
+
+Pass `ssl: true` for a quick default, or provide an object with `rejectUnauthorized`, `ca`, `cert`, and `key` options for full control.
+
+## PostgreSQL-Specific Options
+
+These options are unique to the PostgreSQL adapter:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `applicationName` | `string` | Identifies your app in `pg_stat_activity`. Useful for debugging connection issues. |
+| `statementTimeout` | `number` | Per-statement timeout in milliseconds. Queries exceeding this are cancelled by PostgreSQL. |
+| `queryTimeout` | `number` | Query timeout in milliseconds at the driver level. |
+| `preparedStatements` | `boolean` | Enable prepared statements (default: `true`). |
+| `queryTimeoutMs` | `number` | Default timeout for the adapter's `executeWithTimeout()` method (default: `15000`). |
+
+```typescript title="nextly.config.ts"
+export default defineConfig({
+  database: {
+    adapter: 'postgres',
+    url: process.env.DATABASE_URL,
+    applicationName: 'my-nextly-app',
+    statementTimeout: 30000,
+  },
+});
+```
+
+## Connection Retry
+
+The adapter automatically retries transient connection failures up to 5 times with exponential backoff. This handles common scenarios like:
+
+- Cloud databases waking from auto-suspend (Neon, Supabase)
+- Brief network hiccups during deployment
+- DNS resolution races when multiple build workers start simultaneously
+
+Retryable error codes include `ETIMEDOUT`, `ECONNREFUSED`, `ECONNRESET`, `ENOTFOUND`, and `EAI_AGAIN`. Query-level retries also handle `ETIMEDOUT`, `ECONNRESET`, and `ECONNREFUSED` with up to 3 attempts.
+
+## Docker Setup for Local Development
+
+Run PostgreSQL locally with Docker:
+
+```bash
+docker run -d --name nextly-postgres \
+  -e POSTGRES_USER=nextly \
+  -e POSTGRES_PASSWORD=nextly \
+  -e POSTGRES_DB=nextly_dev \
+  -p 5432:5432 \
+  postgres:16
+```
+
+Then set your environment variable:
+
+```bash title=".env"
+DATABASE_URL=postgres://nextly:nextly@localhost:5432/nextly_dev
+```
+
+To stop and remove the container:
+
+```bash
+docker stop nextly-postgres && docker rm nextly-postgres
+```
+
+## Production Recommendations
+
+- **Use connection pooling** with `pool.max` set based on your hosting plan's connection limit. Many cloud providers limit connections (e.g., Neon free tier allows ~25-30). With Next.js spawning up to 7 build workers, keep `pool.max` conservative.
+- **Enable SSL** with `rejectUnauthorized: true` for all production connections.
+- **Set `applicationName`** so you can identify your app's connections in `pg_stat_activity`.
+- **Use `statementTimeout`** to prevent runaway queries from consuming resources.
+- **TCP keepalive** is enabled by default (10-second initial delay) to prevent cloud databases from silently dropping idle connections.
+
+## Capabilities
+
+The PostgreSQL adapter reports the following capabilities:
+
+```typescript
+{
+  dialect: 'postgresql',
+  supportsJsonb: true,
+  supportsJson: true,
+  supportsArrays: true,
+  supportsGeneratedColumns: true,
+  supportsFts: true,
+  supportsIlike: true,
+  supportsReturning: true,
+  supportsSavepoints: true,
+  supportsOnConflict: true,
+  maxParamsPerQuery: 65535,
+  maxIdentifierLength: 63,
+}
+```
+
+## Next Steps
+
+- [Database overview](/docs/database) -- Compare all supported databases
+- [Environment Variables](/docs/configuration/environment) -- Database-related environment variables
+- [Deployment](/docs/guides/deployment) -- Production database and hosting configuration
+- [MySQL setup](/docs/database/mysql) -- Alternative: MySQL adapter
+- [SQLite setup](/docs/database/sqlite) -- Alternative: SQLite for local development

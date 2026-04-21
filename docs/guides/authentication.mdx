@@ -1,0 +1,263 @@
+---
+title: Authentication
+description: Custom JWT auth system with access/refresh tokens, CSRF protection, RBAC, and API key authentication.
+---
+
+Nextly ships with a complete custom authentication system. It handles user sessions via signed JWTs (using [jose](https://github.com/panva/jose)), password hashing with bcrypt, CSRF protection, brute-force lockout, and a full RBAC (Role-Based Access Control) layer with code-defined and database-managed permissions.
+
+## How Auth Works
+
+Authentication flows through three layers:
+
+1. **JWT tokens** -- short-lived access tokens (15 min) stored in an httpOnly `nextly_session` cookie, with long-lived refresh tokens (7 days) for transparent session renewal
+2. **Session helpers** -- `getSession()`, `requireAuth()`, role-checking utilities
+3. **RBAC middleware** -- `requirePermission()` and `requireCollectionAccess()` for fine-grained authorization
+
+All admin routes are scoped to `/admin/*` with isolated cookie paths, so Nextly auth never interferes with your frontend application cookies.
+
+## Session Management
+
+Sessions use a two-token architecture:
+
+- **Access token** -- JWS signed with HS256 via jose, 15-minute TTL, stateless verification (no database hit)
+- **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed and stored in the database for revocation support
+
+When the access token expires, the admin UI automatically refreshes it using the refresh token. Users never see a re-login prompt until the refresh token itself expires (7 days of inactivity).
+
+### Getting the Current User
+
+```typescript
+// app/api/my-route/route.ts
+import { getSession } from "@nextlyhq/nextly/auth";
+import { env } from "@nextlyhq/nextly/lib/env";
+
+export async function GET(req: Request) {
+  const result = await getSession(req, env.NEXTLY_SECRET_RESOLVED || "");
+
+  if (!result.authenticated) {
+    return Response.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // result.user.id, result.user.email, result.user.name, result.user.roleIds
+  return Response.json({ userId: result.user.id, roles: result.user.roleIds });
+}
+```
+
+The `SessionUser` object contains:
+
+| Field      | Type       | Description                            |
+|------------|------------|----------------------------------------|
+| `id`       | `string`   | User's unique ID                       |
+| `email`    | `string`   | User's email address                   |
+| `name`     | `string`   | Display name                           |
+| `image`    | `string?`  | Profile image URL                      |
+| `roleIds`  | `string[]` | Array of role IDs from the JWT token   |
+
+Custom user fields defined via `defineConfig({ users: { fields } })` are also included in the session user object.
+
+### Requiring Authentication
+
+```typescript
+import { requireAuth } from "@nextlyhq/nextly/auth";
+
+export async function GET(req: Request) {
+  // Throws AuthenticationError if no valid session
+  const user = await requireAuth(req, env.NEXTLY_SECRET_RESOLVED || "");
+
+  return Response.json({ email: user.email });
+}
+```
+
+## Roles
+
+Roles are managed through the admin UI (Settings > Roles) or programmatically via the `RoleService`. Every role has a `name`, `slug`, `level`, and an optional `description`.
+
+The **super-admin** role is a built-in system role that automatically bypasses all permission checks. It is created during initial setup via `seedSuperAdmin()`.
+
+### Checking Roles in Code
+
+```typescript
+import { getSession, hasRole, hasAnyRole, hasAllRoles } from "@nextlyhq/nextly/auth";
+
+export async function GET(req: Request) {
+  const result = await getSession(req, env.NEXTLY_SECRET_RESOLVED || "");
+  if (!result.authenticated) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+  const user = result.user;
+
+  // Single role check
+  if (hasRole(user, "admin")) {
+    // user has the "admin" role
+  }
+
+  // Any of these roles (OR logic)
+  if (hasAnyRole(user, ["admin", "editor"])) {
+    // user has at least one of these roles
+  }
+
+  // All of these roles (AND logic)
+  if (hasAllRoles(user, ["editor", "reviewer"])) {
+    // user has both roles
+  }
+}
+```
+
+## Permissions
+
+Permissions are defined as `action` + `resource` pairs (e.g., `create` + `posts`, `read` + `users`). They are assigned to roles, and roles are assigned to users.
+
+The four standard actions are: `create`, `read`, `update`, `delete`.
+
+Permissions are auto-seeded when you create collections or singles, and managed through the admin UI or `PermissionService`.
+
+## Code-Defined Access Control
+
+You can define access rules directly on collections and singles using `defineCollection({ access })`. These take precedence over database permissions (but super-admin always bypasses everything).
+
+```typescript
+// src/collections/posts.ts
+import { defineCollection } from "@nextlyhq/nextly/config";
+
+export default defineCollection({
+  slug: "posts",
+  access: {
+    // Boolean: allow any authenticated user to read
+    read: true,
+
+    // Function: only admins and editors can create
+    create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+
+    // Function: only admins and editors can update
+    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+
+    // Function: only admins can delete
+    delete: ({ roles }) => roles.includes("admin"),
+  },
+  fields: [
+    // ...
+  ],
+});
+```
+
+## API Key Authentication
+
+Nextly supports API key authentication via the `Authorization: Bearer sk_live_...` header. API keys are created and managed through the admin UI (Settings > API Keys).
+
+### Token Types
+
+| Type          | Description                                |
+|---------------|--------------------------------------------|
+| `read-only`   | Only `read-*` permission slugs             |
+| `full-access` | All permissions of the key creator's roles |
+| `role-based`  | Permissions of a specific role             |
+
+### How It Works
+
+When a request includes a `Bearer` token, the auth middleware:
+
+1. Hashes the key with SHA-256 and looks it up in the database
+2. Checks if the key is expired or revoked
+3. Enforces per-key rate limiting (default: 1,000 requests/hour)
+4. Resolves permissions based on the token type
+5. Returns an `AuthContext` with `authMethod: "api-key"`
+
+```typescript
+// Client-side usage
+const response = await fetch("https://example.com/api/nextly/collections/posts/entries", {
+  headers: {
+    Authorization: "Bearer sk_live_abc123...",
+  },
+});
+```
+
+## Security Features
+
+### Brute-Force Protection
+
+Login attempts are tracked per-user. After 5 consecutive failed attempts, the account is locked for 15 minutes. Counters reset on successful login.
+
+### Login Stall Time
+
+Every login request takes at least 500ms to respond, regardless of whether the user exists. This prevents email enumeration via response timing.
+
+### CSRF Protection
+
+All mutation endpoints (login, logout, register, setup, password operations) are protected with double-submit CSRF tokens plus Origin/Referer header validation.
+
+### Token Refresh Rotation
+
+Every time a refresh token is used, the old one is consumed and a new one is issued. If a consumed token is replayed (possible theft), the system can detect it.
+
+### Password Change Session Revocation
+
+When a user changes their password, all their refresh tokens are deleted, forcing re-login on all devices.
+
+## Password Management
+
+Passwords are hashed using bcrypt with 12 salt rounds. The `AuthService` provides methods for the complete password lifecycle:
+
+- `registerUser()` -- creates a new user with validated password
+- `verifyCredentials()` -- validates email/password for login
+- `changePassword()` -- updates password after verifying current one
+- `generatePasswordResetToken()` -- creates a SHA-256 hashed token (24-hour expiry)
+- `resetPasswordWithToken()` -- consumes the token and updates the password
+- `generateEmailVerificationToken()` -- creates an email verification token
+- `verifyEmail()` -- marks email as verified
+
+Token security: raw tokens are returned to the user once, but only SHA-256 hashes are stored in the database.
+
+## Auth Configuration
+
+```typescript
+// nextly.config.ts
+export default defineConfig({
+  auth: {
+    accessTokenTTL: 15 * 60,           // 15 minutes (seconds)
+    refreshTokenTTL: 7 * 24 * 60 * 60, // 7 days (seconds)
+    maxLoginAttempts: 5,                // Before account lockout
+    lockoutDuration: 15 * 60,          // 15 minutes (seconds)
+    loginStallTime: 500,               // Milliseconds
+    allowedOrigins: [],                // Additional CSRF origins
+    requireEmailVerification: true,    // Block login until email verified
+  },
+});
+```
+
+## Environment Variables
+
+| Variable                 | Required | Description                                     |
+|--------------------------|----------|-------------------------------------------------|
+| `NEXTLY_SECRET`          | Yes      | JWT signing secret (min 32 characters in prod)  |
+| `NEXTLY_ALLOWED_ORIGINS` | No       | Comma-separated additional CSRF origins         |
+| `NEXT_PUBLIC_APP_URL`    | Yes (prod) | Your app's public URL                         |
+
+Generate a secure `NEXTLY_SECRET`:
+
+```bash
+openssl rand -base64 32
+```
+
+## Auth Endpoints
+
+| Method | Path                        | Description                  |
+|--------|-----------------------------|------------------------------|
+| GET    | `/auth/setup-status`        | Check if setup is complete   |
+| GET    | `/auth/session`             | Get current session          |
+| GET    | `/auth/csrf`                | Generate CSRF token          |
+| POST   | `/auth/login`               | Email + password login       |
+| POST   | `/auth/logout`              | Revoke session               |
+| POST   | `/auth/refresh`             | Rotate access + refresh tokens |
+| POST   | `/auth/setup`               | Create first admin (auto-login) |
+| POST   | `/auth/register`            | User registration            |
+| PATCH  | `/auth/change-password`     | Change password (auth required) |
+| POST   | `/auth/forgot-password`     | Request password reset       |
+| POST   | `/auth/reset-password`      | Reset password with token    |
+| POST   | `/auth/verify-email`        | Verify email with token      |
+| POST   | `/auth/verify-email/resend` | Resend verification email    |
+
+## Next Steps
+
+- [Email Configuration](/docs/guides/email) -- set up password reset and verification emails
+- [Collections](/docs/configuration/collections) -- configure access control on collections
+- [Configuration Reference](/docs/configuration/nextly-config) -- full `defineConfig()` options
+- [REST API](/docs/api-reference/rest-api) -- REST API endpoints for auth flows

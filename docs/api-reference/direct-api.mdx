@@ -1,0 +1,560 @@
+---
+title: Direct API
+description: Server-side API for querying and mutating data directly from Next.js server components, route handlers, and server actions.
+---
+
+The Direct API is the primary way to interact with Nextly data on the server. It calls directly into the service layer -- no HTTP requests, no serialization overhead. Use it in Server Components, Server Actions, API Route Handlers, and anywhere your code runs in a Node.js context.
+
+## Getting Started
+
+Import `getNextly` from `@nextlyhq/nextly` and call it to get the singleton instance:
+
+```typescript title="app/posts/page.tsx"
+import { getNextly } from '@nextlyhq/nextly';
+
+const nextly = getNextly();
+
+const posts = await nextly.find({
+  collection: 'posts',
+  where: { status: { equals: 'published' } },
+  sort: '-createdAt',
+  limit: 10,
+});
+```
+
+You can also use the module-level convenience export, which lazily resolves the singleton on each call:
+
+```typescript title="app/posts/page.tsx"
+import { nextly } from '@nextlyhq/nextly';
+
+const posts = await nextly.find({
+  collection: 'posts',
+  limit: 10,
+});
+```
+
+Both approaches are equivalent. Use whichever reads better in your code.
+
+## Access Control
+
+By default, the Direct API **bypasses all access control** (`overrideAccess: true`). This is the expected behavior for trusted server-side code.
+
+To enforce access control, set `overrideAccess: false` and provide a `user` context:
+
+```typescript
+const posts = await nextly.find({
+  collection: 'posts',
+  overrideAccess: false,
+  user: { id: 'user-123', role: 'editor' },
+});
+```
+
+## Collection Operations
+
+### find
+
+Find multiple documents in a collection. Returns a paginated response.
+
+```typescript
+const result = await nextly.find({
+  collection: 'posts',
+  where: { status: { equals: 'published' } },
+  sort: '-publishedAt',
+  limit: 10,
+  page: 1,
+  depth: 2,
+});
+
+// result.docs          - Post[]
+// result.totalDocs     - total matching documents
+// result.totalPages    - total pages
+// result.hasNextPage   - boolean
+// result.hasPrevPage   - boolean
+// result.page          - current page number
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `collection` | `string` | *required* | Collection slug |
+| `where` | `WhereFilter` | `undefined` | Filter conditions (see [Querying](#querying) below) |
+| `limit` | `number` | `10` | Maximum documents per page |
+| `page` | `number` | `1` | Page number (1-indexed) |
+| `sort` | `string` | `undefined` | Sort field. Prefix with `-` for descending |
+| `depth` | `number` | `0` | Relationship population depth |
+| `select` | `Record<string, boolean>` | `undefined` | Fields to include/exclude |
+| `populate` | `Record<string, boolean \| PopulateOptions>` | `undefined` | Per-field population control |
+| `pagination` | `boolean` | `true` | Set to `false` to return all documents without pagination metadata |
+| `richTextFormat` | `'json' \| 'html' \| 'both'` | `'json'` | Output format for rich text fields |
+| `overrideAccess` | `boolean` | `true` | Bypass access control checks |
+
+**Return type:** `PaginatedResponse<T>`
+
+### findByID
+
+Find a single document by ID.
+
+```typescript
+const post = await nextly.findByID({
+  collection: 'posts',
+  id: 'abc-123',
+  depth: 2,
+});
+```
+
+Set `disableErrors: true` to return `null` instead of throwing when the document is not found:
+
+```typescript
+const post = await nextly.findByID({
+  collection: 'posts',
+  id: 'maybe-exists',
+  disableErrors: true,
+});
+
+if (post) {
+  console.log(post.title);
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `collection` | `string` | *required* | Collection slug |
+| `id` | `string` | *required* | Document ID |
+| `depth` | `number` | `0` | Relationship population depth |
+| `select` | `Record<string, boolean>` | `undefined` | Fields to include/exclude |
+| `disableErrors` | `boolean` | `false` | Return `null` instead of throwing `NotFoundError` |
+
+**Return type:** `T | null`
+
+### create
+
+Create a new document.
+
+```typescript
+const post = await nextly.create({
+  collection: 'posts',
+  data: {
+    title: 'Hello World',
+    content: 'My first post',
+    status: 'draft',
+  },
+});
+
+console.log('Created:', post.id);
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `collection` | `string` | *required* | Collection slug |
+| `data` | `Record<string, unknown>` | *required* | Document data |
+| `draft` | `boolean` | `false` | Create as draft |
+| `disableVerificationEmail` | `boolean` | `false` | Skip verification email for auth collections |
+
+**Return type:** `T` (the created document)
+
+**Throws:** `ValidationError` if validation fails.
+
+### update
+
+Update an existing document by ID or by where clause.
+
+```typescript
+// Update by ID
+const updated = await nextly.update({
+  collection: 'posts',
+  id: 'abc-123',
+  data: { status: 'published', publishedAt: new Date() },
+});
+
+// Bulk update by where clause
+const updated = await nextly.update({
+  collection: 'posts',
+  where: { status: { equals: 'draft' } },
+  data: { status: 'archived' },
+});
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `collection` | `string` | *required* | Collection slug |
+| `id` | `string` | `undefined` | Document ID (either `id` or `where` required) |
+| `where` | `WhereFilter` | `undefined` | Where clause for bulk update |
+| `data` | `Record<string, unknown>` | *required* | Update data |
+
+**Return type:** `T` (the updated document)
+
+**Throws:** `NotFoundError` if no matching documents are found.
+
+### delete
+
+Delete documents by ID or by where clause.
+
+```typescript
+// Delete by ID
+const result = await nextly.delete({
+  collection: 'posts',
+  id: 'abc-123',
+});
+
+// Bulk delete by where clause
+const result = await nextly.delete({
+  collection: 'posts',
+  where: { status: { equals: 'archived' } },
+});
+
+console.log('Deleted IDs:', result.ids);
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `collection` | `string` | *required* | Collection slug |
+| `id` | `string` | `undefined` | Document ID (either `id` or `where` required) |
+| `where` | `WhereFilter` | `undefined` | Where clause for bulk delete |
+
+**Return type:** `DeleteResult` (`{ deleted: boolean, ids: string[] }`)
+
+### count
+
+Count documents matching a query.
+
+```typescript
+const { totalDocs } = await nextly.count({
+  collection: 'posts',
+  where: { status: { equals: 'published' } },
+});
+
+console.log('Published posts:', totalDocs);
+```
+
+**Return type:** `CountResult` (`{ totalDocs: number }`)
+
+### bulkDelete
+
+Delete multiple documents by an array of IDs. Supports partial success -- some operations may fail while others succeed.
+
+```typescript
+const result = await nextly.bulkDelete({
+  collection: 'posts',
+  ids: ['post-1', 'post-2', 'post-3'],
+});
+
+console.log('Deleted:', result.success);     // string[]
+console.log('Failed:', result.failed);       // { id, error }[]
+```
+
+**Return type:** `BulkOperationResult`
+
+### duplicate
+
+Duplicate an existing document with optional field overrides.
+
+```typescript
+const copy = await nextly.duplicate({
+  collection: 'posts',
+  id: 'abc-123',
+  overrides: { title: 'Copy of Original Post' },
+});
+```
+
+**Return type:** `T` (the duplicated document)
+
+## Singles (formerly Globals) Operations
+
+Singles are single-document entities for site-wide settings like navigation, footer content, or site configuration.
+
+### findGlobal
+
+Retrieve a Single document.
+
+```typescript
+const settings = await nextly.findGlobal({
+  slug: 'site-settings',
+  depth: 1,
+});
+
+console.log('Site name:', settings.siteName);
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `slug` | `string` | *required* | Single/global slug |
+| `depth` | `number` | `0` | Relationship population depth |
+| `select` | `Record<string, boolean>` | `undefined` | Fields to include/exclude |
+| `richTextFormat` | `'json' \| 'html' \| 'both'` | `'json'` | Rich text output format |
+
+**Return type:** `T` (the Single document)
+
+### updateGlobal
+
+Update a Single document.
+
+```typescript
+const updated = await nextly.updateGlobal({
+  slug: 'site-settings',
+  data: {
+    siteName: 'My Awesome Site',
+    maintenanceMode: false,
+  },
+});
+```
+
+**Return type:** `T` (the updated Single document)
+
+### findGlobals
+
+Fetch content for all registered Singles.
+
+```typescript
+const result = await nextly.findGlobals();
+
+result.docs.forEach(({ slug, label, data }) => {
+  console.log(`${label} (${slug}):`, data);
+});
+
+// Filter by source
+const codeSingles = await nextly.findGlobals({ source: 'code' });
+```
+
+**Return type:** `SingleListResult` (`{ docs: GlobalEntry[], totalDocs, limit, offset }`)
+
+## Querying
+
+The `where` parameter uses a structured query syntax for filtering documents.
+
+### Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `equals` | Exact match | `{ status: { equals: 'published' } }` |
+| `not_equals` | Not equal | `{ status: { not_equals: 'draft' } }` |
+| `greater_than` | Greater than | `{ price: { greater_than: 100 } }` |
+| `greater_than_equal` | Greater than or equal | `{ price: { greater_than_equal: 100 } }` |
+| `less_than` | Less than | `{ price: { less_than: 50 } }` |
+| `less_than_equal` | Less than or equal | `{ price: { less_than_equal: 50 } }` |
+| `like` | SQL LIKE pattern match | `{ title: { like: '%hello%' } }` |
+| `contains` | Case-insensitive search | `{ title: { contains: 'hello' } }` |
+| `in` | Value in array | `{ status: { in: ['draft', 'published'] } }` |
+| `not_in` | Value not in array | `{ status: { not_in: ['archived'] } }` |
+| `exists` | Field exists (non-null) | `{ image: { exists: true } }` |
+
+### Combining Conditions
+
+Use `and` and `or` to combine conditions:
+
+```typescript
+const posts = await nextly.find({
+  collection: 'posts',
+  where: {
+    and: [
+      { status: { equals: 'published' } },
+      { or: [
+        { category: { equals: 'news' } },
+        { category: { equals: 'featured' } },
+      ]},
+      { publishedAt: { less_than: new Date().toISOString() } },
+    ],
+  },
+});
+```
+
+Multiple conditions at the same level are implicitly ANDed:
+
+```typescript
+// These two are equivalent
+{ status: { equals: 'published' }, category: { equals: 'news' } }
+{ and: [{ status: { equals: 'published' } }, { category: { equals: 'news' } }] }
+```
+
+## Sorting
+
+Pass a field name to `sort`. Prefix with `-` for descending order:
+
+```typescript
+// Newest first
+const posts = await nextly.find({ collection: 'posts', sort: '-createdAt' });
+
+// Alphabetical by title
+const posts = await nextly.find({ collection: 'posts', sort: 'title' });
+```
+
+## Depth (Relationship Population)
+
+The `depth` parameter controls how deeply relationship and upload fields are populated:
+
+- `0` (default) -- return relationship IDs only
+- `1` -- populate direct relationships with their document data
+- `2+` -- populate nested relationships
+
+```typescript
+// No population - author field returns an ID string
+const posts = await nextly.find({ collection: 'posts', depth: 0 });
+// posts.docs[0].author => "user-abc"
+
+// Populate one level - author field returns the full user object
+const posts = await nextly.find({ collection: 'posts', depth: 1 });
+// posts.docs[0].author => { id: "user-abc", name: "John", ... }
+```
+
+For fine-grained control, use the `populate` parameter:
+
+```typescript
+const posts = await nextly.find({
+  collection: 'posts',
+  depth: 1,
+  populate: {
+    author: { select: { name: true, email: true } },
+    category: false, // Skip population for this field
+  },
+});
+```
+
+## Rich Text Format
+
+Rich text fields store Lexical JSON internally. Use `richTextFormat` to control the output:
+
+```typescript
+// JSON (default) - returns Lexical editor state
+const posts = await nextly.find({ collection: 'posts', richTextFormat: 'json' });
+
+// HTML - returns rendered HTML string
+const posts = await nextly.find({ collection: 'posts', richTextFormat: 'html' });
+// posts.docs[0].content => "<p>Hello world</p>"
+
+// Both - returns an object with both formats
+const posts = await nextly.find({ collection: 'posts', richTextFormat: 'both' });
+// posts.docs[0].content => { json: {...}, html: "<p>Hello world</p>" }
+```
+
+## TypeScript Support
+
+Run `nextly generate:types` to generate type-safe collection slugs and document types. Once generated, the Direct API provides full type inference:
+
+```typescript
+// Collection slugs are constrained to valid values
+const posts = await nextly.find({ collection: 'posts' });
+// posts.docs is typed as Post[]
+
+// Invalid slugs produce compile-time errors
+const invalid = await nextly.find({ collection: 'nonexistent' }); // TS error
+```
+
+The generated types augment the `GeneratedTypes` interface via module declaration:
+
+```typescript title="payload-types.ts (generated)"
+declare module '@nextlyhq/nextly' {
+  export interface GeneratedTypes extends Config {}
+}
+```
+
+## Error Handling
+
+The Direct API throws typed errors that you can catch and handle:
+
+```typescript
+import { NotFoundError, ValidationError, isNextlyError } from '@nextlyhq/nextly';
+
+try {
+  const post = await nextly.findByID({ collection: 'posts', id: 'missing' });
+} catch (error) {
+  if (error instanceof NotFoundError) {
+    // 404 - document not found
+    console.log(error.message);
+  } else if (error instanceof ValidationError) {
+    // 400 - validation failed
+    console.log(error.errors); // { fieldName: ['error message'] }
+  } else if (isNextlyError(error)) {
+    // Other Nextly errors
+    console.log(error.code, error.statusCode);
+  }
+}
+```
+
+**Error classes:**
+
+| Class | Code | HTTP Status |
+|-------|------|-------------|
+| `ValidationError` | `VALIDATION_ERROR` | 400 |
+| `UnauthorizedError` | `UNAUTHORIZED` | 401 |
+| `ForbiddenError` | `FORBIDDEN` | 403 |
+| `NotFoundError` | `NOT_FOUND` | 404 |
+| `ConflictError` | `CONFLICT` | 409 |
+| `DuplicateError` | `DUPLICATE` | 409 |
+| `DatabaseError` | `DATABASE_ERROR` | 500 |
+
+## Example: Blog Post Listing Page
+
+A complete example using the Direct API in a Next.js Server Component:
+
+```typescript title="app/blog/page.tsx"
+import { getNextly } from '@nextlyhq/nextly';
+
+export default async function BlogPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { page } = await searchParams;
+  const nextly = getNextly();
+
+  const posts = await nextly.find({
+    collection: 'posts',
+    where: { status: { equals: 'published' } },
+    sort: '-publishedAt',
+    limit: 12,
+    page: Number(page) || 1,
+    depth: 1,
+    richTextFormat: 'html',
+  });
+
+  return (
+    <main>
+      <h1>Blog</h1>
+      <div className="grid grid-cols-3 gap-6">
+        {posts.docs.map((post) => (
+          <article key={post.id}>
+            <h2>{post.title}</h2>
+            <div dangerouslySetInnerHTML={{ __html: post.content }} />
+          </article>
+        ))}
+      </div>
+
+      {posts.hasNextPage && (
+        <a href={`/blog?page=${posts.nextPage}`}>Next Page</a>
+      )}
+    </main>
+  );
+}
+```
+
+## Additional Namespaces
+
+The Direct API also provides specialized namespaces for users, media, forms, roles, permissions, components, and API keys. Each namespace follows the same patterns shown above.
+
+| Namespace | Example | Description |
+|-----------|---------|-------------|
+| `nextly.users.find()` | User management | CRUD operations on users |
+| `nextly.media.upload()` | Media library | Upload, find, and manage files |
+| `nextly.forms.submit()` | Form submissions | Submit and query form data |
+| `nextly.roles.find()` | Role management | CRUD operations on RBAC roles |
+| `nextly.permissions.find()` | Permission management | CRUD operations on permissions |
+| `nextly.components.find()` | Component registry | Manage reusable component definitions |
+| `nextly.apiKeys.create()` | API key management | Create and manage API keys |
+| `nextly.access.check()` | Access control | Check user permissions programmatically |
+
+## Next Steps
+
+- [REST API](/docs/api-reference/rest-api) -- HTTP endpoints for external clients and browser code
+- [Client SDK](/docs/api-reference/client-sdk) -- TypeScript SDK for browser-side data fetching
+- [Collections](/docs/configuration/collections) -- Define the content types that the Direct API operates on
+- [Authentication](/docs/guides/authentication) -- RBAC and access control for API operations

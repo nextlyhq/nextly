@@ -1,0 +1,19 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "---Start Here---",
+    "getting-started",
+    "---Build---",
+    "configuration",
+    "admin",
+    "---Infrastructure---",
+    "database",
+    "guides",
+    "---Reference---",
+    "api-reference",
+    "plugins",
+    "examples",
+    "telemetry"
+  ]
+}
