@@ -11,7 +11,7 @@ Report vulnerabilities privately via one of:
 
 Please include a description, reproduction steps, affected package(s), and any known mitigations.
 
-We aim to acknowledge reports within **72 hours** and release fixes for high/critical issues within **90 days**. You will be credited in the advisory unless you prefer to remain anonymous.
+We'll acknowledge reports as quickly as we can and work with you on a fix. You'll be credited in the advisory unless you prefer to remain anonymous.
 
 ## Supported versions
 
