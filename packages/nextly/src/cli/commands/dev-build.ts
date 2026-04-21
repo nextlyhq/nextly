@@ -28,10 +28,7 @@ import {
   type CodeFirstSingleConfig,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service.js";
-import {
-  UserExtSchemaService,
-  type SupportedDialect,
-} from "../../services/users/user-ext-schema-service.js";
+import { UserExtSchemaService } from "../../services/users/user-ext-schema-service.js";
 import { UserFieldDefinitionService } from "../../services/users/user-field-definition-service.js";
 import type { CommandContext } from "../program.js";
 import type { CLIDatabaseAdapter } from "../utils/adapter.js";
@@ -49,6 +46,7 @@ import {
   performAutoSync,
   performComponentsAutoSync,
   performSinglesAutoSync,
+  performSinglesReconcile,
 } from "./dev-server.js";
 
 // ============================================================================
@@ -233,6 +231,16 @@ export async function syncSingles(
       context
     );
   }
+
+  // Reconcile: even when no singles changed in this sync (and thus auto-sync
+  // didn't run), ensure every registered single has its physical table. This
+  // covers the "registry row exists but table missing" case that can happen
+  // after a DB reset, a dropped table, or a UI-created single whose DDL
+  // aborted. Runs unconditionally after sync so reality always matches
+  // registry by the time `pnpm dev` finishes startup.
+  if (autoSyncEnabled) {
+    await performSinglesReconcile(config, adapter, singleRegistry, context);
+  }
 }
 
 // ============================================================================
@@ -376,7 +384,7 @@ export async function syncUserFields(
   };
 
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-  const dialect = drizzleAdapter.getCapabilities().dialect as SupportedDialect;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
 
   // 1. Instantiate services
   const fieldDefService = new UserFieldDefinitionService(
@@ -808,16 +816,20 @@ export async function autoSeedOnFirstRun(
   // Safety: never auto-seed in production
   if (process.env.NODE_ENV === "production") return;
 
-  // Check if a user seed file exists
-  const { existsSync } = await import("fs");
-  const { join } = await import("path");
+  // Check if a user seed file exists. Lazy import via namespace to avoid
+  // the `unbound-method` lint rule that fires when methods are destructured
+  // from a dynamically-imported module.
+  const fs = await import("node:fs");
+  const path = await import("node:path");
   const cwd = options.cwd || process.cwd();
   const seedCandidates = [
     "nextly.seed.ts",
     "nextly.seed.js",
     "nextly.seed.mjs",
   ];
-  const hasSeedFile = seedCandidates.some(name => existsSync(join(cwd, name)));
+  const hasSeedFile = seedCandidates.some(name =>
+    fs.existsSync(path.join(cwd, name))
+  );
 
   if (!hasSeedFile) return;
 
