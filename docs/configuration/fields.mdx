@@ -1,0 +1,710 @@
+---
+title: Fields
+description: Complete reference for every field type, their options, and usage patterns.
+---
+
+Fields define the shape of your content. Every [collection](/docs/configuration/collections), [single](/docs/configuration/singles) (formerly global), and [component](/docs/configuration/components) is composed of fields.
+
+Nextly provides field helper functions exported from `@nextlyhq/nextly/config`. These eliminate the need to manually set the `type` property and give you full TypeScript autocomplete.
+
+```typescript
+import { text, number, select, option } from '@nextlyhq/nextly/config';
+
+const fields = [
+  text({ name: 'title', required: true }),
+  number({ name: 'price', min: 0 }),
+  select({
+    name: 'status',
+    options: [option('Draft'), option('Published')],
+  }),
+];
+```
+
+## Common Field Options
+
+These options are available on every field type:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `name` | `string` | -- | **Required.** Unique field identifier. Lowercase, no spaces. |
+| `label` | `string` | Auto from name | Display label in the Admin UI. |
+| `required` | `boolean` | `false` | Whether the field must have a value. |
+| `unique` | `boolean` | `false` | Enforce uniqueness at the database level. |
+| `index` | `boolean` | `false` | Create a database index for faster queries. |
+| `defaultValue` | `any \| function` | -- | Static value or `(data) => value` function. |
+| `validate` | `function` | -- | Custom validation. Return `true` or an error message string. |
+| `localized` | `boolean` | `false` | Store separate values per locale. (Reserved for future use.) |
+| `custom` | `Record<string, unknown>` | -- | Arbitrary metadata for plugins or hooks. |
+
+### admin Options
+
+Control how the field appears in the Admin UI:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `admin.position` | `'sidebar'` | -- | Place the field in the sidebar instead of the main area. |
+| `admin.width` | `'25%' \| '33%' \| '50%' \| '66%' \| '75%' \| '100%'` | `'100%'` | Field width in the form layout. |
+| `admin.description` | `string` | -- | Help text below the field label. |
+| `admin.placeholder` | `string` | -- | Placeholder text when empty. |
+| `admin.readOnly` | `boolean` | `false` | Make the field read-only in the UI. |
+| `admin.hidden` | `boolean` | `false` | Hide the field from the UI entirely. |
+| `admin.disabled` | `boolean` | `false` | Disable the input. |
+| `admin.className` | `string` | -- | Custom CSS class on the field wrapper. |
+| `admin.style` | `object` | -- | Inline styles on the field wrapper. |
+| `admin.condition` | `FieldCondition` | -- | Conditionally show/hide the field. See below. |
+| `admin.components` | `object` | -- | Custom React components for Field, Cell, or Filter rendering. |
+
+### Conditional Logic
+
+Show or hide a field based on another field's value:
+
+```typescript
+text({
+  name: 'externalUrl',
+  admin: {
+    condition: {
+      field: 'linkType',
+      equals: 'external',
+    },
+  },
+})
+```
+
+Available condition operators: `equals`, `notEquals`, `contains`, `exists`.
+
+### access Options
+
+Field-level access control with per-operation granularity:
+
+```typescript
+text({
+  name: 'internalNotes',
+  access: {
+    create: ({ req }) => req.user?.role === 'admin',
+    read: ({ req }) => req.user?.role === 'admin',
+    update: ({ req }) => req.user?.role === 'admin',
+  },
+})
+```
+
+### hooks Options
+
+Field-level lifecycle hooks:
+
+| Hook | When it runs |
+|------|-------------|
+| `beforeValidate` | Before validation. Can transform the value. |
+| `beforeChange` | Before saving to the database. |
+| `afterChange` | After saving to the database. |
+| `afterRead` | After reading from the database. Can transform the returned value. |
+
+```typescript
+text({
+  name: 'slug',
+  hooks: {
+    beforeValidate: [
+      async ({ value, data }) => {
+        if (!value && data?.title) {
+          return data.title.toLowerCase().replace(/\s+/g, '-');
+        }
+        return value;
+      },
+    ],
+  },
+})
+```
+
+---
+
+## Text Fields
+
+### text
+
+Single-line text input. Supports `hasMany` mode for storing arrays of strings (tag-style input).
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `minLength` | `number` | -- | Minimum string length. |
+| `maxLength` | `number` | -- | Maximum string length. Also sets DB column size. |
+| `hasMany` | `boolean` | `false` | Accept an array of strings. |
+| `minRows` | `number` | -- | Min items when `hasMany: true`. |
+| `maxRows` | `number` | -- | Max items when `hasMany: true`. |
+| `admin.autoComplete` | `string` | -- | HTML autocomplete attribute (e.g., `'name'`, `'tel'`). |
+
+```typescript
+text({ name: 'title', required: true, maxLength: 200 })
+
+// Multiple values (tags)
+text({ name: 'tags', hasMany: true, minRows: 1, maxRows: 10 })
+```
+
+### textarea
+
+Multi-line text input with configurable height.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `minLength` | `number` | -- | Minimum string length. |
+| `maxLength` | `number` | -- | Maximum string length. |
+| `admin.rows` | `number` | `3` | Number of visible text rows. |
+| `admin.resize` | `'vertical' \| 'horizontal' \| 'both' \| 'none'` | `'vertical'` | Resize behavior. |
+
+```typescript
+textarea({ name: 'description', maxLength: 1000 })
+
+textarea({
+  name: 'bio',
+  admin: { rows: 5, resize: 'none' },
+})
+```
+
+### email
+
+Specialized text input with built-in email format validation. Renders with `type="email"`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `admin.autoComplete` | `string` | `'email'` | HTML autocomplete attribute. |
+
+```typescript
+email({ name: 'email', required: true, unique: true })
+```
+
+### password
+
+Masked text input for passwords. Values should be hashed before storage using a `beforeChange` hook.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `minLength` | `number` | `8` | Minimum password length. |
+| `maxLength` | `number` | -- | Maximum password length. |
+| `admin.autoComplete` | `'new-password' \| 'current-password' \| 'off'` | `'new-password'` | HTML autocomplete. |
+| `admin.showStrengthIndicator` | `boolean` | `false` | Show visual password strength meter. |
+
+```typescript
+password({
+  name: 'password',
+  required: true,
+  minLength: 8,
+  access: { read: () => false },
+  hooks: {
+    beforeChange: [
+      async ({ value }) => value ? await bcrypt.hash(value, 10) : value,
+    ],
+  },
+})
+```
+
+### code
+
+Code editor with syntax highlighting. Supports 25+ languages.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `admin.language` | `CodeLanguage` | `'plaintext'` | Syntax highlighting language. |
+| `admin.editorOptions.lineNumbers` | `boolean` | `true` | Show line numbers. |
+| `admin.editorOptions.wordWrap` | `boolean` | `false` | Enable word wrapping. |
+| `admin.editorOptions.tabSize` | `number` | `2` | Tab width in spaces. |
+| `admin.editorOptions.useTabs` | `boolean` | `false` | Use tabs instead of spaces. |
+| `admin.editorOptions.minHeight` | `number` | `200` | Minimum editor height in pixels. |
+| `admin.editorOptions.maxHeight` | `number` | -- | Maximum editor height. |
+| `admin.editorOptions.fontSize` | `number` | `14` | Font size in pixels. |
+| `admin.editorOptions.folding` | `boolean` | `true` | Enable code folding. |
+| `admin.editorOptions.matchBrackets` | `boolean` | `true` | Highlight matching brackets. |
+| `admin.editorOptions.autoCloseBrackets` | `boolean` | `true` | Auto-close brackets/quotes. |
+
+Supported languages: `javascript`, `typescript`, `jsx`, `tsx`, `html`, `css`, `scss`, `less`, `json`, `markdown`, `yaml`, `xml`, `sql`, `graphql`, `python`, `ruby`, `php`, `java`, `c`, `cpp`, `csharp`, `go`, `rust`, `swift`, `kotlin`, `shell`, `bash`, `powershell`, `dockerfile`, `plaintext`.
+
+```typescript
+code({
+  name: 'snippet',
+  admin: {
+    language: 'javascript',
+    editorOptions: { lineNumbers: true, minHeight: 300 },
+  },
+})
+```
+
+---
+
+## Rich Content
+
+### richText
+
+Full-featured WYSIWYG editor powered by Lexical. Content is stored as a JSON structure (Lexical editor state).
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `features` | `RichTextFeature[]` | See below | Enabled editor features. |
+| `admin.hideToolbar` | `boolean` | `false` | Hide the editor toolbar. |
+
+**Default features:** `bold`, `italic`, `underline`, `strikethrough`, `code`, `h1`-`h4`, `orderedList`, `unorderedList`, `indent`, `blockquote`, `link`.
+
+**All available features:**
+
+| Category | Features |
+|----------|----------|
+| Formatting | `bold`, `italic`, `underline`, `strikethrough`, `code`, `subscript`, `superscript` |
+| Text Styling | `fontFamily`, `fontSize`, `fontColor`, `bgColor` |
+| Headings | `h1`, `h2`, `h3`, `h4`, `h5`, `h6` |
+| Lists | `orderedList`, `unorderedList`, `checkList`, `indent` |
+| Links and Media | `link`, `upload`, `relationship` |
+| Advanced | `table`, `horizontalRule`, `codeBlock`, `align` |
+| Rich Media | `video`, `buttonLink`, `collapsible`, `gallery` |
+
+```typescript
+// Simple blog editor
+richText({
+  name: 'content',
+  features: ['bold', 'italic', 'link', 'h2', 'h3', 'orderedList', 'unorderedList'],
+})
+
+// Full-featured editor
+richText({
+  name: 'body',
+  features: [
+    'bold', 'italic', 'underline', 'strikethrough', 'code',
+    'h1', 'h2', 'h3', 'blockquote',
+    'orderedList', 'unorderedList', 'checkList',
+    'link', 'upload', 'table', 'codeBlock',
+  ],
+})
+```
+
+---
+
+## Numeric
+
+### number
+
+Numeric input for integers or decimals. Supports `hasMany` mode for arrays of numbers.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `min` | `number` | -- | Minimum allowed value. |
+| `max` | `number` | -- | Maximum allowed value. |
+| `hasMany` | `boolean` | `false` | Accept an array of numbers. |
+| `minRows` | `number` | -- | Min items when `hasMany: true`. |
+| `maxRows` | `number` | -- | Max items when `hasMany: true`. |
+| `admin.step` | `number` | `1` | Increment step for spinner buttons. |
+
+```typescript
+number({ name: 'price', required: true, min: 0, admin: { step: 0.01 } })
+
+number({ name: 'rating', min: 1, max: 5, admin: { step: 1 } })
+```
+
+---
+
+## Selection
+
+### checkbox
+
+Boolean true/false toggle. Also accepts the type alias `'boolean'` from the Schema Builder.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `defaultValue` | `boolean` | -- | Initial checked state. |
+
+```typescript
+checkbox({ name: 'published', defaultValue: false })
+
+checkbox({
+  name: 'featured',
+  label: 'Featured Post',
+  admin: { position: 'sidebar' },
+})
+```
+
+### select
+
+Dropdown for choosing from predefined options. Supports single or multi-select.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `options` | `SelectOption[]` | -- | **Required.** Array of `{ label, value }` objects. |
+| `hasMany` | `boolean` | `false` | Allow multiple selections. |
+| `enumName` | `string` | Auto | Custom SQL enum name. |
+| `interfaceName` | `string` | -- | TypeScript interface name for code generation. |
+| `filterOptions` | `function` | -- | Dynamically filter available options. |
+| `admin.isClearable` | `boolean` | `false` | Show a clear button. |
+| `admin.isSortable` | `boolean` | `false` | Enable drag-and-drop reorder (multi-select only). |
+
+Use the `option()` helper to create options quickly -- it auto-generates the value from the label:
+
+```typescript
+import { select, option } from '@nextlyhq/nextly/config';
+
+select({
+  name: 'status',
+  required: true,
+  defaultValue: 'draft',
+  options: [option('Draft'), option('Published'), option('Archived')],
+})
+// option('In Review') -> { label: 'In Review', value: 'in_review' }
+
+// Multi-select
+select({
+  name: 'categories',
+  hasMany: true,
+  options: [option('Tech'), option('Business'), option('Design')],
+  admin: { isClearable: true, isSortable: true },
+})
+```
+
+### radio
+
+Radio button group for single selection. Best when all options should be visible at once.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `options` | `SelectOption[]` | -- | **Required.** Array of `{ label, value }` objects. |
+| `enumName` | `string` | Auto | Custom SQL enum name. |
+| `interfaceName` | `string` | -- | TypeScript interface name for code generation. |
+| `admin.layout` | `'horizontal' \| 'vertical'` | `'horizontal'` | Button layout direction. |
+
+```typescript
+radio({
+  name: 'priority',
+  options: [option('Low'), option('Medium'), option('High')],
+  admin: { layout: 'horizontal' },
+})
+```
+
+### date
+
+Date and/or time picker. Dates are stored in UTC as ISO 8601 strings.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `admin.date.pickerAppearance` | `'dayOnly' \| 'dayAndTime' \| 'timeOnly' \| 'monthOnly'` | `'dayOnly'` | Picker mode. |
+| `admin.date.displayFormat` | `string` | -- | Display format string (date-fns format). |
+| `admin.date.monthsToShow` | `1 \| 2` | `1` | Number of months visible in the picker. |
+| `admin.date.minDate` | `Date \| string` | -- | Earliest selectable date. |
+| `admin.date.maxDate` | `Date \| string` | -- | Latest selectable date. |
+| `admin.date.minTime` | `Date \| string` | -- | Earliest selectable time. |
+| `admin.date.maxTime` | `Date \| string` | -- | Latest selectable time. |
+| `admin.date.timeIntervals` | `number` | `30` | Time step in minutes. |
+| `admin.date.timeFormat` | `string` | `'h:mm aa'` | Time display format. |
+
+```typescript
+date({ name: 'publishedAt' })
+
+// Date and time
+date({
+  name: 'eventStart',
+  admin: {
+    date: { pickerAppearance: 'dayAndTime', timeIntervals: 15 },
+  },
+})
+
+// Time only
+date({
+  name: 'openingTime',
+  admin: {
+    date: { pickerAppearance: 'timeOnly', timeFormat: 'HH:mm' },
+  },
+})
+```
+
+---
+
+## Relationships
+
+### relationship
+
+Reference documents from other collections. Supports single, multi, and polymorphic relationships.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `relationTo` | `string \| string[]` | -- | **Required.** Target collection slug(s). |
+| `hasMany` | `boolean` | `false` | Allow multiple document references. |
+| `minRows` | `number` | -- | Min selections when `hasMany: true`. |
+| `maxRows` | `number` | -- | Max selections when `hasMany: true`. |
+| `maxDepth` | `number` | `1` | Population depth for nested relationships. |
+| `filterOptions` | `object \| function` | -- | Filter available documents. |
+| `admin.allowCreate` | `boolean` | `true` | Allow creating new documents from the field. |
+| `admin.allowEdit` | `boolean` | `true` | Allow editing related documents. |
+| `admin.isSortable` | `boolean` | `true` | Enable drag-and-drop reorder (multi only). |
+| `admin.sortOptions` | `string \| object` | -- | Default sort. Prefix with `-` for descending. |
+| `admin.appearance` | `'select' \| 'drawer'` | `'select'` | Picker UI style. Use `'drawer'` for large lists. |
+
+```typescript
+// Single relationship
+relationship({ name: 'author', relationTo: 'users', required: true })
+
+// Has many
+relationship({
+  name: 'categories',
+  relationTo: 'categories',
+  hasMany: true,
+  maxRows: 5,
+})
+
+// Polymorphic (multiple target collections)
+relationship({
+  name: 'relatedContent',
+  relationTo: ['posts', 'pages', 'products'],
+  hasMany: true,
+})
+
+// With dynamic filter
+relationship({
+  name: 'parent',
+  relationTo: 'pages',
+  filterOptions: ({ id }) => {
+    if (id) return { id: { not_equals: id } };
+    return true;
+  },
+})
+```
+
+### upload
+
+Reference files from upload-enabled collections. Works like `relationship` but with media-specific features like thumbnails and file filtering.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `relationTo` | `string \| string[]` | -- | **Required.** Upload collection slug(s). |
+| `hasMany` | `boolean` | `false` | Allow multiple file selections. |
+| `minRows` | `number` | -- | Min uploads when `hasMany: true`. |
+| `maxRows` | `number` | -- | Max uploads when `hasMany: true`. |
+| `maxDepth` | `number` | `1` | Population depth. |
+| `maxFileSize` | `number` | -- | Max file size in bytes. |
+| `mimeTypes` | `string` | -- | Allowed MIME types (e.g., `'image/*'`). |
+| `filterOptions` | `object \| function` | -- | Filter by `mimeType`, `filesize`, `width`, `height`, `filename`, `alt`. |
+| `admin.allowCreate` | `boolean` | `true` | Allow uploading new files from the field. |
+| `admin.allowEdit` | `boolean` | `true` | Allow editing upload metadata. |
+| `admin.isSortable` | `boolean` | `true` | Drag-and-drop reorder (multi only). |
+| `admin.displayPreview` | `boolean` | `true` | Show thumbnail preview. |
+
+```typescript
+// Single image
+upload({ name: 'featuredImage', relationTo: 'media' })
+
+// Gallery with constraints
+upload({
+  name: 'gallery',
+  relationTo: 'media',
+  hasMany: true,
+  maxRows: 10,
+  filterOptions: { mimeType: { contains: 'image' } },
+})
+
+// Polymorphic uploads
+upload({
+  name: 'attachment',
+  relationTo: ['media', 'documents'],
+})
+```
+
+---
+
+## Structured Fields
+
+### array
+
+Repeatable sets of fields. Each row contains the same field structure. Rows can be added, removed, and reordered.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `fields` | `FieldConfig[]` | -- | **Required.** Field definitions for each row. |
+| `minRows` | `number` | -- | Minimum number of rows. |
+| `maxRows` | `number` | -- | Maximum number of rows. |
+| `labels` | `{ singular?, plural? }` | -- | Custom labels (e.g., `'Link'` / `'Links'`). |
+| `interfaceName` | `string` | -- | TypeScript interface name. |
+| `dbName` | `string` | Auto | Custom database table name. |
+| `virtual` | `boolean` | `false` | No database storage. |
+| `admin.initCollapsed` | `boolean` | `false` | Start rows collapsed. |
+| `admin.isSortable` | `boolean` | `true` | Enable drag-and-drop reorder. |
+| `admin.components.RowLabel` | `React.ComponentType` | -- | Custom row label component. |
+
+```typescript
+array({
+  name: 'links',
+  labels: { singular: 'Link', plural: 'Links' },
+  maxRows: 10,
+  fields: [
+    text({ name: 'label', required: true }),
+    text({ name: 'url', required: true }),
+  ],
+})
+
+// FAQ section
+array({
+  name: 'faq',
+  labels: { singular: 'Question', plural: 'Questions' },
+  fields: [
+    text({ name: 'question', required: true }),
+    richText({ name: 'answer', required: true }),
+  ],
+  admin: { initCollapsed: true },
+})
+```
+
+### group
+
+Organize related fields together. Named groups create nested data structures. Groups without a name are presentational only.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `name` | `string` | -- | If provided, fields are nested under this property. If omitted, purely visual. |
+| `fields` | `FieldConfig[]` | -- | **Required.** Nested field definitions. |
+| `interfaceName` | `string` | -- | TypeScript interface name. |
+| `dbName` | `string` | Auto | Custom database column name. |
+| `virtual` | `boolean` | `false` | No database storage. |
+| `admin.hideGutter` | `boolean` | `false` | Remove the left-side visual gutter. |
+
+```typescript
+// Named group -- creates nested data: { seo: { metaTitle, metaDescription } }
+group({
+  name: 'seo',
+  fields: [
+    text({ name: 'metaTitle', maxLength: 60 }),
+    textarea({ name: 'metaDescription', maxLength: 160 }),
+  ],
+})
+
+// Presentational group -- no data nesting, fields live at parent level
+group({
+  label: 'Display Settings',
+  fields: [
+    checkbox({ name: 'showTitle', defaultValue: true }),
+    checkbox({ name: 'showDate', defaultValue: true }),
+  ],
+  admin: { hideGutter: true },
+})
+```
+
+### json
+
+Store arbitrary JSON data with an in-browser code editor. Supports JSON Schema validation.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `jsonSchema` | `JSONSchemaDefinition` | -- | Inline JSON Schema for validation and editor hints. |
+| `admin.editorOptions.height` | `number \| string` | `300` | Editor height. |
+| `admin.editorOptions.minHeight` | `number` | `100` | Minimum height. |
+| `admin.editorOptions.maxHeight` | `number` | -- | Maximum height. |
+| `admin.editorOptions.lineNumbers` | `boolean` | `true` | Show line numbers. |
+| `admin.editorOptions.folding` | `boolean` | `true` | Enable code folding. |
+| `admin.editorOptions.wordWrap` | `boolean` | `false` | Enable word wrap. |
+| `admin.editorOptions.minimap` | `boolean` | `false` | Show code minimap. |
+| `admin.editorOptions.tabSize` | `number` | `2` | Tab size. |
+| `admin.editorOptions.formatOnBlur` | `boolean` | `true` | Auto-prettify on blur. |
+| `admin.editorOptions.validateOnChange` | `boolean` | `true` | Real-time syntax validation. |
+
+Database storage: PostgreSQL uses `JSONB`, MySQL uses `JSON`, SQLite uses `TEXT`.
+
+```typescript
+json({ name: 'metadata' })
+
+// With JSON Schema validation
+json({
+  name: 'settings',
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      theme: { type: 'string', enum: ['light', 'dark'] },
+      maxItems: { type: 'number', minimum: 1 },
+    },
+    required: ['theme'],
+  },
+})
+```
+
+---
+
+## Component Fields
+
+### component
+
+Embed reusable [Components](/docs/configuration/components) within Collections, Singles, or other Components. Three modes are available:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `component` | `string` | -- | Single mode: one specific Component slug. Mutually exclusive with `components`. |
+| `components` | `string[]` | -- | Dynamic zone: array of allowed Component slugs. Mutually exclusive with `component`. |
+| `repeatable` | `boolean` | `false` | Allow multiple instances (array mode). |
+| `minRows` | `number` | -- | Min instances when `repeatable: true`. |
+| `maxRows` | `number` | -- | Max instances when `repeatable: true`. |
+| `admin.initCollapsed` | `boolean` | `false` | Start instances collapsed. |
+| `admin.isSortable` | `boolean` | `true` | Drag-and-drop reorder (repeatable only). |
+
+```typescript
+// Fixed single component
+component({ name: 'seo', component: 'seo' })
+
+// Dynamic zone -- editors pick from multiple types
+component({
+  name: 'layout',
+  components: ['hero', 'cta', 'content-block'],
+  repeatable: true,
+})
+
+// Repeatable single component
+component({
+  name: 'features',
+  component: 'feature-card',
+  repeatable: true,
+  minRows: 1,
+  maxRows: 12,
+})
+```
+
+---
+
+## Virtual Fields
+
+### join
+
+Display reverse relationships -- entries from another collection that reference the current document. Join fields are read-only and do not store data. They query at read time.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `collection` | `string` | -- | **Required.** Collection containing the referencing field. |
+| `on` | `string` | -- | **Required.** Field name that references this collection. Supports dot notation. |
+| `where` | `object` | -- | Additional filter for joined entries. |
+| `defaultLimit` | `number` | `10` | Max entries to display. |
+| `defaultSort` | `string` | -- | Sort field. Prefix with `-` for descending. |
+| `maxDepth` | `number` | `1` | Population depth for relationships in joined entries. |
+| `admin.allowNavigation` | `boolean` | `true` | Make entries clickable links. |
+| `admin.defaultColumns` | `string[]` | -- | Columns to display in the list. |
+| `admin.allowCreate` | `boolean` | `false` | Show "Create New" button. |
+
+```typescript
+// On a Categories collection -- show all posts in this category
+{
+  name: 'posts',
+  type: 'join',
+  label: 'Posts in this Category',
+  collection: 'posts',
+  on: 'category',
+  defaultSort: '-createdAt',
+  admin: {
+    defaultColumns: ['title', 'status', 'createdAt'],
+  },
+}
+```
+
+---
+
+## Helper Utilities
+
+### option()
+
+Creates a `{ label, value }` option for `select` and `radio` fields. Auto-generates the value from the label by lowercasing and replacing spaces with underscores.
+
+```typescript
+import { option } from '@nextlyhq/nextly/config';
+
+option('Draft')         // { label: 'Draft', value: 'draft' }
+option('In Progress')   // { label: 'In Progress', value: 'in_progress' }
+option('Active', 'active')  // { label: 'Active', value: 'active' }
+```
+
+## Next Steps
+
+- [Collections](/docs/configuration/collections) -- define content types using fields
+- [Singles](/docs/configuration/singles) -- define single-document content using fields
+- [Components](/docs/configuration/components) -- create reusable field groups

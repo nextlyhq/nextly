@@ -1,0 +1,147 @@
+---
+title: Plugins
+description: Extend Nextly with official and custom plugins that add collections, admin views, hooks, and API endpoints.
+---
+
+Plugins extend Nextly with new functionality without modifying core code. A plugin can add collections, register lifecycle hooks, inject custom admin views, and transform configuration -- all through a single `plugins` array in your config.
+
+## Official Plugins
+
+| Plugin | Package | Description |
+|--------|---------|-------------|
+| [Form Builder](/docs/plugins/form-builder) | `@nextlyhq/plugin-form-builder` | Visual drag-and-drop form builder with submission management, email notifications, spam protection, and export |
+
+## Adding a Plugin
+
+Install the plugin package, then add it to your `defineConfig` call.
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from '@nextlyhq/nextly';
+import { formBuilder } from '@nextlyhq/plugin-form-builder';
+
+const fb = formBuilder();
+
+export default defineConfig({
+  plugins: [fb.plugin],
+  collections: [Posts, Users, Media],
+});
+```
+
+Plugin collections are merged automatically -- you do not need to spread them into the `collections` array yourself. The plugin's `config()` transformer handles this during initialization.
+
+For simpler setups where you do not need to customize plugin options, use the pre-configured default instance:
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from '@nextlyhq/nextly';
+import { formBuilderPlugin } from '@nextlyhq/plugin-form-builder';
+
+export default defineConfig({
+  plugins: [formBuilderPlugin],
+  collections: [Posts, Users, Media],
+});
+```
+
+## How Plugins Work
+
+Every plugin implements the `PluginDefinition` interface from `@nextlyhq/nextly`. The lifecycle has two phases:
+
+### 1. Configuration Phase
+
+Before services start, Nextly calls each plugin's optional `config()` function. This lets plugins inject collections, modify settings, or add fields to existing collections.
+
+```typescript
+const plugin: PluginDefinition = {
+  name: 'my-plugin',
+  version: '1.0.0',
+  collections: [MyCollection],
+
+  config(config) {
+    // Merge plugin collections with user collections
+    return {
+      ...config,
+      collections: [...(config.collections || []), ...myCollections],
+    };
+  },
+};
+```
+
+### 2. Initialization Phase
+
+After all services are registered, Nextly calls each plugin's `init()` function with a `PluginContext`. This context provides access to:
+
+- **`services`** -- Collection CRUD, user management, media handling, and email sending
+- **`infra`** -- Direct database access and logger
+- **`config`** -- Read-only Nextly configuration
+- **`hooks`** -- Hook registration for lifecycle events
+
+```typescript
+import { definePlugin } from '@nextlyhq/nextly';
+
+export const auditPlugin = definePlugin({
+  name: 'audit-log',
+  version: '1.0.0',
+
+  async init(nextly) {
+    nextly.hooks.on('afterCreate', '*', async (context) => {
+      nextly.infra.logger.info('Created entry', {
+        collection: context.collection,
+        id: context.data?.id,
+      });
+    });
+  },
+});
+```
+
+## Plugin Admin Integration
+
+Plugins can control where their collections appear in the admin sidebar and customize their visual appearance.
+
+```typescript
+const plugin: PluginDefinition = {
+  name: 'my-plugin',
+  collections: [MyCollection],
+
+  admin: {
+    order: 50,
+    description: 'What this plugin does',
+    appearance: {
+      icon: 'BarChart',
+      label: 'Analytics',
+      badge: 'Beta',
+      badgeVariant: 'secondary',
+    },
+  },
+};
+```
+
+Plugins can also register custom admin view components. The Form Builder plugin, for example, replaces the default collection edit view with a visual drag-and-drop builder. Components are referenced by path strings (e.g., `@nextlyhq/plugin-form-builder/admin#FormBuilderView`) and auto-registered when the admin panel loads.
+
+## Overriding Plugin Behavior
+
+Host applications can override a plugin's sidebar placement and appearance through the `admin.pluginOverrides` section of `defineConfig`:
+
+```typescript
+// nextly.config.ts
+export default defineConfig({
+  plugins: [fb.plugin],
+  admin: {
+    pluginOverrides: {
+      '@nextlyhq/plugin-form-builder': {
+        placement: AdminPlacement.COLLECTIONS,
+        order: 10,
+        appearance: {
+          label: 'Contact Forms',
+        },
+      },
+    },
+  },
+});
+```
+
+## Next Steps
+
+- [Form Builder Plugin](/docs/plugins/form-builder) -- set up dynamic forms with drag-and-drop building, submission tracking, and notifications
+- [Configuration Reference](/docs/configuration/nextly-config) -- full `defineConfig` options including the `plugins` array
+- [Admin Customization](/docs/admin/customization) -- override plugin sidebar placement and appearance

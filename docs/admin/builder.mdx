@@ -1,0 +1,131 @@
+---
+title: Schema Builder
+description: Create collections, singles, and components visually with the drag-and-drop Schema Builder.
+---
+
+The Schema Builder is Nextly's visual schema designer. Instead of writing collection definitions in code, you design your content types through a drag-and-drop interface. The Schema Builder auto-generates the TypeScript types, Zod validation schemas, and Drizzle database migrations that the code-first approach would produce manually.
+
+The Schema Builder has three variants that share the same interface:
+
+- **Collections Builder** at `/admin/collections/builder`
+- **Singles Builder** at `/admin/singles/builder`
+- **Components Builder** at `/admin/components/builder`
+
+## The Schema Builder Layout
+
+All three Schema Builder variants use the same two-column layout: a main canvas area and a context-sensitive sidebar.
+
+**Canvas (main area).** A sortable list of the fields you have added to your schema. Each field row shows the field icon, label, type badge, and a "Required" badge if applicable. Drag the grip handle on any row to reorder fields. Click a row to open its configuration in the sidebar. Nested field types (Repeater, Group) display their child fields inline with visual indentation and dedicated drop zones.
+
+**Sidebar (right).** The sidebar switches between three views using tab buttons at the bottom:
+
+- **Add Fields.** A searchable palette of all available field types, organized into Basic and Advanced categories. Each field type shows an icon, name, and short description. Drag a field onto the canvas, or click it to append it to the field list.
+- **Settings.** Entity-level configuration: description, sidebar icon, admin group, timestamps toggle, "use as title" field, hidden toggle, and (for collections) a Hooks editor for adding pre-built lifecycle hooks.
+- **Field Editor.** When you click a field row on the canvas, the sidebar slides over to show a configuration form with four tabs:
+
+| Tab | What you configure |
+|---|---|
+| **General** | Name, label, type, description, required toggle, default value |
+| **Validation** | Type-specific rules: min/max length, pattern, min/max value, min/max rows |
+| **Admin** | Layout width (25%–100%), position (main or sidebar), read-only, hidden, conditional visibility |
+| **Advanced** | Unique constraint, database index, localized (reserved) |
+
+## Available Field Types
+
+### Basic Fields
+
+| Field Type | Description |
+|---|---|
+| **Text** | Short text input |
+| **Textarea** | Multi-line text content |
+| **Rich Text** | Rich text editor with formatting |
+| **Email** | Email address field |
+| **Password** | Secure text input |
+| **Number** | Numeric values |
+| **Code** | Code editor with syntax highlighting |
+| **Date** | Date and time picker |
+| **Select** | Dropdown from options |
+| **Radio** | Single choice from options |
+| **Checkbox** | Boolean toggle |
+| **Toggle** | On/off switch |
+| **Upload** | File or image upload |
+
+### Advanced Fields
+
+| Field Type | Description |
+|---|---|
+| **Group** | Nested group of fields. Renders child fields inline |
+| **Repeater** | Repeatable group of fields. Editors add/remove/reorder rows |
+| **Component** | Embed a reusable component field group |
+| **JSON** | Raw JSON data |
+| **Relationship** | Reference to entries in other collections |
+
+Group and Repeater fields support nesting up to 3 levels deep. Each level gets a progressively darker background shade to make the hierarchy visible.
+
+## Creating a Collection, Step by Step
+
+Here is a typical workflow for creating a new "Blog Posts" collection using the Schema Builder:
+
+1. Navigate to **Builder > Collections** in the sidebar and click **New Collection**.
+
+2. Enter the collection name. The Schema Builder generates a URL-friendly slug automatically (e.g., "Blog Posts" becomes `blog_posts`).
+
+3. Notice that **Title** and **Slug** are already present as system fields. These are included in every collection automatically and cannot be removed.
+
+4. Switch to the **Settings** tab in the right sidebar to set a description, pick a sidebar icon, and choose a field to use as the entry title.
+
+5. Drag a **Rich Text** field from the palette to the center panel. Click the new field row. In the Field Editor, set the name to `content`.
+
+6. Drag an **Upload** field and name it `featuredImage`. In the validation tab, you can restrict the accepted MIME types to `image/*`.
+
+7. Drag a **Select** field and name it `status`. Add options: `draft`, `published`, `archived`.
+
+8. Drag a **Relationship** field and name it `author`. Set the target collection to `users`.
+
+9. Reorder fields by dragging the grip handles.
+
+10. Click **Create**. The Schema Builder sends the schema to the server, which generates:
+    - A collection configuration file
+    - TypeScript interfaces for the collection's documents
+    - A Zod validation schema
+    - A Drizzle database schema and migration
+
+The new collection immediately appears in the admin sidebar under Collections.
+
+## Auto-Generated Outputs
+
+When you save a Schema Builder schema, Nextly generates all the artifacts the code-first approach requires:
+
+- **TypeScript types.** Interfaces for your collection documents, written to the configured `typescript.outputFile` path
+- **Zod schemas.** Runtime validation schemas that match your field definitions and validation rules
+- **Database migrations.** Drizzle migration files in your configured `db.migrationsDir` that create or alter tables and columns
+
+This means you can start with the Schema Builder to prototype quickly, then switch to code-first definitions for advanced customization, or continue using the Schema Builder exclusively.
+
+## Permissions
+
+The Schema Builder requires the `manage-settings` permission. Users without this permission will not see the Schema Builder section in the sidebar.
+
+By default, the Schema Builder section is visible in development (`NODE_ENV !== "production"`) and hidden in production. You can override this with the `showBuilder` branding option. See [Branding](/docs/admin/branding).
+
+## Schema Builder vs. Code-First
+
+Both approaches produce the same result: registered collections, singles, or components with typed schemas and migrations. Choose the approach that fits your workflow:
+
+| Aspect | Builder (Visual) | Code-first |
+|---|---|---|
+| Speed to prototype | Drag-and-drop, instant preview | Write config, run CLI |
+| Version control | Generated files are committed | Hand-written files are committed |
+| Advanced hooks | Add via Hooks panel in Schema Builder | Full programmatic control |
+| Team workflow | Non-developers can contribute | Developers own the schema |
+
+For code-first definitions, see [Collections](/docs/configuration/collections), [Singles](/docs/configuration/singles), and [Fields](/docs/configuration/fields).
+
+## Next Steps
+
+- [Admin Panel Overview](/docs/admin) -- Full admin panel navigation guide
+- [Branding](/docs/admin/branding) -- Control Builder visibility with `showBuilder`
+- [Collections](/docs/configuration/collections) -- Code-first collection definitions
+- [Singles](/docs/configuration/singles) -- Code-first single definitions
+- [Components](/docs/configuration/components) -- Reusable field groups
+- [Fields](/docs/configuration/fields) -- Field type reference and validation options

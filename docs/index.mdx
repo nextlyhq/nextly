@@ -1,0 +1,41 @@
+---
+title: Nextly Documentation
+description: The open-source, type-safe headless app framework built natively for Next.js. Define content with code or build it visually.
+---
+
+Nextly is an open-source app framework that runs inside your Next.js application. It gives you two ways to define your content model: write TypeScript config (code-first) or use the visual Schema Builder in the admin panel. Either way, you get the same type-safe API, the same admin interface, and the same query layer.
+
+## Why Nextly?
+
+- **Next.js Native** -- Runs as part of your Next.js app. No separate server, no external API to manage.
+- **Code-First + Visual** -- Define collections in TypeScript for version control, or build them visually in the admin panel. Mix both approaches freely.
+- **Type-Safe** -- Full TypeScript support with auto-generated types for your content schema.
+- **Direct API** -- Query content directly in Server Components with `nextly.find()` and `nextly.findByID()`. No HTTP overhead.
+- **Flexible Database** -- PostgreSQL, MySQL, or SQLite via swappable Drizzle adapters.
+- **Admin Panel** -- A full-featured admin UI at `/admin` with RBAC, media library, and rich text editing out of the box.
+
+## Quick Links
+
+- [Getting Started](/docs/getting-started) -- What Nextly is and core concepts
+- [Installation](/docs/getting-started/installation) -- Install Nextly in a new or existing Next.js project
+- [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
+- [Configuration](/docs/configuration) -- Configure collections, singles, fields, and plugins
+- [API Reference](/docs/api-reference) -- Direct API, REST API, and Server Actions
+
+## Get Started
+
+The fastest way to start is with the scaffolding CLI:
+
+```bash
+npx @nextlyhq/create-nextly-app my-app
+```
+
+Or follow the [Quick Start guide](/docs/getting-started/quick-start) to add Nextly to an existing Next.js project and build a blog in 5 minutes.
+
+## Next Steps
+
+- [Getting Started](/docs/getting-started) -- Core concepts and prerequisites
+- [Installation](/docs/getting-started/installation) -- Install Nextly in your project
+- [Configuration](/docs/configuration) -- Configure collections, singles, fields, and plugins
+- [Database](/docs/database) -- Choose and configure PostgreSQL, MySQL, or SQLite
+- [Deployment](/docs/guides/deployment) -- Deploy to Vercel, Docker, or any Node.js host

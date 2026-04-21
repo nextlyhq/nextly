@@ -1,0 +1,113 @@
+---
+title: Telemetry
+description: What Nextly's CLI collects, why, and how to opt out.
+---
+
+Nextly collects anonymous usage data from its CLI tools (`create-nextly-app` and `nextly`) to understand which features are used, catch regressions, and make data-driven product decisions during alpha.
+
+Telemetry is **anonymous**, **opt-out**, automatically disabled in CI, Docker, production, and non-interactive shells, and can be disabled permanently with one command or one environment variable.
+
+## How to opt out
+
+Any of these is enough. The first one you set wins.
+
+```bash
+# Option 1: one-time command, persists in ~/.config/nextly/config.json
+nextly telemetry disable
+
+# Option 2: environment variable, per-session
+NEXTLY_TELEMETRY_DISABLED=1 nextly dev
+
+# Option 3: community standard (also respected by other tools)
+DO_NOT_TRACK=1 nextly dev
+```
+
+## What we collect
+
+Every event includes this base context:
+
+| Field | Example | Description |
+|---|---|---|
+| `cli_name` | `"nextly"` | Which CLI emitted the event |
+| `cli_version` | `"0.1.3"` | Version of the CLI |
+| `node_version` | `"22.11.0"` | Node.js runtime version |
+| `os` | `"darwin"` | `darwin / linux / win32 / freebsd / other` |
+| `arch` | `"arm64"` | `arm64 / x64 / other` |
+| `package_manager` | `"pnpm"` | From `npm_config_user_agent` |
+| `is_ci` / `is_docker` | `false` | Always false in practice (telemetry is off in CI and Docker) |
+| `schema_version` | `1` | Version of this event schema |
+| `project_id` | `"a1b2c3d4e5f6"` | 12-char one-way hash of your cwd plus a per-machine salt; lets us count distinct projects without knowing their paths. Only present for `nextly` commands, not `create-nextly-app`. |
+
+### `create-nextly-app` events
+
+| Event | Extra properties |
+|---|---|
+| `scaffold_started` | Flag presence booleans (`yes`, `demoData`, `skipInstall`, `useYalc`) |
+| `template_selected` | `template`, `approach` |
+| `database_selected` | `database` |
+| `install_started` | (none) |
+| `install_completed` | `duration_ms` |
+| `install_failed` | `duration_ms`, `error_code` |
+| `scaffold_completed` | `total_duration_ms`, `template`, `database`, `approach`, `demo_data` |
+| `scaffold_failed` | `stage`, `error_code`, `duration_ms` |
+
+### `nextly` command events
+
+| Event | Extra properties |
+|---|---|
+| `command_started` | `command`, `flags_count` (the number of flags passed, never their names or values) |
+| `command_completed` | `command`, `duration_ms` |
+| `command_failed` | `command`, `duration_ms`, `error_code` |
+
+### `error_code` taxonomy
+
+Errors map to a fixed enum. Raw error messages and stack traces never leave your machine.
+
+- `install_failed`, `install_network`, `install_permission`, `install_disk_full`
+- `template_download_failed`, `template_parse_failed`
+- `config_generation_failed`
+- `db_connection_failed`, `migration_conflict`
+- `unknown`
+
+## What we never collect
+
+- Project name, directory name, or any file path.
+- Git remote URL, username, email, or hostname.
+- IP address. We set `disableGeoip: true` on PostHog so the server does not derive one either.
+- File contents, schema names, collection names, or field names.
+- `.env` values, API keys, database URLs, or auth secrets.
+- Raw error messages or stack traces.
+- Next.js or Nextly config file contents.
+
+## How anonymous identity works
+
+On first run, Nextly generates two random values:
+
+- **`anonymousId`** -- 256 bits of entropy, stored in your user config directory (`~/.config/nextly/config.json` on Linux; OS-appropriate paths elsewhere). Sent with every event as the `distinct_id`. Never linked to any account or email.
+- **`salt`** -- 128 bits of entropy, stored alongside the ID. Used to hash your project paths. The salt never leaves your machine.
+
+You can rotate both with:
+
+```bash
+nextly telemetry reset
+```
+
+This will also re-show the first-run notice on your next CLI invocation.
+
+## When telemetry is disabled automatically
+
+- `DO_NOT_TRACK=1` is set.
+- `NEXTLY_TELEMETRY_DISABLED=1` is set.
+- `NODE_ENV=production`.
+- CI is detected (`CI=1`, `GITHUB_ACTIONS`, `GITLAB_CI`, `CIRCLECI`, `TRAVIS`, `JENKINS_URL`, `BUILDKITE`, `VERCEL`, `NETLIFY`, `RENDER`).
+- Docker is detected (`/.dockerenv` present).
+- Stdout is not a TTY (e.g., output is piped to a file).
+
+## Source code
+
+Every line of telemetry code is open-source. Audit it yourself:
+
+- [`packages/telemetry/src/events.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/telemetry/src/events.ts) -- the full event catalog
+- [`packages/telemetry/src/is-disabled.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/telemetry/src/is-disabled.ts) -- disable resolution order
+- [`packages/telemetry/src/client.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/telemetry/src/client.ts) -- PostHog client wrapper
+- [`packages/telemetry/src/index.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/telemetry/src/index.ts) -- the public API

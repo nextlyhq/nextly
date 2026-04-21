@@ -1,0 +1,588 @@
+---
+title: Form Builder
+description: Create and manage dynamic forms with a visual drag-and-drop builder, submission tracking, email notifications, spam protection, webhooks, and data export.
+---
+
+The Form Builder plugin adds a complete form management system to Nextly. Build forms visually in the admin panel or define them in code, collect submissions, send email notifications, and protect against spam -- all without writing custom endpoints.
+
+## Installation
+
+```bash
+npm install @nextlyhq/plugin-form-builder
+```
+
+The plugin requires these peer dependencies (already present in most Nextly projects):
+
+- `@nextlyhq/nextly` >= 0.0.13
+- `@nextlyhq/admin` >= 0.0.13
+- `react` ^18 or ^19
+- `next` ^14, ^15, or ^16
+
+## Basic Setup
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from '@nextlyhq/nextly';
+import { formBuilder } from '@nextlyhq/plugin-form-builder';
+
+const fb = formBuilder();
+
+export default defineConfig({
+  plugins: [fb.plugin],
+  collections: [Posts, Users, Media],
+});
+```
+
+This creates two collections automatically:
+
+| Collection | Default Slug | Purpose |
+|------------|-------------|---------|
+| Forms | `forms` | Stores form definitions (fields, settings, notifications) |
+| Submissions | `form-submissions` | Stores submitted data with status tracking |
+
+Both collections appear in the admin sidebar under the **Forms** group.
+
+## Configuration Options
+
+Pass an options object to `formBuilder()` to customize behavior.
+
+```typescript
+// nextly.config.ts
+const fb = formBuilder({
+  // Customize collection slugs and labels
+  formOverrides: {
+    slug: 'contact-forms',
+    labels: { singular: 'Contact Form', plural: 'Contact Forms' },
+  },
+  formSubmissionOverrides: {
+    slug: 'responses',
+    labels: { singular: 'Response', plural: 'Responses' },
+  },
+
+  // Enable/disable specific field types
+  fields: {
+    file: false,      // Disable file uploads
+    hidden: false,    // Disable hidden fields
+  },
+
+  // Email notifications
+  notifications: {
+    defaultFrom: 'noreply@example.com',
+    defaultToEmail: 'submissions@example.com',
+    enabled: true,
+  },
+
+  // Spam protection
+  spamProtection: {
+    honeypot: true,
+    rateLimit: {
+      maxSubmissions: 10,
+      windowMs: 60_000,
+    },
+  },
+
+  // File upload limits
+  uploads: {
+    maxFileSize: 10_485_760, // 10 MB
+    allowedMimeTypes: ['image/*', 'application/pdf', 'text/*'],
+    uploadCollection: 'media',
+  },
+
+  // Feature flags
+  features: {
+    builder: true,
+    conditionalLogic: true,
+    fileUploads: true,
+  },
+
+  // Collections that can serve as redirect targets after submission
+  redirectRelationships: ['pages'],
+});
+```
+
+### Collection Overrides
+
+You can add custom fields to the Forms or Submissions collections, or restrict access control.
+
+**Array style** -- appends fields to the defaults:
+
+```typescript
+formOverrides: {
+  fields: [
+    text({ name: 'internalNotes', label: 'Internal Notes' }),
+  ],
+  access: {
+    read: () => true,
+    create: ({ user }) => !!user,
+  },
+}
+```
+
+**Function style** -- full control over the field list:
+
+```typescript
+formSubmissionOverrides: {
+  fields: ({ defaultFields }) => {
+    const formIndex = defaultFields.findIndex(f => f.name === 'form');
+    return [
+      ...defaultFields.slice(0, formIndex + 1),
+      { name: 'source', type: 'text' },
+      ...defaultFields.slice(formIndex + 1),
+    ];
+  },
+}
+```
+
+## Field Types
+
+All 13 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
+
+| Type | Description | Key Options |
+|------|-------------|-------------|
+| `text` | Single-line text input | `minLength`, `maxLength`, `pattern` |
+| `email` | Email address with format validation | `pattern` |
+| `number` | Numeric input | `min`, `max`, `step` |
+| `phone` | Phone number input | `pattern` |
+| `url` | URL with format validation | `pattern` |
+| `textarea` | Multi-line text input | `rows`, `minLength`, `maxLength` |
+| `select` | Dropdown menu | `options`, `allowMultiple` |
+| `checkbox` | Single boolean toggle | `defaultValue` |
+| `radio` | Radio button group | `options` |
+| `file` | File upload | `accept`, `multiple`, `maxFileSize` |
+| `date` | Date picker | `min`, `max` |
+| `time` | Time picker | `defaultValue` (HH:mm format) |
+| `hidden` | Hidden value (not shown to users) | `defaultValue` |
+
+Every field supports these common properties: `name`, `label`, `placeholder`, `helpText`, `defaultValue`, `required`, `validation`, `conditionalLogic`, and `admin.width` (25% to 100%).
+
+## Creating Forms
+
+### Visual Builder (Admin UI)
+
+Navigate to **Forms** in the admin sidebar and click **Create New**. The visual builder provides:
+
+- **Field Library** -- click or drag field types to add them to the form
+- **Form Canvas** -- reorder fields with drag-and-drop, click to edit
+- **Field Editor** -- configure each field's label, validation, placeholder, help text, and conditional logic
+- **Settings Tab** -- submit button text, confirmation type (message or redirect), multiple submission settings
+- **Notifications Tab** -- configure email integrations per form
+- **Preview** -- see how the form will look to end users
+
+Forms have three statuses:
+- **Draft** -- not accepting submissions (use for building)
+- **Published** -- live and accepting submissions
+- **Closed** -- shows a configurable closed message
+
+### Code-First Definitions
+
+Use the field helper functions to define forms programmatically. These helpers set the `type` property automatically.
+
+```typescript
+import {
+  text,
+  email,
+  textarea,
+  select,
+  checkbox,
+  option,
+} from '@nextlyhq/plugin-form-builder';
+
+const contactFields = [
+  text({ name: 'firstName', label: 'First Name', required: true }),
+  text({ name: 'lastName', label: 'Last Name', required: true }),
+  email({ name: 'email', label: 'Email Address', required: true }),
+  select({
+    name: 'subject',
+    label: 'Subject',
+    required: true,
+    options: [
+      option('General Inquiry'),
+      option('Support Request'),
+      option('Feedback'),
+    ],
+  }),
+  textarea({
+    name: 'message',
+    label: 'Message',
+    required: true,
+    rows: 5,
+    validation: { minLength: 10, maxLength: 2000 },
+  }),
+  checkbox({ name: 'subscribe', label: 'Subscribe to our newsletter' }),
+];
+```
+
+The `option()` helper converts labels to slug values automatically (`'General Inquiry'` becomes `'general_inquiry'`). Pass a second argument for an explicit value: `option('United States', 'us')`.
+
+Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`.
+
+### Utility Functions
+
+Create a complete form config with defaults applied in one call:
+
+```typescript
+import { createFormConfig } from '@nextlyhq/plugin-form-builder';
+
+const contactForm = createFormConfig('contact', contactFields, {
+  settings: {
+    submitButtonText: 'Send Message',
+    confirmationType: 'message',
+    successMessage: 'Thanks! We will get back to you within 24 hours.',
+  },
+});
+```
+
+Validate a form config before saving:
+
+```typescript
+import { validateFormConfig, assertValidFormConfig } from '@nextlyhq/plugin-form-builder';
+
+const result = validateFormConfig(myFormConfig);
+if (!result.valid) {
+  console.error(result.errors);
+}
+
+// Or throw on invalid config
+assertValidFormConfig(myFormConfig);
+```
+
+## Form Submissions
+
+### Handling Submissions
+
+Use the `submitForm` handler to process submissions server-side. It runs the full pipeline: fetch form, validate data, check spam, store submission, and determine redirect.
+
+```typescript
+import { submitForm } from '@nextlyhq/plugin-form-builder';
+
+const result = await submitForm(
+  {
+    formSlug: 'contact',
+    data: { firstName: 'Jane', email: 'jane@example.com', message: 'Hello!' },
+    metadata: { ipAddress: req.ip, userAgent: req.headers['user-agent'] },
+  },
+  { pluginContext, pluginConfig }
+);
+
+if (result.success) {
+  if (result.redirect) {
+    // Redirect the user
+  }
+  // result.submission contains the stored document
+} else {
+  // result.error and result.validationErrors describe what went wrong
+}
+```
+
+### Validation
+
+The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage. Free-text fields are also sanitized by stripping HTML tags to prevent injection.
+
+You can validate data without creating a submission:
+
+```typescript
+import { validateSubmission } from '@nextlyhq/plugin-form-builder';
+
+const { valid, errors } = await validateSubmission(
+  'contact',
+  { firstName: 'Jane', email: 'not-an-email' },
+  { pluginContext, pluginConfig }
+);
+```
+
+### Submission Status
+
+Each submission tracks its review state:
+
+| Status | Description |
+|--------|-------------|
+| `new` | Unread submission |
+| `read` | Reviewed by an admin |
+| `archived` | Archived (hidden from default views) |
+
+Admins can also add internal notes to any submission -- these are not visible to the original submitter.
+
+### Statistics
+
+```typescript
+import { getFormSubmissionStats } from '@nextlyhq/plugin-form-builder';
+
+const stats = await getFormSubmissionStats('contact', { pluginContext, pluginConfig });
+// { total: 42, new: 5, read: 30, archived: 7 }
+```
+
+## Email Notifications
+
+Notifications are configured per form in the admin UI under the **Notifications** tab. Each notification integration specifies:
+
+| Setting | Description |
+|---------|-------------|
+| `templateSlug` | Email template to use (from your [email configuration](/docs/guides/email)) |
+| `recipientType` | `"static"` (fixed email) or `"field"` (value from a form field) |
+| `to` | Email address, or `{{fieldName}}` reference when using field recipient |
+| `providerId` | Email provider to use (optional, falls back to system default) |
+| `cc` / `bcc` | Additional recipients |
+
+Template variables available in your email templates: all submitted field values, plus `formName` and `submissionId`.
+
+### beforeEmail Hook
+
+Modify or filter outgoing emails before they are sent:
+
+```typescript
+const fb = formBuilder({
+  beforeEmail: async ({ emails, form, submission }) => {
+    return emails.map(email => ({
+      ...email,
+      bcc: ['archive@example.com'],
+    }));
+  },
+});
+```
+
+## Spam Protection
+
+Three layers of protection are available, all enabled by default (except reCAPTCHA).
+
+### Honeypot Fields
+
+Hidden form fields that bots fill in automatically. When a honeypot field contains a value, the submission is silently rejected -- the bot receives a fake success response to avoid revealing the detection.
+
+Standard honeypot field names checked: `__honeypot`, `_honeypot`, `honeypot`, `__hp`, `_hp`, `website`, `url_field`, `fax_number`.
+
+### Rate Limiting
+
+Limits submissions per IP address and form within a time window. Defaults to 10 submissions per 60 seconds per IP.
+
+```typescript
+spamProtection: {
+  rateLimit: {
+    maxSubmissions: 5,
+    windowMs: 120_000, // 2 minutes
+  },
+}
+```
+
+The rate limit store is in-memory. For multi-instance deployments, consider using a shared store (Redis) or adjusting thresholds.
+
+### reCAPTCHA v3
+
+Configuration is available for Google reCAPTCHA v3. Set the site key and secret key globally or per form.
+
+```typescript
+spamProtection: {
+  recaptcha: {
+    enabled: true,
+    siteKey: 'your-site-key',
+    secretKey: 'your-secret-key',
+    scoreThreshold: 0.5,
+  },
+}
+```
+
+## Conditional Logic
+
+Fields can be shown or hidden based on the values of other fields. Configure conditional logic on any field through the admin UI or in code.
+
+```typescript
+import { text, select, option } from '@nextlyhq/plugin-form-builder';
+
+const fields = [
+  select({
+    name: 'contactMethod',
+    label: 'Preferred Contact Method',
+    options: [option('Email'), option('Phone')],
+  }),
+  text({
+    name: 'phoneNumber',
+    label: 'Phone Number',
+    conditionalLogic: {
+      enabled: true,
+      action: 'show',
+      operator: 'AND',
+      conditions: [
+        { field: 'contactMethod', comparison: 'equals', value: 'phone' },
+      ],
+    },
+  }),
+];
+```
+
+Supported comparison operators: `equals`, `notEquals`, `contains`, `isEmpty`, `isNotEmpty`, `greaterThan`, `lessThan`.
+
+Multiple conditions can be combined with `AND` (all must match) or `OR` (any must match). The `action` property determines whether matching conditions **show** or **hide** the field.
+
+## Webhooks
+
+Forms support webhook integrations that fire on submission events. Webhooks are asynchronous -- they do not block the submission response. Failed webhooks are logged but do not cause submission failures.
+
+```typescript
+// In a form's notification config
+webhooks: [
+  {
+    url: 'https://api.example.com/webhooks/form-submissions',
+    events: ['submission.created'],
+    secret: 'your-webhook-secret',
+    includeData: true,
+  },
+  {
+    url: 'https://crm.example.com/api/leads',
+    events: ['submission.created', 'submission.updated'],
+    headers: { 'X-API-Key': 'abc123' },
+    method: 'POST',
+  },
+]
+```
+
+Supported events: `submission.created`, `submission.updated`, `submission.deleted`.
+
+When a `secret` is configured, the request includes an `X-Webhook-Signature` header with an HMAC-SHA256 signature (`sha256=<hex>`). Verify it on the receiving end:
+
+```typescript
+const crypto = require('crypto');
+
+const signature = 'sha256=' + crypto
+  .createHmac('sha256', secret)
+  .update(JSON.stringify(req.body))
+  .digest('hex');
+
+const isValid = crypto.timingSafeEqual(
+  Buffer.from(req.headers['x-webhook-signature']),
+  Buffer.from(signature)
+);
+```
+
+## Exporting Submissions
+
+Export submissions to CSV or JSON from code or the admin UI.
+
+### CSV Export
+
+```typescript
+import { exportToCSV, downloadFile, generateExportFilename } from '@nextlyhq/plugin-form-builder';
+
+const csv = exportToCSV(submissions, form, {
+  includeMetadata: true,
+  delimiter: ',',
+  includeBOM: true,       // Excel compatibility
+  dateFormat: 'iso',
+});
+
+// Browser download
+const filename = generateExportFilename('contact', 'csv');
+// "contact-submissions-2026-03-20.csv"
+downloadFile(csv, filename, 'text/csv;charset=utf-8');
+```
+
+### JSON Export
+
+```typescript
+import { exportToJSON } from '@nextlyhq/plugin-form-builder';
+
+const json = exportToJSON(submissions, form, {
+  includeMetadata: true,
+  includeFormDefinition: true,
+  indent: 2,
+});
+```
+
+### One-Step Export
+
+```typescript
+import { exportAndDownload } from '@nextlyhq/plugin-form-builder';
+
+// In a React component
+const handleExport = (format: 'csv' | 'json') => {
+  exportAndDownload(submissions, form, format);
+};
+```
+
+## Example: Contact Form
+
+A complete contact form setup from config to submission handling.
+
+**1. Configure the plugin:**
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from '@nextlyhq/nextly';
+import { formBuilder } from '@nextlyhq/plugin-form-builder';
+
+const fb = formBuilder({
+  notifications: {
+    defaultFrom: 'noreply@mysite.com',
+  },
+  spamProtection: {
+    honeypot: true,
+    rateLimit: { maxSubmissions: 5, windowMs: 60_000 },
+  },
+});
+
+export default defineConfig({
+  plugins: [fb.plugin],
+  collections: [Posts, Users, Media],
+});
+```
+
+**2. Define the form fields (code-first):**
+
+```typescript
+import {
+  text, email, textarea, select, checkbox, option, hidden,
+  createFormConfig,
+} from '@nextlyhq/plugin-form-builder';
+
+const contactForm = createFormConfig('contact', [
+  text({ name: 'name', label: 'Full Name', required: true }),
+  email({ name: 'email', label: 'Email', required: true }),
+  select({
+    name: 'subject',
+    label: 'Subject',
+    required: true,
+    options: [
+      option('General Inquiry'),
+      option('Support'),
+      option('Partnership'),
+    ],
+  }),
+  textarea({
+    name: 'message',
+    label: 'Message',
+    required: true,
+    rows: 5,
+    validation: { maxLength: 5000 },
+  }),
+  checkbox({ name: 'newsletter', label: 'Subscribe to updates' }),
+  hidden({ name: 'source', label: 'Source', defaultValue: 'website' }),
+]);
+```
+
+**3. Handle submissions in an API route:**
+
+```typescript
+import { submitForm } from '@nextlyhq/plugin-form-builder';
+
+export async function POST(request: Request) {
+  const data = await request.json();
+
+  const result = await submitForm(
+    {
+      formSlug: 'contact',
+      data,
+      metadata: {
+        ipAddress: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+      },
+    },
+    { pluginContext, pluginConfig }
+  );
+
+  return Response.json(result);
+}
+```
+
+## Next Steps
+
+- [Plugins Overview](/docs/plugins) -- how the plugin system works and how to create custom plugins
+- [Email Configuration](/docs/guides/email) -- set up email providers and templates for form notifications
+- [Collections](/docs/configuration/collections) -- understand how plugin collections work alongside your own

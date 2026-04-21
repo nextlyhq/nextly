@@ -101,3 +101,7 @@ e2e/auth-e2e/test-results/
 
 # Template testing scaffolds (created during E2E testing, never committed)
 templates-testing/
+
+# Internal-only docs (manual tests, legacy notes, superpowers artifacts).
+# Kept in the working tree for local reference but never published.
+.internal-docs/

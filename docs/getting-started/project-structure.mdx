@@ -1,0 +1,160 @@
+---
+title: Project Structure
+description: Understand how a Nextly project is organized, where key files live, and what each directory does.
+---
+
+A Nextly project follows the standard Next.js App Router structure with a few additions: a `nextly.config.ts` at the root, admin routes under `src/app/admin/`, and API routes for the backend. This page explains where everything lives and what each part does.
+
+## Directory Overview
+
+Here is the typical structure of a Nextly project:
+
+```
+my-nextly-app/
+├── src/
+│   ├── app/
+│   │   ├── admin/
+│   │   │   ├── [[...params]]/
+│   │   │   │   ├── page.tsx          # Admin panel UI (client component)
+│   │   │   │   └── layout.tsx        # Admin layout with branding CSS
+│   │   │   └── api/
+│   │   │       └── [[...params]]/
+│   │   │           └── route.ts      # Admin API catch-all handler
+│   │   ├── api/
+│   │   │   ├── health/
+│   │   │   │   └── route.ts          # Health check endpoint
+│   │   │   └── media/
+│   │   │       └── [[...path]]/
+│   │   │           └── route.ts      # Media upload/management API
+│   │   ├── layout.tsx                # Root layout
+│   │   ├── page.tsx                  # Home page
+│   │   └── globals.css               # Global styles
+│   ├── db/
+│   │   ├── schemas/
+│   │   │   └── dynamic/              # Auto-generated schemas for Builder collections
+│   │   └── migrations/               # Database migration files
+│   ├── types/
+│   │   └── nextly-types.ts           # Auto-generated TypeScript types
+│   └── hooks/
+│       └── example-hooks.ts          # Database lifecycle hooks
+├── nextly.config.ts                  # Nextly configuration (collections, singles, plugins)
+├── next.config.ts                    # Next.js configuration
+├── .env                              # Environment variables
+├── package.json
+└── tsconfig.json
+```
+
+## Key Files
+
+### `nextly.config.ts`
+
+The central configuration file. This is where you define code-first collections, singles, plugins, storage adapters, email configuration, and admin branding. It lives at the project root.
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from "@nextlyhq/nextly/config";
+
+export default defineConfig({
+  collections: [/* your collections */],
+  singles: [/* your singles */],
+  plugins: [/* your plugins */],
+
+  storage: [/* storage adapters */],
+  email: { /* email provider config */ },
+
+  admin: {
+    branding: {
+      logoText: "My App",
+      colors: { primary: "#387c26" },
+    },
+  },
+
+  typescript: {
+    outputFile: "./src/types/nextly-types.ts",
+  },
+
+  db: {
+    schemasDir: "./src/db/schemas/collections",
+    migrationsDir: "./src/db/migrations",
+  },
+});
+```
+
+See [Configuration](/docs/configuration) for the full reference.
+
+### `next.config.ts`
+
+Standard Next.js configuration. The main Nextly-specific addition is `serverExternalPackages`, which prevents Next.js from bundling server-only dependencies like database drivers:
+
+```typescript title="next.config.ts"
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  serverExternalPackages: [
+    "@nextlyhq/nextly",
+    "@nextlyhq/adapter-drizzle",
+    "pg",
+    "better-sqlite3",
+    "bcryptjs",
+    "sharp",
+    "esbuild",
+  ],
+};
+
+export default nextConfig;
+```
+
+### `.env`
+
+Environment variables for database connection, authentication, and storage. See [Environment Variables](/docs/configuration/environment) for the full list.
+
+The essential variables are:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Database connection string |
+| `DB_DIALECT` | Database type (`postgresql`, `mysql`, `sqlite`) |
+| `AUTH_SECRET` | Secret for JWT/session encryption (min 32 chars) |
+| `NEXTAUTH_URL` | Public URL of your app |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob token (if using Vercel storage) |
+
+## Key Directories
+
+### `src/app/admin/`
+
+The admin panel lives here as a standard Next.js route. The catch-all `[[...params]]` pattern lets Nextly handle all admin panel routing internally.
+
+- **`page.tsx`** -- Renders the admin panel UI. This is a client component that imports `RootLayout` from `@nextlyhq/admin`.
+- **`layout.tsx`** -- Injects branding CSS (custom colors, logos) from your `nextly.config.ts`.
+- **`api/[[...params]]/route.ts`** -- The API backend for the admin panel. Handles all CRUD operations for collections, singles, users, roles, and permissions.
+
+### `src/app/api/media/`
+
+Media upload and management routes. The catch-all pattern handles file uploads, listing, updating metadata, and folder management. This route reads storage configuration from `nextly.config.ts`.
+
+### `src/db/schemas/dynamic/`
+
+When you create collections using the Schema Builder (visual approach), Nextly generates Drizzle schema files in this directory. These schemas are registered at startup so the admin API can query them. Code-first collections do not use this directory -- their schemas are generated from `nextly.config.ts` during migrations.
+
+### `src/types/`
+
+Auto-generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. Run `npx @nextlyhq/nextly generate:types` to regenerate.
+
+### `src/hooks/`
+
+Database lifecycle hooks let you run custom logic before or after CRUD operations. For example, you can auto-generate slugs, send notifications, or validate data. See [Hooks](/docs/configuration) for details.
+
+## Code-First vs Builder: Where Content Is Defined
+
+| Approach | Where collections are defined | Schema location |
+| --- | --- | --- |
+| **Code-First** | `nextly.config.ts` | Generated during `npx @nextlyhq/nextly migrate` |
+| **Builder (Visual)** | Admin panel at `/admin` | `src/db/schemas/dynamic/` (auto-generated) |
+
+Both approaches produce the same result: database tables, admin UI, and API endpoints. You can mix them -- define some collections in config and create others through the Schema Builder.
+
+## Next Steps
+
+- [Configuration](/docs/configuration) -- Full `nextly.config.ts` reference
+- [Fields](/docs/configuration/fields) -- All available field types
+- [Admin Panel](/docs/admin) -- Overview of the admin panel features
+- [Environment Variables](/docs/configuration/environment) -- All environment variables explained

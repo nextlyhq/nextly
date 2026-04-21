@@ -1,0 +1,206 @@
+---
+title: Components
+description: Define reusable field groups that can be shared across Collections and Singles.
+---
+
+Components are reusable field group templates. Define a set of fields once as a Component, then embed it in any number of Collections or Singles. Each usage creates a separate data instance -- Components are schemas, not shared documents.
+
+Key characteristics:
+
+- **Templates, not documents** -- Components define a field structure. Each embed creates its own data.
+- **Own database table** -- Each Component type gets a table with a `comp_` prefix (e.g., `comp_seo`).
+- **Support nesting** -- Component fields can reference other Components (max depth: 3 levels).
+- **Dual creation** -- Define in code with `defineComponent()` or visually in the Admin Schema Builder.
+
+<Tabs items={["Code-First", "Builder (Visual)"]}>
+<Tab value="Code-First">
+
+Use `defineComponent()` from `@nextlyhq/nextly/config` to create Components in TypeScript. This is the recommended approach for version-controlled projects.
+
+```typescript title="components/seo.ts"
+import {
+  defineComponent,
+  text,
+  textarea,
+  upload,
+} from '@nextlyhq/nextly/config';
+
+export default defineComponent({
+  slug: 'seo',
+  label: { singular: 'SEO Metadata' },
+  admin: {
+    category: 'Shared',
+    icon: 'Search',
+    description: 'Search engine optimization metadata',
+  },
+  fields: [
+    text({ name: 'metaTitle', required: true, label: 'Meta Title' }),
+    textarea({
+      name: 'metaDescription',
+      label: 'Meta Description',
+      maxLength: 160,
+    }),
+    upload({ name: 'ogImage', relationTo: 'media', label: 'OG Image' }),
+    text({ name: 'canonicalUrl', label: 'Canonical URL' }),
+  ],
+});
+```
+
+### Component Config Options
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `slug` | `string` | Yes | Unique identifier. Used as DB table prefix (`comp_{slug}`). Must be URL-friendly. |
+| `fields` | `FieldConfig[]` | Yes | Array of [field definitions](/docs/configuration/fields). |
+| `label` | `{ singular: string }` | No | Display name in the Admin UI. Auto-generated from slug if omitted. |
+| `admin.category` | `string` | No | Group Components in the sidebar (e.g., `'Shared'`, `'Blocks'`). |
+| `admin.icon` | `string` | No | Lucide icon name shown in sidebar and selector. |
+| `admin.description` | `string` | No | Help text in the component selector modal. |
+| `admin.hidden` | `boolean` | No | Hide from Admin UI navigation. Still usable in code. |
+| `admin.imageURL` | `string` | No | Preview image URL in the component selector. |
+| `dbName` | `string` | No | Custom database table name (overrides `comp_{slug}`). |
+| `description` | `string` | No | General description. Falls back to `admin.description`. |
+| `custom` | `Record<string, unknown>` | No | Arbitrary metadata for plugins or custom code. |
+
+</Tab>
+<Tab value="Builder (Visual)">
+
+You can also create Components visually in the Admin UI:
+
+1. Navigate to **Components** in the sidebar.
+2. Click **Create Component**.
+3. Name it and add fields using the drag-and-drop Schema Builder.
+4. Save -- the Component is immediately available for use.
+
+Builder-created Components work identically to code-defined ones. Both produce the same database schema and API behavior.
+
+</Tab>
+</Tabs>
+
+## Using Components in Collections and Singles
+
+Once defined, embed a Component in any Collection or Single using the `component` field helper.
+
+### Single Component (Fixed Type)
+
+Embed exactly one instance of a specific Component type:
+
+```typescript title="collections/pages.ts"
+import { defineCollection, component, text, richText } from '@nextlyhq/nextly/config';
+
+export default defineCollection({
+  slug: 'pages',
+  fields: [
+    text({ name: 'title', required: true }),
+    richText({ name: 'content' }),
+    component({ name: 'seo', component: 'seo' }),
+  ],
+});
+```
+
+### Dynamic Zone (Multiple Component Types)
+
+Let editors choose from several Component types -- ideal for flexible page builders:
+
+```typescript title="collections/pages.ts"
+import { defineCollection, component, text } from '@nextlyhq/nextly/config';
+
+export default defineCollection({
+  slug: 'pages',
+  fields: [
+    text({ name: 'title', required: true }),
+    component({
+      name: 'layout',
+      components: ['hero', 'cta', 'content-block', 'image-gallery'],
+      repeatable: true,
+    }),
+  ],
+});
+```
+
+### Repeatable Single Component
+
+An array of the same Component type, like a list of feature cards:
+
+```typescript title="collections/landing-pages.ts"
+import { defineCollection, component, text } from '@nextlyhq/nextly/config';
+
+export default defineCollection({
+  slug: 'landing-pages',
+  fields: [
+    text({ name: 'title', required: true }),
+    component({
+      name: 'features',
+      component: 'feature-card',
+      repeatable: true,
+      minRows: 1,
+      maxRows: 12,
+    }),
+  ],
+});
+```
+
+## Example: Hero Section Component
+
+A more detailed Component with multiple field types:
+
+```typescript title="components/hero.ts"
+import {
+  defineComponent,
+  text,
+  upload,
+  select,
+  option,
+} from '@nextlyhq/nextly/config';
+
+export default defineComponent({
+  slug: 'hero',
+  label: { singular: 'Hero Section' },
+  admin: {
+    category: 'Blocks',
+    icon: 'Image',
+    description: 'Full-width hero banner with heading and CTA',
+  },
+  fields: [
+    text({ name: 'heading', required: true, label: 'Heading' }),
+    text({ name: 'subheading', label: 'Subheading' }),
+    upload({
+      name: 'backgroundImage',
+      relationTo: 'media',
+      label: 'Background Image',
+    }),
+    text({ name: 'ctaText', label: 'CTA Button Text' }),
+    text({ name: 'ctaLink', label: 'CTA Button Link' }),
+    select({
+      name: 'alignment',
+      label: 'Content Alignment',
+      options: [option('Left'), option('Center'), option('Right')],
+      defaultValue: 'center',
+    }),
+  ],
+});
+```
+
+## Component Nesting
+
+Components can embed other Components using the `component` field type, up to 3 levels deep:
+
+```typescript title="components/faq-item.ts"
+import { defineComponent, text, component } from '@nextlyhq/nextly/config';
+
+export default defineComponent({
+  slug: 'faq-item',
+  label: { singular: 'FAQ Item' },
+  fields: [
+    text({ name: 'question', required: true }),
+    text({ name: 'answer', required: true }),
+    component({ name: 'cta', component: 'cta' }),
+  ],
+});
+```
+
+## Next Steps
+
+- [Fields](/docs/configuration/fields) -- all field types available inside Components
+- [Collections](/docs/configuration/collections) -- where Components are most commonly used
+- [Singles](/docs/configuration/singles) -- use Components in single-document content

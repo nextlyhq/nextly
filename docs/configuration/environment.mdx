@@ -1,0 +1,191 @@
+---
+title: Environment Variables
+description: All environment variables used by Nextly, organized by category with required vs optional indicators.
+---
+
+Nextly uses environment variables for database connections, authentication, storage, and other runtime settings. Copy `.env.example` to `.env` and configure the values for your environment.
+
+```bash
+cp .env.example .env
+```
+
+## Database (Required)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DB_DIALECT` | Yes | `postgresql` | Database dialect: `postgresql`, `mysql`, or `sqlite`. |
+| `DATABASE_URL` | Yes | -- | Full database connection string. |
+| `DB_POOL_MAX` | No | `20` | Maximum connections in the pool. |
+| `DB_POOL_MIN` | No | `2` | Minimum connections in the pool. |
+| `DB_CONNECTION_TIMEOUT` | No | `30000` | Connection timeout in milliseconds. |
+| `DB_QUERY_TIMEOUT` | No | `15000` | Query timeout in milliseconds. |
+| `DB_HEALTHCHECK_INTERVAL_MS` | No | `30000` | Health check interval in milliseconds. |
+| `DB_SNAKE_CASE` | No | `false` | Use `snake_case` for database column names instead of `camelCase`. |
+| `DB_LOG_ENABLED` | No | `false` | Enable database query logging. |
+| `DB_LOG_LEVEL` | No | -- | Log level for database queries (e.g., `debug`). |
+
+Connection string formats:
+
+```bash
+# PostgreSQL (recommended for production)
+DATABASE_URL=postgresql://user:password@localhost:5432/nextly_dev
+
+# MySQL
+DATABASE_URL=mysql://root:root@localhost:3306/nextly_dev
+
+# SQLite (development only)
+DATABASE_URL=file:./dev.db
+```
+
+## Authentication (Required)
+
+Nextly uses a custom JWT auth system with access/refresh tokens. These variables are required for auth to function.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NEXTLY_SECRET` | Yes | -- | Secret key for signing JWT tokens. Minimum 32 characters in production. Generate with `openssl rand -base64 32`. |
+| `NEXTLY_ALLOWED_ORIGINS` | No | -- | Comma-separated list of additional origins allowed for CSRF validation (e.g., `https://admin.example.com,https://staging.example.com`). The app's own origin is always allowed. |
+
+### OAuth Providers (Optional)
+
+Configure these only if you use social login.
+
+| Variable | Description |
+|----------|-------------|
+| `AUTH_GOOGLE_ID` | Google OAuth client ID. |
+| `AUTH_GOOGLE_SECRET` | Google OAuth client secret. |
+| `AUTH_GITHUB_ID` | GitHub OAuth client ID. |
+| `AUTH_GITHUB_SECRET` | GitHub OAuth client secret. |
+
+## Application URLs
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NEXT_PUBLIC_APP_URL` | No | `http://localhost:3000` | Public-facing app URL. Used in client-side code. |
+| `API_BASE_URL` | No | `http://localhost:3000/api` | Base URL for API routes. |
+
+## Storage (Required)
+
+Nextly requires a cloud storage adapter for media uploads. Choose one backend.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `STORAGE_ADAPTER` | Yes | `vercel` | Storage backend: `vercel` or `s3`. |
+
+### Vercel Blob
+
+Recommended for Vercel deployments.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BLOB_READ_WRITE_TOKEN` | Yes (if `vercel`) | Vercel Blob storage token from your Vercel dashboard. |
+
+### S3 / S3-Compatible
+
+Works with AWS S3, Cloudflare R2, MinIO, and DigitalOcean Spaces.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `S3_BUCKET` | Yes (if `s3`) | S3 bucket name. |
+| `S3_REGION` | Yes (if `s3`) | AWS region (e.g., `us-east-1`). Use `auto` for R2. |
+| `AWS_ACCESS_KEY_ID` | Yes (if `s3`) | Access key ID. |
+| `AWS_SECRET_ACCESS_KEY` | Yes (if `s3`) | Secret access key. |
+| `S3_ENDPOINT` | No | Custom endpoint URL. Required for R2 and MinIO. |
+| `S3_PUBLIC_URL` | No | Public URL prefix for R2 (e.g., `https://pub-xxxx.r2.dev`). |
+| `S3_FORCE_PATH_STYLE` | No | Set `true` for MinIO. |
+
+## Email / SMTP (Optional)
+
+Required only for sending emails (password resets, notifications). If any SMTP variable is set in production, all must be configured.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SMTP_HOST` | No | -- | SMTP server hostname (e.g., `smtp.gmail.com`). |
+| `SMTP_PORT` | No | `587` | SMTP port. 587 for TLS, 465 for SSL. |
+| `SMTP_USER` | No | -- | SMTP authentication username. |
+| `SMTP_PASS` | No | -- | SMTP authentication password. |
+| `SMTP_FROM` | No | -- | From address for outgoing emails. |
+
+## Permission Caching (Optional)
+
+Nextly includes a hybrid permission cache (in-memory + database) that reduces permission check queries by approximately 60%.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PERMISSION_CACHE_ENABLED` | No | `true` | Enable hybrid permission caching. |
+| `PERMISSION_CACHE_TTL_SECONDS` | No | `86400` | Time-to-live for database cache entries (seconds). |
+| `PERMISSION_CACHE_MEMORY_SIZE` | No | `10000` | In-memory LRU cache size (number of entries). |
+| `DEBUG_CACHE` | No | -- | Set `1` to enable cache debugging logs. |
+
+The database permission cache requires periodic cleanup. Set up a daily cron job:
+
+```bash
+0 2 * * * curl -X POST http://localhost:3000/api/auth/cache/cleanup
+```
+
+## Debug and Feature Flags (Optional)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NODE_ENV` | No | `development` | Runtime environment: `development`, `production`, or `test`. |
+| `DEBUG_RBAC` | No | -- | Set `1` to enable detailed RBAC permission logs. |
+
+## Docker Development (Optional)
+
+Used by `docker-compose.yml` for local database setup. Not needed when connecting to an existing database.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_NAME` | `nextly_dev` | PostgreSQL database name. |
+| `DB_USER` | `postgres` | PostgreSQL user. |
+| `DB_PASSWORD` | -- | PostgreSQL password. Change in production. |
+| `DB_PORT` | `5432` | PostgreSQL port. |
+| `ADMINER_PORT` | `8080` | Adminer UI port (database browser). |
+| `REDIS_PORT` | `6379` | Redis cache port. |
+| `DRIZZLE_STUDIO_PORT` | `4983` | Drizzle Studio port for database GUI. |
+
+## Example .env
+
+A minimal production `.env` file:
+
+```bash
+# Database
+DB_DIALECT=postgresql
+DATABASE_URL=postgresql://user:password@db.example.com:5432/nextly_prod
+
+# Auth
+NEXTLY_SECRET=your-generated-secret-at-least-32-characters-long
+NEXT_PUBLIC_APP_URL=https://your-domain.com
+
+# Storage (Vercel Blob)
+STORAGE_ADAPTER=vercel
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxxxxxxx
+```
+
+A development `.env` file with S3-compatible storage (MinIO):
+
+```bash
+# Database
+DB_DIALECT=postgresql
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/nextly_dev
+
+# Auth
+NEXTLY_SECRET=dev-secret-minimum-32-characters-long-replace-in-production
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Storage (MinIO)
+STORAGE_ADAPTER=s3
+S3_BUCKET=nextly-dev
+S3_REGION=us-east-1
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT=http://localhost:9000
+S3_FORCE_PATH_STYLE=true
+```
+
+## Next Steps
+
+- [Nextly Config](/docs/configuration/nextly-config) -- the central `nextly.config.ts` file
+- [Database](/docs/database) -- choose and configure PostgreSQL, MySQL, or SQLite
+- [Deployment](/docs/guides/deployment) -- production environment variable checklist
+- [Authentication](/docs/guides/authentication) -- auth-related environment variables in depth

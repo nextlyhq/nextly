@@ -1,0 +1,387 @@
+---
+title: Nextly Config Reference
+description: Complete reference for every option in the nextly.config.ts configuration file.
+---
+
+The `nextly.config.ts` file is the central configuration for your Nextly application. The `defineConfig()` function validates your config, checks for duplicate slugs, and applies sensible defaults.
+
+## Full Example
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from '@nextlyhq/nextly';
+import { s3Storage } from '@nextlyhq/storage-s3';
+import Posts from './src/collections/posts';
+import Media from './src/collections/media';
+import SiteSettings from './src/singles/site-settings';
+import Header from './src/singles/header';
+import Footer from './src/singles/footer';
+import { Seo, Hero } from './src/components';
+
+export default defineConfig({
+  // Content model
+  collections: [Posts, Media],
+  singles: [SiteSettings, Header, Footer],
+  components: [Seo, Hero],
+
+  // User model extensions
+  users: {
+    fields: [
+      text({ name: 'company', label: 'Company' }),
+      select({ name: 'department', options: [/* ... */] }),
+    ],
+  },
+
+  // Output paths
+  typescript: {
+    outputFile: './src/types/generated/payload-types.ts',
+    declare: true,
+  },
+  db: {
+    schemasDir: './src/db/schemas/collections',
+    migrationsDir: './src/db/migrations',
+  },
+
+  // Cloud storage
+  storage: [
+    s3Storage({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.AWS_REGION!,
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      collections: {
+        media: true,
+      },
+    }),
+  ],
+
+  // Security
+  security: {
+    cors: {
+      origin: ['https://example.com'],
+      credentials: true,
+    },
+    sanitization: { enabled: true },
+  },
+
+  // Rate limiting
+  rateLimit: {
+    enabled: true,
+    readLimit: 100,
+    writeLimit: 30,
+    windowMs: 60000,
+  },
+
+  // Email
+  email: {
+    providerConfig: {
+      provider: 'resend',
+      apiKey: process.env.RESEND_API_KEY!,
+    },
+    from: 'My App <noreply@example.com>',
+    baseUrl: 'https://example.com',
+  },
+
+  // Admin panel
+  admin: {
+    branding: {
+      logoUrl: '/logo.svg',
+      logoText: 'My App',
+      favicon: '/favicon.ico',
+      colors: {
+        primary: '#6366f1',
+        accent: '#f59e0b',
+      },
+    },
+  },
+});
+```
+
+## Config Options Reference
+
+### `collections`
+
+| | |
+|---|---|
+| **Type** | `CollectionConfig[]` |
+| **Default** | `[]` |
+
+Array of collection configurations. Each collection should be defined with `defineCollection()` and imported from its own file. See [Collections](/docs/configuration/collections).
+
+### `singles`
+
+| | |
+|---|---|
+| **Type** | `SingleConfig[]` |
+| **Default** | `[]` |
+
+Array of single configurations for one-off documents like site settings, headers, and footers. Each single should be defined with `defineSingle()`. See [Singles](/docs/configuration/singles).
+
+### `components`
+
+| | |
+|---|---|
+| **Type** | `ComponentConfig[]` |
+| **Default** | `[]` |
+
+Array of reusable component configurations that can be embedded in collections and singles via the `component` field type. Component slugs must be unique across components, collections, and singles. See [Components](/docs/configuration/components).
+
+### `users`
+
+| | |
+|---|---|
+| **Type** | `UserConfig` |
+| **Default** | `undefined` |
+
+Extend the built-in user model with custom fields. Custom fields are stored in a separate `user_ext` table.
+
+```typescript
+users: {
+  fields: [
+    text({ name: 'phoneNumber', label: 'Phone Number' }),
+    text({ name: 'company', label: 'Company' }),
+    select({ name: 'department', options: [/* ... */] }),
+  ],
+  admin: {
+    listFields: ['company', 'department'],
+  },
+}
+```
+
+### `typescript`
+
+| | |
+|---|---|
+| **Type** | `TypeScriptConfig` |
+
+Controls TypeScript type generation for your collections.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `outputFile` | `string` | `'./src/types/generated/payload-types.ts'` | Path to the generated TypeScript file |
+| `declare` | `boolean` | `true` | Whether to add `declare module` blocks for type inference |
+
+### `db`
+
+| | |
+|---|---|
+| **Type** | `DatabaseConfig` |
+
+Controls where Drizzle schema files and migration files are generated.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `schemasDir` | `string` | `'./src/db/schemas/collections'` | Directory for generated Drizzle schema files |
+| `migrationsDir` | `string` | `'./src/db/migrations'` | Directory for generated migration files |
+
+### `storage`
+
+| | |
+|---|---|
+| **Type** | `StoragePlugin[]` |
+| **Default** | `[]` |
+
+Storage plugins for cloud storage providers. Local filesystem storage is used by default for collections without a configured plugin.
+
+Available adapters:
+- `@nextlyhq/storage-s3` -- AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces
+- `@nextlyhq/storage-vercel-blob` -- Vercel Blob Storage
+
+```typescript
+import { s3Storage } from '@nextlyhq/storage-s3';
+
+storage: [
+  s3Storage({
+    bucket: process.env.S3_BUCKET!,
+    region: process.env.AWS_REGION!,
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+    collections: {
+      media: true,
+      'private-docs': {
+        prefix: 'private/',
+        signedDownloads: true,
+        clientUploads: true,
+      },
+    },
+  }),
+]
+```
+
+### `security`
+
+| | |
+|---|---|
+| **Type** | `SecurityConfig` |
+| **Default** | Secure defaults applied by middleware |
+
+Controls security headers, CORS, file upload restrictions, and input sanitization.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `headers` | `SecurityHeadersConfig` | CSP, X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy |
+| `cors` | `CorsConfig` | Cross-Origin Resource Sharing. Default: same-origin only |
+| `uploads` | `UploadSecurityConfigInput` | MIME type allowlist and SVG serving behavior |
+| `sanitization` | `SanitizationConfigInput` | HTML tag stripping, CSS validation, URL protocol validation |
+
+```typescript
+security: {
+  cors: {
+    origin: ['https://example.com', 'https://app.example.com'],
+    credentials: true,
+  },
+  headers: {
+    contentSecurityPolicy: "default-src 'self'",
+  },
+  uploads: {
+    additionalMimeTypes: ['application/xml'],
+  },
+  sanitization: {
+    enabled: true,
+    stripHtmlFromText: true,
+  },
+}
+```
+
+### `rateLimit`
+
+| | |
+|---|---|
+| **Type** | `RateLimitingConfig` |
+| **Default** | Enabled with 100 read / 30 write per minute |
+
+API rate limiting configuration. Enabled by default. Opt out with `rateLimit: { enabled: false }`.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Enable or disable rate limiting |
+| `readLimit` | `number` | `100` | Max GET requests per window |
+| `writeLimit` | `number` | `30` | Max POST/PATCH/PUT/DELETE requests per window |
+| `windowMs` | `number` | `60000` | Time window in milliseconds (1 minute) |
+| `store` | `RateLimitStore` | In-memory | Custom store (use Redis for multi-instance deployments) |
+| `keyGenerator` | `(request: Request) => string` | Client IP | Custom key generation function |
+| `skip` | `(request: Request) => boolean` | None | Skip rate limiting for certain requests |
+| `collections` | `Record<string, { readLimit?, writeLimit? }>` | None | Per-collection rate limit overrides |
+
+```typescript
+rateLimit: {
+  enabled: true,
+  readLimit: 100,
+  writeLimit: 30,
+  collections: {
+    media: { readLimit: 50, writeLimit: 10 },
+    logs: { readLimit: 200 },
+  },
+}
+```
+
+### `apiKeys`
+
+| | |
+|---|---|
+| **Type** | `ApiKeysConfig` |
+| **Default** | 1,000 requests/hour, 1-hour window |
+
+Per-key rate limiting for API key authentication (`Authorization: Bearer sk_live_...`).
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `rateLimit.requestsPerHour` | `number` | `1000` | Max requests per sliding window |
+| `rateLimit.windowMs` | `number` | `3600000` | Sliding window duration in ms (1 hour) |
+
+### `email`
+
+| | |
+|---|---|
+| **Type** | `EmailConfig` |
+| **Default** | `undefined` |
+
+Email provider configuration for password resets, notifications, and other transactional emails. Database-managed providers (configured via admin Settings UI) take precedence when available.
+
+```typescript
+email: {
+  providerConfig: {
+    provider: 'resend',
+    apiKey: process.env.RESEND_API_KEY!,
+  },
+  from: 'My App <noreply@example.com>',
+  baseUrl: 'https://example.com',
+}
+```
+
+### `plugins`
+
+| | |
+|---|---|
+| **Type** | `PluginDefinition[]` |
+| **Default** | `[]` |
+
+Plugins extend Nextly with additional collections, hooks, and custom functionality.
+
+```typescript
+import { formBuilder } from '@nextlyhq/plugin-form-builder';
+
+const formBuilderPlugin = formBuilder();
+
+export default defineConfig({
+  plugins: [formBuilderPlugin.plugin],
+  collections: [Posts],
+});
+```
+
+### `admin`
+
+| | |
+|---|---|
+| **Type** | `AdminConfig` |
+| **Default** | `undefined` (Nextly defaults used) |
+
+Admin panel branding and plugin sidebar customization.
+
+#### `admin.branding`
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `logoUrl` | `string` | None | Logo image URL (replaces text logo) |
+| `logoUrlLight` | `string` | None | Light-mode logo (when `logoUrl` is not set) |
+| `logoUrlDark` | `string` | None | Dark-mode logo (when `logoUrl` is not set) |
+| `logoText` | `string` | `"Nextly"` | Text label in sidebar header |
+| `favicon` | `string` | None | Custom favicon URL |
+| `colors.primary` | `string` | None | Primary brand color (hex, e.g. `"#6366f1"`) |
+| `colors.accent` | `string` | None | Accent brand color (hex, e.g. `"#f59e0b"`) |
+| `showBuilder` | `boolean` | `NODE_ENV !== "production"` | Show/hide builder navigation in admin |
+
+#### `admin.pluginOverrides`
+
+Override any plugin's sidebar placement and appearance without modifying plugin source code.
+
+```typescript
+admin: {
+  pluginOverrides: {
+    'form-builder': {
+      placement: AdminPlacement.SETTINGS,
+      order: 80,
+      appearance: { icon: 'FileText' },
+    },
+  },
+}
+```
+
+## Validation
+
+`defineConfig()` performs these checks at startup:
+
+- **Duplicate slugs** -- Collection, single, and component slugs must all be unique
+- **Cross-type conflicts** -- A single cannot share a slug with a collection or component
+- **Component nesting** -- Circular component references and excessive nesting depth are rejected
+- **User config** -- Custom user fields are validated for correctness
+- **API key limits** -- `requestsPerHour` must be a positive integer
+
+If validation fails, Nextly throws a descriptive error at startup so you can fix it immediately.
+
+## Next Steps
+
+- **[Collections](/docs/configuration/collections)** -- Define content types with multiple entries
+- **[Singles](/docs/configuration/singles)** -- Define single-document content
+- **[Components](/docs/configuration/components)** -- Reusable field groups for collections and singles
+- **[Fields](/docs/configuration/fields)** -- All available field types
+- **[Environment Variables](/docs/configuration/environment)** -- All environment variables explained

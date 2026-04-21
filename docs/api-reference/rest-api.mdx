@@ -1,0 +1,447 @@
+---
+title: REST API
+description: HTTP REST API for client-side applications, external services, and any environment where direct server-side access is not available.
+---
+
+Nextly exposes a REST API through a single Next.js catch-all route handler. All collection entries, singles, users, roles, media, and more are accessible via standard HTTP methods. Use this API from browser code, mobile apps, third-party services, or any HTTP client.
+
+## Setup
+
+Create a catch-all route handler that delegates to Nextly:
+
+```typescript title="app/api/[[...params]]/route.ts"
+import { createDynamicHandlers } from '@nextlyhq/nextly';
+import nextlyConfig from '../../../nextly.config';
+
+const handlers = createDynamicHandlers({ config: nextlyConfig });
+export const { GET, POST, PUT, PATCH, DELETE, OPTIONS } = handlers;
+```
+
+All API endpoints are served under `/api/`.
+
+## Authentication
+
+The REST API supports two authentication methods:
+
+### Session Cookie
+
+When a user logs in through the admin panel or the auth endpoints, a session cookie (`nextly_cms_session`) is set automatically. Requests from the same browser include this cookie.
+
+### API Key
+
+Pass an API key in the `Authorization` header:
+
+```bash
+curl -H "Authorization: Bearer sk_live_abc123..." \
+  https://example.com/api/collections/posts/entries
+```
+
+API keys are created through the [Direct API](/docs/api-reference/direct-api) (`nextly.apiKeys.create()`) or the admin panel.
+
+## Collection Entries
+
+Collection entries are the primary data in Nextly. Each collection (e.g., `posts`, `products`) has a full set of CRUD endpoints.
+
+### List Entries
+
+```
+GET /api/collections/{slug}/entries
+```
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | `number` | `10` | Maximum results per page (max: 500) |
+| `page` | `number` | `1` | Page number (1-indexed) |
+| `sort` | `string` | -- | Sort field. Prefix with `-` for descending |
+| `depth` | `number` | `0` | Relationship population depth |
+| `where[field][operator]` | `string` | -- | Filter conditions (see [Query Parameters](#query-parameters)) |
+
+**Example:**
+
+```bash
+curl "https://example.com/api/collections/posts/entries?limit=10&sort=-createdAt&where[status][equals]=published"
+```
+
+**Response:**
+
+```json
+{
+  "data": {
+    "status": 200,
+    "success": true,
+    "data": {
+      "docs": [
+        { "id": "abc-123", "title": "Hello World", "status": "published", ... }
+      ],
+      "totalDocs": 42,
+      "limit": 10,
+      "totalPages": 5,
+      "page": 1,
+      "hasNextPage": true,
+      "hasPrevPage": false,
+      "nextPage": 2,
+      "prevPage": null,
+      "pagingCounter": 1
+    }
+  }
+}
+```
+
+### Get Entry by ID
+
+```
+GET /api/collections/{slug}/entries/{id}
+```
+
+**Example:**
+
+```bash
+curl "https://example.com/api/collections/posts/entries/abc-123?depth=2"
+```
+
+**Response:**
+
+```json
+{
+  "data": {
+    "status": 200,
+    "success": true,
+    "data": {
+      "id": "abc-123",
+      "title": "Hello World",
+      "status": "published",
+      "author": { "id": "user-1", "name": "John Doe" },
+      "createdAt": "2025-01-15T10:30:00.000Z",
+      "updatedAt": "2025-01-15T10:30:00.000Z"
+    }
+  }
+}
+```
+
+### Create Entry
+
+```
+POST /api/collections/{slug}/entries
+Content-Type: application/json
+```
+
+**Example:**
+
+```bash
+curl -X POST "https://example.com/api/collections/posts/entries" \
+  -H "Authorization: Bearer sk_live_abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{ "title": "New Post", "content": "Hello!", "status": "draft" }'
+```
+
+### Update Entry
+
+```
+PATCH /api/collections/{slug}/entries/{id}
+Content-Type: application/json
+```
+
+Send only the fields you want to update:
+
+```bash
+curl -X PATCH "https://example.com/api/collections/posts/entries/abc-123" \
+  -H "Authorization: Bearer sk_live_abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "published" }'
+```
+
+### Delete Entry
+
+```
+DELETE /api/collections/{slug}/entries/{id}
+```
+
+```bash
+curl -X DELETE "https://example.com/api/collections/posts/entries/abc-123" \
+  -H "Authorization: Bearer sk_live_abc123..."
+```
+
+### Count Entries
+
+```
+GET /api/collections/{slug}/entries/count
+```
+
+Returns the total number of entries matching a query:
+
+```bash
+curl "https://example.com/api/collections/posts/entries/count?where[status][equals]=published"
+```
+
+### Duplicate Entry
+
+```
+POST /api/collections/{slug}/entries/{id}/duplicate
+```
+
+Creates a copy of an existing entry with new system fields (id, timestamps):
+
+```bash
+curl -X POST "https://example.com/api/collections/posts/entries/abc-123/duplicate" \
+  -H "Authorization: Bearer sk_live_abc123..."
+```
+
+### Bulk Delete
+
+```
+POST /api/collections/{slug}/entries/bulk-delete
+Content-Type: application/json
+```
+
+```bash
+curl -X POST "https://example.com/api/collections/posts/entries/bulk-delete" \
+  -H "Authorization: Bearer sk_live_abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{ "ids": ["post-1", "post-2", "post-3"] }'
+```
+
+### Bulk Update
+
+```
+POST /api/collections/{slug}/entries/bulk-update
+Content-Type: application/json
+```
+
+Update multiple entries by IDs:
+
+```bash
+curl -X POST "https://example.com/api/collections/posts/entries/bulk-update" \
+  -H "Authorization: Bearer sk_live_abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{ "ids": ["post-1", "post-2"], "data": { "status": "archived" } }'
+```
+
+### Bulk Update by Query
+
+```
+PATCH /api/collections/{slug}/entries
+Content-Type: application/json
+```
+
+Update all entries matching a where clause:
+
+```bash
+curl -X PATCH "https://example.com/api/collections/posts/entries" \
+  -H "Authorization: Bearer sk_live_abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{ "where": { "status": { "equals": "draft" } }, "data": { "status": "archived" } }'
+```
+
+## Singles (formerly Globals)
+
+Singles are single-document entities for site-wide content (settings, navigation, footer).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/singles` | List all singles |
+| `GET` | `/api/singles/{slug}` | Get single document content |
+| `PATCH` | `/api/singles/{slug}` | Update single document content |
+| `GET` | `/api/singles/{slug}/schema` | Get single schema metadata |
+
+**Example -- fetch site settings:**
+
+```bash
+curl "https://example.com/api/singles/site-settings"
+```
+
+## Query Parameters
+
+### Where Clauses
+
+Filter results using the `where[field][operator]=value` format in query strings:
+
+```
+?where[status][equals]=published
+?where[price][greater_than]=100
+?where[title][contains]=hello
+?where[category][in]=news,featured
+```
+
+**Supported operators:**
+
+| Operator | Description | Query string example |
+|----------|-------------|---------------------|
+| `equals` | Exact match | `where[status][equals]=published` |
+| `not_equals` | Not equal | `where[status][not_equals]=draft` |
+| `greater_than` | Greater than | `where[price][greater_than]=100` |
+| `greater_than_equal` | Greater than or equal | `where[price][greater_than_equal]=100` |
+| `less_than` | Less than | `where[price][less_than]=50` |
+| `less_than_equal` | Less than or equal | `where[price][less_than_equal]=50` |
+| `like` | SQL LIKE pattern | `where[title][like]=%hello%` |
+| `contains` | Case-insensitive search | `where[title][contains]=hello` |
+| `in` | Value in comma-separated list | `where[status][in]=draft,published` |
+| `not_in` | Value not in list | `where[status][not_in]=archived` |
+| `exists` | Field is non-null | `where[image][exists]=true` |
+
+### Sorting
+
+Sort by any field. Prefix with `-` for descending:
+
+```
+?sort=-createdAt       // Newest first
+?sort=title            // Alphabetical ascending
+```
+
+### Pagination
+
+```
+?limit=20&page=2       // 20 results per page, page 2
+```
+
+### Depth
+
+Control relationship population:
+
+```
+?depth=0               // IDs only (default)
+?depth=1               // Populate direct relationships
+?depth=2               // Populate nested relationships
+```
+
+## Users
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/users` | List all users |
+| `POST` | `/api/users` | Create a user |
+| `GET` | `/api/users/{id}` | Get user by ID |
+| `PATCH` | `/api/users/{id}` | Update user |
+| `DELETE` | `/api/users/{id}` | Delete user |
+| `GET` | `/api/me` | Get current authenticated user |
+| `PATCH` | `/api/me` | Update current user profile |
+| `GET` | `/api/me/permissions` | Get current user's permissions |
+
+## Authentication Endpoints
+
+All auth endpoints are under `/api/auth/`:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/auth/register` | Register a new user (public) |
+| `POST` | `/api/auth/forgot-password` | Request password reset (public) |
+| `POST` | `/api/auth/reset-password` | Reset password with token (public) |
+| `POST` | `/api/auth/verify-email` | Verify email with token (public) |
+| `PATCH` | `/api/auth/change-password` | Change password (authenticated) |
+
+Session-based login and logout are handled by the Auth.js integration and the session cookie.
+
+## Roles and Permissions
+
+### Roles
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/roles` | List all roles |
+| `POST` | `/api/roles` | Create a role |
+| `GET` | `/api/roles/{id}` | Get role by ID |
+| `PATCH` | `/api/roles/{id}` | Update role |
+| `DELETE` | `/api/roles/{id}` | Delete role |
+| `GET` | `/api/roles/{id}/permissions` | List role permissions |
+| `POST` | `/api/roles/{id}/permissions` | Add permission to role |
+| `PATCH` | `/api/roles/{id}/permissions` | Replace all role permissions |
+| `DELETE` | `/api/roles/{id}/permissions/{permId}` | Remove permission from role |
+
+### Permissions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/permissions` | List all permissions |
+| `POST` | `/api/permissions` | Create a permission |
+| `GET` | `/api/permissions/{id}` | Get permission by ID |
+| `DELETE` | `/api/permissions/{id}` | Delete permission |
+
+## Media
+
+Media endpoints handle file uploads and management. Files are stored using the configured storage adapter (local, S3, Vercel Blob).
+
+Refer to the admin panel or Direct API for media upload operations. The REST API handles media through the standard collection entry endpoints for the media collection.
+
+## API Keys
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/api-keys` | List API keys for current user |
+| `POST` | `/api/api-keys` | Create a new API key |
+| `GET` | `/api/api-keys/{id}` | Get API key metadata |
+| `PATCH` | `/api/api-keys/{id}` | Update API key name/description |
+| `DELETE` | `/api/api-keys/{id}` | Revoke an API key |
+
+## Response Format
+
+All successful responses follow this structure:
+
+```json
+{
+  "data": {
+    "status": 200,
+    "success": true,
+    "data": { ... }
+  }
+}
+```
+
+## Error Responses
+
+Errors return an appropriate HTTP status code with an error message:
+
+```json
+{
+  "error": "Resource not found"
+}
+```
+
+**Common error codes:**
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Bad request -- invalid input or validation failure |
+| `401` | Unauthorized -- authentication required |
+| `403` | Forbidden -- insufficient permissions |
+| `404` | Not found -- resource does not exist |
+| `409` | Conflict -- duplicate resource or concurrent modification |
+| `429` | Too many requests -- rate limit exceeded |
+| `500` | Internal server error |
+
+## Security
+
+The REST API includes built-in security features:
+
+- **Rate limiting** -- configurable request rate limits per IP
+- **CORS** -- configurable cross-origin request handling
+- **Security headers** -- standard security headers applied to all responses
+- **Super-admin protection** -- prevents non-super-admins from assigning the super_admin role
+
+These are configured in your `nextly.config.ts` via the `security` and `rateLimit` options. See [Configuration](/docs/configuration/nextly-config) for details.
+
+## Example: Fetch and Display Posts
+
+```typescript title="Client-side fetch"
+async function fetchPosts(page = 1) {
+  const params = new URLSearchParams({
+    limit: '10',
+    page: String(page),
+    sort: '-createdAt',
+    'where[status][equals]': 'published',
+    depth: '1',
+  });
+
+  const response = await fetch(`/api/collections/posts/entries?${params}`);
+  const json = await response.json();
+
+  return json.data.data; // PaginatedResponse
+}
+```
+
+## Next Steps
+
+- [Direct API](/docs/api-reference/direct-api) -- Server-side API for direct database access (no HTTP overhead)
+- [Client SDK](/docs/api-reference/client-sdk) -- TypeScript SDK that wraps this REST API for browser use
+- [Authentication](/docs/guides/authentication) -- RBAC, API keys, and access control
+- [Collections](/docs/configuration/collections) -- Define the content types that the REST API serves
