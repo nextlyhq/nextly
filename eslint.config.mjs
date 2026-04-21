@@ -10,6 +10,12 @@ export default [
       ".turbo/**",
       "**/*.d.ts",
       "packages/create-nextly-app/templates/**",
+      // reason: top-level templates (`templates/blog`, `templates/base`,
+      // `templates/blank`) have no tsconfig of their own; they are
+      // scaffolded into user projects at `create-nextly-app` time where
+      // they get linted. Typed-linting at the monorepo level fails with
+      // "not found by the project service".
+      "templates/**",
       // reason: shared eslint-config package's own .js files are not in
       // any tsconfig project; type-aware linting would fail on them
       "packages/eslint-config/**",

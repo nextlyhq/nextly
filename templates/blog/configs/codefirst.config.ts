@@ -1,13 +1,17 @@
-// Code-first approach: All schemas defined in TypeScript.
-// Collections and singles are synced to the database on `pnpm dev`.
-// Edit the shared definitions in ./shared.ts to add, remove, or modify fields.
+// Code-first approach: schemas defined in TypeScript. Collections and
+// singles are synced to the database on `pnpm dev`. Edit the files under
+// ../src/collections/ and ../src/globals/ to add, remove, or modify fields.
 import { defineConfig } from "@revnixhq/nextly/config";
 
-import { posts, authors, categories, tags, siteSettings } from "./shared";
+import { Authors } from "../src/collections/Authors";
+import { Categories } from "../src/collections/Categories";
+import { Posts } from "../src/collections/Posts";
+import { Tags } from "../src/collections/Tags";
+import { SiteSettings } from "../src/globals/SiteSettings";
 
 export default defineConfig({
-  collections: [posts, authors, categories, tags],
-  singles: [siteSettings],
+  collections: [Posts, Authors, Categories, Tags],
+  singles: [SiteSettings],
 
   // TypeScript type generation
   typescript: {

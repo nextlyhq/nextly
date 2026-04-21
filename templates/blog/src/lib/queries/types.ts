@@ -1,8 +1,9 @@
 /**
  * Domain types for the blog template's frontend.
  *
- * These mirror the schema definitions in `nextly.config.ts` (or
- * `configs/shared.ts` in the template source). When you regenerate types
+ * These mirror the schema definitions in `nextly.config.ts` (or the
+ * collection files under `src/collections/` in the template source).
+ * When you regenerate types
  * with `pnpm types:generate`, the generated file at
  * `src/types/generated/nextly-types.ts` will contain richer types derived
  * directly from your schema — feel free to swap the imports in this file
