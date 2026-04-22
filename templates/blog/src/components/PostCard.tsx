@@ -7,8 +7,11 @@ import type { Post } from "@/lib/queries/types";
 
 /**
  * PostCard - a card showing a blog post preview in a grid.
- * Displays featured image, title, excerpt, author, date, reading time,
- * and categories.
+ *
+ * Uses the design tokens from `globals.css` (surface, border, muted,
+ * accent) so the card adapts to light and dark modes automatically.
+ * Subtle hover lifts the border to the accent color - movement is
+ * intentionally modest so long scrolls aren't noisy.
  */
 
 interface PostCardProps {
@@ -36,11 +39,16 @@ export function PostCard({ post }: PostCardProps) {
     : null;
 
   return (
-    <article className="group flex flex-col">
-      {/* Featured image with aspect ratio container */}
+    <article
+      className="group flex h-full flex-col overflow-hidden rounded-xl border transition-colors"
+      style={{
+        borderColor: "var(--color-border)",
+        background: "var(--color-bg-surface)",
+      }}
+    >
       <Link
         href={`/blog/${slug}`}
-        className="relative mb-4 block overflow-hidden rounded-lg"
+        className="relative block overflow-hidden"
         aria-label={title}
       >
         {featuredImage?.url ? (
@@ -49,64 +57,72 @@ export function PostCard({ post }: PostCardProps) {
             alt={featuredImage.altText || title}
             width={720}
             height={405}
-            // One col on phones, two on tablets, three on desktop in the
-            // max-w-5xl container. `sizes` lets Next.js pick the right
-            // srcset candidate per breakpoint so phones don't download
-            // a desktop-sized image.
             sizes="(min-width: 1024px) 320px, (min-width: 640px) 50vw, 100vw"
             className="aspect-video w-full object-cover motion-safe:transition-transform motion-safe:duration-300 motion-safe:group-hover:scale-[1.02]"
           />
         ) : (
-          <div className="flex aspect-video w-full items-center justify-center bg-neutral-100 text-sm text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+          <div
+            className="flex aspect-video w-full items-center justify-center text-sm"
+            style={{
+              background: "var(--color-bg)",
+              color: "var(--color-fg-muted)",
+            }}
+          >
             No image
           </div>
         )}
       </Link>
 
-      {/* Category badges */}
-      {categories && categories.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {categories.map(cat => (
-            <CategoryBadge key={cat.slug} name={cat.name} slug={cat.slug} />
-          ))}
-        </div>
-      )}
+      <div className="flex flex-1 flex-col p-5">
+        {categories && categories.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {categories.slice(0, 2).map(cat => (
+              <CategoryBadge key={cat.slug} name={cat.name} slug={cat.slug} />
+            ))}
+          </div>
+        )}
 
-      {/* Title */}
-      <h2 className="mb-2 text-lg font-semibold leading-snug tracking-tight text-neutral-900 dark:text-neutral-100">
-        <Link
-          href={`/blog/${slug}`}
-          className="transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+        <h2
+          className="mb-2 text-lg font-semibold leading-snug tracking-tight"
+          style={{ color: "var(--color-fg)" }}
         >
-          {title}
-        </Link>
-      </h2>
-
-      {/* Excerpt */}
-      {excerpt && (
-        <p className="mb-3 line-clamp-2 text-sm text-neutral-600 dark:text-neutral-400">
-          {excerpt}
-        </p>
-      )}
-
-      {/* Author, date, reading time - pushed to bottom with mt-auto */}
-      <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-500 dark:text-neutral-500">
-        {author && (
           <Link
-            href={`/authors/${author.slug}`}
-            className="font-medium text-neutral-700 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100"
+            href={`/blog/${slug}`}
+            className="transition-colors group-hover:opacity-90"
           >
-            {author.name}
+            {title}
           </Link>
+        </h2>
+
+        {excerpt && (
+          <p
+            className="mb-4 line-clamp-2 text-sm"
+            style={{ color: "var(--color-fg-muted)" }}
+          >
+            {excerpt}
+          </p>
         )}
-        {author && formattedDate && <span aria-hidden="true">&middot;</span>}
-        {formattedDate && (
-          <time dateTime={publishedAt ?? undefined}>{formattedDate}</time>
-        )}
-        {readingTime && formattedDate && (
-          <span aria-hidden="true">&middot;</span>
-        )}
-        {readingTime ? <span>{readingTime} min read</span> : null}
+
+        <div
+          className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
+          style={{ color: "var(--color-fg-muted)" }}
+        >
+          {author && (
+            <Link
+              href={`/authors/${author.slug}`}
+              className="font-medium transition-colors"
+              style={{ color: "var(--color-fg)" }}
+            >
+              {author.name}
+            </Link>
+          )}
+          {author && formattedDate && <span aria-hidden="true">·</span>}
+          {formattedDate && (
+            <time dateTime={publishedAt ?? undefined}>{formattedDate}</time>
+          )}
+          {readingTime && formattedDate && <span aria-hidden="true">·</span>}
+          {readingTime ? <span>{readingTime} min read</span> : null}
+        </div>
       </div>
     </article>
   );

@@ -2,7 +2,8 @@ import Link from "next/link";
 
 /**
  * CategoryBadge - a small linked pill that shows a category name.
- * Used on PostCard and single post pages.
+ * Used on PostCard and single post pages. Uses design tokens so it
+ * adapts to light + dark modes without Tailwind dark: variants.
  */
 
 interface CategoryBadgeProps {
@@ -14,7 +15,11 @@ export function CategoryBadge({ name, slug }: CategoryBadgeProps) {
   return (
     <Link
       href={`/categories/${slug}`}
-      className="inline-block rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700"
+      className="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium transition-opacity hover:opacity-80"
+      style={{
+        background: "var(--color-tag-bg)",
+        color: "var(--color-tag-fg)",
+      }}
     >
       {name}
     </Link>
