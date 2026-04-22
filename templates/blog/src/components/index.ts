@@ -1,12 +1,14 @@
 // Blog template components barrel export
 export { AuthorCard } from "./AuthorCard";
 export { CategoryBadge } from "./CategoryBadge";
+export { CategoryCardGrid } from "./CategoryCardGrid";
 export { CategoryStrip } from "./CategoryStrip";
 export { FeaturedPost } from "./FeaturedPost";
 export { Footer } from "./Footer";
 export { Header } from "./Header";
 export { Hero } from "./Hero";
 export { JsonLd } from "./JsonLd";
+export { ListingHeader } from "./ListingHeader";
 export { Logo } from "./Logo";
 export { NewsletterCta } from "./NewsletterCta";
 export { Pagination } from "./Pagination";
@@ -18,4 +20,5 @@ export { PostTOC } from "./PostTOC";
 export { ReadingProgressBar } from "./ReadingProgressBar";
 export { RichTextRenderer } from "./RichTextRenderer";
 export { SearchIcon } from "./SearchIcon";
+export { TagCloud } from "./TagCloud";
 export { ThemeToggle } from "./ThemeToggle";

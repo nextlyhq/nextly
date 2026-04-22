@@ -9,6 +9,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { JsonLd } from "@/components/JsonLd";
+import { ListingHeader } from "@/components/ListingHeader";
 import { Pagination } from "@/components/Pagination";
 import { PostGrid } from "@/components/PostGrid";
 import {
@@ -103,16 +104,17 @@ export default async function CategoryPage({
     <>
       <JsonLd data={[collectionSchema, breadcrumbSchema]} />
 
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
-          {category.name}
-        </h1>
-        {category.description && (
-          <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-            {category.description}
-          </p>
-        )}
-      </div>
+      <ListingHeader
+        label="Category"
+        title={category.name}
+        description={category.description ?? undefined}
+        stats={[
+          {
+            text: `${posts.totalDocs} ${posts.totalDocs === 1 ? "post" : "posts"}`,
+          },
+          { text: "RSS", href: `/categories/${slug}/feed.xml` },
+        ]}
+      />
 
       <PostGrid posts={posts.docs} />
 

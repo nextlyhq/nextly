@@ -1,12 +1,14 @@
 /**
- * sitemap.xml — auto-generated from published content.
+ * sitemap.xml - auto-generated from published content.
  *
- * Included routes: homepage, /blog, /archive, /tags, every published
- * post, every category, every tag, every author. If you add new static
- * routes, register them in the `staticPages` array below.
+ * Included routes: homepage, /blog, /categories, /tags, every
+ * published post, every category archive, every tag archive, every
+ * author page. The /archive route from earlier versions of this
+ * template has been removed (replaced by the paginated /blog). If
+ * you add new static routes, register them in `staticPages` below.
  *
- * Next.js serves the output at /sitemap.xml. The `metadataBase` in the
- * root layout resolves relative URLs; here we emit absolute URLs for
+ * Next.js serves this at /sitemap.xml. `metadataBase` in the root
+ * layout resolves relative URLs; here we emit absolute URLs for
  * clarity and to match what search engines expect.
  */
 
@@ -32,9 +34,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: absoluteUrl("/"), changeFrequency: "daily", priority: 1 },
     { url: absoluteUrl("/blog"), changeFrequency: "daily", priority: 0.9 },
     {
-      url: absoluteUrl("/archive"),
+      url: absoluteUrl("/categories"),
       changeFrequency: "weekly",
-      priority: 0.7,
+      priority: 0.6,
     },
     { url: absoluteUrl("/tags"), changeFrequency: "weekly", priority: 0.6 },
   ];
