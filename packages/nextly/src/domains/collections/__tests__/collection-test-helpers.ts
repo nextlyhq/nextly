@@ -217,24 +217,6 @@ export function createMockRelationshipService(): MockRecord {
   };
 }
 
-export function createMockFieldPermissionChecker(): MockRecord {
-  return {
-    filterFieldsBulk: vi
-      .fn()
-      .mockImplementation(
-        (_userId: string, _collection: string, entries: unknown[]) =>
-          Promise.resolve(entries)
-      ),
-    filterFields: vi
-      .fn()
-      .mockImplementation(
-        (_userId: string, _collection: string, entry: unknown) =>
-          Promise.resolve(entry)
-      ),
-    canAccessField: vi.fn().mockResolvedValue(true),
-  };
-}
-
 export function createMockHookRegistry(): MockRecord {
   return {
     executeBeforeOperation: vi.fn().mockResolvedValue(undefined),

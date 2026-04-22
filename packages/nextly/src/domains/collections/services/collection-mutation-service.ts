@@ -23,7 +23,6 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { toSnakeCase } from "../../../lib/case-conversion";
-import type { FieldPermissionCheckerService } from "../../../services/auth/field-permission-checker-service";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
@@ -56,7 +55,6 @@ export class CollectionMutationService extends BaseService {
     private readonly fileManager: CollectionFileManager,
     private readonly collectionService: DynamicCollectionService,
     private readonly relationshipService: CollectionRelationshipService,
-    private readonly fieldPermissionChecker: FieldPermissionCheckerService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
     private readonly componentDataService?: ComponentDataService
@@ -177,11 +175,10 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * Create a new entry.
-   * Applies collection-level access control, field-level permissions, and hooks.
+   * Applies collection-level access control and hooks.
    *
    * Security checks are applied in order:
    * 1. Collection-level access (AccessControlService)
-   * 2. Field-level permissions (FieldPermissionCheckerService)
    *
    * @param params - Collection name and optional user context
    * @param body - Entry data to create
@@ -287,29 +284,6 @@ export class CollectionMutationService extends BaseService {
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
-
-      // Validate permissions if user provided and access not overridden
-      if (accessUser?.id) {
-        // Check field-level write permissions
-        const fieldNames = Object.keys(finalData);
-        for (const fieldName of fieldNames) {
-          const canWrite = await this.fieldPermissionChecker.canAccessField(
-            accessUser.id,
-            params.collectionName,
-            fieldName,
-            "write"
-          );
-
-          if (!canWrite) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: `You do not have permission to set the field "${fieldName}"`,
-              data: null,
-            };
-          }
-        }
-      }
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -669,11 +643,10 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * Update an existing entry.
-   * Applies collection-level access control, field-level permissions, and hooks.
+   * Applies collection-level access control and hooks.
    *
    * Security checks are applied in order:
    * 1. Collection-level access (AccessControlService)
-   * 2. Field-level permissions (FieldPermissionCheckerService)
    *
    * @param params - Collection name, entry ID, and optional user context
    * @param body - Update data
@@ -799,30 +772,6 @@ export class CollectionMutationService extends BaseService {
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
-
-      // Validate permissions if user provided and access not overridden
-      if (accessUser?.id) {
-        // Check field-level write permissions
-        const fieldNames = Object.keys(finalData);
-        for (const fieldName of fieldNames) {
-          const canWrite = await this.fieldPermissionChecker.canAccessField(
-            accessUser.id,
-            params.collectionName,
-            fieldName,
-            "write",
-            existingEntry
-          );
-
-          if (!canWrite) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: `You do not have permission to update the field "${fieldName}"`,
-              data: null,
-            };
-          }
-        }
-      }
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -1448,28 +1397,6 @@ export class CollectionMutationService extends BaseService {
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
 
-      // Validate permissions if user provided
-      if (params.user?.id) {
-        const fieldNames = Object.keys(finalData);
-        for (const fieldName of fieldNames) {
-          const canWrite = await this.fieldPermissionChecker.canAccessField(
-            params.user.id,
-            params.collectionName,
-            fieldName,
-            "write"
-          );
-
-          if (!canWrite) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: `You do not have permission to set the field "${fieldName}"`,
-              data: null,
-            };
-          }
-        }
-      }
-
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
       fields.forEach(field => {
@@ -1712,29 +1639,6 @@ export class CollectionMutationService extends BaseService {
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
-
-      // Validate permissions if user provided
-      if (params.user?.id) {
-        const fieldNames = Object.keys(finalData);
-        for (const fieldName of fieldNames) {
-          const canWrite = await this.fieldPermissionChecker.canAccessField(
-            params.user.id,
-            params.collectionName,
-            fieldName,
-            "write",
-            existingEntry
-          );
-
-          if (!canWrite) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: `You do not have permission to update the field "${fieldName}"`,
-              data: null,
-            };
-          }
-        }
-      }
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
@@ -2153,28 +2057,6 @@ export class CollectionMutationService extends BaseService {
 
       const finalData = currentData;
 
-      // Validate permissions if user provided
-      if (params.user?.id) {
-        const fieldNames = Object.keys(finalData);
-        for (const fieldName of fieldNames) {
-          const canWrite = await this.fieldPermissionChecker.canAccessField(
-            params.user.id,
-            params.collectionName,
-            fieldName,
-            "write"
-          );
-
-          if (!canWrite) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: `You do not have permission to set the field "${fieldName}"`,
-              data: null,
-            };
-          }
-        }
-      }
-
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization
       fields.forEach(field => {
@@ -2448,29 +2330,6 @@ export class CollectionMutationService extends BaseService {
       }
 
       const finalData = currentData;
-
-      // Validate permissions if user provided
-      if (params.user?.id) {
-        const fieldNames = Object.keys(finalData);
-        for (const fieldName of fieldNames) {
-          const canWrite = await this.fieldPermissionChecker.canAccessField(
-            params.user.id,
-            params.collectionName,
-            fieldName,
-            "write",
-            existingEntry
-          );
-
-          if (!canWrite) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: `You do not have permission to update the field "${fieldName}"`,
-              data: null,
-            };
-          }
-        }
-      }
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization

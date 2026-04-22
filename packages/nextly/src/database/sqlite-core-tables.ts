@@ -136,17 +136,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "child_role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
       UNIQUE("parent_role_id", "child_role_id")
     )`,
-    `CREATE TABLE IF NOT EXISTS "field_permissions" (
-      "id" TEXT PRIMARY KEY,
-      "role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
-      "collection_slug" TEXT NOT NULL,
-      "field_path" TEXT NOT NULL,
-      "action" TEXT NOT NULL,
-      "condition" TEXT,
-      "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
-      "updated_at" INTEGER NOT NULL DEFAULT (unixepoch()),
-      UNIQUE("role_id", "collection_slug", "field_path")
-    )`,
     // row_level_security_policies table was removed in the RLS cleanup
     // (refactor(nextly): remove RLS, commits 8c61348f + 433927f9).
     `CREATE TABLE IF NOT EXISTS "media_folders" (

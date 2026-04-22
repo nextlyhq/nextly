@@ -25,7 +25,6 @@ import type { TableDefinition } from "@revnixhq/adapter-drizzle/types";
  * - System: systemMigrations, exampleUsers
  * - Authentication: users, accounts, sessions, verificationTokens, passwordResetTokens, emailVerificationTokens, refreshTokens
  * - RBAC: roles, permissions, rolePermissions, userRoles, roleInherits, userPermissionCache
- * - Security: fieldPermissions
  * - CMS: dynamicCollections, media, mediaFolders, contentSchemaEvents
  */
 export const nextlyTables: TableDefinition[] = [

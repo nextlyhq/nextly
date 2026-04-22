@@ -4,8 +4,6 @@ import { getDialectTables } from "../database/index";
 import { container } from "../di/container";
 
 import { AuthService } from "./auth/auth-service";
-import { FieldPermissionCheckerService } from "./auth/field-permission-checker-service";
-import { FieldPermissionService } from "./auth/field-permission-service";
 import { PermissionCheckerService } from "./auth/permission-checker-service";
 import { PermissionService } from "./auth/permission-service";
 import { RoleInheritanceService } from "./auth/role-inheritance-service";
@@ -101,9 +99,6 @@ export { UserRoleService } from "./auth/user-role-service";
 export { RoleInheritanceService } from "./auth/role-inheritance-service";
 export { PermissionCheckerService } from "./auth/permission-checker-service";
 
-export { FieldPermissionService } from "./auth/field-permission-service";
-export { FieldPermissionCheckerService } from "./auth/field-permission-checker-service";
-
 export {
   SystemTableService,
   type SystemTableStatus,
@@ -154,9 +149,6 @@ export class ServiceContainer {
   private _userRoles?: UserRoleService;
   private _roleInheritance?: RoleInheritanceService;
   private _permissionChecker?: PermissionCheckerService;
-
-  private _fieldPermissions?: FieldPermissionService;
-  private _fieldPermissionChecker?: FieldPermissionCheckerService;
 
   private _media?: LegacyMediaService;
   private _mediaFolders?: MediaFolderService;
@@ -345,34 +337,6 @@ export class ServiceContainer {
       );
     }
     return this._permissionChecker;
-  }
-
-  /**
-   * Get FieldPermission service instance (lazy-loaded)
-   * Handles field-level permission CRUD operations
-   */
-  get fieldPermissions(): FieldPermissionService {
-    if (!this._fieldPermissions) {
-      this._fieldPermissions = new FieldPermissionService(
-        this.adapter,
-        this.getLogger()
-      );
-    }
-    return this._fieldPermissions;
-  }
-
-  /**
-   * Get FieldPermissionChecker service instance (lazy-loaded)
-   * Handles field-level authorization checking logic
-   */
-  get fieldPermissionChecker(): FieldPermissionCheckerService {
-    if (!this._fieldPermissionChecker) {
-      this._fieldPermissionChecker = new FieldPermissionCheckerService(
-        this.adapter,
-        this.getLogger()
-      );
-    }
-    return this._fieldPermissionChecker;
   }
 
   /**

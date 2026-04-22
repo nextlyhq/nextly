@@ -51,15 +51,15 @@ import type { PermissionSeedService } from "../services/auth/permission-seed-ser
 import type { RBACAccessControlService } from "../services/auth/rbac-access-control-service";
 import type {
   CollectionRegistryService,
-  type CodeFirstCollectionConfig,
+  CodeFirstCollectionConfig,
 } from "../services/collections/collection-registry-service";
 import type { CollectionRelationshipService } from "../services/collections/collection-relationship-service";
 import type { CollectionService } from "../services/collections/collection-service";
 import type {
   ComponentRegistryService,
-  type CodeFirstComponentConfig,
-  type ComponentDataService,
-  type ComponentSchemaService,
+  CodeFirstComponentConfig,
+  ComponentDataService,
+  ComponentSchemaService,
 } from "../services/components";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";

@@ -8,7 +8,7 @@
  * Covers:
  * - listEntries: default pagination, custom page/limit, search, where clause
  *   filtering (eq/ne/gt/lt/like/in), sorting (asc/desc), field selection,
- *   component data population, field permission filtering, error handling,
+ *   component data population, error handling,
  *   collection-not-found 404, empty results, and response structure.
  * - countEntries: basic count, count with search, count with where, access
  *   denied, error handling.
@@ -26,7 +26,6 @@ import {
   createMockFileManager,
   createMockCollectionService,
   createMockRelationshipService,
-  createMockFieldPermissionChecker,
   createMockHookRegistry,
   createMockAccessControlService,
   createMockComponentDataService,
@@ -136,9 +135,6 @@ describe("CollectionEntryService — Query Contracts", () => {
   let mockFileManager: ReturnType<typeof createMockFileManager>;
   let mockCollectionService: ReturnType<typeof createMockCollectionService>;
   let mockRelationshipService: ReturnType<typeof createMockRelationshipService>;
-  let mockFieldPermissionChecker: ReturnType<
-    typeof createMockFieldPermissionChecker
-  >;
   let mockHookRegistry: ReturnType<typeof createMockHookRegistry>;
   let mockAccessControlService: ReturnType<
     typeof createMockAccessControlService
@@ -157,7 +153,6 @@ describe("CollectionEntryService — Query Contracts", () => {
     mockFileManager = createMockFileManager(schema);
     mockCollectionService = createMockCollectionService();
     mockRelationshipService = createMockRelationshipService();
-    mockFieldPermissionChecker = createMockFieldPermissionChecker();
     mockHookRegistry = createMockHookRegistry();
     mockAccessControlService = createMockAccessControlService();
     mockComponentDataService = createMockComponentDataService();
@@ -168,7 +163,6 @@ describe("CollectionEntryService — Query Contracts", () => {
       mockFileManager as never,
       mockCollectionService as never,
       mockRelationshipService as never,
-      mockFieldPermissionChecker as never,
       mockHookRegistry as never,
       mockAccessControlService as never,
       mockComponentDataService as never,
@@ -232,36 +226,6 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(
         mockComponentDataService.populateComponentDataMany
       ).toHaveBeenCalled();
-    });
-
-    it("should apply field-level permissions when user is provided", async () => {
-      selectData.rows = [createSampleEntry()];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1", role: "editor" },
-      });
-
-      expect(mockFieldPermissionChecker.filterFieldsBulk).toHaveBeenCalledWith(
-        "user-1",
-        "posts",
-        expect.any(Array),
-        "read"
-      );
-    });
-
-    it("should NOT apply field-level permissions when overrideAccess is true", async () => {
-      selectData.rows = [createSampleEntry()];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1", role: "editor" },
-        overrideAccess: true,
-      });
-
-      expect(
-        mockFieldPermissionChecker.filterFieldsBulk
-      ).not.toHaveBeenCalled();
     });
 
     it("should execute beforeOperation and beforeRead hooks", async () => {

@@ -6,9 +6,9 @@
  *
  * Covers:
  * - createEntry: basic fields, hook execution order, slug generation,
- *   relationship normalisation, field permission checks, error handling.
+ *   relationship normalisation, error handling.
  * - getEntry: success, 404, access control, depth, field selection.
- * - updateEntry: 404 existing entry check, hooks, field permission checks.
+ * - updateEntry: 404 existing entry check, hooks.
  * - deleteEntry: 404, hooks, access control, success response.
  */
 
@@ -24,7 +24,6 @@ import {
   createMockFileManager,
   createMockCollectionService,
   createMockRelationshipService,
-  createMockFieldPermissionChecker,
   createMockHookRegistry,
   createMockAccessControlService,
   createMockComponentDataService,
@@ -132,9 +131,6 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   let mockFileManager: ReturnType<typeof createMockFileManager>;
   let mockCollectionService: ReturnType<typeof createMockCollectionService>;
   let mockRelationshipService: ReturnType<typeof createMockRelationshipService>;
-  let mockFieldPermissionChecker: ReturnType<
-    typeof createMockFieldPermissionChecker
-  >;
   let mockHookRegistry: ReturnType<typeof createMockHookRegistry>;
   let mockAccessControlService: ReturnType<
     typeof createMockAccessControlService
@@ -153,7 +149,6 @@ describe("CollectionEntryService — Mutation Contracts", () => {
     mockFileManager = createMockFileManager(schema);
     mockCollectionService = createMockCollectionService();
     mockRelationshipService = createMockRelationshipService();
-    mockFieldPermissionChecker = createMockFieldPermissionChecker();
     mockHookRegistry = createMockHookRegistry();
     mockAccessControlService = createMockAccessControlService();
     mockComponentDataService = createMockComponentDataService();
@@ -164,7 +159,6 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       mockFileManager as never,
       mockCollectionService as never,
       mockRelationshipService as never,
-      mockFieldPermissionChecker as never,
       mockHookRegistry as never,
       mockAccessControlService as never,
       mockComponentDataService as never,
@@ -264,18 +258,6 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       await service.createEntry({ collectionName: "posts" }, { title: "Test" });
 
       expect(mockCollectionService.getCollection).toHaveBeenCalledWith("posts");
-    });
-
-    it("should check field write permissions when user is provided", async () => {
-      selectData.rows = [{ id: "new-1", title: "Test" }];
-
-      await service.createEntry(
-        { collectionName: "posts", user: { id: "user-1", role: "editor" } },
-        { title: "Test" }
-      );
-
-      // Field permission checker is used for canWriteField on each field
-      expect(mockFieldPermissionChecker.canAccessField).toHaveBeenCalled();
     });
 
     it("should return error when collection service fails", async () => {
@@ -505,21 +487,6 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         "afterUpdate",
         expect.any(Object)
       );
-    });
-
-    it("should check field write permissions when user is provided", async () => {
-      selectData.rows = [createSampleEntry()];
-
-      await service.updateEntry(
-        {
-          collectionName: "posts",
-          entryId: "entry-1",
-          user: { id: "user-1", role: "editor" },
-        },
-        { title: "Updated" }
-      );
-
-      expect(mockFieldPermissionChecker.canAccessField).toHaveBeenCalled();
     });
 
     it("should return CollectionServiceResult shape", async () => {

@@ -26,7 +26,6 @@ import {
   createMockFileManager,
   createMockCollectionService,
   createMockRelationshipService,
-  createMockFieldPermissionChecker,
   createMockHookRegistry,
   createMockAccessControlService,
   createMockComponentDataService,
@@ -141,7 +140,6 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     const mockFileManager = createMockFileManager(schema);
     const mockCollectionService = createMockCollectionService();
     const mockRelationshipService = createMockRelationshipService();
-    const mockFieldPermissionChecker = createMockFieldPermissionChecker();
     const mockHookRegistry = createMockHookRegistry();
     const mockAccessControlService = createMockAccessControlService();
     const mockComponentDataService = createMockComponentDataService();
@@ -152,7 +150,6 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       mockFileManager as never,
       mockCollectionService as never,
       mockRelationshipService as never,
-      mockFieldPermissionChecker as never,
       mockHookRegistry as never,
       mockAccessControlService as never,
       mockComponentDataService as never,
@@ -340,7 +337,6 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         createMockFileManager(schema) as never,
         createMockCollectionService() as never,
         createMockRelationshipService() as never,
-        createMockFieldPermissionChecker() as never,
         createMockHookRegistry() as never,
         mockACS as never,
         createMockComponentDataService() as never,
@@ -400,7 +396,6 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         createMockFileManager(schema) as never,
         createMockCollectionService() as never,
         createMockRelationshipService() as never,
-        createMockFieldPermissionChecker() as never,
         createMockHookRegistry() as never,
         mockACS as never,
         createMockComponentDataService() as never,
@@ -498,7 +493,6 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         fileManager as never,
         createMockCollectionService() as never,
         createMockRelationshipService() as never,
-        createMockFieldPermissionChecker() as never,
         createMockHookRegistry() as never,
         createMockAccessControlService() as never,
         createMockComponentDataService() as never,

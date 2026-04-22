@@ -5,8 +5,8 @@
  * - CollectionService — unified metadata + entry orchestrator. Its
  *   factory is the most complex in the system: it builds a file
  *   manager, dynamic-collection service, metadata service, relationship
- *   service, field permission checker, access control service, and
- *   entry service, then composes them.
+ *   service, access control service, and entry service, then composes
+ *   them.
  * - CollectionsHandler — thin dispatcher-facing handler that needs a
  *   raw Drizzle instance for legacy query paths.
  * - CollectionRegistryService — tracks registered collections and
@@ -20,7 +20,6 @@
 
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import { AccessControlService } from "../../services/access";
-import { FieldPermissionCheckerService } from "../../services/auth/field-permission-checker-service";
 import type { PermissionSeedService } from "../../services/auth/permission-seed-service";
 import type { RBACAccessControlService } from "../../services/auth/rbac-access-control-service";
 import { CollectionFileManager } from "../../services/collection-file-manager";
@@ -49,8 +48,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
   } = ctx;
 
   // CollectionService — composes file manager, dynamic-collection,
-  // metadata, relationship, field-permission, access control, and
-  // entry services.
+  // metadata, relationship, access control, and entry services.
   container.registerSingleton<CollectionService>("collectionService", () => {
     // Raw Drizzle instance for non-BaseService classes that need it directly.
     const drizzleDb = db ?? adapterDrizzleDb;
@@ -113,11 +111,6 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       );
     }
 
-    const fieldPermissionChecker = new FieldPermissionCheckerService(
-      adapter,
-      logger
-    );
-
     // Create the relationship service and expose it via the DI container
     // so other services (e.g. ComponentDataService) can share the same
     // instance instead of creating duplicates.
@@ -152,7 +145,6 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       fileManager,
       dynamicCollectionService,
       relationshipService,
-      fieldPermissionChecker,
       hookRegistry ?? createNoOpHookRegistry(),
       accessControlService,
       componentDataService,

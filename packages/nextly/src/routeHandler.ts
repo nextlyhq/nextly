@@ -546,15 +546,6 @@ async function resolveAuthorization(
     return requirePermission(req, action, "roles");
   }
 
-  // --- Field permissions: allow roles OR fieldPermissions ---
-  if (service === "fieldPermissions") {
-    const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "roles" },
-      { action, resource: "fieldPermissions" },
-    ]);
-  }
-
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
   const action = getActionFromMethod(httpMethod);
   return requirePermission(req, action, service);

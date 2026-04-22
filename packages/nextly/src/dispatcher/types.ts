@@ -13,7 +13,6 @@ export type ServiceType =
   | "auth"
   | "posts"
   | "collections"
-  | "fieldPermissions"
   | "singles"
   | "forms"
   | "components"
