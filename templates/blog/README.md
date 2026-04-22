@@ -1,32 +1,47 @@
 # Blog Template
 
-A complete blog starter with posts, authors, categories, and a clean frontend built with Server Components and Tailwind CSS.
+A production-quality blog starter for Nextly. Ships with:
+
+- 15 seeded posts · 3 authors · 4 categories · 8 tags
+- Modern-tech visual design with full light/dark mode parity via a 3-state theme toggle
+- Users-as-authors (no separate authors collection) with real admin/editor/author roles
+- Homepage with admin-editable hero, featured post, latest grid, category strip, and newsletter CTA
+- Post detail with reading progress bar, auto-TOC, share buttons, prev/next, and related posts
+- Static search via Pagefind (zero server infrastructure)
+- Newsletter signup via the `@revnixhq/plugin-form-builder` plugin
+- Rich SEO: per-author / per-category / per-tag RSS, sitemap, OG images, JSON-LD (Article, Person, CollectionPage, BreadcrumbList, WebSite)
 
 ## What's Included
 
 ### Collections
 
-- **Posts** - Title, slug, rich text content, featured image, author (relates to users), categories, tags, excerpt, publish date, featured flag, SEO group, status (draft/published). Auto-generates slug from title; computes reading time and word count on save.
-- **Categories** - Name, slug, description. Simple taxonomy for organizing posts.
+- **Posts** - Title, slug, rich text content, featured image, author (relates to users), categories, tags, excerpt, publish date, featured flag, SEO group (metaTitle, metaDescription, ogImage, canonical, noindex), status (draft/published). Auto-generates slug from title; computes reading time and word count on save.
+- **Categories** - Name, slug, description. Simple taxonomy.
 - **Tags** - Name, slug, description. Granular cross-cutting taxonomy.
+
+### Singles (globals)
+
+- **Site Settings** - Site name, tagline, description, logo, social handles (Twitter, GitHub, LinkedIn). Drives the Header, Footer, and SEO metadata.
+- **Navigation** - Header link list + footer "Read" link list + UI toggles (show theme toggle, show search icon).
+- **Homepage** - Hero title/subtitle + section-visibility toggles (featured post, latest grid, category strip, newsletter CTA) + newsletter heading/subheading.
 
 ### Users as authors
 
 The template uses the built-in `users` collection as the author identity: posts relate directly to users via the `author` relationship field. Each user has additional scalar fields defined in `configs/codefirst.config.ts`:
 
 - `bio` (textarea): short author bio shown on post footers and `/authors/[slug]`.
-- `avatarUrl` (text): URL of an avatar image. Plain text (not an uploaded media record) because user-extension fields support only scalar types today. Full URL or a filename served from your seed-media base URL.
-- `slug` (text): the URL slug for `/authors/[slug]`. Unique per user.
+- `avatarUrl` (text): URL of an avatar image. Plain text (not an uploaded media record) because user-extension fields support only scalar types today.
+- `slug` (text): URL slug for `/authors/[slug]`. Unique per user.
 
 No separate `authors` collection; no duplicated profile data.
 
 ### Roles
 
-Three roles seeded by the template on first run:
+Three roles seeded on first run:
 
 - **Administrator** (`admin`) - full access to content, taxonomy, media, and users.
-- **Editor** (`editor`) - can create, edit, and publish any post; manages categories, tags, and media.
-- **Author** (`author`) - can draft and edit their own posts; reads published content.
+- **Editor** (`editor`) - create, edit, and publish any post; manages categories, tags, and media.
+- **Author** (`author`) - draft and edit their own posts; read published content.
 
 Fine-grained permissions are not pre-assigned by the template. The three roles exist as labeled buckets; configure their permission rules via `/admin/roles/<slug>` or programmatically with `nextly.roles.setPermissions({...})`. The `super-admin` role (seeded by Nextly core) bypasses all access checks.
 
@@ -37,134 +52,90 @@ Collection access policies in `src/access/` gate who can reach each CRUD operati
 
 Row-level checks (authors only editing their own posts) live at the database permission layer, not in the access functions - the `AccessControlFunction` signature doesn't receive the target document.
 
-### Singles
+## Pages
 
-- **Site Settings** - Site name, tagline, description, logo, social links (Twitter, GitHub, LinkedIn). Used by the Header and Footer components.
+| Route                         | What it is                                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `/`                           | Homepage: hero + featured + latest grid + category strip + newsletter CTA (all toggleable from the Homepage single) |
+| `/blog`                       | All posts, paginated 9 per page                                                                                     |
+| `/blog/[slug]`                | Post detail with reading progress, auto-TOC, share bar, author card, related posts, prev/next                       |
+| `/authors/[slug]`             | Profile-centered author page with big avatar, bio, stats, post grid                                                 |
+| `/categories`                 | All categories as a card grid with descriptions + post counts                                                       |
+| `/categories/[slug]`          | Category archive, paginated, per-category RSS link                                                                  |
+| `/tags`                       | Tag cloud sized by post count                                                                                       |
+| `/tags/[slug]`                | Tag archive, paginated, per-tag RSS link                                                                            |
+| `/search`                     | Client-side Pagefind search                                                                                         |
+| `/feed.xml`                   | Site-wide RSS feed                                                                                                  |
+| `/categories/[slug]/feed.xml` | Per-category RSS                                                                                                    |
+| `/tags/[slug]/feed.xml`       | Per-tag RSS                                                                                                         |
+| `/authors/[slug]/feed.xml`    | Per-author RSS                                                                                                      |
+| `/sitemap.xml`                | Sitemap covering posts, categories, tags, authors, and static pages                                                 |
 
-### Frontend Pages
+### Design system
 
-All pages are Server Components using Nextly's Direct API (zero HTTP overhead).
+Light and dark modes are driven by CSS custom properties in `src/app/globals.css`. The theme toggle in the header cycles Light / System / Dark and persists to `localStorage`. First paint has the correct theme applied via an inline script in `<head>` (no flash-of-wrong-theme).
 
-| Route                | Page             | Description                                                      |
-| -------------------- | ---------------- | ---------------------------------------------------------------- |
-| `/`                  | Homepage         | Hero section with site name/tagline + latest 3 posts             |
-| `/blog`              | Blog Listing     | All published posts in a grid with pagination (9 per page)       |
-| `/blog/[slug]`       | Single Post      | Full post with rich text, author card, categories, related posts |
-| `/authors/[slug]`    | Author Profile   | Author bio + all their published posts                           |
-| `/categories/[slug]` | Category Archive | Posts filtered by category with pagination                       |
+Typography lives under `.prose-blog` for the rich-text renderer; tokens adjust across themes automatically.
 
-### Components
+## Schema approaches
 
-| Component        | Purpose                                                      |
-| ---------------- | ------------------------------------------------------------ |
-| Header           | Site name and navigation                                     |
-| Footer           | Copyright, social links, "Powered by Nextly"                 |
-| PostCard         | Post preview card with image, title, excerpt, metadata       |
-| PostGrid         | Responsive grid layout (1/2/3 columns)                       |
-| Pagination       | URL-based page navigation (?page=N)                          |
-| AuthorCard       | Author avatar, name, bio (compact and full variants)         |
-| CategoryBadge    | Linked category pill                                         |
-| RichTextRenderer | Renders Lexical rich text as HTML with Tailwind prose styles |
+The template supports all three Nextly schema approaches:
 
-### Seed Data (optional)
-
-When demo content is selected, the seed system creates:
-
-- 5 blog posts about web development topics
-- 2 authors (Jane Smith, John Doe)
-- 3 categories (Technology, Tutorials, Opinion)
-- Site settings with name, tagline, and social links
-- Placeholder images for posts and author avatars
-
-Demo content is seeded automatically on first `pnpm dev`.
-
-## Schema Approaches
-
-This template supports all three approaches:
-
-**Code-first** (`configs/codefirst.config.ts`): Full schema definitions in TypeScript. Best for developers who want type safety and version control.
-
-**Visual** (`configs/visual.config.ts`): Empty config. Schemas are created by the seed script or manually via the Admin Panel.
-
-**Both** (`configs/both.config.ts`): Core schemas in code with the ability to add more via the Admin Panel.
+- **Code-first** (`configs/codefirst.config.ts`) - Full schemas in TypeScript. Best for version control and type safety.
+- **Visual** (`configs/visual.config.ts`) - Empty config. Create schemas via the Admin Panel.
+- **Both** (`configs/both.config.ts`) - Core schemas in code, extendable via the UI.
 
 ## Customization
 
+### Hero, homepage sections, navigation - edit from the admin
+
+Go to `/admin/singles/homepage` and change the hero title, subtitle, or newsletter copy. Toggle sections on/off with the checkboxes. Same for Site Settings and Navigation - all three singles ship with sensible defaults but are editable without touching code.
+
+### Theme colors
+
+Edit CSS variables in `src/app/globals.css`:
+
+- Light values under `[data-theme="light"]`
+- Dark values under `[data-theme="dark"]`
+- `--color-accent` is the single accent color used for links, the reading progress bar, focus rings, and newsletter buttons
+
+### Photos
+
+Replace the placeholder gradient SVGs in `seed/media/`. See `seed/media/README.md` for a full guide on sizing, format, and where to source photography.
+
 ### Adding fields to posts
 
-Edit `nextly.config.ts` and add fields to the posts collection:
+Edit `src/collections/Posts/index.ts`:
 
 ```typescript
-const posts = defineCollection({
-  slug: "posts",
-  fields: [
-    // ...existing fields...
-    checkbox({ name: "featured", defaultValue: false }),
-    text({ name: "metaTitle" }),
-    textarea({ name: "metaDescription" }),
-  ],
-});
+// src/collections/Posts/index.ts
+fields: [
+  // ...existing fields...
+  checkbox({ name: "pinned", defaultValue: false }),
+  text({ name: "subtitle" }),
+],
 ```
 
-### Changing the design
-
-All components use Tailwind CSS utility classes. Edit the component files in `src/components/` to change colors, spacing, typography, or layout.
+Re-run `pnpm dev`. The schema-change handler walks you through applying the migration.
 
 ### Adding pages
 
-Create new files in `src/app/(frontend)/` following the Next.js App Router conventions. The `(frontend)` route group provides the Header/Footer layout automatically.
-
-### Adding image blur placeholders (optional)
-
-`next/image` loads images without a blur-in effect by default. To add blurred placeholders that fade into the final image, install `plaiceholder`:
-
-```bash
-pnpm add plaiceholder sharp
-```
-
-Then generate a blur data URL at render time and pass it to the Image component:
-
-```tsx
-import { getPlaiceholder } from "plaiceholder";
-
-async function getBlur(url: string) {
-  const res = await fetch(url);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const { base64 } = await getPlaiceholder(buf);
-  return base64;
-}
-
-const blurDataURL = featuredImage?.url
-  ? await getBlur(featuredImage.url)
-  : undefined;
-
-<Image
-  src={featuredImage.url}
-  placeholder={blurDataURL ? "blur" : "empty"}
-  blurDataURL={blurDataURL}
-  // ...rest of props
-/>;
-```
-
-For production, cache the result (e.g. via React `cache()` or a persistent key-value store) so plaiceholder only runs once per image.
+Create new files in `src/app/(frontend)/` following the Next.js App Router conventions. The `(frontend)` route group provides the Header and Footer via `layout.tsx`.
 
 ## Performance
 
-The template pre-renders every dynamic page at build time via `generateStaticParams`:
+Dynamic pages pre-render at build time via `generateStaticParams` and revalidate every 60 seconds (ISR):
 
 - Every published post
 - Every author
 - Every category
 - Every tag
 
-New content gets rendered on-demand and cached (`revalidate = 60` — 60-second ISR window). This gives you static-site speed with CMS flexibility.
+New content renders on-demand and caches until the next ISR tick. Adjust the window by editing `export const revalidate = 60` in the relevant page. Lower for fresher content at higher DB cost; higher for the opposite.
 
-- **Tuning the staleness window**: edit `export const revalidate = 60` in the page file. Lower for fresher content at higher DB cost; higher for the opposite.
-- **Pre-render cap**: each dynamic route pre-generates up to 1000 entries at build time. Beyond that, posts/authors/categories/tags still render on-demand via ISR — they just miss the build-time boost.
+Images use `next/image` with a `sizes` attribute so phones don't download desktop-sized files. The `unoptimized` prop is set on avatar images since they can come from arbitrary remote URLs that aren't in `next.config.images.remotePatterns`.
 
-`<Image>` components include a `sizes` attribute so responsive images are served at the right width per breakpoint (phones don't download desktop-sized images).
-
-## Data Fetching
+## Data fetching
 
 All pages fetch data using Nextly's Direct API:
 
@@ -172,7 +143,7 @@ All pages fetch data using Nextly's Direct API:
 import { getNextly } from "@revnixhq/nextly";
 
 export default async function BlogPage() {
-  const nextly = getNextly();
+  const nextly = await getNextly();
   const result = await nextly.find({
     collection: "posts",
     where: { status: { equals: "published" } },
@@ -184,4 +155,97 @@ export default async function BlogPage() {
 }
 ```
 
-The Direct API runs in Server Components with zero HTTP overhead. Relationships are populated via the `depth` parameter.
+The Direct API runs in Server Components with zero HTTP overhead. Relationships populate via the `depth` parameter. Per-request caching (React `cache()`) avoids duplicate fetches when multiple components need the same data; see `src/lib/queries/` for the cached helpers.
+
+## Search
+
+Search uses [Pagefind](https://pagefind.app), a static search index:
+
+1. `pnpm build` compiles Next.js and runs `scripts/build-search-index.mjs`, which scans the rendered HTML and writes an index under `public/pagefind/`.
+2. The `/search` page loads `pagefind.js` on demand and runs queries entirely in the browser.
+3. No server-side search infrastructure required.
+
+To rebuild the index manually without a full site build: `pnpm search:index`.
+
+On platforms other than Vercel, set a `Content-Type: application/wasm` header for `public/pagefind/*.wasm` or Pagefind's MIME check may fail.
+
+## Newsletter
+
+The homepage and footer newsletter forms submit to the `@revnixhq/plugin-form-builder` plugin. Submissions are stored in the `form-submissions` collection and visible at `/admin/collections/form-submissions`.
+
+The seed creates a form with slug `newsletter` on first run. If the seed skipped it (or you removed it), create a new Form at `/admin/collections/forms` with slug `newsletter` and the plugin + frontend will start working.
+
+To send a welcome email on subscription, add an `afterChange` hook on the `form-submissions` collection that calls your email provider when the referenced form's slug is `newsletter`.
+
+## SEO
+
+- **Metadata API**: every page defines `generateMetadata` with title, description, canonical, Open Graph, and Twitter card. Per-post SEO fields (metaTitle, metaDescription, ogImage, canonical, noindex) override the defaults.
+- **JSON-LD**: post detail ships Article + BreadcrumbList, category/tag archives ship CollectionPage + BreadcrumbList, author pages ship Person + BreadcrumbList, homepage ships WebSite.
+- **Sitemap**: auto-generated at `/sitemap.xml` from published content.
+- **OG images**: dynamic per-post OG at `/blog/[slug]/opengraph-image` (and similar for categories, tags, authors) - Vercel's `@vercel/og` with Next.js conventions. Uploaded per-post `seo.ogImage` takes precedence when set.
+- **RSS**: four feeds - site-wide, per-category, per-tag, per-author. All include the last 20 published posts with title, link, description, and pubDate.
+
+## File layout
+
+```
+templates/blog/
+  configs/
+    codefirst.config.ts    # Code-first schemas + plugins
+    both.config.ts         # Code-first + UI extensions
+    visual.config.ts       # Empty; UI-created schemas only
+  seed/
+    media/                 # Gradient SVG placeholders (see README there)
+    seed-data.json         # 15 posts + 3 users + 4 categories + 8 tags
+    nextly.seed.ts         # Idempotent seed script (users, roles, content, forms)
+  scripts/
+    build-search-index.mjs # Pagefind index generator
+  src/
+    access/                # RBAC access-control functions
+    actions/               # Server Actions (newsletter submission)
+    app/
+      layout.tsx           # Root layout with theme-init script
+      globals.css          # Design tokens + .prose-blog
+      sitemap.ts
+      robots.ts
+      feed.xml/            # Site-wide RSS
+      opengraph-image.tsx  # Default OG image
+      (frontend)/          # Route group for the public-facing blog
+      categories/[slug]/feed.xml/
+      tags/[slug]/feed.xml/
+      authors/[slug]/feed.xml/
+    collections/
+      Posts/               # Folder collection with its own hooks
+      Categories.ts        # Flat (trivial collection)
+      Tags.ts              # Flat (trivial collection)
+    globals/
+      SiteSettings/
+      Navigation/
+      Homepage/
+    hooks/
+      auto-slug.ts         # Shared beforeValidate hook (Posts + Categories + Tags)
+    lib/
+      extract-toc.ts       # HTML -> TOC utility for post detail
+      queries/             # Cached Direct-API wrappers
+      rss.ts               # Minimal RSS 2.0 builder
+      site-url.ts
+    components/            # React components (26 total)
+```
+
+The architecture follows Payload CMS's hybrid pattern: folder-per-collection-when-complex, flat-file-when-trivial. Hooks used by multiple collections live in `src/hooks/`; collection-specific hooks live inside that collection's folder.
+
+## Known limitations
+
+These are tracked as follow-ups in `findings/task-17-*.md` in the Nextly integrations workspace:
+
+- On the very first `pnpm dev`, physical tables for the three Singles (site-settings, navigation, homepage) may be created AFTER the user seed runs. The seed's `updateGlobal` calls are wrapped in try/catch and log a warning; the admin panel lets you edit the singles after scaffolding. Subsequent dev restarts work correctly.
+- The `nextly.find({ collection: "users", ... })` generic path routes through the dynamic-collection registry; the template uses `nextly.users.findOne` instead.
+- `nextly.roles.create` may return an opaque error on some installs; the seed skips gracefully and you can create roles manually at `/admin/roles`.
+
+## Extending
+
+This template is intended as a starting point. Common customizations:
+
+- **Change the aesthetic**: edit CSS tokens in `globals.css` and swap the `Geist` font in `src/app/layout.tsx` for your choice.
+- **Replace the newsletter provider**: the `submit-newsletter.ts` Server Action can call any HTTP endpoint. Swap the `form-submissions.create` body for a Resend / ConvertKit / Mailchimp API call if you'd rather bypass the Nextly admin.
+- **Add comments**: drop in Giscus (GitHub Discussions) or Commento. Comments aren't shipped by default because they're spam magnets and rarely used on modern tech blogs - but the template stays out of the way if you add them.
+- **Scheduled publishing**: add a `publishAt` date field + a cron job that flips `status: "scheduled"` to `status: "published"` when the date passes. The template doesn't ship this because it needs a job runner (Vercel Cron, BullMQ, etc.) - your infra, your choice.
