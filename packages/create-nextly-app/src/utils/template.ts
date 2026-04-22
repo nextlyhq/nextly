@@ -315,6 +315,10 @@ export async function generatePackageJson(
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
     "eslint-config-next": runtimeVersions["eslint-config-next"],
+    // Pagefind powers /search in the blog template. Zero-config
+    // static index generated at `next build` time. Templates that
+    // don't ship a /search page simply won't invoke it.
+    pagefind: "^1.1.0",
   };
 
   const pkg = {
@@ -327,7 +331,12 @@ export async function generatePackageJson(
       // nextly.config.ts, and respawns the child when the schema changes.
       // Using `next dev --turbopack` directly skips DB init + prompts.
       dev: "nextly dev",
-      build: "nextly migrate && next build",
+      // Build: migrate DB + compile Next.js + (if present) generate
+      // the Pagefind search index. Templates without the search
+      // script silently skip the last step.
+      build:
+        "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)",
+      "search:index": "node scripts/build-search-index.mjs",
       start: "next start",
       lint: "next lint",
       nextly: "nextly",
