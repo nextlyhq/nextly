@@ -640,6 +640,54 @@ export default async function seed(): Promise<void> {
     }
   }
 
+  // Newsletter form: seed via the form-builder plugin. The frontend
+  // NewsletterCta component submits to `form-submissions` referencing
+  // this form's id. Wrapped in try/catch because the plugin's forms
+  // collection may not be registered on every install path.
+  console.log("  Seeding Newsletter form...");
+  try {
+    const existing = await nextly.find({
+      collection: "forms",
+      where: { slug: { equals: "newsletter" } },
+      limit: 1,
+    });
+    if (existing.totalDocs === 0) {
+      await nextly.create({
+        collection: "forms",
+        data: {
+          slug: "newsletter",
+          title: "Newsletter",
+          fields: [
+            {
+              blockType: "text",
+              name: "name",
+              label: "Name",
+              required: false,
+              width: 50,
+            },
+            {
+              blockType: "email",
+              name: "email",
+              label: "Email",
+              required: true,
+              width: 50,
+            },
+          ],
+          submitButtonLabel: "Subscribe",
+          confirmationMessage: "Thanks for subscribing! We'll be in touch.",
+        },
+      });
+      console.log("  Newsletter form created.");
+    }
+  } catch (err) {
+    console.log(
+      `  Could not seed Newsletter form: ${err instanceof Error ? err.message : String(err)}`
+    );
+    console.log(
+      "  Create it manually at /admin/collections/forms with slug 'newsletter'."
+    );
+  }
+
   // Step 3: End-of-run summary
   const uploaded = outcomes.filter(o => "id" in o).length;
   const missed = outcomes.filter(
