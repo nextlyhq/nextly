@@ -9,6 +9,7 @@
 // to `nextly.config.ts` at the scaffolded project root - `src/` lives
 // right next to it there.
 import { defineConfig, text, textarea } from "@revnixhq/nextly/config";
+import { formBuilderPlugin } from "@revnixhq/plugin-form-builder";
 
 import { Categories } from "./src/collections/Categories";
 import { Posts } from "./src/collections/Posts";
@@ -20,6 +21,12 @@ import { SiteSettings } from "./src/globals/SiteSettings";
 export default defineConfig({
   collections: [Posts, Categories, Tags],
   singles: [SiteSettings, Navigation, Homepage],
+
+  // Form builder plugin: powers the homepage/footer newsletter form
+  // and any other forms you create in the admin (contact, lead
+  // capture). Registers two collections - `forms` and
+  // `form-submissions` - that are admin-editable.
+  plugins: [formBuilderPlugin],
 
   // Users are the author identity: posts relate to users, and
   // `/authors/[slug]` resolves to a user by their `slug` extension field.

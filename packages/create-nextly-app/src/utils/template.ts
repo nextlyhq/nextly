@@ -295,6 +295,12 @@ export async function generatePackageJson(
     dependencies["@revnixhq/adapter-drizzle"] =
       versions["@revnixhq/adapter-drizzle"];
     dependencies[database.adapter] = versions[database.adapter] || "latest";
+    // Form builder plugin ships with every scaffold so templates that
+    // want it (e.g. the blog template's Newsletter form) work out of
+    // the box. It's a small dep and unused templates simply don't
+    // import it - no runtime cost.
+    dependencies["@revnixhq/plugin-form-builder"] =
+      versions["@revnixhq/plugin-form-builder"] || "latest";
   }
 
   // DB drivers are regular deps of their respective adapter packages and

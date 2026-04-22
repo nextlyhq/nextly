@@ -6,6 +6,7 @@
 // Admin Panel. This gives you the best of both worlds: version-controlled
 // core schemas with the flexibility to extend via the UI.
 import { defineConfig, text, textarea } from "@revnixhq/nextly/config";
+import { formBuilderPlugin } from "@revnixhq/plugin-form-builder";
 
 // Imports use `./src/...` relative paths (not `@/*` alias) because
 // Nextly's CLI loads this config through plain Node.js, which does not
@@ -20,6 +21,12 @@ import { SiteSettings } from "./src/globals/SiteSettings";
 export default defineConfig({
   collections: [Posts, Categories, Tags],
   singles: [SiteSettings, Navigation, Homepage],
+
+  // Form builder plugin registers `forms` and `form-submissions`
+  // collections so the newsletter form (and any other forms users
+  // create in the admin) work out of the box. Plugin docs:
+  // packages/plugin-form-builder/README.md in the Nextly monorepo.
+  plugins: [formBuilderPlugin],
 
   users: {
     fields: [
