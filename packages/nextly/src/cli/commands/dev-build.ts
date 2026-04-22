@@ -122,10 +122,14 @@ export async function syncCollections(
     await performAutoSync(config, adapter, result, options, context);
   }
 
-  // Step 6: Run seeders if requested
-  if (options.seed) {
-    await performSeeding(adapter, options, context, configResult);
-  }
+  // Seeding moved out of syncCollections to the orchestrator (runDbSync).
+  // When collections AND singles exist, running the user seed here caused
+  // the seed to execute before singles' physical tables were created by
+  // syncSingles (which runs AFTER syncCollections). Any seed that calls
+  // nextly.updateGlobal("...") then failed with
+  //   DatabaseError: no such table: single_<slug>
+  // even though the singles were registered in dynamic_singles. The fix is
+  // to seed AFTER every sync step has run — runDbSync now owns that call.
 }
 
 // ============================================================================

@@ -264,51 +264,54 @@ export class RoleMutationService extends BaseService {
         }
       }
 
-      // Wrap all database mutations in a transaction for atomicity
+      // Wrap mutations in a transaction when the underlying driver allows
+      // async callbacks (postgres, mysql). better-sqlite3 is synchronous and
+      // rejects promise-returning callbacks with "Transaction function cannot
+      // return a promise" — for SQLite we fall back to sequential execution
+      // on the base connection. The method's comment block at the top of
+      // the file already documents this constraint; the fix is to honor it.
       try {
-        // Required by Drizzle ORM: transaction callback type varies by dialect.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await this.db.transaction(async (tx: any) => {
-          // Create the role
-          await tx.insert(this.tables.roles).values(roleData);
+        const isSqlite = this.dialect === "sqlite";
 
-          // Insert all role-permission mappings (only if we have permissions)
-          // TODO: Use RolePermissionService once it's created
+        const runMutations = async (
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dialect-specific Drizzle typing
+          executor: any
+        ): Promise<{
+          assignedPermIds: string[];
+          assignedChildRoleIds: string[];
+        }> => {
+          await executor.insert(this.tables.roles).values(roleData);
+
           if (uniqueIds.length > 0) {
             const rolePermissionData = uniqueIds.map(permissionId => ({
               id: randomUUID(),
               roleId: id,
               permissionId,
             }));
-
-            await tx
+            await executor
               .insert(this.tables.rolePermissions)
               .values(rolePermissionData);
           }
 
-          // Insert role inheritance relationships
-          // TODO: Use RoleInheritanceService.addRoleInheritance() once it's created
           if (uniqueChildRoleIds.length > 0) {
             const roleInheritanceData = uniqueChildRoleIds.map(childRoleId => ({
               id: randomUUID(),
               parentRoleId: id,
               childRoleId,
             }));
-
-            await tx
+            await executor
               .insert(this.tables.roleInherits)
               .values(roleInheritanceData);
           }
 
-          // Fetch created data for response (within transaction)
-          const rolePermRows = await tx.query.rolePermissions.findMany({
+          const rolePermRows = await executor.query.rolePermissions.findMany({
             where: eq(this.tables.rolePermissions.roleId, id),
           });
           const assignedPermIds = (
             rolePermRows as Array<{ permissionId: unknown }>
           ).map(rp => String(rp.permissionId));
 
-          const childRows = await tx
+          const childRows = await executor
             .select({ childRoleId: this.tables.roleInherits.childRoleId })
             .from(this.tables.roleInherits)
             .where(eq(this.tables.roleInherits.parentRoleId, id));
@@ -316,14 +319,18 @@ export class RoleMutationService extends BaseService {
             childRows as Array<{ childRoleId: unknown }>
           ).map(r => String(r.childRoleId));
 
-          return {
-            assignedPermIds,
-            assignedChildRoleIds,
-          };
-        });
+          return { assignedPermIds, assignedChildRoleIds };
+        };
 
-        // Invalidate cache after successful transaction
-        invalidatePermissionCache({ roleId: id });
+        const result = isSqlite
+          ? await runMutations(this.db)
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle transaction callback type varies by dialect
+            await this.db.transaction(async (tx: any) => runMutations(tx));
+
+        // Invalidate cache after successful transaction. `void` marks the
+        // promise as intentionally unawaited - cache invalidation is
+        // fire-and-forget and must not block the create response.
+        void invalidatePermissionCache({ roleId: id });
 
         return {
           success: true,
@@ -341,6 +348,16 @@ export class RoleMutationService extends BaseService {
           },
         };
       } catch (e: unknown) {
+        // Log the raw error so developers can see the true cause. The mapped
+        // message returned to callers is intentionally generic for safety,
+        // but silently swallowing the original error made "Failed to create
+        // role" undebuggable (no stack, no DB code, no SQL). Surface the
+        // full error at WARN so it appears in dev terminals without needing
+        // verbose logging turned on.
+        this.logger.warn(
+          `createRole transaction failed: ${e instanceof Error ? e.message : String(e)}`,
+          { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
+        );
         return mapDbErrorToServiceError(e, {
           defaultMessage: "Failed to create role",
           "unique-violation": "A role with this slug or name already exists",
@@ -348,6 +365,14 @@ export class RoleMutationService extends BaseService {
         });
       }
     } catch (e: unknown) {
+      // Same rationale as the inner catch: log the raw error so the
+      // developer sees the actual cause (e.g. a validation query failing
+      // because a referenced table is missing). The outer catch covers
+      // errors thrown before the transaction begins.
+      this.logger.warn(
+        `createRole failed before transaction: ${e instanceof Error ? e.message : String(e)}`,
+        { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
+      );
       return mapDbErrorToServiceError(e, {
         defaultMessage: "Failed to create role",
         "unique-violation": "A role with this slug or name already exists",
@@ -572,7 +597,7 @@ export class RoleMutationService extends BaseService {
           changes.permissionIds !== undefined ||
           changes.childRoleIds !== undefined
         ) {
-          invalidatePermissionCache({ roleId });
+          void invalidatePermissionCache({ roleId });
         }
 
         return {
@@ -680,8 +705,8 @@ export class RoleMutationService extends BaseService {
           .where(eq(this.tables.roles.id, roleId));
       });
 
-      // Invalidate cache after successful transaction
-      invalidatePermissionCache({ roleId });
+      // Invalidate cache after successful transaction (fire-and-forget).
+      void invalidatePermissionCache({ roleId });
 
       return {
         success: true,

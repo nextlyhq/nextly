@@ -81,8 +81,16 @@ export function mapDbErrorToServiceError(
     }
   }
 
-  // In development, include the actual error for debugging
-  if (process.env.NODE_ENV === "development" && dbErr.kind === "internal") {
+  // In development, include the actual error whenever we fell back to the
+  // generic default message. Previously this only applied to "internal"
+  // errors, which meant classified errors with no override (e.g. an
+  // unmapped constraint or fk-violation for a caller that only set a
+  // defaultMessage) produced the opaque default with no way to see why.
+  // Dev-only surface keeps production responses clean.
+  if (
+    process.env.NODE_ENV === "development" &&
+    message === messages.defaultMessage
+  ) {
     const originalError =
       error instanceof Error ? error.message : String(error);
     message = `${message} (Dev: ${originalError})`;
