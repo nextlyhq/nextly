@@ -5,6 +5,8 @@
 
 export * from "./types";
 export * from "./site-settings";
+export * from "./navigation";
+export * from "./homepage";
 export * from "./posts";
 export * from "./authors";
 export * from "./categories";
