@@ -10,7 +10,6 @@ import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { AccessControlService } from "./access";
-import { FieldPermissionCheckerService } from "./auth/field-permission-checker-service";
 import type { PermissionSeedService } from "./auth/permission-seed-service";
 import { CollectionFileManager } from "./collection-file-manager";
 import {
@@ -64,11 +63,6 @@ export class CollectionsHandler {
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
-
-    const fieldPermissionChecker = new FieldPermissionCheckerService(
-      adapter,
-      logger
-    );
 
     const hookRegistry = getHookRegistry();
 
@@ -142,7 +136,6 @@ export class CollectionsHandler {
       this.fileManager,
       this.collectionService,
       this.relationshipService,
-      fieldPermissionChecker,
       hookRegistry,
       accessControlService,
       componentDataService

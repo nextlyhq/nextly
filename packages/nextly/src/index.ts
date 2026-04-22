@@ -32,18 +32,6 @@ export type {
   NewDynamicCollection,
 } from "./schemas/dynamic-collections";
 
-// Export field-level permission types
-export type {
-  FieldPermissionRule,
-  FieldPermissionInsertData,
-  FieldPermissionUpdateData,
-  PermissionCondition,
-  PermissionContext,
-  FieldAccessResult,
-  FieldPermissionCacheKey,
-  CachedFieldPermission,
-} from "./types/field-permissions";
-
 // Export pagination types
 export type {
   PaginatedResponse,

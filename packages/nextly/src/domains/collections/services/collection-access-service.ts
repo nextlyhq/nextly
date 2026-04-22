@@ -87,7 +87,7 @@ export class CollectionAccessService extends BaseService {
   /**
    * Check collection-level access for an operation.
    *
-   * Called FIRST before any other security checks (hooks, field permissions).
+   * Called FIRST before any other security checks (hooks).
    * Returns early with 403 if access is denied.
    *
    * When `overrideAccess` is true, access control is bypassed entirely (returns null).

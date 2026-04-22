@@ -21,11 +21,7 @@ import { createAdapterFromEnv } from "../database/factory";
 import { ServiceContainer } from "../services";
 import { ServiceResult } from "../types/auth";
 
-import {
-  dispatchAuth,
-  dispatchFieldPermissions,
-  dispatchRbac,
-} from "./handlers/auth-dispatcher";
+import { dispatchAuth, dispatchRbac } from "./handlers/auth-dispatcher";
 import { dispatchCollections } from "./handlers/collection-dispatcher";
 import { dispatchComponents } from "./handlers/component-dispatcher";
 import {
@@ -69,7 +65,6 @@ export class ServiceDispatcher {
     "rbac",
     "auth",
     "collections",
-    "fieldPermissions",
     "singles",
     "forms",
     "components",
@@ -220,8 +215,6 @@ export class ServiceDispatcher {
         return dispatchAuth(this.container, method, p, body);
       case "collections":
         return dispatchCollections(this.container, method, p, body);
-      case "fieldPermissions":
-        return dispatchFieldPermissions(this.container, method, p, body);
       case "rbac":
         return dispatchRbac(this.container, method, p, body);
       case "singles":

@@ -14,9 +14,8 @@
  * - AuthService — user registration, password reset / change, email
  *   verification. Consumed by the auth route handlers via deps-bridge.ts.
  *
- * `FieldPermissionCheckerService` and `AccessControlService` are created
- * inline inside the `CollectionService` factory because they only exist
- * as dependencies of that one consumer.
+ * `AccessControlService` is created inline inside the `CollectionService`
+ * factory because it only exists as a dependency of that one consumer.
  */
 
 import { AuthService } from "../../domains/auth/services/auth-service";

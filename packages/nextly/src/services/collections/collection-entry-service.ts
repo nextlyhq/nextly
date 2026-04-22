@@ -37,7 +37,6 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
-import type { FieldPermissionCheckerService } from "../auth/field-permission-checker-service";
 import type { RBACAccessControlService } from "../auth/rbac-access-control-service";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -79,7 +78,6 @@ export class CollectionEntryService extends BaseService {
     fileManager: CollectionFileManager,
     collectionService: DynamicCollectionService,
     relationshipService: CollectionRelationshipService,
-    fieldPermissionChecker: FieldPermissionCheckerService,
     hookRegistry: HookRegistry,
     accessControlService: AccessControlService,
     componentDataService?: ComponentDataService,
@@ -102,7 +100,6 @@ export class CollectionEntryService extends BaseService {
       fileManager,
       collectionService,
       relationshipService,
-      fieldPermissionChecker,
       this.accessService,
       this.hookService,
       componentDataService
@@ -113,7 +110,6 @@ export class CollectionEntryService extends BaseService {
       fileManager,
       collectionService,
       relationshipService,
-      fieldPermissionChecker,
       this.accessService,
       this.hookService,
       componentDataService

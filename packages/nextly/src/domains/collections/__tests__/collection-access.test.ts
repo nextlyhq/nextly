@@ -3,8 +3,7 @@
  *
  * Tests for the access control behaviour of CollectionEntryService:
  * checkCollectionAccess for create/read/update/delete, owner-only filtering
- * via getAccessQueryConstraint, RBAC integration, field-level permissions,
- * and overrideAccess bypass.
+ * via getAccessQueryConstraint, RBAC integration, and overrideAccess bypass.
  *
  * Covers:
  * - Access denied (403) for each CRUD operation
@@ -12,7 +11,6 @@
  * - overrideAccess bypasses all access checks
  * - RBAC access control integration
  * - Owner-only filtering (access query constraint) on list/count
- * - Field-level permission filtering
  * - Error handling in access evaluation (fail-secure)
  */
 
@@ -28,7 +26,6 @@ import {
   createMockFileManager,
   createMockCollectionService,
   createMockRelationshipService,
-  createMockFieldPermissionChecker,
   createMockHookRegistry,
   createMockAccessControlService,
   createMockComponentDataService,
@@ -131,7 +128,6 @@ vi.mock("@nextly/lib/field-transform", () => ({
 function buildService(overrides: {
   accessControlService?: ReturnType<typeof createMockAccessControlService>;
   rbacAccessControlService?: { checkAccess: ReturnType<typeof vi.fn> };
-  fieldPermissionChecker?: ReturnType<typeof createMockFieldPermissionChecker>;
   collectionService?: ReturnType<typeof createMockCollectionService>;
 }) {
   const schema = createMockSchema();
@@ -145,8 +141,6 @@ function buildService(overrides: {
     createMockFileManager(schema) as never,
     (overrides.collectionService ?? createMockCollectionService()) as never,
     createMockRelationshipService() as never,
-    (overrides.fieldPermissionChecker ??
-      createMockFieldPermissionChecker()) as never,
     createMockHookRegistry() as never,
     (overrides.accessControlService ??
       createMockAccessControlService()) as never,
@@ -490,94 +484,6 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       // RBAC only runs when user is provided
       expect(rbac.checkAccess).not.toHaveBeenCalled();
       expect(result.success).toBe(true);
-    });
-  });
-
-  // ── Field-level permissions ───────────────────────────────────────────
-
-  describe("field-level permissions", () => {
-    it("should filter fields on listEntries when user is provided", async () => {
-      const fpc = createMockFieldPermissionChecker();
-      const { service, selectData } = buildService({
-        fieldPermissionChecker: fpc,
-      });
-      selectData.rows = [createSampleEntry()];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1", role: "editor" },
-      });
-
-      expect(fpc.filterFieldsBulk).toHaveBeenCalledWith(
-        "user-1",
-        "posts",
-        expect.any(Array),
-        "read"
-      );
-    });
-
-    it("should NOT filter fields when no user is provided", async () => {
-      const fpc = createMockFieldPermissionChecker();
-      const { service, selectData } = buildService({
-        fieldPermissionChecker: fpc,
-      });
-      selectData.rows = [createSampleEntry()];
-
-      await service.listEntries({
-        collectionName: "posts",
-      });
-
-      expect(fpc.filterFieldsBulk).not.toHaveBeenCalled();
-    });
-
-    it("should NOT filter fields when overrideAccess is true", async () => {
-      const fpc = createMockFieldPermissionChecker();
-      const { service, selectData } = buildService({
-        fieldPermissionChecker: fpc,
-      });
-      selectData.rows = [createSampleEntry()];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1" },
-        overrideAccess: true,
-      });
-
-      expect(fpc.filterFieldsBulk).not.toHaveBeenCalled();
-    });
-
-    it("should check canWriteField on createEntry when user is provided", async () => {
-      const fpc = createMockFieldPermissionChecker();
-      const { service, selectData } = buildService({
-        fieldPermissionChecker: fpc,
-      });
-      selectData.rows = [{ id: "new-1", title: "Test" }];
-
-      await service.createEntry(
-        { collectionName: "posts", user: { id: "user-1", role: "editor" } },
-        { title: "Test" }
-      );
-
-      expect(fpc.canAccessField).toHaveBeenCalled();
-    });
-
-    it("should check canWriteField on updateEntry when user is provided", async () => {
-      const fpc = createMockFieldPermissionChecker();
-      const { service, selectData } = buildService({
-        fieldPermissionChecker: fpc,
-      });
-      selectData.rows = [createSampleEntry()];
-
-      await service.updateEntry(
-        {
-          collectionName: "posts",
-          entryId: "entry-1",
-          user: { id: "user-1", role: "editor" },
-        },
-        { title: "Updated" }
-      );
-
-      expect(fpc.canAccessField).toHaveBeenCalled();
     });
   });
 

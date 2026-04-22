@@ -959,89 +959,6 @@ function parseSingleRoutes(
   return null;
 }
 
-function parseFieldPermissionRoutes(
-  id: string | undefined,
-  subresource: string | undefined,
-  httpMethod: string,
-  routeParams: Record<string, string>
-): ParsedRoute | null {
-  if (!id && httpMethod === "POST") {
-    // POST /api/field-permissions → create field permission
-    return {
-      service: "fieldPermissions",
-      operation: "create",
-      method: "createFieldPermission",
-      routeParams,
-    };
-  }
-
-  if (!id && httpMethod === "GET") {
-    // GET /api/field-permissions → list field permissions
-    // Supports query params: roleId, collectionSlug, fieldPath, action, page, pageSize
-    return {
-      service: "fieldPermissions",
-      operation: "list",
-      method: "listFieldPermissions",
-      routeParams,
-    };
-  }
-
-  if (id && !subresource && httpMethod === "GET") {
-    // GET /api/field-permissions/123 → get field permission by id
-    routeParams.id = id;
-    return {
-      service: "fieldPermissions",
-      operation: "single",
-      method: "getFieldPermissionById",
-      routeParams,
-    };
-  }
-
-  if (id && !subresource && httpMethod === "PUT") {
-    // PUT /api/field-permissions/123 → update field permission
-    routeParams.id = id;
-    return {
-      service: "fieldPermissions",
-      operation: "update",
-      method: "updateFieldPermission",
-      routeParams,
-    };
-  }
-
-  if (id && !subresource && httpMethod === "DELETE") {
-    // DELETE /api/field-permissions/123 → delete field permission
-    routeParams.id = id;
-    return {
-      service: "fieldPermissions",
-      operation: "delete",
-      method: "deleteFieldPermission",
-      routeParams,
-    };
-  }
-
-  if (id === "bulk" && httpMethod === "POST") {
-    // POST /api/field-permissions/bulk → bulk create field permissions
-    return {
-      service: "fieldPermissions",
-      operation: "create",
-      method: "bulkCreateFieldPermissions",
-      routeParams,
-    };
-  }
-
-  if (id === "bulk" && httpMethod === "DELETE") {
-    // DELETE /api/field-permissions/bulk → bulk delete field permissions
-    return {
-      service: "fieldPermissions",
-      operation: "delete",
-      method: "bulkDeleteFieldPermissions",
-      routeParams,
-    };
-  }
-
-  return null;
-}
-
 // ============================================================================
 // Components Routes Parser
 // ============================================================================
@@ -1712,17 +1629,6 @@ export function parseRestRoute(
   // Handle Permissions endpoints
   if (resource === "permissions") {
     const result = parsePermissionRoutes(id, httpMethod, routeParams);
-    if (result) return result;
-  }
-
-  // Handle Field Permissions endpoints
-  if (resource === "field-permissions") {
-    const result = parseFieldPermissionRoutes(
-      id,
-      subresource,
-      httpMethod,
-      routeParams
-    );
     if (result) return result;
   }
 

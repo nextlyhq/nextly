@@ -39,7 +39,6 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { toSnakeCase } from "../../../lib/case-conversion";
-import type { FieldPermissionCheckerService } from "../../../services/auth/field-permission-checker-service";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
@@ -85,7 +84,6 @@ export class CollectionQueryService extends BaseService {
     private readonly fileManager: CollectionFileManager,
     private readonly collectionService: DynamicCollectionService,
     private readonly relationshipService: CollectionRelationshipService,
-    private readonly fieldPermissionChecker: FieldPermissionCheckerService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
     private readonly componentDataService?: ComponentDataService
@@ -103,12 +101,10 @@ export class CollectionQueryService extends BaseService {
    * Returns a paginated response with documents and
    * comprehensive pagination metadata.
    *
-   * Applies collection-level access control, field permissions,
-   * and expands relationships.
+   * Applies collection-level access control and expands relationships.
    *
    * Security checks are applied in order:
    * 1. Collection-level access (AccessControlService)
-   * 2. Field-level permissions (FieldPermissionCheckerService)
    *
    * @param params - Collection name, user context, pagination, and query options
    * @returns Paginated response with docs array and pagination metadata
@@ -553,16 +549,6 @@ export class CollectionQueryService extends BaseService {
           });
       }
 
-      // Apply field-level permissions if user provided and access not overridden
-      if (accessUser?.id) {
-        expandedEntries = await this.fieldPermissionChecker.filterFieldsBulk(
-          accessUser.id,
-          params.collectionName,
-          expandedEntries,
-          "read"
-        );
-      }
-
       // ============================================================
       // GEO FILTERING: Apply geo operators in application layer
       // ============================================================
@@ -944,11 +930,10 @@ export class CollectionQueryService extends BaseService {
 
   /**
    * Get a single entry by ID.
-   * Applies collection-level access control and field permissions.
+   * Applies collection-level access control.
    *
    * Security checks are applied in order:
    * 1. Collection-level access (AccessControlService)
-   * 2. Field-level permissions (FieldPermissionCheckerService)
    *
    * @param params - Collection name, entry ID, optional user context, and depth
    * @returns Entry with expanded relationships or error
@@ -1096,16 +1081,6 @@ export class CollectionQueryService extends BaseService {
           depth: params.depth,
           select: params.select,
         });
-      }
-
-      // Apply field-level permissions if user provided and access not overridden
-      if (accessUser?.id) {
-        expandedEntry = await this.fieldPermissionChecker.filterFields(
-          accessUser.id,
-          params.collectionName,
-          expandedEntry,
-          "read"
-        );
       }
 
       // Execute afterRead hooks (code-registered)

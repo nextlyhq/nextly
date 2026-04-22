@@ -20,13 +20,6 @@ export type {
 export type { SeedResult } from "./services/permission-seed-service";
 
 export type {
-  PermissionCondition,
-  PermissionContext,
-  FieldPermissionRule,
-  FieldAccessResult,
-} from "@nextly/types/field-permissions";
-
-export type {
   MinimalUser,
   AccessControlContext,
   CollectionAccessControl,

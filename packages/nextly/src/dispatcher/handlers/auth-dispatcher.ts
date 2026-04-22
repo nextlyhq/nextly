@@ -1,12 +1,10 @@
 /**
- * Auth / RBAC / field-permission dispatch handlers.
+ * Auth / RBAC dispatch handlers.
  *
- * Groups three closely related method maps into one file:
+ * Groups two closely related method maps into one file:
  *
  * - `AUTH_METHODS` — login, register, password flows, email verification
  *   against `container.auth`.
- * - `FIELD_PERMISSION_METHODS` — CRUD + bulk ops against
- *   `container.fieldPermissions`.
  * - `RBAC_METHODS` — role / permission / role-permission / user-role /
  *   role-inheritance operations that need access to multiple sub-services
  *   on the container, so the handler receives the full `ServiceContainer`.
@@ -22,7 +20,6 @@ import {
 import type { MethodHandler, Params } from "../types";
 
 type AuthService = ServiceContainer["auth"];
-type FieldPermissionService = ServiceContainer["fieldPermissions"];
 type RbacContainer = ServiceContainer;
 
 // ============================================================
@@ -101,90 +98,6 @@ const AUTH_METHODS: Record<string, MethodHandler<AuthService>> = {
   },
   cleanupExpiredTokens: {
     execute: svc => svc.cleanupExpiredTokens(),
-  },
-};
-
-// ============================================================
-// Field permission methods
-// ============================================================
-
-const FIELD_PERMISSION_METHODS: Record<
-  string,
-  MethodHandler<FieldPermissionService>
-> = {
-  listFieldPermissions: {
-    execute: (svc, p) =>
-      svc.listFieldPermissions({
-        roleId: p.roleId,
-        collectionSlug: p.collectionSlug,
-        fieldPath: p.fieldPath,
-        action: p.action as "read" | "write" | "none" | undefined,
-        page: toNumber(p.page),
-        pageSize: toNumber(p.pageSize),
-        sortBy: p.sortBy as
-          | "roleId"
-          | "collectionSlug"
-          | "fieldPath"
-          | "createdAt"
-          | undefined,
-        sortOrder: p.sortOrder as "asc" | "desc" | undefined,
-      }),
-  },
-  getFieldPermissionById: {
-    execute: (svc, p) =>
-      svc.getFieldPermissionById(requireParam(p, "id", "Field permission ID")),
-  },
-  createFieldPermission: {
-    execute: (svc, _, body) => {
-      if (!body) throw new Error("Field permission data is required");
-      return svc.createFieldPermission(
-        body as Parameters<typeof svc.createFieldPermission>[0]
-      );
-    },
-  },
-  updateFieldPermission: {
-    execute: (svc, p, body) => {
-      if (!p.id || !body)
-        throw new Error("Field permission ID and update data are required");
-      return svc.updateFieldPermission(
-        p.id,
-        body as Parameters<typeof svc.updateFieldPermission>[1]
-      );
-    },
-  },
-  deleteFieldPermission: {
-    execute: (svc, p) =>
-      svc.deleteFieldPermission(requireParam(p, "id", "Field permission ID")),
-  },
-  bulkCreateFieldPermissions: {
-    execute: (svc, _, body) => {
-      const b = body as
-        | { permissions?: Parameters<typeof svc.bulkCreateFieldPermissions>[0] }
-        | undefined;
-      if (!b?.permissions || !Array.isArray(b.permissions)) {
-        throw new Error("Array of field permissions is required");
-      }
-      return svc.bulkCreateFieldPermissions(b.permissions);
-    },
-  },
-  bulkDeleteFieldPermissions: {
-    execute: async (svc, _, body) => {
-      const b = body as { ids?: string[] } | undefined;
-      if (!b?.ids || !Array.isArray(b.ids)) {
-        throw new Error("Array of field permission IDs is required");
-      }
-      const results = await Promise.allSettled(
-        b.ids.map(id => svc.deleteFieldPermission(id))
-      );
-      const succeeded = results.filter(r => r.status === "fulfilled").length;
-      const failed = results.filter(r => r.status === "rejected").length;
-      return {
-        success: failed === 0,
-        statusCode: failed === 0 ? 200 : 207,
-        message: `Deleted ${succeeded} field permissions, ${failed} failed`,
-        data: { succeeded, failed, total: b.ids.length },
-      };
-    },
   },
 };
 
@@ -448,17 +361,6 @@ export function dispatchAuth(
   const handler = AUTH_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute(services.auth, params, body);
-}
-
-export function dispatchFieldPermissions(
-  services: ServiceContainer,
-  method: string,
-  params: Params,
-  body: unknown
-): Promise<unknown> {
-  const handler = FIELD_PERMISSION_METHODS[method];
-  if (!handler) throw new Error(`Unknown method: ${method}`);
-  return handler.execute(services.fieldPermissions, params, body);
 }
 
 export function dispatchRbac(

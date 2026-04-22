@@ -878,19 +878,6 @@ function generateSqliteCreateStatements(): string[] {
       UNIQUE("parent_role_id", "child_role_id")
     )`,
 
-    // Field permissions table (depends on roles)
-    `CREATE TABLE IF NOT EXISTS "field_permissions" (
-      "id" TEXT PRIMARY KEY,
-      "role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
-      "collection_slug" TEXT NOT NULL,
-      "field_path" TEXT NOT NULL,
-      "action" TEXT NOT NULL,
-      "condition" TEXT,
-      "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
-      "updated_at" INTEGER NOT NULL DEFAULT (unixepoch()),
-      UNIQUE("role_id", "collection_slug", "field_path")
-    )`,
-
     // Media folders table (depends on users, self-referencing)
     `CREATE TABLE IF NOT EXISTS "media_folders" (
       "id" TEXT PRIMARY KEY,
