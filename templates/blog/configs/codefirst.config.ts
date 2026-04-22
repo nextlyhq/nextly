@@ -1,12 +1,19 @@
 // Code-first approach: schemas defined in TypeScript. Collections and
 // singles are synced to the database on `pnpm dev`. Edit the files under
-// ../src/collections/ and ../src/globals/ to add, remove, or modify fields.
+// src/collections/ and src/globals/ to add, remove, or modify fields.
+//
+// Imports are relative (`./src/...`) rather than using the `@/*` alias:
+// Nextly's CLI loads this file through plain Node.js module resolution
+// when running `nextly dev`, and Node does not honor tsconfig path
+// aliases. Using `./src/...` works because the CLI copies this file
+// to `nextly.config.ts` at the scaffolded project root - `src/` lives
+// right next to it there.
 import { defineConfig, text, textarea } from "@revnixhq/nextly/config";
 
-import { Categories } from "../src/collections/Categories";
-import { Posts } from "../src/collections/Posts";
-import { Tags } from "../src/collections/Tags";
-import { SiteSettings } from "../src/globals/SiteSettings";
+import { Categories } from "./src/collections/Categories";
+import { Posts } from "./src/collections/Posts";
+import { Tags } from "./src/collections/Tags";
+import { SiteSettings } from "./src/globals/SiteSettings";
 
 export default defineConfig({
   collections: [Posts, Categories, Tags],

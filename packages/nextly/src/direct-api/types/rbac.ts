@@ -118,6 +118,21 @@ export interface CreateRoleArgs extends DirectAPIConfig {
      * @default 0
      */
     level?: number;
+    /**
+     * Permission IDs to grant this role at creation.
+     *
+     * The role mutation service requires at least one permission OR at
+     * least two child roles. Pass an empty array / omit only when you
+     * also pass `childRoleIds` with two or more entries - otherwise the
+     * create call will fail with `"At least one permission is required
+     * to create a role"`.
+     */
+    permissionIds?: string[];
+    /**
+     * Child role IDs this role inherits from. See `permissionIds` for
+     * the validation rule around the two fields.
+     */
+    childRoleIds?: string[];
   };
 }
 

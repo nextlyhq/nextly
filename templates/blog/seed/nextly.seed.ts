@@ -15,7 +15,161 @@ import path from "path";
 
 import { getNextly } from "@revnixhq/nextly";
 
-import { seedRoles } from "./roles";
+// Role definitions for the three content roles the blog template seeds.
+// Inlined (rather than imported from a sibling file) because the CLI
+// only copies `seed-data.json` and `media/` from the template's seed/
+// folder into the scaffolded project - arbitrary .ts files under seed/
+// do not survive scaffolding. Keeping the role seed here means it
+// ships end-to-end.
+//
+// Fine-grained permissions are intentionally not assigned on these
+// roles. Permissions auto-generate when collections register and are
+// wired to the `super-admin` role on first boot. Configure per-role
+// permissions via the admin UI at /admin/roles/<slug> or with
+// nextly.roles.setPermissions({...}).
+const TEMPLATE_ROLES = [
+  {
+    slug: "admin",
+    name: "Administrator",
+    description:
+      "Full access to all content, taxonomy, media, and user management.",
+    level: 100,
+  },
+  {
+    slug: "editor",
+    name: "Editor",
+    description:
+      "Can create, edit, and publish any post. Manages categories, tags, and media.",
+    level: 50,
+  },
+  {
+    slug: "author",
+    name: "Author",
+    description:
+      "Can draft and edit their own posts. Reads published posts and taxonomy.",
+    level: 10,
+  },
+] as const;
+
+/**
+ * Pick permission IDs appropriate for each role. Fetches the catalog of
+ * auto-generated collection/single permissions (registered by Nextly
+ * during collection sync) and slices it per role scope.
+ *
+ * - admin: every permission in the system (broad default - tighten via
+ *   /admin/roles/<slug> after seeding).
+ * - editor: content + media permissions.
+ * - author: posts + media (create/read) and read-only access to the
+ *   content taxonomy.
+ *
+ * Returns an empty array if fetching permissions fails; callers still
+ * get a "at least one permission required" error from the core service
+ * in that case and the role will be skipped with a warning.
+ */
+async function pickPermissionIdsForRoles(
+  nextly: Awaited<ReturnType<typeof getNextly>>
+): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
+  try {
+    const all = await nextly.permissions.find({ limit: 500 });
+    const perms = all.docs;
+    out.admin = perms.map(p => (p as { id: string }).id);
+    out.editor = perms
+      .filter(p => {
+        const resource = (p as { resource?: string }).resource;
+        return (
+          resource === "posts" ||
+          resource === "categories" ||
+          resource === "tags" ||
+          resource === "media" ||
+          resource === "form-submissions"
+        );
+      })
+      .map(p => (p as { id: string }).id);
+    out.author = perms
+      .filter(p => {
+        const resource = (p as { resource?: string }).resource;
+        const action = (p as { action?: string }).action;
+        if (resource === "posts" || resource === "media") return true;
+        if (
+          (resource === "categories" || resource === "tags") &&
+          action === "read"
+        ) {
+          return true;
+        }
+        return false;
+      })
+      .map(p => (p as { id: string }).id);
+  } catch (err) {
+    console.log(
+      `  Warning: could not list permissions: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  return out;
+}
+
+async function seedRoles(
+  nextly: Awaited<ReturnType<typeof getNextly>>
+): Promise<Record<string, string>> {
+  const roleIdBySlug: Record<string, string> = {};
+
+  // First pass: find any existing roles by listing.
+  try {
+    const existing = await nextly.roles.find({ limit: 100, page: 1 });
+    for (const role of TEMPLATE_ROLES) {
+      const match = existing.docs.find(
+        r => (r as { slug?: string }).slug === role.slug
+      );
+      if (match) roleIdBySlug[role.slug] = (match as { id: string }).id;
+    }
+  } catch (err) {
+    console.log(
+      `  Warning: could not list roles: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  // Second pass: create any roles that weren't found. Pass through the
+  // curated permission-ID list so the core validator
+  // ("At least one permission is required to create a role") is
+  // satisfied. Requires the Direct API to forward permissionIds through
+  // `data.permissionIds` (wired up in packages/nextly Direct API rbac
+  // namespace).
+  const rolePermissionIds = await pickPermissionIdsForRoles(nextly);
+  for (const role of TEMPLATE_ROLES) {
+    if (roleIdBySlug[role.slug]) continue;
+    const permissionIds = rolePermissionIds[role.slug] ?? [];
+    if (permissionIds.length === 0) {
+      console.log(
+        `  Warning: no permissions resolved for "${role.slug}", skipping. ` +
+          "Create the role via /admin/roles and re-run the seed."
+      );
+      continue;
+    }
+    try {
+      const created = await nextly.roles.create({
+        data: {
+          name: role.name,
+          slug: role.slug,
+          description: role.description,
+          level: role.level,
+          permissionIds,
+        },
+      });
+      roleIdBySlug[role.slug] = created.id as string;
+      console.log(
+        `  Seeded role: ${role.slug} (${permissionIds.length} permissions)`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(
+        `  Warning: could not create role "${role.slug}": ${msg}. ` +
+          "Create it via /admin/roles and re-run the seed."
+      );
+    }
+  }
+
+  return roleIdBySlug;
+}
 
 // Approach is replaced by the CLI during scaffolding
 const APPROACH = "{{approach}}";
@@ -304,14 +458,12 @@ export default async function seed(): Promise<void> {
   console.log("  Creating users...");
   const userIdMap: Record<string, string> = {};
   for (const user of seedData.users) {
-    // Skip if user already exists (idempotency: a re-run shouldn't
-    // collide on the unique email index).
-    const existing = await nextly.find({
-      collection: "users",
-      where: { email: { equals: user.email } },
-      limit: 1,
-      depth: 0,
-    });
+    // Idempotency: look up by email via the dedicated users namespace.
+    // `nextly.find({ collection: "users" })` routes through the dynamic
+    // collections path (which only knows about user-defined collections
+    // like dc_posts) and throws "schema not found"; users is a core
+    // collection with its own query namespace.
+    const existing = await nextly.users.findOne({ search: user.email });
     // Build role IDs array if seed-data declares one. Nextly's user
     // mutation service accepts `roles: string[]` in the create/update
     // payload and handles the `user_roles` join rows automatically.
@@ -320,8 +472,8 @@ export default async function seed(): Promise<void> {
       roleSlug && roleIdBySlug[roleSlug] ? [roleIdBySlug[roleSlug]] : [];
 
     let userId: string;
-    if (existing.totalDocs > 0) {
-      userId = existing.docs[0].id as string;
+    if (existing) {
+      userId = existing.id as string;
       if (roleIds.length > 0) {
         // Re-running seed against an existing user: update roles.
         // Wrapped in try/catch so a role-assignment failure doesn't

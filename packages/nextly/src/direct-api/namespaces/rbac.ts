@@ -144,13 +144,20 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
     async create(args: CreateRoleArgs): Promise<Role> {
       try {
+        // Pass through caller-provided permissionIds and childRoleIds.
+        // Previously these were hardcoded to empty arrays, which made
+        // every create call fail against the service's validation
+        // ("At least one permission is required to create a role"). The
+        // service accepts empty arrays only when both are empty AND
+        // the caller has bypassed validation via a different path;
+        // ordinary Direct API callers always need to pass at least one.
         const result = await ctx.rbacRoleService.createRole({
           name: args.data.name,
           slug: args.data.slug,
           description: args.data.description,
           level: args.data.level ?? 0,
-          permissionIds: [],
-          childRoleIds: [],
+          permissionIds: args.data.permissionIds ?? [],
+          childRoleIds: args.data.childRoleIds ?? [],
         });
         if (!result.success || !result.data) {
           throw createErrorFromResult({
@@ -488,15 +495,7 @@ async function resolveApiKeyOwner(
 
   // Drizzle's builder chain is generic over dialect, so we funnel through
   // `unknown` once at the adapter boundary and assert the final row shape.
-  const db = adapter.getDrizzle() as unknown as {
-    select: (columns: Record<string, unknown>) => {
-      from: (table: unknown) => {
-        where: (cond: unknown) => {
-          limit: (n: number) => Promise<unknown[]>;
-        };
-      };
-    };
-  };
+  const db = adapter.getDrizzle();
 
   const rows = (await db
     .select({ userId: privateTable.userId })
