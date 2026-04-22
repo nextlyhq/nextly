@@ -78,6 +78,11 @@ export const config = [
       "import-x/resolver-next": [
         createTypeScriptImportResolver({
           alwaysTryTypes: true,
+          project: [
+            "tsconfig.json",
+            "packages/*/tsconfig.json",
+            "apps/*/tsconfig.json",
+          ],
         }),
         createNodeResolver({
           extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
