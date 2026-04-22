@@ -20,9 +20,13 @@ import {
   group,
 } from "@revnixhq/nextly/config";
 
-import { authenticated } from "@/access/authenticated";
-import { isAuthorOrEditor } from "@/access/is-author-or-editor";
-import { autoSlug } from "@/hooks/auto-slug";
+// Relative imports (not `@/*` alias) because Nextly's CLI loads the
+// root nextly.config.ts via Node.js, which pulls this file transitively
+// through Node's module resolver - no TypeScript path-alias support.
+import { anyone } from "../../access/anyone";
+import { authenticated } from "../../access/authenticated";
+import { isAuthorOrEditor } from "../../access/is-author-or-editor";
+import { autoSlug } from "../../hooks/auto-slug";
 
 import { computeReadingTime } from "./hooks/reading-time";
 import { requireFeaturedAlt } from "./hooks/require-featured-alt";
@@ -91,7 +95,7 @@ export const Posts = defineCollection({
   // enforced by the RBAC permission rules on the `author` role - the
   // AccessControlFunction signature does not receive the target doc.
   access: {
-    read: true,
+    read: anyone,
     create: authenticated,
     update: isAuthorOrEditor,
     delete: isAuthorOrEditor,

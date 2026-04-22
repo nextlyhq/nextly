@@ -7,10 +7,13 @@
 // core schemas with the flexibility to extend via the UI.
 import { defineConfig, text, textarea } from "@revnixhq/nextly/config";
 
-import { Categories } from "../src/collections/Categories";
-import { Posts } from "../src/collections/Posts";
-import { Tags } from "../src/collections/Tags";
-import { SiteSettings } from "../src/globals/SiteSettings";
+// Imports use `./src/...` relative paths (not `@/*` alias) because
+// Nextly's CLI loads this config through plain Node.js, which does not
+// honor tsconfig path aliases. See codefirst.config.ts for full note.
+import { Categories } from "./src/collections/Categories";
+import { Posts } from "./src/collections/Posts";
+import { Tags } from "./src/collections/Tags";
+import { SiteSettings } from "./src/globals/SiteSettings";
 
 export default defineConfig({
   collections: [Posts, Categories, Tags],

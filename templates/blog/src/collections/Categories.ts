@@ -5,8 +5,11 @@
  */
 import { defineCollection, text, textarea } from "@revnixhq/nextly/config";
 
-import { isAuthorOrEditor } from "@/access/is-author-or-editor";
-import { autoSlug } from "@/hooks/auto-slug";
+// Relative imports (not `@/*` alias) because Nextly's CLI loads this
+// file via Node.js, not the Next.js resolver. See Posts/index.ts.
+import { anyone } from "../access/anyone";
+import { isAuthorOrEditor } from "../access/is-author-or-editor";
+import { autoSlug } from "../hooks/auto-slug";
 
 export const Categories = defineCollection({
   slug: "categories",
@@ -19,7 +22,7 @@ export const Categories = defineCollection({
   admin: { useAsTitle: "name" },
   // Public can read categories; content roles can curate them.
   access: {
-    read: true,
+    read: anyone,
     create: isAuthorOrEditor,
     update: isAuthorOrEditor,
     delete: isAuthorOrEditor,
