@@ -1,0 +1,69 @@
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+/**
+ * `metadataBase` tells Next.js how to resolve relative URLs in
+ * OpenGraph images, Twitter images, and canonical URLs. Set
+ * `NEXT_PUBLIC_SITE_URL` in your environment to your production
+ * domain (e.g. `https://yourblog.com`). The localhost fallback keeps
+ * dev working.
+ */
+export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
+  ),
+  title: { default: "Nextly", template: "%s — Nextly" },
+  description: "A blog built with Nextly.",
+};
+
+/**
+ * Inline theme-init script.
+ *
+ * Runs before React hydrates so the correct theme class is set on
+ * <html> on first paint - eliminates flash-of-wrong-theme. Reads the
+ * user preference from localStorage under `nextly-theme`; falls back
+ * to `prefers-color-scheme: dark` when preference is "system" or
+ * unset. See `src/components/ThemeToggle.tsx` for the writer side.
+ */
+const themeInitScript = `
+(function() {
+  try {
+    var stored = localStorage.getItem("nextly-theme");
+    var pref = stored || "system";
+    var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var isDark = pref === "dark" || (pref === "system" && prefersDark);
+    document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  } catch (e) {}
+})();
+`;
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
+        {children}
+      </body>
+    </html>
+  );
+}

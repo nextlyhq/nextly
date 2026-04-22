@@ -1,16 +1,31 @@
 /**
  * Blog Homepage
  *
- * Hero section with site name + tagline, followed by the latest 3 posts.
+ * Full editorial layout driven by the Homepage single:
+ *   Hero → Featured post → Latest grid → Category strip → Newsletter CTA
+ *
+ * Every major section is independently toggleable from the admin
+ * (showFeaturedPost / showLatestPosts / showCategoryStrip /
+ * showNewsletterCta). Copy for the hero and newsletter comes from the
+ * single too; defaults in `src/lib/queries/homepage.ts` kick in when
+ * the single hasn't been populated yet.
+ *
  * Ships WebSite JSON-LD and full metadata for the root URL.
  */
 
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { CategoryStrip } from "@/components/CategoryStrip";
+import { FeaturedPost } from "@/components/FeaturedPost";
+import { Hero } from "@/components/Hero";
 import { JsonLd } from "@/components/JsonLd";
+import { NewsletterCta } from "@/components/NewsletterCta";
 import { PostGrid } from "@/components/PostGrid";
-import { getLatestPosts, getSiteSettings } from "@/lib/queries";
+import { getAllCategories } from "@/lib/queries/categories";
+import { getHomepage } from "@/lib/queries/homepage";
+import { getFeaturedPost, getLatestPosts } from "@/lib/queries/posts";
+import { getSiteSettings } from "@/lib/queries/site-settings";
 import { absoluteUrl } from "@/lib/site-url";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -34,10 +49,26 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function HomePage() {
-  const [settings, posts] = await Promise.all([
+  const [settings, homepage] = await Promise.all([
     getSiteSettings(),
-    getLatestPosts(3),
+    getHomepage(),
   ]);
+
+  // Fetch only the sections we'll actually render, so toggled-off
+  // sections don't incur database work.
+  const [featured, latest, categories] = await Promise.all([
+    homepage.showFeaturedPost ? getFeaturedPost() : Promise.resolve(null),
+    homepage.showLatestPosts
+      ? getLatestPosts(homepage.latestPostsCount ?? 3)
+      : Promise.resolve([]),
+    homepage.showCategoryStrip ? getAllCategories() : Promise.resolve([]),
+  ]);
+
+  // Filter featured out of "latest" to avoid duplicating it in both
+  // sections (a common editorial mistake).
+  const latestFiltered = featured
+    ? latest.filter(p => p.slug !== featured.slug)
+    : latest;
 
   const websiteSchema: Record<string, unknown> = {
     "@context": "https://schema.org",
@@ -51,32 +82,45 @@ export default async function HomePage() {
     <>
       <JsonLd data={websiteSchema} />
 
-      {/* Hero section */}
-      <section className="mb-16 text-center">
-        <h1 className="text-4xl font-bold tracking-tight text-neutral-900 sm:text-5xl dark:text-neutral-100">
-          {settings.siteName}
-        </h1>
-        <p className="mt-4 text-lg text-neutral-600 dark:text-neutral-400">
-          {settings.tagline}
-        </p>
-      </section>
+      <Hero title={homepage.heroTitle} subtitle={homepage.heroSubtitle} />
 
-      {/* Latest posts section */}
-      <section>
-        <div className="mb-8 flex items-center justify-between">
-          <h2 className="text-xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-            Latest Posts
-          </h2>
-          <Link
-            href="/blog"
-            className="text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
-          >
-            View all &rarr;
-          </Link>
-        </div>
+      {homepage.showFeaturedPost && featured && (
+        <FeaturedPost
+          post={featured}
+          sectionTitle={homepage.featuredSectionTitle}
+        />
+      )}
 
-        <PostGrid posts={posts} />
-      </section>
+      {homepage.showLatestPosts && latestFiltered.length > 0 && (
+        <section className="mb-16">
+          <div className="mb-6 flex items-baseline justify-between">
+            <h2
+              className="text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "var(--color-fg-muted)" }}
+            >
+              {homepage.latestSectionTitle}
+            </h2>
+            <Link
+              href="/blog"
+              className="text-sm font-medium transition-colors"
+              style={{ color: "var(--color-accent)" }}
+            >
+              View all →
+            </Link>
+          </div>
+          <PostGrid posts={latestFiltered} />
+        </section>
+      )}
+
+      {homepage.showCategoryStrip && <CategoryStrip categories={categories} />}
+
+      {homepage.showNewsletterCta && (
+        <NewsletterCta
+          variant="homepage"
+          heading={homepage.newsletterHeading}
+          subheading={homepage.newsletterSubheading}
+        />
+      )}
     </>
   );
 }

@@ -19,6 +19,21 @@ export async function getCategoryBySlug(
   return result.docs[0] ? (result.docs[0] as Category) : null;
 }
 
+/**
+ * All categories as full records. Used by the homepage CategoryStrip
+ * and by the future /categories index page. If you need post counts
+ * alongside each category, prefer `getAllCategoriesWithCounts` below.
+ */
+export async function getAllCategories(): Promise<Category[]> {
+  const nextly = await getNextly();
+  const result = await nextly.find({
+    collection: "categories",
+    limit: 1000,
+    depth: 0,
+  });
+  return result.docs.map(d => d as unknown as Category);
+}
+
 export async function getAllCategorySlugs(): Promise<string[]> {
   const nextly = await getNextly();
   const result = await nextly.find({
