@@ -258,6 +258,62 @@ export async function getPostsByTag(
   };
 }
 
+/**
+ * Find the chronologically adjacent published posts for prev/next
+ * navigation on a post detail page.
+ *
+ * "Previous" = the post published just before `currentPublishedAt`.
+ * "Next" = the post published just after it. Either may be null at
+ * the edges. Uses depth=0 because the caller only needs title + slug.
+ */
+export async function getAdjacentPosts(
+  currentSlug: string,
+  currentPublishedAt: string | null | undefined
+): Promise<{
+  previous: { title: string; slug: string } | null;
+  next: { title: string; slug: string } | null;
+}> {
+  if (!currentPublishedAt) return { previous: null, next: null };
+  const nextly = await getNextly();
+
+  const [prev, next] = await Promise.all([
+    nextly.find({
+      collection: "posts",
+      where: {
+        and: [
+          PUBLISHED,
+          { publishedAt: { less_than: currentPublishedAt } },
+          { slug: { not_equals: currentSlug } },
+        ],
+      },
+      sort: "-publishedAt",
+      limit: 1,
+      depth: 0,
+    }),
+    nextly.find({
+      collection: "posts",
+      where: {
+        and: [
+          PUBLISHED,
+          { publishedAt: { greater_than: currentPublishedAt } },
+          { slug: { not_equals: currentSlug } },
+        ],
+      },
+      sort: "publishedAt",
+      limit: 1,
+      depth: 0,
+    }),
+  ]);
+
+  const pick = (doc?: Record<string, unknown>) =>
+    doc ? { title: doc.title as string, slug: doc.slug as string } : null;
+
+  return {
+    previous: pick(prev.docs[0]),
+    next: pick(next.docs[0]),
+  };
+}
+
 export interface RelatedPostsOptions {
   tagIds?: string[];
   categoryIds?: string[];
