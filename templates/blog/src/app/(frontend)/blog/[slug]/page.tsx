@@ -1,22 +1,39 @@
 /**
  * Single Blog Post Page
  *
- * Full post rendering with featured image, rich text, author card,
- * category badges, reading time, related posts, and SEO: complete
- * Metadata API (canonical, OpenGraph, Twitter, robots) plus JSON-LD
- * Article + BreadcrumbList schemas.
+ * Full post rendering with the Task 17 post-detail treatment:
+ *   Reading progress bar (article-scoped)
+ *   Category badge + title + meta row (author, date, reading time)
+ *   Share bar (Twitter/X, LinkedIn, Copy link)
+ *   Featured image
+ *   Collapsible Table of Contents (auto from H2/H3 in the body)
+ *   Rich-text body with id-injected headings for anchor links
+ *   Share bar (repeat at bottom)
+ *   AuthorCard (compact)
+ *   Related posts
+ *   Prev/Next navigation
+ *
+ * Ships Article + BreadcrumbList JSON-LD and the full Metadata API
+ * (canonical, OpenGraph, Twitter card, robots index/follow).
  */
 
 import type { Metadata } from "next";
 import Image from "next/image";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AuthorCard } from "@/components/AuthorCard";
 import { CategoryBadge } from "@/components/CategoryBadge";
 import { JsonLd } from "@/components/JsonLd";
 import { PostGrid } from "@/components/PostGrid";
+import { PostPrevNext } from "@/components/PostPrevNext";
+import { PostShareBar } from "@/components/PostShareBar";
+import { PostTOC } from "@/components/PostTOC";
+import { ReadingProgressBar } from "@/components/ReadingProgressBar";
 import { RichTextRenderer } from "@/components/RichTextRenderer";
+import { extractToc } from "@/lib/extract-toc";
 import {
+  getAdjacentPosts,
   getAllPostSlugs,
   getPostBySlug,
   getRelatedPosts,
@@ -24,17 +41,6 @@ import {
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
 
-/**
- * Pre-render every published post at build time. Anything published
- * later gets rendered on-demand and cached per `revalidate` below.
- *
- * We deliberately chose generateStaticParams + revalidate over Next.js
- * 16 Cache Components here: the static-params pattern is mature, well-
- * documented, portable across every Nextly-supported database, and
- * easy for template users to reason about. Cache Components is newer
- * and introduces behavior that's harder to debug. Migrate whenever
- * the ecosystem settles.
- */
 export async function generateStaticParams() {
   const slugs = await getAllPostSlugs();
   return slugs.map(slug => ({ slug }));
@@ -42,12 +48,6 @@ export async function generateStaticParams() {
 
 /** Revalidate each post page every 60 seconds (ISR). */
 export const revalidate = 60;
-
-/**
- * Posts published after the build render on-demand via ISR. Default
- * for dynamic segments; pinned explicitly so the behavior is obvious
- * to readers of the code.
- */
 export const dynamicParams = true;
 
 export async function generateMetadata({
@@ -62,13 +62,8 @@ export async function generateMetadata({
   const seo = post.seo ?? {};
   const title = seo.metaTitle || post.title;
   const description = seo.metaDescription || post.excerpt || undefined;
-
-  // Image precedence: explicit SEO override → featured image → dynamic OG.
-  // Returning `undefined` (not [] ) lets Next.js fall back to the
-  // co-located opengraph-image.tsx route automatically.
   const seoImage = seo.ogImage?.url ?? post.featuredImage?.url ?? undefined;
   const images = seoImage ? [{ url: seoImage, alt: post.title }] : undefined;
-
   const canonical = seo.canonical || `/blog/${slug}`;
 
   return {
@@ -110,12 +105,20 @@ export default async function PostPage({
   ]);
   if (!post) notFound();
 
-  const relatedPosts = await getRelatedPosts(slug, {
-    tagIds: post.tags?.map(t => t.id) ?? [],
-    categoryIds: post.categories?.map(c => c.id) ?? [],
-    authorId: post.author?.id,
-    limit: 2,
-  });
+  const [relatedPosts, adjacent] = await Promise.all([
+    getRelatedPosts(slug, {
+      tagIds: post.tags?.map(t => t.id) ?? [],
+      categoryIds: post.categories?.map(c => c.id) ?? [],
+      authorId: post.author?.id,
+      limit: 3,
+    }),
+    getAdjacentPosts(slug, post.publishedAt),
+  ]);
+
+  // Build TOC + id-injected body from the HTML content. extractToc is
+  // safe to run on trusted server-generated HTML.
+  const rawHtml = typeof post.content === "string" ? post.content : "";
+  const { html: bodyHtml, toc } = extractToc(rawHtml);
 
   const formattedDate = post.publishedAt
     ? new Date(post.publishedAt).toLocaleDateString("en-US", {
@@ -127,22 +130,14 @@ export default async function PostPage({
 
   const postUrl = absoluteUrl(`/blog/${slug}`);
 
-  // Google clamps Article.headline display at 110 chars and will drop
-  // rich-result eligibility for over-long headlines. Truncate for the
-  // schema only; keep the original title on the page.
+  // Google clamps Article.headline at 110 chars for rich results.
   const headline =
     post.title.length > 110 ? `${post.title.slice(0, 107)}…` : post.title;
 
-  // Article.image is required for Top Stories carousel + AMP. Fall back
-  // to the co-located dynamic OG route when the post has no featured
-  // image, so every post stays rich-result eligible.
   const articleImage = post.featuredImage?.url
     ? [post.featuredImage.url]
     : [absoluteUrl(`/blog/${slug}/opengraph-image`)];
 
-  // Article schema: tells Google this is a news/blog article for
-  // rich-result eligibility. BreadcrumbList drives the breadcrumb
-  // UI in Google search results.
   const articleSchema: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -181,92 +176,124 @@ export default async function PostPage({
         name: "Blog",
         item: absoluteUrl("/blog"),
       },
-      {
-        "@type": "ListItem",
-        position: 3,
-        name: post.title,
-        item: postUrl,
-      },
+      { "@type": "ListItem", position: 3, name: post.title, item: postUrl },
     ],
   };
 
   return (
-    <article>
-      <JsonLd data={[articleSchema, breadcrumbSchema]} />
+    <>
+      <ReadingProgressBar />
 
-      {/* Featured image */}
-      {post.featuredImage?.url && (
-        <div className="mb-8 overflow-hidden rounded-xl">
-          <Image
-            src={post.featuredImage.url}
-            alt={post.featuredImage.altText || post.title}
-            width={1200}
-            height={630}
-            // Hero spans the max-w-5xl container (1024px in Tailwind v4)
-            // minus px-6 padding on each side, fluid below that breakpoint.
-            sizes="(min-width: 1024px) 976px, calc(100vw - 48px)"
-            className="aspect-video w-full object-cover"
-            priority
-          />
+      <article className="mx-auto max-w-3xl">
+        <JsonLd data={[articleSchema, breadcrumbSchema]} />
+
+        {/* Category badges */}
+        {post.categories && post.categories.length > 0 && (
+          <div className="mb-4 flex flex-wrap gap-2">
+            {post.categories.map(cat => (
+              <CategoryBadge key={cat.slug} name={cat.name} slug={cat.slug} />
+            ))}
+          </div>
+        )}
+
+        {/* Title */}
+        <h1
+          className="mb-4 text-3xl font-bold leading-tight tracking-tight sm:text-4xl"
+          style={{ color: "var(--color-fg)" }}
+        >
+          {post.title}
+        </h1>
+
+        {/* Meta row */}
+        <div
+          className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+          style={{ color: "var(--color-fg-muted)" }}
+        >
+          {post.author && (
+            <Link
+              href={`/authors/${post.author.slug}`}
+              className="font-medium transition-colors"
+              style={{ color: "var(--color-fg)" }}
+            >
+              {post.author.name}
+            </Link>
+          )}
+          {post.author && formattedDate && <span aria-hidden="true">·</span>}
+          {formattedDate && (
+            <time dateTime={post.publishedAt ?? undefined}>
+              {formattedDate}
+            </time>
+          )}
+          {post.readingTime && formattedDate && (
+            <span aria-hidden="true">·</span>
+          )}
+          {post.readingTime ? <span>{post.readingTime} min read</span> : null}
         </div>
-      )}
 
-      {/* Category badges */}
-      {post.categories && post.categories.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          {post.categories.map(cat => (
-            <CategoryBadge key={cat.slug} name={cat.name} slug={cat.slug} />
-          ))}
+        {/* Share bar (top) */}
+        <div className="mb-8">
+          <PostShareBar title={post.title} url={postUrl} />
         </div>
-      )}
 
-      {/* Title */}
-      <h1 className="mb-4 text-3xl font-bold tracking-tight text-neutral-900 sm:text-4xl dark:text-neutral-100">
-        {post.title}
-      </h1>
+        {/* Featured image */}
+        {post.featuredImage?.url && (
+          <div className="mb-8 overflow-hidden rounded-xl">
+            <Image
+              src={post.featuredImage.url}
+              alt={post.featuredImage.altText || post.title}
+              width={1200}
+              height={630}
+              sizes="(min-width: 768px) 768px, calc(100vw - 48px)"
+              className="aspect-video w-full object-cover"
+              priority
+            />
+          </div>
+        )}
 
-      {/* Author, date, reading time meta */}
-      <div className="mb-8 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-500 dark:text-neutral-400">
+        {/* Table of contents */}
+        {toc.length > 0 && <PostTOC toc={toc} />}
+
+        {/* Post content */}
+        {bodyHtml && (
+          <div className="mb-12">
+            <RichTextRenderer html={bodyHtml} className="prose-blog" />
+          </div>
+        )}
+
+        {/* Share bar (bottom) */}
+        <div
+          className="mb-10 border-t pt-6"
+          style={{ borderColor: "var(--color-border)" }}
+        >
+          <PostShareBar title={post.title} url={postUrl} />
+        </div>
+
+        {/* Author card */}
         {post.author && (
-          <span className="font-medium text-neutral-700 dark:text-neutral-300">
-            {post.author.name}
-          </span>
+          <div className="mb-12">
+            <AuthorCard author={post.author} />
+          </div>
         )}
-        {post.author && formattedDate && (
-          <span aria-hidden="true">&middot;</span>
-        )}
-        {formattedDate && (
-          <time dateTime={post.publishedAt ?? undefined}>{formattedDate}</time>
-        )}
-        {post.readingTime && formattedDate && (
-          <span aria-hidden="true">&middot;</span>
-        )}
-        {post.readingTime ? <span>{post.readingTime} min read</span> : null}
-      </div>
 
-      {/* Post content */}
-      {typeof post.content === "string" && post.content && (
-        <div className="mb-12">
-          <RichTextRenderer html={post.content} />
-        </div>
-      )}
+        {/* Related posts */}
+        {relatedPosts.length > 0 && (
+          <section
+            className="border-t pt-12"
+            style={{ borderColor: "var(--color-border)" }}
+          >
+            <h2
+              className="mb-8 text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "var(--color-fg-muted)" }}
+            >
+              Related reading
+            </h2>
+            <PostGrid posts={relatedPosts} />
+          </section>
+        )}
 
-      {/* Author card */}
-      {post.author && (
-        <div className="mb-12">
-          <AuthorCard author={post.author} />
-        </div>
-      )}
-
-      {/* Related posts */}
-      {relatedPosts.length > 0 && (
-        <section className="border-t border-neutral-200 pt-12 dark:border-neutral-800">
-          <h2 className="mb-8 text-xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-            Related Posts
-          </h2>
-          <PostGrid posts={relatedPosts} />
-        </section>
-      )}
-    </article>
+        {/* Prev/Next */}
+        <PostPrevNext previous={adjacent.previous} next={adjacent.next} />
+      </article>
+    </>
   );
 }
