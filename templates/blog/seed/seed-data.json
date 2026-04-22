@@ -335,6 +335,34 @@
       }
     }
   ],
+  "navigation": {
+    "headerLinks": [
+      { "label": "Blog", "href": "/blog", "openInNewTab": false },
+      { "label": "Tags", "href": "/tags", "openInNewTab": false },
+      { "label": "Categories", "href": "/categories", "openInNewTab": false }
+    ],
+    "footerReadLinks": [
+      { "label": "Latest posts", "href": "/blog" },
+      { "label": "All tags", "href": "/tags" },
+      { "label": "All categories", "href": "/categories" },
+      { "label": "RSS feed", "href": "/feed.xml" }
+    ],
+    "showThemeToggle": true,
+    "showSearchIcon": true
+  },
+  "homepage": {
+    "heroTitle": "Ideas on building, shipping, and surviving software.",
+    "heroSubtitle": "Essays and notes from our engineering team. New posts every week.",
+    "showFeaturedPost": true,
+    "featuredSectionTitle": "Featured",
+    "showLatestPosts": true,
+    "latestSectionTitle": "Latest",
+    "latestPostsCount": 3,
+    "showCategoryStrip": true,
+    "showNewsletterCta": true,
+    "newsletterHeading": "Get new posts in your inbox",
+    "newsletterSubheading": "No spam. Unsubscribe anytime."
+  },
   "siteSettings": {
     "siteName": "My Blog",
     "tagline": "Thoughts on web development",

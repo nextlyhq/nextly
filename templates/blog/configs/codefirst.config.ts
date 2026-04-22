@@ -13,11 +13,13 @@ import { defineConfig, text, textarea } from "@revnixhq/nextly/config";
 import { Categories } from "./src/collections/Categories";
 import { Posts } from "./src/collections/Posts";
 import { Tags } from "./src/collections/Tags";
+import { Homepage } from "./src/globals/Homepage";
+import { Navigation } from "./src/globals/Navigation";
 import { SiteSettings } from "./src/globals/SiteSettings";
 
 export default defineConfig({
   collections: [Posts, Categories, Tags],
-  singles: [SiteSettings],
+  singles: [SiteSettings, Navigation, Homepage],
 
   // Users are the author identity: posts relate to users, and
   // `/authors/[slug]` resolves to a user by their `slug` extension field.

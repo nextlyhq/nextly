@@ -242,6 +242,29 @@ interface SeedData {
       linkedin?: string;
     };
   };
+  navigation?: {
+    headerLinks?: Array<{
+      label: string;
+      href: string;
+      openInNewTab?: boolean;
+    }>;
+    footerReadLinks?: Array<{ label: string; href: string }>;
+    showThemeToggle?: boolean;
+    showSearchIcon?: boolean;
+  };
+  homepage?: {
+    heroTitle?: string;
+    heroSubtitle?: string;
+    showFeaturedPost?: boolean;
+    featuredSectionTitle?: string;
+    showLatestPosts?: boolean;
+    latestSectionTitle?: string;
+    latestPostsCount?: number;
+    showCategoryStrip?: boolean;
+    showNewsletterCta?: boolean;
+    newsletterHeading?: string;
+    newsletterSubheading?: string;
+  };
 }
 
 type UploadOutcome =
@@ -582,6 +605,39 @@ export default async function seed(): Promise<void> {
     });
   } catch {
     console.log("  Could not update site settings (will be set up in admin).");
+  }
+
+  // Navigation single: seed default link arrays + UI toggles. Wrapped in
+  // try/catch since Single DDL may not have landed on every install path
+  // (see findings/task-17-sub-6-schema-resolver-known-issues.md).
+  if (seedData.navigation) {
+    console.log("  Updating navigation...");
+    try {
+      await nextly.updateGlobal({
+        slug: "navigation",
+        data: seedData.navigation,
+      });
+    } catch {
+      console.log(
+        "  Could not update navigation (edit in admin under Singles / Navigation)."
+      );
+    }
+  }
+
+  // Homepage single: hero copy + section visibility toggles. Same
+  // try/catch rationale as navigation above.
+  if (seedData.homepage) {
+    console.log("  Updating homepage...");
+    try {
+      await nextly.updateGlobal({
+        slug: "homepage",
+        data: seedData.homepage,
+      });
+    } catch {
+      console.log(
+        "  Could not update homepage (edit in admin under Singles / Homepage)."
+      );
+    }
   }
 
   // Step 3: End-of-run summary
