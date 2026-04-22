@@ -4,9 +4,19 @@ import fs from "fs-extra";
 
 import type { ProjectInfo } from "../types";
 
+// Plugin-side admin imports. Every scaffold ships @revnixhq/plugin-form-builder
+// as a dependency (see template.ts and installers/dependencies.ts). These three
+// lines register the plugin's custom admin field components and load its CSS so
+// the Forms collection's drag-and-drop field builder and Submissions filter UI
+// render correctly. Without them, the Forms sidebar item still shows but the
+// builder falls back to plain JSON/text inputs. Mirror any future plugin-X the
+// CLI installs by default (keep in sync with TEMPLATE_PLUGIN_PACKAGES).
 const ADMIN_PAGE_TEMPLATE = `"use client";
 
 import "@revnixhq/admin/style.css";
+import "@revnixhq/plugin-form-builder/admin";
+import "@revnixhq/plugin-form-builder/styles/builder.css";
+import "@revnixhq/plugin-form-builder/styles/submissions-filter.css";
 import { RootLayout, QueryProvider, ErrorBoundary } from "@revnixhq/admin";
 
 export default function AdminPage() {

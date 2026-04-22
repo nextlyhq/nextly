@@ -652,11 +652,30 @@ export default async function seed(): Promise<void> {
       limit: 1,
     });
     if (existing.totalDocs === 0) {
+      // Payload shape: the form-builder plugin's `forms` collection has
+      // top-level `name` (required, internal), `slug` (required, unique),
+      // `fields` (required, JSON array of field configs), `status`
+      // (defaults to "draft" — must be "published" to accept submissions),
+      // and a `settings` group for submit button text, confirmation type
+      // and success message. Earlier versions of this seed used
+      // `title`/`submitButtonLabel`/`confirmationMessage` at the top
+      // level, which tripped the collection's NOT NULL constraint on
+      // `name` with the opaque error "Missing required field: 'name'
+      // cannot be empty".
       await nextly.create({
         collection: "forms",
         data: {
-          slug: "newsletter",
+          // `title` is auto-injected as a NOT NULL column by Nextly's
+          // runtime-schema-generator for any dynamic collection that does
+          // not define its own `title` field. The form-builder plugin's
+          // forms collection uses `name` for the internal label, so the
+          // `title` column has no corresponding field definition and must
+          // be populated explicitly. Without this, the insert fails with
+          // "Missing required field: 'title' cannot be empty".
           title: "Newsletter",
+          name: "Newsletter",
+          slug: "newsletter",
+          status: "published",
           fields: [
             {
               blockType: "text",
@@ -673,8 +692,12 @@ export default async function seed(): Promise<void> {
               width: 50,
             },
           ],
-          submitButtonLabel: "Subscribe",
-          confirmationMessage: "Thanks for subscribing! We'll be in touch.",
+          settings: {
+            submitButtonText: "Subscribe",
+            confirmationType: "message",
+            successMessage:
+              "Thanks for subscribing! We'll be in touch.",
+          },
         },
       });
       console.log("  Newsletter form created.");
@@ -695,8 +718,13 @@ export default async function seed(): Promise<void> {
   );
   const total = outcomes.length;
 
+  // `authors` was renamed to `users` in the users-as-authors migration
+  // (Task 17). Old field name lingered here and threw
+  //   TypeError: Cannot read properties of undefined (reading 'length')
+  // which was swallowed by the silent errorLog inside seedAll and surfaced
+  // only as the opaque "Seeding failed with 1 error(s)".
   console.log(
-    `  Demo content loaded: ${seedData.posts.length} posts, ${seedData.authors.length} authors, ${seedData.categories.length} categories`
+    `  Demo content loaded: ${seedData.posts.length} posts, ${seedData.users.length} users, ${seedData.categories.length} categories`
   );
 
   if (total === 0) {

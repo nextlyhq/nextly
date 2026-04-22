@@ -36,6 +36,18 @@ const ALL_ADAPTER_PACKAGES = [
 ];
 
 /**
+ * Plugin packages that are shipped with every scaffold. Must stay in sync
+ * with the plugin deps added in `generatePackageJson` (template.ts) - both
+ * paths scaffold the same project, the only difference is whether deps
+ * resolve from npm or yalc. Omitting these from the yalc list caused
+ * runtime "Cannot find package '@revnixhq/plugin-form-builder'" errors
+ * in scaffolded projects whose templates import the plugin.
+ */
+const TEMPLATE_PLUGIN_PACKAGES = [
+  "@revnixhq/plugin-form-builder",
+];
+
+/**
  * Get all packages that need to be installed for a given configuration.
  * Storage is not included - local disk is the default and needs no extra package.
  */
@@ -72,6 +84,7 @@ export async function installDependencies(
           "@revnixhq/ui",
           "@revnixhq/adapter-drizzle",
           ...ALL_ADAPTER_PACKAGES,
+          ...TEMPLATE_PLUGIN_PACKAGES,
         ]),
       ];
 
@@ -101,6 +114,7 @@ export async function installDependencies(
           "@revnixhq/ui",
           "@revnixhq/adapter-drizzle",
           ...ALL_ADAPTER_PACKAGES,
+          ...TEMPLATE_PLUGIN_PACKAGES,
         ]),
       ];
 

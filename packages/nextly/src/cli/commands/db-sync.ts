@@ -314,13 +314,15 @@ export async function runDbSync(
       configResult
     );
 
-    // Step 6: Run seeders if explicitly requested via --seed flag
-    if (options.seed && collectionCount === 0 && singleCount === 0) {
-      // Only run seeders here if no collections or singles were synced
-      // (otherwise seeders are run after sync in syncCollections)
-      await performSeeding(adapter, options, context, configResult);
-    } else if (options.seed && collectionCount === 0 && singleCount > 0) {
-      // Run seeders after singles sync if no collections
+    // Step 6: Run seeders if explicitly requested via --seed flag.
+    // Runs unconditionally when seed=true after every sync step (collections,
+    // singles, components, user fields, permissions) has created its physical
+    // tables. Previously seeding lived inside syncCollections, which caused
+    // user seeds that touched singles to fail with "no such table:
+    // single_<slug>" on first run — the single's physical table had not been
+    // created yet because syncSingles ran later. Centralizing the call here
+    // guarantees the orchestration order: sync-all-schemas → seed-content.
+    if (options.seed) {
       await performSeeding(adapter, options, context, configResult);
     }
 
@@ -334,9 +336,11 @@ export async function runDbSync(
       // Create debounced sync function to handle rapid file changes
       const debouncedSync = createDebouncedSync(adapter, options, context);
 
-      // Register watch callback
-      watchConfig(async newConfigResult => {
-        // Use debounced sync to prevent multiple syncs on rapid changes
+      // Register watch callback. Synchronous on purpose - debouncedSync
+      // schedules its own async work; the callback itself has nothing to
+      // await, so flagging it async triggered
+      // @typescript-eslint/require-await + no-misused-promises.
+      watchConfig(newConfigResult => {
         debouncedSync(newConfigResult);
       });
 
