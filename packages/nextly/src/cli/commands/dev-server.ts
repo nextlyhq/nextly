@@ -461,6 +461,55 @@ export function displayAutoSyncResults(
 // ============================================================================
 
 /**
+ * Register a newly-DDL'd Single table with the live schema resolver.
+ *
+ * Why: the adapter's `TableResolver` is built once at boot from the current
+ * contents of `dynamic_singles`. If DDL creates a new physical table after
+ * that snapshot (auto-sync on first run, reconcile on later boots, UI-create
+ * from the admin panel), the resolver still doesn't know about it and any
+ * subsequent query fails with "Table '...' not found in schema registry.
+ * Ensure setTableResolver() has been called during boot."
+ *
+ * Mirrors the pattern in `single-dispatcher.ts` (UI-create path), which
+ * calls `resolver.registerDynamicSchema(tableName, runtimeTable)` right
+ * after successful DDL. Keeping the logic in one helper avoids drift
+ * between the three places that create single tables: sync, reconcile, and
+ * UI-create.
+ *
+ * Non-fatal: if the resolver isn't available (e.g. DI not yet wired), we
+ * log and continue. The next boot will rebuild the resolver from the
+ * registry row that was just written, so the table becomes visible then.
+ */
+function registerSingleTableInResolver(
+  adapter: DrizzleAdapter,
+  tableName: string,
+  fields: FieldDefinition[],
+  logger: CommandContext["logger"]
+): void {
+  try {
+    const dialect = adapter.getCapabilities().dialect;
+    const { table } = generateRuntimeSchema(tableName, fields, dialect);
+    const resolver = (
+      adapter as unknown as {
+        tableResolver?: {
+          registerDynamicSchema?: (name: string, t: unknown) => void;
+        };
+      }
+    ).tableResolver;
+    if (resolver && typeof resolver.registerDynamicSchema === "function") {
+      resolver.registerDynamicSchema(tableName, table);
+      logger.debug(`Registered runtime schema for ${tableName}`);
+    }
+  } catch (err) {
+    // Deliberately swallow: subsequent queries in this boot may fail but
+    // the next restart rebuilds the resolver from the registry rows.
+    logger.debug(
+      `Could not register runtime schema for ${tableName}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
  * Perform auto-sync for Singles: create data tables and update migration status
  */
 export async function performSinglesAutoSync(
@@ -588,6 +637,14 @@ export async function performSinglesAutoSync(
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 
         if (tableActuallyExists) {
+          // Register in the live resolver so subsequent queries in the
+          // same boot can reach the table without a restart.
+          registerSingleTableInResolver(
+            drizzleAdapter,
+            tableName,
+            singleConfig.fields as unknown as FieldDefinition[],
+            logger
+          );
           await singleRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
           logger.debug(`Created table and set status to 'applied' for ${slug}`);
@@ -714,6 +771,15 @@ export async function performSinglesReconcile(
 
       const tableExists = await drizzleAdapter.tableExists(single.tableName);
       if (tableExists) {
+        // Register in the live resolver so the very next query in this
+        // boot (e.g. the user's nextly.seed.ts calling updateGlobal) can
+        // resolve the table without waiting for a restart.
+        registerSingleTableInResolver(
+          drizzleAdapter,
+          single.tableName,
+          fields,
+          logger
+        );
         await singleRegistry.updateMigrationStatus(single.slug, "applied");
         reconciledSlugs.push(single.slug);
         logger.info(

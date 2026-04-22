@@ -48,14 +48,14 @@ import { createPluginContext } from "../plugins/plugin-context";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ApiKeyService } from "../services/auth/api-key-service";
 import type { PermissionSeedService } from "../services/auth/permission-seed-service";
-import { RBACAccessControlService } from "../services/auth/rbac-access-control-service";
-import {
+import type { RBACAccessControlService } from "../services/auth/rbac-access-control-service";
+import type {
   CollectionRegistryService,
   type CodeFirstCollectionConfig,
 } from "../services/collections/collection-registry-service";
 import type { CollectionRelationshipService } from "../services/collections/collection-relationship-service";
 import type { CollectionService } from "../services/collections/collection-service";
-import {
+import type {
   ComponentRegistryService,
   type CodeFirstComponentConfig,
   type ComponentDataService,
@@ -77,7 +77,8 @@ import type { UserService } from "../services/users/user-service";
 import type { SingleConfig } from "../singles/config/types";
 import type { IStorageAdapter } from "../storage/adapters/base-adapter";
 import type { ImageProcessor } from "../storage/image-processor";
-import { initializeMediaStorage, MediaStorage } from "../storage/storage";
+import type { MediaStorage } from "../storage/storage";
+import { initializeMediaStorage } from "../storage/storage";
 import type { StoragePlugin } from "../storage/types";
 import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
@@ -301,6 +302,33 @@ export async function registerServices(
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
 
   const schemaRegistry = await initializeSchemaRegistry(adapter);
+
+  // Belt-and-suspenders: also register every code-first collection and
+  // single from the supplied config directly into the resolver. The
+  // `loadDynamicTables` pass inside initializeSchemaRegistry reads from
+  // the `dynamic_collections` / `dynamic_singles` DB tables and swallows
+  // errors on failure, which means a silent read hiccup (SQLite driver
+  // quirk, partially-written row, wrong JSON shape on the `fields`
+  // column) leaves code-first tables invisible at runtime. Registering
+  // straight from the loaded `NextlyConfig` sidesteps that failure mode
+  // entirely for code-first tables - the DB is still the source of
+  // truth for UI-created tables via `loadDynamicTables`.
+  if (schemaRegistry) {
+    try {
+      await registerConfigTablesInResolver(
+        schemaRegistry,
+        transformedConfig,
+        adapter,
+        resolvedLogger
+      );
+    } catch (err) {
+      // Non-fatal: the DB-backed pass may still have registered these
+      // tables. Log at debug so real issues surface during dev.
+      resolvedLogger.debug?.(
+        `[registerServices] Could not register config tables into resolver: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
 
   // Register SchemaChangeService for schema change confirmation flow.
   // Depends on adapter, SchemaRegistry (from initializeSchemaRegistry),
@@ -590,6 +618,80 @@ type DynamicTableRow = {
   fields: string;
   slug: string;
 };
+
+/**
+ * Register every code-first collection and single from the config as a
+ * runtime Drizzle schema in the resolver. Complements `loadDynamicTables`
+ * which reads the same data from the `dynamic_*` DB registry; having both
+ * paths makes the resolver correct even when the DB read silently fails
+ * or when a just-synced row hasn't been flushed yet.
+ *
+ * No-op for tables that are already registered (e.g. from the DB pass).
+ */
+async function registerConfigTablesInResolver(
+  registry: import("../database/schema-registry.js").SchemaRegistry,
+  config: NextlyServiceConfig,
+  adapter: DrizzleAdapter,
+  logger: Partial<Logger>
+): Promise<void> {
+  const dialect = adapter.getCapabilities().dialect;
+
+  // Collections: table name convention is `dc_<slug-with-underscores>`.
+  for (const collection of config.collections ?? []) {
+    try {
+      const slug = (collection as { slug: string }).slug;
+      const dbName = (collection as { dbName?: string }).dbName;
+      const fields = (collection as { fields?: unknown[] }).fields ?? [];
+      if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
+      const baseTableName = dbName ?? slug.replace(/-/g, "_");
+      const tableName = baseTableName.startsWith("dc_")
+        ? baseTableName
+        : `dc_${baseTableName}`;
+      const { generateRuntimeSchema } = await import(
+        "../domains/schema/services/runtime-schema-generator.js"
+      );
+      const { table } = generateRuntimeSchema(
+        tableName,
+        fields as FieldDefinition[],
+        dialect
+      );
+      registry.registerDynamicSchema(tableName, table);
+    } catch (err) {
+      logger.debug?.(
+        `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // Singles: table name convention is `single_<slug-with-underscores>`.
+  // Routes through the canonical resolver helper added in Task 17 Sub-1
+  // so every code path agrees on the physical table name.
+  const { resolveSingleTableName } = await import(
+    "../domains/singles/services/resolve-single-table-name.js"
+  );
+  for (const single of config.singles ?? []) {
+    try {
+      const slug = (single as { slug: string }).slug;
+      const dbName = (single as { dbName?: string }).dbName;
+      const fields = (single as { fields?: unknown[] }).fields ?? [];
+      if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
+      const tableName = resolveSingleTableName({ slug, dbName });
+      const { generateRuntimeSchema } = await import(
+        "../domains/schema/services/runtime-schema-generator.js"
+      );
+      const { table } = generateRuntimeSchema(
+        tableName,
+        fields as FieldDefinition[],
+        dialect
+      );
+      registry.registerDynamicSchema(tableName, table);
+    } catch (err) {
+      logger.debug?.(
+        `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+}
 
 async function loadDynamicTables(
   adapter: DrizzleAdapter,
@@ -1085,7 +1187,9 @@ async function initializePlugins(
     | UserService
     | UnifiedMediaService
     | EmailService
-    | unknown => {
+    | DatabaseInstance
+    | Logger
+    | NextlyServiceConfig => {
     switch (name) {
       case "collectionService":
         return container.get<CollectionService>("collectionService");

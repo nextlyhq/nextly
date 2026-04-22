@@ -493,9 +493,20 @@ async function resolveApiKeyOwner(
   const privateTable = (apiKeyService as unknown as ApiKeyServicePrivateTable)
     .apiKeysTable;
 
-  // Drizzle's builder chain is generic over dialect, so we funnel through
-  // `unknown` once at the adapter boundary and assert the final row shape.
-  const db = adapter.getDrizzle();
+  // Drizzle's builder chain is generic over dialect and the adapter
+  // returns `unknown` to keep the interface dialect-neutral. Use the
+  // adapter's generic parameter to narrow to just the chain we need -
+  // avoids an `as` cast that ESLint's "unnecessary type assertion"
+  // autofix would strip.
+  const db = adapter.getDrizzle<{
+    select: (columns: Record<string, unknown>) => {
+      from: (table: unknown) => {
+        where: (cond: unknown) => {
+          limit: (n: number) => Promise<unknown[]>;
+        };
+      };
+    };
+  }>();
 
   const rows = (await db
     .select({ userId: privateTable.userId })
