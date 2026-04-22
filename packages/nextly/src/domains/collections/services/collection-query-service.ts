@@ -391,7 +391,7 @@ export class CollectionQueryService extends BaseService {
       const dialect = this.adapter?.dialect || "postgresql";
 
       // Get the table name for component subqueries
-      const tableName = `dc_${params.collectionName}`;
+      const tableName = getTableName(params.collectionName);
 
       // Build component field EXISTS conditions
       const componentCondition = this.buildComponentFieldConditions(
@@ -870,7 +870,7 @@ export class CollectionQueryService extends BaseService {
           extractComponentFieldConditions(params.where, fieldsForFilters);
 
         // Get the table name for component subqueries
-        const tableName = `dc_${params.collectionName}`;
+        const tableName = getTableName(params.collectionName);
 
         // Build component field EXISTS conditions
         const componentCondition = this.buildComponentFieldConditions(

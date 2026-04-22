@@ -62,7 +62,10 @@ export class CollectionFileManager {
   }
 
   registerSchema(collectionName: string, schema: unknown): void {
-    this.schemaRegistry.set(`dc_${collectionName}`, schema);
+    this.schemaRegistry.set(
+      `dc_${collectionName.replace(/-/g, "_")}`,
+      schema
+    );
   }
 
   registerSchemas(schemas: Record<string, unknown>): void {
@@ -218,7 +221,7 @@ export class CollectionFileManager {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async loadDynamicSchema(collectionName: string): Promise<any> {
-    const schemaKey = `dc_${collectionName}`;
+    const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
     console.log(
       "[FileManager] loadDynamicSchema called for:",
       collectionName,
@@ -247,7 +250,9 @@ export class CollectionFileManager {
         const metadata = await this.metadataFetcher(collectionName);
         if (metadata && metadata.fields) {
           const dialect = this.adapter.dialect as SupportedDialect;
-          const tableName = metadata.tableName || `dc_${collectionName}`;
+          const tableName =
+            metadata.tableName ||
+            `dc_${collectionName.replace(/-/g, "_")}`;
 
           console.log(
             "[FileManager] Generating runtime schema for:",
@@ -291,7 +296,7 @@ export class CollectionFileManager {
   async reloadSchema(collectionName: string): Promise<void> {
     const schemaFileName = `${collectionName}.ts`;
     const schemaPath = path.resolve(path.join(this.schemasDir, schemaFileName));
-    const schemaKey = `dc_${collectionName}`;
+    const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
 
     try {
       try {
