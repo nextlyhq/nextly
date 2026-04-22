@@ -1,7 +1,14 @@
 /**
  * Author Profile Page
  *
- * Author card + their published posts, newest first.
+ * Profile-centered layout per the Task 17 design (Option B):
+ *   Big centered avatar
+ *   Name (H1)
+ *   Bio (centered, max-w-prose)
+ *   Stats row (post count, RSS)
+ *   Divider
+ *   Posts by author in a 3-col grid
+ *
  * Ships Person + BreadcrumbList JSON-LD.
  */
 
@@ -73,9 +80,7 @@ export default async function AuthorPage({
   };
 
   // Two-item breadcrumb (Home → Author). Intentionally no middle
-  // "Authors" step because we don't ship a public /authors index route;
-  // pointing a breadcrumb labeled "Authors" at /blog would mismatch the
-  // destination page's H1 and fail Google's rich-result validation.
+  // "Authors" step because we don't ship a public /authors index.
   const breadcrumbSchema: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -99,12 +104,37 @@ export default async function AuthorPage({
     <>
       <JsonLd data={[personSchema, breadcrumbSchema]} />
 
-      <div className="mb-12">
+      {/* Profile-centered header */}
+      <div className="mx-auto mb-12 max-w-xl text-center">
         <AuthorCard author={author} variant="full" />
+        <div
+          className="mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm"
+          style={{ color: "var(--color-fg-muted)" }}
+        >
+          <span>
+            {posts.totalDocs} {posts.totalDocs === 1 ? "post" : "posts"}
+          </span>
+          <span aria-hidden="true">·</span>
+          <a
+            href={`/authors/${slug}/feed.xml`}
+            className="transition-opacity hover:opacity-80"
+            style={{ color: "var(--color-accent)" }}
+          >
+            RSS
+          </a>
+        </div>
       </div>
 
+      <div
+        className="mb-8 h-px"
+        style={{ background: "var(--color-border)" }}
+      />
+
       <section>
-        <h2 className="mb-8 text-xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+        <h2
+          className="mb-6 text-xs font-semibold uppercase tracking-widest"
+          style={{ color: "var(--color-fg-muted)" }}
+        >
           Posts by {author.name}
         </h2>
         <PostGrid posts={posts.docs} />

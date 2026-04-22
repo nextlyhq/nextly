@@ -1,11 +1,14 @@
 /**
  * Blog Listing Page
  *
- * All published posts in a grid with URL-based pagination (/blog?page=2).
+ * All published posts in a grid with URL-based pagination
+ * (/blog?page=2). Uses the shared ListingHeader pattern for visual
+ * consistency with category / tag / author archives.
  */
 
 import type { Metadata } from "next";
 
+import { ListingHeader } from "@/components/ListingHeader";
 import { Pagination } from "@/components/Pagination";
 import { PostGrid } from "@/components/PostGrid";
 import { getPosts, getSiteSettings } from "@/lib/queries";
@@ -35,9 +38,16 @@ export default async function BlogPage({
 
   return (
     <>
-      <h1 className="mb-8 text-3xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
-        Blog
-      </h1>
+      <ListingHeader
+        title="All posts"
+        description="Every published post, newest first."
+        stats={[
+          {
+            text: `${result.totalDocs} ${result.totalDocs === 1 ? "post" : "posts"}`,
+          },
+          { text: "RSS", href: "/feed.xml" },
+        ]}
+      />
 
       <PostGrid posts={result.docs} />
 

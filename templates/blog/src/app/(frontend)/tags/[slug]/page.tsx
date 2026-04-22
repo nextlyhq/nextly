@@ -2,15 +2,15 @@
  * Tag Archive Page
  *
  * Posts with a given tag, paginated. Mirrors the category archive's
- * layout and SEO wiring — CollectionPage + BreadcrumbList JSON-LD,
+ * layout and SEO wiring: CollectionPage + BreadcrumbList JSON-LD,
  * full Metadata API, and a link to the tag's RSS feed.
  */
 
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { JsonLd } from "@/components/JsonLd";
+import { ListingHeader } from "@/components/ListingHeader";
 import { Pagination } from "@/components/Pagination";
 import { PostGrid } from "@/components/PostGrid";
 import { getAllTagSlugs, getPostsByTag, getTagBySlug } from "@/lib/queries";
@@ -59,10 +59,7 @@ export default async function TagPage({
   const tag = await getTagBySlug(slug);
   if (!tag) notFound();
 
-  const posts = await getPostsByTag(tag.id, {
-    page: currentPage,
-    limit: 9,
-  });
+  const posts = await getPostsByTag(tag.id, { page: currentPage, limit: 9 });
 
   const collectionSchema: Record<string, unknown> = {
     "@context": "https://schema.org",
@@ -101,24 +98,17 @@ export default async function TagPage({
     <>
       <JsonLd data={[collectionSchema, breadcrumbSchema]} />
 
-      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
-            #{tag.name}
-          </h1>
-          {tag.description && (
-            <p className="mt-2 text-neutral-600 dark:text-neutral-400">
-              {tag.description}
-            </p>
-          )}
-        </div>
-        <Link
-          href={`/tags/${slug}/feed.xml`}
-          className="text-sm font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
-        >
-          RSS
-        </Link>
-      </div>
+      <ListingHeader
+        label="Tag"
+        title={`#${tag.name}`}
+        description={tag.description ?? undefined}
+        stats={[
+          {
+            text: `${posts.totalDocs} ${posts.totalDocs === 1 ? "post" : "posts"}`,
+          },
+          { text: "RSS", href: `/tags/${slug}/feed.xml` },
+        ]}
+      />
 
       <PostGrid posts={posts.docs} />
 
