@@ -23,7 +23,7 @@ import React, { useState, useEffect } from "react";
 import { type Control, type FieldValues, useForm } from "react-hook-form";
 import { z } from "zod";
 
-import { User, Search, Users } from "@admin/components/icons";
+import { User, Users } from "@admin/components/icons";
 import {
   Form,
   FormControl,
@@ -33,6 +33,7 @@ import {
   FormMessage,
   FormDescription,
 } from "@admin/components/ui/form";
+import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import { createSlugSchema } from "@admin/lib/validation";
 import { UserFieldConfig, FieldType } from "@admin/types/field-types";
 
@@ -107,8 +108,9 @@ export function UserFieldEditor({
   const fetchUserRoles = async () => {
     setIsLoadingRoles(true);
     try {
-      const response = await fetch(
-        "/admin/api/roles?limit=100&sortBy=name&sortOrder=asc"
+      const response = await authFetch(
+        "/admin/api/roles?limit=100&sortBy=name&sortOrder=asc",
+        { credentials: "include" }
       );
       const data = await response.json();
 

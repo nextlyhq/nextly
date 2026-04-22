@@ -8,13 +8,22 @@ import {
 
 /**
  * Create a Set-Cookie header for the access token.
+ *
+ * `cookieMaxAgeSeconds` controls only when the browser drops the cookie — the
+ * JWT's own `exp` claim (set by `signAccessToken`) is the authoritative
+ * expiration. Callers should pass the refresh-token TTL here so that expired
+ * JWTs still reach the server and drive the TOKEN_EXPIRED refresh flow.
  */
 export function setAccessTokenCookie(
   token: string,
-  ttlSeconds: number,
+  cookieMaxAgeSeconds: number,
   isProduction: boolean
 ): string {
-  const options = getCookieOptions("accessToken", isProduction, ttlSeconds);
+  const options = getCookieOptions(
+    "accessToken",
+    isProduction,
+    cookieMaxAgeSeconds
+  );
   return serializeCookie(COOKIE_NAMES.accessToken, token, options);
 }
 

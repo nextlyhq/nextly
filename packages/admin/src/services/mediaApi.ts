@@ -27,6 +27,12 @@
 import { getCurrentUserId } from "@admin/lib/auth/session";
 
 import { parseApiError } from "../lib/api/parseApiError";
+import {
+  authFetch,
+  readAuthErrorCodeFromText,
+  redirectToLogin,
+  refreshAccessToken,
+} from "../lib/api/refreshInterceptor";
 import type {
   Media,
   MediaListResponse,
@@ -62,7 +68,7 @@ async function mediaFetch<T>(
   url: string,
   options?: RequestInit
 ): Promise<MediaApiResponse<T>> {
-  const response = await fetch(url, options);
+  const response = await authFetch(url, options);
 
   if (!response.ok) {
     const json = await response.json().catch(() => null);
@@ -94,21 +100,16 @@ async function mediaFetch<T>(
  *
  * @throws Error if upload fails or file is invalid
  */
-export async function uploadMedia(
-  file: File,
-  onProgress?: (progress: number) => void,
-  folderId?: string | null
-): Promise<Media> {
-  const userId = await getCurrentUserId();
+interface XhrUploadResult {
+  status: number;
+  responseText: string;
+}
 
+function uploadMediaOnce(
+  formData: FormData,
+  onProgress?: (progress: number) => void
+): Promise<XhrUploadResult> {
   return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("uploadedBy", userId);
-    if (folderId) {
-      formData.append("folderId", folderId);
-    }
-
     const xhr = new XMLHttpRequest();
 
     xhr.upload.addEventListener("progress", event => {
@@ -119,27 +120,7 @@ export async function uploadMedia(
     });
 
     xhr.addEventListener("load", () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const response = JSON.parse(xhr.responseText);
-          if (response.success && response.data) {
-            resolve(response.data);
-          } else {
-            reject(new Error(response.message || "Upload failed"));
-          }
-        } catch {
-          reject(new Error("Failed to parse server response"));
-        }
-      } else {
-        try {
-          const response = JSON.parse(xhr.responseText);
-          reject(
-            new Error(response.message || `Upload failed: ${xhr.statusText}`)
-          );
-        } catch {
-          reject(new Error(`Upload failed: ${xhr.statusText}`));
-        }
-      }
+      resolve({ status: xhr.status, responseText: xhr.responseText });
     });
 
     xhr.addEventListener("error", () => {
@@ -153,6 +134,60 @@ export async function uploadMedia(
     xhr.open("POST", "/api/media");
     xhr.send(formData);
   });
+}
+
+export async function uploadMedia(
+  file: File,
+  onProgress?: (progress: number) => void,
+  folderId?: string | null
+): Promise<Media> {
+  const userId = await getCurrentUserId();
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("uploadedBy", userId);
+  if (folderId) {
+    formData.append("folderId", folderId);
+  }
+
+  // XMLHttpRequest-based uploads can't route through `authFetch`, so we
+  // reproduce its single-retry 401→refresh contract here. Progress events
+  // from the first attempt still fire normally.
+  let result = await uploadMediaOnce(formData, onProgress);
+
+  if (result.status === 401) {
+    const code = readAuthErrorCodeFromText(result.responseText);
+    if (code === "TOKEN_EXPIRED") {
+      if (await refreshAccessToken()) {
+        result = await uploadMediaOnce(formData, onProgress);
+      } else {
+        redirectToLogin();
+      }
+    } else if (code === "UNAUTHENTICATED" || code === "SESSION_UPGRADED") {
+      redirectToLogin();
+    }
+  }
+
+  if (result.status >= 200 && result.status < 300) {
+    try {
+      const response = JSON.parse(result.responseText);
+      if (response.success && response.data) {
+        return response.data as Media;
+      }
+      throw new Error(response.message || "Upload failed");
+    } catch (err) {
+      if (err instanceof Error) throw err;
+      throw new Error("Failed to parse server response");
+    }
+  }
+
+  try {
+    const response = JSON.parse(result.responseText);
+    throw new Error(response.message || `Upload failed: ${result.status}`);
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    throw new Error(`Upload failed: ${result.status}`);
+  }
 }
 
 // ============================================================
@@ -237,7 +272,7 @@ export async function bulkDeleteMedia(mediaIds: string[]): Promise<{
   failureCount: number;
   failed: string[];
 }> {
-  const response = await fetch("/api/media/bulk", {
+  const response = await authFetch("/api/media/bulk", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mediaIds }),

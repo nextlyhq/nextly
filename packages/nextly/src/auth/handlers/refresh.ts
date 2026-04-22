@@ -3,8 +3,10 @@
  * Rotates the refresh token and issues a new access token.
  * Re-fetches roles from DB (guarantees fresh roles within 15 min).
  */
-import { setAccessTokenCookie } from "../cookies/access-token-cookie.js";
-import { clearAccessTokenCookie } from "../cookies/access-token-cookie.js";
+import {
+  setAccessTokenCookie,
+  clearAccessTokenCookie,
+} from "../cookies/access-token-cookie.js";
 import {
   setRefreshTokenCookie,
   readRefreshTokenCookie,
@@ -114,7 +116,7 @@ export async function handleRefresh(
   });
 
   const cookies = [
-    setAccessTokenCookie(accessToken, deps.accessTokenTTL, deps.isProduction),
+    setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
     setRefreshTokenCookie(newRawToken, deps.refreshTokenTTL, deps.isProduction),
   ];
 

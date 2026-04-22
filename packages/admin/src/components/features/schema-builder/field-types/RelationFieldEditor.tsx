@@ -31,6 +31,7 @@ import {
   FormMessage,
   FormDescription,
 } from "@admin/components/ui/form";
+import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import { createSlugSchema } from "@admin/lib/validation";
 import { RelationFieldConfig, FieldType } from "@admin/types/field-types";
 
@@ -128,8 +129,9 @@ export function RelationFieldEditor({
     try {
       // 2. Fetch Collections
       try {
-        const collectionsRes = await fetch(
-          "/admin/api/collections?limit=100&sortBy=name&sortOrder=asc"
+        const collectionsRes = await authFetch(
+          "/admin/api/collections?limit=100&sortBy=name&sortOrder=asc",
+          { credentials: "include" }
         );
         if (collectionsRes.ok) {
           const collectionsData = await collectionsRes.json();
@@ -157,7 +159,9 @@ export function RelationFieldEditor({
 
       // 3. Fetch Singles
       try {
-        const singlesRes = await fetch("/admin/api/singles");
+        const singlesRes = await authFetch("/admin/api/singles", {
+          credentials: "include",
+        });
         if (singlesRes.ok) {
           const singlesData = await singlesRes.json();
           if (singlesData.data) {

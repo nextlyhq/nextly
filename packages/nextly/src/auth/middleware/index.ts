@@ -113,6 +113,12 @@ export interface ErrorResponse {
   message: string;
   error: string;
   data: null;
+  /**
+   * Machine-readable error code (e.g. "TOKEN_EXPIRED", "UNAUTHENTICATED").
+   * Included in the JSON body so clients can distinguish "needs refresh"
+   * from "fully unauthenticated" without parsing the human-readable message.
+   */
+  code?: string;
   /** Optional HTTP response headers (e.g. Retry-After, X-RateLimit-*). Excluded from JSON body. */
   headers?: Record<string, string>;
 }
@@ -124,7 +130,8 @@ export function createErrorResponse(
   statusCode: number,
   message: string,
   error?: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  code?: string
 ): ErrorResponse {
   return {
     success: false,
@@ -132,6 +139,7 @@ export function createErrorResponse(
     message,
     error: error || message,
     data: null,
+    ...(code && { code }),
     ...(headers && { headers }),
   };
 }
@@ -301,8 +309,8 @@ export async function requireAuthentication(
 ): Promise<AuthContext | ErrorResponse> {
   // getSession returns GetSessionResult; extract user or null for backward compat
   const sessionResult = await getSession(req, env.NEXTLY_SECRET_RESOLVED || "");
-  const user = sessionResult.authenticated ? sessionResult.user : null;
-  if (user) {
+  if (sessionResult.authenticated) {
+    const { user } = sessionResult;
     return {
       userId: user.id,
       userName: user.name ?? undefined,
@@ -315,12 +323,25 @@ export async function requireAuthentication(
 
   const apiKeyResult = await requireApiKeyAuth(req);
 
-  // null → no Authorization header → truly unauthenticated
+  // null → no Authorization header → truly unauthenticated.
+  // If the session was expired, emit TOKEN_EXPIRED so the client can refresh
+  // silently instead of bouncing the user to login.
   if (apiKeyResult === null) {
+    if (sessionResult.reason === "expired") {
+      return createErrorResponse(
+        401,
+        "Session expired",
+        "Your session has expired, please refresh",
+        undefined,
+        "TOKEN_EXPIRED"
+      );
+    }
     return createErrorResponse(
       401,
       "Authentication required",
-      "You must be logged in to access this resource"
+      "You must be logged in to access this resource",
+      undefined,
+      "UNAUTHENTICATED"
     );
   }
 

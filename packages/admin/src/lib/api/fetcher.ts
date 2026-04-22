@@ -1,4 +1,5 @@
 import { parseApiError } from "./parseApiError";
+import { authFetch } from "./refreshInterceptor";
 
 // Schema version tracking for cross-flow notification.
 // When the server bumps the schema version (e.g., code-first change),
@@ -29,27 +30,6 @@ type ApiErrorResult = {
 
 export type ApiResult<T> = ApiSuccess<T> | ApiErrorResult;
 
-// ─── Token refresh interceptor state ─────────────────────────────────────
-// Prevents multiple concurrent refresh calls when several API requests
-// receive 401 TOKEN_EXPIRED simultaneously.
-let isRefreshing = false;
-let refreshQueue: Array<{
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-}> = [];
-
-async function attemptTokenRefresh(): Promise<boolean> {
-  try {
-    const res = await fetch(`${BASE_URL}/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 export async function fetcher<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -66,7 +46,9 @@ export async function fetcher<T = unknown>(
     ...options,
   };
 
-  const res = await fetch(fullUrl, fetchOptions);
+  const res = isProtected
+    ? await authFetch(fullUrl, fetchOptions)
+    : await fetch(fullUrl, fetchOptions);
 
   // Check X-Nextly-Schema-Version header for cross-flow schema change detection.
   // If the version increased and we didn't just apply changes ourselves,
@@ -87,65 +69,6 @@ export async function fetcher<T = unknown>(
         );
       }
       window.__nextlySchemaVersion = version;
-    }
-  }
-
-  // ─── Token refresh interceptor ───────────────────────────────────────
-  // When a protected request returns 401 with TOKEN_EXPIRED, transparently
-  // refresh the access token and retry. Uses a mutex to prevent concurrent refreshes.
-  if (res.status === 401 && isProtected) {
-    let errorBody: { error?: { code?: string } } | null = null;
-    try {
-      errorBody = await res.clone().json();
-    } catch {
-      // Not JSON, fall through to normal error handling
-    }
-
-    const errorCode = errorBody?.error?.code;
-
-    if (errorCode === "TOKEN_EXPIRED") {
-      if (!isRefreshing) {
-        isRefreshing = true;
-        const refreshed = await attemptTokenRefresh();
-        isRefreshing = false;
-
-        if (refreshed) {
-          // Retry all queued requests from concurrent 401s
-          const queue = [...refreshQueue];
-          refreshQueue = [];
-          queue.forEach(({ resolve }) =>
-            resolve(fetcher(path, options, isProtected))
-          );
-          // Retry the original request
-          return fetcher<T>(path, options, isProtected);
-        } else {
-          // Refresh failed -- session truly expired
-          refreshQueue.forEach(({ reject }) =>
-            reject(new Error("Session expired"))
-          );
-          refreshQueue = [];
-          if (typeof window !== "undefined") {
-            window.location.href = "/admin/login";
-          }
-          throw parseApiError(errorBody, 401);
-        }
-      } else {
-        // Another request is already refreshing, queue this one
-        return new Promise<T>((resolve, reject) => {
-          refreshQueue.push({
-            resolve: val => resolve(val as T),
-            reject,
-          });
-        });
-      }
-    }
-
-    // SESSION_UPGRADED or UNAUTHENTICATED -- redirect to login
-    if (errorCode === "SESSION_UPGRADED" || errorCode === "UNAUTHENTICATED") {
-      if (typeof window !== "undefined") {
-        window.location.href = "/admin/login";
-      }
-      throw parseApiError(errorBody, 401);
     }
   }
 

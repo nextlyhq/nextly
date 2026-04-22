@@ -21,6 +21,7 @@
 
 import { BASE_URL } from "../lib/api/fetcher";
 import { parseApiError } from "../lib/api/parseApiError";
+import { authFetch } from "../lib/api/refreshInterceptor";
 
 // ============================================================
 // Types
@@ -96,7 +97,7 @@ async function apiKeyFetch<T = unknown>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await authFetch(`${BASE_URL}${path}`, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
