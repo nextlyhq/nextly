@@ -192,9 +192,9 @@
     "vitest": "^4.0.8"
   },
   "peerDependencies": {
-    "@revnixhq/adapter-mysql": ">=0.0.139",
-    "@revnixhq/adapter-postgres": ">=0.0.139",
-    "@revnixhq/adapter-sqlite": ">=0.0.139",
+    "@revnixhq/adapter-mysql": "workspace:*",
+    "@revnixhq/adapter-postgres": "workspace:*",
+    "@revnixhq/adapter-sqlite": "workspace:*",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0"
   },
   "peerDependenciesMeta": {

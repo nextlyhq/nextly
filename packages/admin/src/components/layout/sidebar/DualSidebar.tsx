@@ -12,7 +12,6 @@ import { useCollections, useSingles } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
-import { navigateTo } from "@admin/lib/navigation";
 import {
   filterCollectionItems,
   filterSingleItems,
@@ -424,38 +423,29 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       ...(showBuilder ? ["builders" as const] : []),
     ].includes(selectedMain) || selectedMain.startsWith("standalone-");
 
-  const handleMainClick = (item: MainMenuItem) => {
-    setSelectedMain(item.id);
+  const CATEGORIES_WITH_SUB_SIDEBAR = [
+    "collections",
+    "singles",
+    "plugins",
+    "manage",
+    "settings",
+    "builders",
+  ];
 
-    // On mobile, we avoid automatic navigation for categories that have a sub-sidebar.
-    // This allows users to see the sub-menu first before choosing a specific page.
-    if (isMobile) {
-      const categoriesWithSubSidebar = [
-        "collections",
-        "singles",
-        "plugins",
-        "manage",
-        "settings",
-        "builders",
-      ];
-      if (
-        categoriesWithSubSidebar.includes(item.id) ||
-        item.id.startsWith("standalone-")
-      ) {
-        return;
-      }
-    }
+  const hasSubSidebarCategory = (id: string) =>
+    CATEGORIES_WITH_SUB_SIDEBAR.includes(id) || id.startsWith("standalone-");
 
-    // Automatic navigation logic
+  const resolveItemHref = (item: MainMenuItem): string => {
     if (item.id === "collections") {
-      navigateTo(
-        firstCollectionUrl || ROUTES.COLLECTIONS + "?from=collections"
-      );
-    } else if (item.id === "singles") {
-      navigateTo(firstSingleUrl || ROUTES.SINGLES + "?from=singles");
-    } else if (item.id === "plugins" && firstPluginUrl) {
-      navigateTo(firstPluginUrl);
-    } else if (item.id.startsWith("standalone-")) {
+      return firstCollectionUrl || ROUTES.COLLECTIONS + "?from=collections";
+    }
+    if (item.id === "singles") {
+      return firstSingleUrl || ROUTES.SINGLES + "?from=singles";
+    }
+    if (item.id === "plugins") {
+      return firstPluginUrl || "#";
+    }
+    if (item.id.startsWith("standalone-")) {
       const slug = item.id.replace("standalone-", "");
       const sp = visibleStandalonePlugins.find(
         p =>
@@ -465,12 +455,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             .replace(/^-+|-+$/g, "") === slug
       );
       const firstCol = sp?.collections?.[0];
-      if (firstCol) {
-        navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: firstCol }));
-      }
-    } else if (item.href && item.href !== "#") {
-      navigateTo(item.href);
+      return firstCol
+        ? buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: firstCol })
+        : "#";
     }
+    return item.href;
   };
 
   // Resolve collections for the active standalone plugin section
@@ -538,24 +527,45 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           {visibleMenuItems.map(item => {
             const Icon = item.icon;
             const isSelected = selectedMain === item.id;
+            const href = resolveItemHref(item);
+            const stayOnPageMobile = isMobile && hasSubSidebarCategory(item.id);
+            const renderAsLink = href !== "#" && !stayOnPageMobile;
+
+            const className = cn(
+              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
+              isSelected
+                ? "bg-primary text-primary-foreground"
+                : "text-sidebar-foreground/60 hover-unified"
+            );
+
+            const iconContent = (
+              <>
+                <Icon className="h-5 w-5" />
+                {isSelected && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-primary rounded-r-full" />
+                )}
+              </>
+            );
 
             return (
               <Tooltip key={item.id} delayDuration={0}>
                 <TooltipTrigger asChild>
-                  <button
-                    onClick={() => handleMainClick(item)}
-                    className={cn(
-                      "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
-                      isSelected
-                        ? "bg-primary text-primary-foreground"
-                        : "text-sidebar-foreground/60 hover-unified"
-                    )}
-                  >
-                    <Icon className="h-5 w-5" />
-                    {isSelected && (
-                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-primary rounded-r-full" />
-                    )}
-                  </button>
+                  {renderAsLink ? (
+                    <Link
+                      href={href}
+                      onClick={() => setSelectedMain(item.id)}
+                      className={className}
+                    >
+                      {iconContent}
+                    </Link>
+                  ) : (
+                    <button
+                      onClick={() => setSelectedMain(item.id)}
+                      className={className}
+                    >
+                      {iconContent}
+                    </button>
+                  )}
                 </TooltipTrigger>
                 <TooltipContent
                   side="right"
