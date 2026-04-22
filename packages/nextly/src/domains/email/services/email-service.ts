@@ -372,21 +372,28 @@ export class EmailService extends BaseService {
   /**
    * Send a welcome email.
    *
-   * Uses the `welcome` template slug. When `verifyLink` is provided the
-   * template includes a "Verify Email" button so the user can confirm
-   * their address before logging in.
+   * Uses the `welcome` template slug. Confirms account creation and
+   * directs the user to sign in — no verify CTA. Verification is the
+   * job of `sendEmailVerificationEmail`.
+   *
+   * Login URL resolution (highest priority first):
+   * 1. `options.loginUrl` (per-request full URL override — frontend apps)
+   * 2. `baseUrl + (options.path ?? emailConfig.loginPath ?? '/admin')`
    */
   async sendWelcomeEmail(
     to: string,
     user: { name: string | null; email: string },
-    options?: { verifyLink?: string }
+    options?: { loginUrl?: string; path?: string }
   ): Promise<void> {
+    const loginUrl =
+      options?.loginUrl ??
+      `${this.getBaseUrl()}${options?.path ?? this.emailConfig?.loginPath ?? "/admin"}`;
+
     await this.sendWithTemplate("welcome", to, {
       userName: user.name ?? user.email,
       appName: this.getAppName(),
       userEmail: user.email,
-      verifyLink: options?.verifyLink ?? "",
-      expiresIn: "24 hours",
+      loginUrl,
       year: new Date().getFullYear().toString(),
     });
   }

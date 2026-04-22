@@ -218,6 +218,15 @@ export interface EmailConfig {
   verifyEmailPath?: string;
 
   /**
+   * Path for the login page link used by the welcome email.
+   * The full URL is constructed as `{baseUrl}{loginPath}`.
+   *
+   * @default '/admin'
+   * @example '/signin'
+   */
+  loginPath?: string;
+
+  /**
    * Custom email template overrides.
    * Override the default HTML templates for auth-related emails.
    */

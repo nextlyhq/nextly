@@ -1,10 +1,10 @@
 /**
  * Default Welcome Email Template
  *
- * Sent to new users after account creation when `sendWelcomeEmail`
- * is enabled. Includes a verify email button so the user can confirm
- * their address before logging in. Uses inline CSS for email client
- * compatibility. Content is wrapped by the shared header/footer layout.
+ * Sent to confirm a new account has been created and direct the
+ * user to sign in. Generic enough to be used by both admin-created
+ * user flows and frontend self-signup. Does NOT include a verify
+ * CTA — that is the job of the `email-verification` template.
  *
  * Slug: `welcome`
  *
@@ -17,39 +17,39 @@ import type { EmailTemplateInsert } from "../../../../schemas/email-templates/ty
 export const welcomeTemplate: EmailTemplateInsert = {
   name: "Welcome Email",
   slug: "welcome",
-  subject: "Welcome to {{appName}}, {{userName}}!",
-  htmlContent: `<h1 style="margin: 0; padding: 0 0 16px; font-size: 24px; font-weight: 600; color: #18181b; line-height: 32px;">Welcome, {{userName}}!</h1>
-<p style="margin: 0; padding: 0 0 16px; font-size: 16px; color: #3f3f46; line-height: 24px;">Thank you for joining <strong>{{appName}}</strong>. We're excited to have you on board.</p>
-<p style="margin: 0; padding: 0 0 24px; font-size: 16px; color: #3f3f46; line-height: 24px;">Your account has been created with the email address <strong>{{userEmail}}</strong>. To get started, please verify your email address by clicking the button below.</p>
+  subject: "Welcome to {{appName}}",
+  htmlContent: `<h1 style="margin: 0; padding: 0 0 16px; font-size: 24px; font-weight: 600; color: #18181b; line-height: 32px;">Welcome to {{appName}}</h1>
+<p style="margin: 0; padding: 0 0 16px; font-size: 16px; color: #3f3f46; line-height: 24px;">Hi {{userName}},</p>
+<p style="margin: 0; padding: 0 0 16px; font-size: 16px; color: #3f3f46; line-height: 24px;">Your account has been created with the email <strong>{{userEmail}}</strong>. Thanks for joining us — we're glad to have you.</p>
+<p style="margin: 0; padding: 0 0 24px; font-size: 16px; color: #3f3f46; line-height: 24px;">You can sign in now and start using {{appName}}.</p>
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%">
   <tr>
     <td align="center" style="padding: 0 0 24px;">
-      <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{verifyLink}}" style="height:44px;v-text-anchor:middle;width:200px;" arcsize="14%" fillcolor="#18181b" stroke="f"><v:textbox inset="0,0,0,0"><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:500;">Verify Email</center></v:textbox></v:roundrect><![endif]-->
-      <!--[if !mso]><!--><a href="{{verifyLink}}" style="display: inline-block; padding: 12px 24px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 20px;">Verify Email</a><!--<![endif]-->
+      <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{loginUrl}}" style="height:44px;v-text-anchor:middle;width:200px;" arcsize="14%" fillcolor="#18181b" stroke="f"><v:textbox inset="0,0,0,0"><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:500;">Get Started</center></v:textbox></v:roundrect><![endif]-->
+      <!--[if !mso]><!--><a href="{{loginUrl}}" style="display: inline-block; padding: 12px 24px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 20px;">Get Started</a><!--<![endif]-->
     </td>
   </tr>
 </table>
-<p style="margin: 0; padding: 0 0 16px; font-size: 14px; color: #71717a; line-height: 20px;">This link will expire in <strong>{{expiresIn}}</strong>.</p>
-<p style="margin: 0; font-size: 16px; color: #3f3f46; line-height: 24px;">If you have any questions, feel free to reach out to our support team.</p>
+<p style="margin: 0; padding: 0 0 16px; font-size: 14px; color: #71717a; line-height: 20px;">If you have any questions, just reply to this email — we're happy to help.</p>
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%">
   <tr>
     <td style="padding: 16px 0 0; border-top: 1px solid #e4e4e7;">
       <p style="margin: 0; font-size: 12px; color: #a1a1aa; line-height: 18px;">If the button above doesn't work, copy and paste the following URL into your browser:</p>
-      <p style="margin: 0; padding: 4px 0 0; font-size: 12px; color: #a1a1aa; line-height: 18px; word-break: break-all;">{{verifyLink}}</p>
+      <p style="margin: 0; padding: 4px 0 0; font-size: 12px; color: #a1a1aa; line-height: 18px; word-break: break-all;">{{loginUrl}}</p>
     </td>
   </tr>
 </table>`,
-  plainTextContent: `Welcome, {{userName}}!
+  plainTextContent: `Welcome to {{appName}}
 
-Thank you for joining {{appName}}. We're excited to have you on board.
+Hi {{userName}},
 
-Your account has been created with the email address {{userEmail}}. To get started, please verify your email address by visiting the link below:
+Your account has been created with the email {{userEmail}}. Thanks for joining us — we're glad to have you.
 
-{{verifyLink}}
+You can sign in now and start using {{appName}}:
 
-This link will expire in {{expiresIn}}.
+{{loginUrl}}
 
-If you have any questions, feel free to reach out to our support team.`,
+If you have any questions, just reply to this email — we're happy to help.`,
   variables: [
     {
       name: "userName",
@@ -63,14 +63,9 @@ If you have any questions, feel free to reach out to our support team.`,
       required: false,
     },
     {
-      name: "verifyLink",
-      description: "Email verification URL",
+      name: "loginUrl",
+      description: "Sign-in URL the user should visit to access their account",
       required: true,
-    },
-    {
-      name: "expiresIn",
-      description: "Token expiry duration (e.g. 24 hours)",
-      required: false,
     },
     {
       name: "year",
