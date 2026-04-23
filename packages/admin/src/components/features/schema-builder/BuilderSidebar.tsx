@@ -143,10 +143,10 @@ export function BuilderSidebar({
                   }
                 }}
                 className={cn(
-                  "flex items-center justify-center gap-1.5 w-full text-[13px] font-medium transition-all duration-150 border-0 shadow-none! h-full py-3 rounded-none",
+                  "builder-sidebar-tab flex items-center justify-center gap-1.5 w-full text-[13px] font-medium transition-all duration-150 border-0 shadow-none! h-full py-3 rounded-none",
                   isActive
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-transparent text-muted-foreground hover:text-foreground hover-subtle-row"
+                    ? "bg-primary border-primary"
+                    : "bg-transparent hover:text-foreground hover-subtle-row"
                 )}
                 style={{
                   borderColor: isActive ? "hsl(var(--primary))" : undefined,
