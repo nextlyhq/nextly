@@ -17,6 +17,7 @@ export default [
       "src/route-handler/**/*.ts",
       "src/actions/**/*.ts",
       "src/api/**/*.ts",
+      "src/direct-api/**/*.ts",
       "src/routeHandler.ts",
     ],
     rules: {
