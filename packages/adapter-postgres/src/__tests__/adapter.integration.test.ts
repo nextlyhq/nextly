@@ -29,8 +29,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Connection string for the test Postgres 16 instance
 // ============================================================
 
+// F18 canonical env var: TEST_POSTGRES_URL.
+// Falls back to the dev Docker container if unset (local dev convenience).
 const TEST_DB_URL =
-  process.env.TEST_DATABASE_URL_POSTGRES ||
+  process.env.TEST_POSTGRES_URL ||
   "postgresql://postgres:dev_password_change_in_production@localhost:5432/nextly_test";
 
 // ============================================================
