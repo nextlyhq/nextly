@@ -13,7 +13,8 @@ import fs from "fs-extra";
 // defined in nextly.config.ts. Instead, a nextly.seed.ts file is generated
 // that creates them in the database as unlocked (editable) entries.
 //
-// The seed runs via `npx @nextlyhq/nextly dev --seed` after migrations.
+// The seed runs via `npm run db:setup` (which invokes
+// `nextly db:sync --seed`) after migrations.
 
 /**
  * Blog CMS seed template.
@@ -28,7 +29,7 @@ const BLOG_SEED = `import { container } from "@revnixhq/nextly";
  * These are created as UI-editable entries — you can modify fields,
  * add new collections, or delete them via the admin dashboard.
  *
- * Run: npx @revnixhq/nextly dev --seed
+ * Run: npm run db:setup
  */
 export default async function seed() {
   const collectionRegistry = container.get<any>("collectionRegistryService");

@@ -350,7 +350,7 @@ function PermissionsContent() {
           <p className="mt-1 text-sm text-muted-foreground">
             {search || typeFilter !== "all"
               ? "Try adjusting your search or clearing the filter."
-              : "Permissions are auto-generated when you run nextly dev or create collections."}
+              : "Permissions are auto-generated when you run next dev or create collections."}
           </p>
           {(search || typeFilter !== "all") && (
             <Button
