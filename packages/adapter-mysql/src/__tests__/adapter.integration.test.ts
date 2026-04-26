@@ -27,9 +27,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Connection string for the test MySQL 8 instance
 // ============================================================
 
+// F18 canonical env var: TEST_MYSQL_URL.
 const TEST_DB_URL =
-  process.env.TEST_DATABASE_URL_MYSQL ||
-  "mysql://root:root@localhost:3307/nextly_test";
+  process.env.TEST_MYSQL_URL || "mysql://root:root@localhost:3307/nextly_test";
 
 // ============================================================
 // Drizzle table definitions matching the raw SQL schemas below.
