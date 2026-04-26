@@ -34,9 +34,14 @@
  * @packageDocumentation
  */
 
-import { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
+import {
+  DrizzleAdapter,
+  // F17: connect-time DB version check shared across all adapters.
+  checkDialectVersion,
+} from "@revnixhq/adapter-drizzle";
 import {
   createDatabaseError,
+  isDatabaseError,
   type MySqlAdapterConfig,
   type DatabaseCapabilities,
   type PoolStats,
@@ -281,10 +286,20 @@ export class MySqlAdapter extends DrizzleAdapter {
       // Cast to our Pool interface - mysql2's mixin types don't resolve properly
       this.pool = mysql.createPool(poolConfig) as unknown as Pool;
 
-      // Verify connection with smoke test
+      // Verify connection with smoke test, then check dialect version.
+      // Why: F17 hard-fails at connect on real MySQL <8.0 (no variant
+      // token detected). Recognized variants (MariaDB, TiDB, Aurora,
+      // PlanetScale, Vitess) log a warning via the adapter logger and
+      // proceed. Truly unparseable strings hard-fail so users see the
+      // issue at boot rather than mid-apply.
       const connection = await this.pool.getConnection();
       try {
         await connection.query("SELECT 1");
+        await checkDialectVersion(connection, "mysql", {
+          // Why: route variant warnings through the adapter's logger so
+          // users see a single, consistent log surface.
+          onWarning: msg => this.config.logger?.warn?.(msg),
+        });
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -863,6 +878,13 @@ export class MySqlAdapter extends DrizzleAdapter {
    * @returns DatabaseError with proper classification
    */
   private classifyError(error: unknown, sql?: string): DatabaseError {
+    // Why short-circuit on existing DatabaseError: F17's
+    // UnsupportedDialectVersionError is already a typed DatabaseError with
+    // kind: "unsupported_version" plus detectedVersion/requiredVersion
+    // fields. Re-wrapping it here would erase those fields and re-tag it
+    // as kind: "unknown".
+    if (isDatabaseError(error)) return error;
+
     const mysqlError = error as {
       errno?: number;
       code?: string;
