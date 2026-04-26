@@ -132,8 +132,12 @@ describe("reloadNextlyConfig", () => {
     expect(applySpy).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
     const warningArg = warnSpy.mock.calls[0]?.[0] as string;
+    // The classification string is in the message, even though the
+    // headline avoids the word "destructive" (see reload-config.ts
+    // explanatory comment for why).
     expect(warningArg).toContain("destructive");
     expect(warningArg).toContain("users");
+    expect(warningArg).toContain("needs review");
   });
 
   it("skips collections that have no changes (preview reports hasChanges=false)", async () => {

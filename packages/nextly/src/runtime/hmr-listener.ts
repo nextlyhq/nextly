@@ -87,9 +87,12 @@ export function ensureHmrListener(): void {
   }
 }
 
-// Returns true if HMR signaled a reload since the last call. Resets the
-// flag in the process. Returns false if a reload is already in flight
-// (the caller should await the in-flight promise instead).
+// Returns true exactly when HMR signaled a reload since the last call,
+// and resets the flag. Returns false in two cases that the caller should
+// treat the same way: (1) no event has fired, (2) a reload is already in
+// flight from a peer request. In case (2) the in-flight reload will
+// finish for the peer; this caller may proceed with the current cached
+// instance and pick up the new schema on a subsequent call.
 export function consumeHmrReloadFlag(): boolean {
   if (g.__nextly_hmrReload === true) {
     g.__nextly_hmrReload = false;

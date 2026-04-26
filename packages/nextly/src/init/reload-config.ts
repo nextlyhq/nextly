@@ -96,13 +96,30 @@ export async function reloadNextlyConfig(opts?: {
   // Re-read disk. The config-loader has its own in-memory cache; we
   // explicitly clear it so we definitely pick up the just-saved file
   // even on hosts with coarse mtime resolution.
-  const { loadConfig, clearConfigCache } = await import(
-    "../cli/utils/config-loader.js"
-  );
-  clearConfigCache();
-  const result = await loadConfig();
-  const newConfig = (result as { config?: { collections?: CollectionDef[] } })
-    .config;
+  // The whole load is wrapped in try/catch because users routinely save
+  // nextly.config.ts mid-edit with syntax errors during dev. Without this
+  // guard, the loader rejection bubbles through getNextly() and turns
+  // every subsequent request into a 500. The wrapper used to log+continue
+  // here; we preserve that behavior. Logger isn't yet resolved (services
+  // may not exist), so we use console.warn directly.
+  let newConfig: { collections?: CollectionDef[] } | undefined;
+  try {
+    const { loadConfig, clearConfigCache } = await import(
+      "../cli/utils/config-loader.js"
+    );
+    clearConfigCache();
+    const result = await loadConfig();
+    newConfig = (result as { config?: { collections?: CollectionDef[] } })
+      .config;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[Nextly HMR] Could not reload nextly.config.ts: ${msg}. ` +
+        `Keeping the previously-loaded config. Fix the syntax error and ` +
+        `save again to retry.`
+    );
+    return;
+  }
   if (!newConfig) return;
 
   let schemaChangeService: SchemaChangeServiceLike | undefined;
@@ -145,14 +162,20 @@ export async function reloadNextlyConfig(opts?: {
       if (!preview.hasChanges) continue;
 
       if (preview.hasDestructiveChanges) {
-        // Loud log so the user understands why their config edit did not
-        // take effect. Do not throw; other collections in the same reload
-        // pass should still be processed.
+        // The "destructive" flag is set for any classification other than
+        // "safe" (includes "interactive" cases like NOT-NULL on a non-empty
+        // column without a default). The headline phrasing avoids the word
+        // "destructive" so users with an "interactive" classification do
+        // not mistake this for irreversible damage; the classification
+        // string itself is included in the message for accurate triage.
+        // Do not throw; other collections in the same reload pass should
+        // still be processed.
         logger?.warn(
-          `[Nextly HMR] Destructive code-first change detected for '${slug}' ` +
-            `(classification: ${preview.classification}). Auto-apply skipped to ` +
-            `prevent data loss. Use the admin Schema Builder to confirm with ` +
-            `resolutions, or revert the config edit.`
+          `[Nextly HMR] Code-first change for '${slug}' needs review ` +
+            `(classification: ${preview.classification}). Auto-apply skipped ` +
+            `to prevent data loss without explicit resolutions. Use the ` +
+            `admin Schema Builder to confirm with resolutions, or revert ` +
+            `the config edit.`
         );
         continue;
       }
