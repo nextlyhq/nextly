@@ -8,6 +8,8 @@
  * collections they can actually read.
  */
 
+import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -148,35 +150,34 @@ const COLLECTIONS_METHODS: Record<
       }
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
-       
-      const currentFields = (collection.fields ?? []) as any[];
-      const tableName =
-         
-        (collection as any).tableName ?? `dc_${collection.slug}`;
+      // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
+      // which has tableName, fields: FieldConfig[], and schemaVersion: number.
+      // FieldConfig is structurally compatible with FieldDefinition (the schema
+      // service's input type), so we cast through unknown for the type system
+      // even though the runtime values are interchangeable.
+      const currentFields = (collection.fields ??
+        []) as unknown as FieldDefinition[];
+      const tableName = collection.tableName;
       const preview = await schemaChangeService.preview(
         tableName,
         currentFields,
-         
-        fields as any[]
+        fields as FieldDefinition[]
       );
       return {
         ...preview,
-         
-        schemaVersion: (collection as any).schemaVersion ?? 0,
+        schemaVersion: collection.schemaVersion,
       };
     },
   },
-  // Apply confirmed schema changes.
+  // Apply confirmed schema changes via the in-process schema service.
   //
-  // Two code paths:
-  // 1. Wrapper mode (NEXTLY_IPC_PORT set): enqueue the apply on the IPC
-  //    dispatcher so the wrapper can run DDL in its plain-Node context
-  //    (drizzle-kit/api works there) and respawn the child. The handler
-  //    awaits the wrapper's response via /apply-result before returning.
-  // 2. Plain next dev (no wrapper): fall back to the in-process path.
-  //    DDL may silently fail under Turbopack per the known createRequire
-  //    issue; the error surfaces via the Sub-task 1 truth-telling fix
-  //    rather than a green success toast.
+  // F1 PR 3: single-process model. drizzle-kit/api is loaded lazily by the
+  // schema service via drizzle-kit-lazy.ts (PR 1's webpackIgnore +
+  // turbopackIgnore magic comments keep it out of the handler bundle), so
+  // DDL runs cleanly in the same process serving requests. No more
+  // wrapper-mode IPC routing. bumpSchemaVersion fires automatically on
+  // success via SchemaChangeService.setOnApplySuccess (registered in
+  // di/register.ts:355-356).
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
@@ -196,79 +197,38 @@ const COLLECTIONS_METHODS: Record<
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
-         
-        resolutions?: Record<string, any>;
+        resolutions?: Record<string, FieldResolution>;
       };
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
       }
       if (!fields) throw new Error("fields is required in request body");
-      // Optimistic locking: reject if version changed since preview
-       
-      const currentVersion = (collection as any).schemaVersion ?? 0;
+      // Optimistic locking: reject if version changed since preview.
+      const currentVersion = collection.schemaVersion;
       if (schemaVersion !== undefined && schemaVersion !== currentVersion) {
         throw new Error(
           "Schema was modified by another session. Please refresh."
         );
       }
-       
-      const currentFields = (collection.fields ?? []) as any[];
-      const tableName =
-         
-        (collection as any).tableName ?? `dc_${collection.slug}`;
 
-      // Wrapper mode: delegate DDL to the wrapper via IPC.
-      const ipcServer = (
-        globalThis as unknown as {
-          __nextly_ipcServer?: {
-            dispatcher: {
-              pushApplyRequest: (input: {
-                slug: string;
-                newFields: unknown[];
-                resolutions: Record<string, unknown>;
-              }) => Promise<{
-                id: string;
-                success: boolean;
-                newSchemaVersion?: number;
-                error?: string;
-              }>;
-            };
-          } | null;
-        }
-      ).__nextly_ipcServer;
+      const currentFields = (collection.fields ??
+        []) as unknown as FieldDefinition[];
+      const tableName = collection.tableName;
 
-      if (ipcServer?.dispatcher) {
-        const result = await ipcServer.dispatcher.pushApplyRequest({
-          slug: p.collectionName,
-          newFields: fields,
-          resolutions: resolutions ?? {},
-        });
-        if (!result.success) {
-          throw new Error(
-            result.error ?? "Schema apply failed in wrapper context"
-          );
-        }
-        return {
-          success: true,
-          restarting: true,
-          message: "Schema changes applied. Dev server restarting.",
-          newSchemaVersion: result.newSchemaVersion ?? currentVersion + 1,
-        };
-      }
-
-      // Plain next dev fallback (no wrapper): in-process apply. Subject to
-      // Turbopack / drizzle-kit/api issues, but the Sub-task 1 rollback
-      // ensures any DDL failure surfaces an honest error rather than a
-      // misleading success.
+      // SchemaChangeService.apply expects a CollectionRegistryLike interface
+      // whose getCollectionBySlug returns Record<string, unknown> | null;
+      // CollectionRegistryService returns the more-specific
+      // DynamicCollectionRecord. The interface is not exported (intentional,
+      // to avoid pulling its full DI graph through schema-change-service),
+      // so we read its shape via Parameters<typeof apply>[5] and cast through
+      // unknown to bridge the structural-vs-nominal gap without `as any`.
       const result = await schemaChangeService.apply(
         p.collectionName,
         tableName,
         currentFields,
-         
-        fields as any[],
+        fields as FieldDefinition[],
         currentVersion,
-         
-        registry as any,
+        registry as unknown as Parameters<typeof schemaChangeService.apply>[5],
         resolutions
       );
       if (!result.success) {
@@ -277,7 +237,6 @@ const COLLECTIONS_METHODS: Record<
       }
       return {
         success: true,
-        restarting: false,
         message: result.message,
         newSchemaVersion: result.newSchemaVersion,
       };
@@ -290,7 +249,7 @@ const COLLECTIONS_METHODS: Record<
       // Build sort parameter from sortBy and sortOrder.
       // Frontend sends: sortBy=createdAt&sortOrder=desc
       // Backend expects: sort=-createdAt (desc) or sort=createdAt (asc).
-      let sort: string | undefined = p.sort as string | undefined;
+      let sort = p.sort;
       if (!sort && p.sortBy) {
         const sortOrder = p.sortOrder === "desc" ? "desc" : "asc";
         sort = sortOrder === "desc" ? `-${p.sortBy}` : String(p.sortBy);

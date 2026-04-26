@@ -49,10 +49,12 @@ export interface SchemaPreviewResponse {
   schemaVersion: number;
 }
 
-// Response from the apply endpoint
+// Response from the apply endpoint.
+// F1 PR 3: dropped the `restarting` field (single-process model means
+// no child to restart). The dispatcher no longer emits it; this interface
+// matches the new server shape.
 export interface SchemaApplyResponse {
   success: boolean;
-  restarting: boolean;
   message: string;
   newSchemaVersion: number;
 }

@@ -47,10 +47,6 @@ import {
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
-// Imported here (not lazy) because bumpSchemaVersion is tiny and used in the
-// IPC server onApplied callback set up during init. Lazy-loading it adds no
-// value for a non-heavy module.
-import { bumpSchemaVersion } from "./routeHandler";
 // HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
@@ -94,112 +90,7 @@ export type { NextlyServiceConfig } from "./di/register";
 const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_initPromise?: Promise<Nextly> | null;
-  // Task 11: IPC server handle when running under the nextly dev wrapper.
-  // Exposed on globalThis so other modules (e.g. the collection dispatcher
-  // apply handler) can push apply-requests into the same dispatcher queue
-  // the wrapper polls.
-  __nextly_ipcServer?: { dispatcher: unknown; port: number } | null;
-  // In-flight promise for IPC server bootstrap so concurrent calls to
-  // ensureWrapperIpcServer wait for the same attempt rather than racing.
-  __nextly_ipcServerPromise?: Promise<void> | null;
-  // Task 11: latest pending schema change from the wrapper, surfaced to
-  // the admin UI via /api/admin-meta/schema-pending so PendingSchemaBanner
-  // knows when to show.
-  __nextly_pendingSchemaChange?: {
-    slug: string;
-    classification: string;
-    diff: unknown;
-    ddlPreview?: string[];
-    rowCounts?: Record<string, number>;
-    receivedAt: string;
-  } | null;
 };
-
-// Task 11: binds the IPC server used by the `nextly dev` wrapper. Idempotent
-// and triggered from multiple init entry points (getNextly() and the module
-// scope bootstrap below) because auth/admin handlers can call registerServices
-// without going through getNextly and we need the IPC server up either way.
-// No-op when NEXTLY_IPC_PORT/NEXTLY_IPC_TOKEN are unset (plain `next dev`).
-export async function ensureWrapperIpcServer(): Promise<void> {
-  if (globalForInit.__nextly_ipcServer) return;
-  if (globalForInit.__nextly_ipcServerPromise)
-    return globalForInit.__nextly_ipcServerPromise;
-
-  const ipcPortRaw = process.env.NEXTLY_IPC_PORT;
-  const ipcToken = process.env.NEXTLY_IPC_TOKEN;
-  if (!ipcPortRaw || !ipcToken) return;
-  const ipcPort = Number.parseInt(ipcPortRaw, 10);
-  if (!Number.isFinite(ipcPort) || ipcPort <= 0) return;
-
-  globalForInit.__nextly_ipcServerPromise = (async () => {
-    try {
-      // Lazy-import so users not running under the wrapper do not pay the
-      // cost of loading the http server module into the dev bundle.
-      const { startIpcServer } = await import("./cli/wrapper/ipc-server");
-      const handle = await startIpcServer({
-        port: ipcPort,
-        token: ipcToken,
-        onPending: payload => {
-          globalForInit.__nextly_pendingSchemaChange = {
-            slug: payload.slug,
-            classification: payload.classification,
-            diff: payload.diff,
-            ddlPreview: payload.ddlPreview,
-            rowCounts: payload.rowCounts,
-            receivedAt: new Date().toISOString(),
-          };
-        },
-        onApplied: () => {
-          globalForInit.__nextly_pendingSchemaChange = null;
-          bumpSchemaVersion();
-        },
-      });
-      globalForInit.__nextly_ipcServer = {
-        dispatcher: handle.dispatcher,
-        port: handle.port,
-      };
-      console.log(
-        `[Nextly] IPC server bound at 127.0.0.1:${handle.port} (wrapper mode)`
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // EADDRINUSE with our own port means a previous module instance in
-      // this same Node process already bound the server (Next/Turbopack
-      // can re-execute our module on HMR while globalThis state from the
-      // earlier run persists). Swallow silently rather than log a scary
-      // warning; the server is up and the admin UI can reach it.
-      if (msg.includes("EADDRINUSE")) {
-        // Mark as bound so subsequent calls in this module instance skip
-        // the attempt entirely. dispatcher is null here because we lost
-        // the handle, but the admin dispatcher does not go through it
-        // (it uses globalThis.__nextly_ipcServer?.dispatcher only for
-        // UI-first apply enqueue which SHOULD still have the original
-        // dispatcher set by whichever module actually won the bind).
-        if (!globalForInit.__nextly_ipcServer) {
-          globalForInit.__nextly_ipcServer = {
-            dispatcher: null,
-            port: ipcPort,
-          };
-        }
-      } else {
-        console.warn(
-          `[Nextly] Could not start IPC server on port ${ipcPort}: ${msg}`
-        );
-      }
-    } finally {
-      globalForInit.__nextly_ipcServerPromise = null;
-    }
-  })();
-
-  return globalForInit.__nextly_ipcServerPromise;
-}
-
-// Start the IPC server eagerly at module load when env vars are set. This
-// covers the common case where Nextly is imported but getNextly() is not
-// yet called - the wrapper can still reach the IPC endpoints.
-if (process.env.NEXTLY_IPC_PORT && process.env.NEXTLY_IPC_TOKEN) {
-  void ensureWrapperIpcServer();
-}
 
 // ============================================================
 // Main API
@@ -336,17 +227,7 @@ export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
         // idempotent and their errors are already caught internally, so
         // firing without await is safe.
         void runPostInitTasks();
-
-        // IPC server startup moved OUT of this block and into
-        // ensureWrapperIpcServer() below so it runs independently of
-        // service registration. Other code paths (auth handler, etc.)
-        // call registerServices() without going through getNextly(),
-        // which used to mean the IPC server never bound.
       }
-
-      // Run the IPC server bootstrap every time getNextly resolves. It
-      // is idempotent and binds at most once per process.
-      await ensureWrapperIpcServer();
 
       // Get the Direct API instance
       const directAPI = getDirectAPI();
