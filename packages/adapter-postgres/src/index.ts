@@ -66,7 +66,11 @@
  * @packageDocumentation
  */
 
-import { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
+import {
+  DrizzleAdapter,
+  // F17: connect-time DB version check shared across all adapters.
+  checkDialectVersion,
+} from "@revnixhq/adapter-drizzle";
 import type {
   PostgresAdapterConfig,
   DatabaseCapabilities,
@@ -83,9 +87,13 @@ import type {
   DatabaseError,
   DatabaseErrorKind,
 } from "@revnixhq/adapter-drizzle/types";
-import { createDatabaseError } from "@revnixhq/adapter-drizzle/types";
+import {
+  createDatabaseError,
+  isDatabaseError,
+} from "@revnixhq/adapter-drizzle/types";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool, PoolClient, PoolConfig } from "pg";
+import type { PoolClient, PoolConfig } from "pg";
+import { Pool } from "pg";
 
 import {
   detectPostgresProvider,
@@ -335,10 +343,22 @@ export class PostgresAdapter extends DrizzleAdapter {
           // Client is automatically removed from pool, no action needed
         });
 
-        // Verify connection with smoke test
+        // Verify connection with smoke test, then check dialect version.
+        // Why: F17 hard-fails at connect on unsupported PG versions (<15.0)
+        // so users see a clear upgrade pointer instead of cryptic errors
+        // mid-apply later. The version query runs inside the existing retry
+        // loop's try block, so transient network failures (Neon cold start,
+        // EAI_AGAIN) continue to retry; only confirmed version mismatch
+        // surfaces as UnsupportedDialectVersionError and exits the loop.
         const client = await this.pool.connect();
         try {
           await client.query("SELECT 1");
+          await checkDialectVersion(client, "postgresql", {
+            // Why: route any future variant warnings through the adapter's
+            // logger. PG has no recognized variants today, but this keeps
+            // the integration symmetric with MySQL.
+            onWarning: msg => this.config.logger?.warn?.(msg),
+          });
           this.connected = true;
 
           if (this.config.logger?.info) {
@@ -952,6 +972,13 @@ export class PostgresAdapter extends DrizzleAdapter {
    * @returns DatabaseError with proper classification
    */
   private classifyError(error: unknown, sql?: string): DatabaseError {
+    // Why short-circuit on existing DatabaseError: F17's
+    // UnsupportedDialectVersionError is already a typed DatabaseError with
+    // kind: "unsupported_version" plus detectedVersion/requiredVersion
+    // fields. Re-wrapping it here would erase those fields and re-tag it
+    // as kind: "unknown".
+    if (isDatabaseError(error)) return error;
+
     const pgError = error as {
       code?: string;
       message?: string;
