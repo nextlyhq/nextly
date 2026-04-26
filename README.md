@@ -119,6 +119,22 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+### Running Tests
+
+Nextly has two test suites: unit (no DB needed) and integration (real Docker-backed PG/MySQL).
+
+```sh
+# Unit suite — no setup needed
+pnpm test:unit
+
+# Integration suite — start Docker test stack first
+docker compose -f docker-compose.test.yml up -d
+pnpm test:integration
+docker compose -f docker-compose.test.yml down
+```
+
+For the full test workflow including per-dialect runs, writing new integration tests, and CI details, see the [Testing section in CONTRIBUTING.md](./CONTRIBUTING.md#testing).
+
 ---
 
 ## Docker Development Environment
