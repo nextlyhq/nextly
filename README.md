@@ -4,7 +4,7 @@ An open-source CMS and app framework for Next.js. Define your content schema wit
 
 ## Packages
 
-### Core 
+### Core
 
 | Package            | Description                                             |
 | ------------------ | ------------------------------------------------------- |
@@ -28,6 +28,30 @@ An open-source CMS and app framework for Next.js. Define your content schema wit
 | **@nextly/eslint-config**   | Shared ESLint configuration     |
 | **@nextly/tsconfig**        | Shared TypeScript configuration |
 | **@nextly/prettier-config** | Shared Prettier configuration   |
+
+## Requirements
+
+Adopting Nextly into a Next.js application needs the following:
+
+### Runtime
+
+| Tool    | Minimum                                                     |
+| ------- | ----------------------------------------------------------- |
+| Node.js | 18+ (Node 22 LTS is what we test against)                   |
+| pnpm    | 8+                                                          |
+| Next.js | 15+ for production; 16+ recommended for Turbopack-based dev |
+
+### Database
+
+Nextly verifies your database version at connect time. Older real PostgreSQL/MySQL/SQLite versions hard-fail at boot with a clear upgrade pointer.
+
+| Database   | Minimum | Notes                                                                                                                                                          |
+| ---------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL | 15.0+   | Standard PG, Neon, Supabase, RDS, Aurora PG all supported.                                                                                                     |
+| MySQL      | 8.0+    | MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) recognized at connect with a warning and continue to work on best-effort support. |
+| SQLite     | 3.38+   | Bundled with `better-sqlite3` (currently 3.45+).                                                                                                               |
+
+See [database support docs](./docs/database/support.mdx) for the full version policy, cloud-provider compatibility, and upgrade guidance.
 
 ## Monorepo Structure
 
