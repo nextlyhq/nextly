@@ -133,7 +133,7 @@ export function createProgram(): Command {
       "after",
       `
 ${pc.bold("Examples:")}
-  ${pc.gray("$")} nextly dev                    ${pc.gray("# Start development mode")}
+  ${pc.gray("$")} next dev                      ${pc.gray("# Start the dev server (Nextly boots in-process)")}
   ${pc.gray("$")} nextly generate:types         ${pc.gray("# Generate TypeScript types")}
   ${pc.gray("$")} nextly migrate                ${pc.gray("# Run pending migrations")}
   ${pc.gray("$")} nextly migrate:status         ${pc.gray("# Show migration status")}
