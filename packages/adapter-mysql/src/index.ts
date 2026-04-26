@@ -34,11 +34,8 @@
  * @packageDocumentation
  */
 
-import {
-  DrizzleAdapter,
-  // F17: connect-time DB version check shared across all adapters.
-  checkDialectVersion,
-} from "@revnixhq/adapter-drizzle";
+import { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
+// F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
   isDatabaseError,
@@ -65,6 +62,7 @@ import {
   type PoolConfig,
   type SslConfig,
 } from "@revnixhq/adapter-drizzle/types";
+import { checkDialectVersion } from "@revnixhq/adapter-drizzle/version-check";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import type {

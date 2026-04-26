@@ -66,11 +66,8 @@
  * @packageDocumentation
  */
 
-import {
-  DrizzleAdapter,
-  // F17: connect-time DB version check shared across all adapters.
-  checkDialectVersion,
-} from "@revnixhq/adapter-drizzle";
+import { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
+// F17: connect-time DB version check shared across all adapters.
 import type {
   PostgresAdapterConfig,
   DatabaseCapabilities,
@@ -91,6 +88,7 @@ import {
   createDatabaseError,
   isDatabaseError,
 } from "@revnixhq/adapter-drizzle/types";
+import { checkDialectVersion } from "@revnixhq/adapter-drizzle/version-check";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";

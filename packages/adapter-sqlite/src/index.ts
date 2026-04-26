@@ -34,11 +34,8 @@
  * @packageDocumentation
  */
 
-import {
-  DrizzleAdapter,
-  // F17: connect-time DB version check shared across all adapters.
-  checkDialectVersion,
-} from "@revnixhq/adapter-drizzle";
+import { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
+// F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
   isDatabaseError,
@@ -63,6 +60,7 @@ import {
   type BaseAdapterConfig,
   type AdapterLogger,
 } from "@revnixhq/adapter-drizzle/types";
+import { checkDialectVersion } from "@revnixhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
 import {
   drizzle,
