@@ -4,7 +4,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { DrizzlePushService } from "../services/drizzle-push-service";
 
-// Mock drizzle-kit-api wrapper
+// Mock drizzle-kit-lazy module (replaces the old drizzle-kit-api wrapper
+// in F1 PR 1). The async accessors return per-dialect kits; mocks supply
+// resolved promises so each test can drive pushSchema without touching
+// real drizzle-kit.
 const mockApply = vi.fn().mockResolvedValue(undefined);
 const mockPushResult = {
   hasDataLoss: false,
@@ -13,16 +16,19 @@ const mockPushResult = {
   apply: mockApply,
 };
 
-vi.mock("../../../database/drizzle-kit-api", () => ({
-  requireDrizzleKit: () => ({
-    pushSchema: vi.fn().mockResolvedValue(mockPushResult),
-  }),
-  requireDrizzleKitMySQL: () => ({
-    pushSchema: vi.fn().mockResolvedValue(mockPushResult),
-  }),
-  requireDrizzleKitSQLite: () => ({
-    pushSchema: vi.fn().mockResolvedValue(mockPushResult),
-  }),
+vi.mock("../../../database/drizzle-kit-lazy", () => ({
+  getPgDrizzleKit: () =>
+    Promise.resolve({
+      pushSchema: vi.fn().mockResolvedValue(mockPushResult),
+    }),
+  getMySQLDrizzleKit: () =>
+    Promise.resolve({
+      pushSchema: vi.fn().mockResolvedValue(mockPushResult),
+    }),
+  getSQLiteDrizzleKit: () =>
+    Promise.resolve({
+      pushSchema: vi.fn().mockResolvedValue(mockPushResult),
+    }),
 }));
 
 describe("DrizzlePushService", () => {
