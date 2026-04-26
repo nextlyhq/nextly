@@ -19,32 +19,21 @@
 
 import type { Command } from "commander";
 
-import { ClackSchemaChangePrompt } from "../../domains/schema/services/schema-change-prompt.js";
 import { runDbSync } from "../commands/db-sync.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import { createContext, type GlobalOptions } from "../program.js";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter.js";
 import {
   createApplyServices,
   executeApplyRequest,
   type ApplyServices,
 } from "../wrapper/apply-executor.js";
-import { createAsyncLock } from "../wrapper/async-lock.js";
 import { buildNextDevSupervisorOptions } from "../wrapper/build-next-dev-supervisor-options.js";
-import {
-  ChangeOrchestrator,
-  type CollectionDelta,
-} from "../wrapper/change-orchestrator.js";
 import { loadNextlyConfig } from "../wrapper/config-loader.js";
 import { FileWatcher } from "../wrapper/file-watcher.js";
 import { findFreePort } from "../wrapper/free-port.js";
 import { IpcClient } from "../wrapper/ipc-client.js";
 import { generateIpcToken } from "../wrapper/ipc-token.js";
 import { NextBinaryNotFoundError } from "../wrapper/resolve-next-bin.js";
-import { StdinMutex } from "../wrapper/stdin-mutex.js";
 import { Supervisor } from "../wrapper/supervisor.js";
 
 export interface DevWrapperCommandOptions {
@@ -113,7 +102,7 @@ export function registerDevCommand(program: Command): void {
     )
     .option("-p, --port <port>", "Port for next dev", "3000")
     .action(async (cmdOptions: DevWrapperCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+      const globalOpts: GlobalOptions = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
       const { logger } = context;
       const cwd = globalOpts.cwd ?? process.cwd();
@@ -272,115 +261,24 @@ export function registerDevCommand(program: Command): void {
         return applyServices;
       };
 
-      // Lazy orchestrator. Shares the same apply services + schema change
-      // facade the UI-first flow uses, plus its own @clack/prompts renderer
-      // and stdin mutex so terminal prompts run without fighting next dev's
-      // readline. Built on first config change.
-      let orchestrator: ChangeOrchestrator | null = null;
-      const sharedMutex = createAsyncLock();
-      const getOrchestrator = async (): Promise<ChangeOrchestrator | null> => {
-        if (orchestrator) return orchestrator;
-        const services = await getApplyServices();
-        if (!services) return null;
-        orchestrator = new ChangeOrchestrator({
-          schemaChangeService: services.schemaChangeService,
-          collectionRegistry: services.registry,
-          supervisor,
-          ipcClient,
-          stdinMutex: new StdinMutex(),
-          prompt: new ClackSchemaChangePrompt(),
-          mutex: sharedMutex,
-          // List current-vs-new collection deltas by comparing the jiti-loaded
-          // config against the registry snapshot. Code-first collections are
-          // authored in the config; their "current" state is whatever was
-          // previously applied (stored in dynamic_collections under source="code").
-          listCollectionDeltas: async (): Promise<CollectionDelta[]> => {
-            const { config } = await loadNextlyConfig(cwd);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const configCollections = (config.collections ?? []) as any[];
-            const deltas: CollectionDelta[] = [];
-            for (const cfg of configCollections) {
-              let existing = await services.registry.getCollectionBySlug(
-                cfg.slug
-              );
-              // Brand-new code-first collection: there is no row in
-              // dynamic_collections for it yet, so SchemaChangeService.apply
-              // would fail at updateCollection() (no row to update). Insert
-              // an empty-fields stub up front with source="code" so the
-              // subsequent apply can upgrade it with the real fields.
-              if (!existing) {
-                try {
-                  existing = await services.registry.registerCollection({
-                    slug: cfg.slug,
-                    labels: cfg.labels ?? {
-                      singular: cfg.slug,
-                      plural: `${cfg.slug}s`,
-                    },
-                    tableName: cfg.dbName ?? `dc_${cfg.slug}`,
-                    description: cfg.description,
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    fields: [] as any,
-                    timestamps: cfg.timestamps,
-                    admin: cfg.admin,
-                    source: "code",
-                    // Code-first collections are locked against UI edits: the
-                    // config file is the source of truth.
-                    locked: true,
-                    schemaVersion: 0,
-                    migrationStatus: "pending",
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  } as any);
-                } catch (err) {
-                  logger.warn(
-                    `Could not pre-register code-first collection '${cfg.slug}': ${err instanceof Error ? err.message : String(err)}`
-                  );
-                }
-              }
-              deltas.push({
-                slug: cfg.slug,
-                tableName: cfg.dbName ?? `dc_${cfg.slug}`,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                currentFields: (existing?.fields ?? []) as any,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                newFields: (cfg.fields ?? []) as any,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                currentSchemaVersion: (existing as any)?.schemaVersion ?? 0,
-              });
-            }
-            return deltas;
-          },
-          logger: {
-            info: (m: string) => logger.info(m),
-            warn: (m: string) => logger.warn(m),
-            error: (m: string) => logger.error(m),
-          },
-        });
-        return orchestrator;
-      };
-
+      // F1 PR 2: code-first dispatch moved to runtime/hmr-listener.ts.
+      // The wrapper's onChange path used to invoke the change orchestrator
+      // (which prompted the user, applied DDL, and restarted the child).
+      // With single-process F1, the child receives Next's HMR event itself
+      // and getNextly() drains the reload flag in-process. The wrapper
+      // still spawns and supervises the child for now (PR 4 deletes the
+      // whole wrapper directory); we just no-op the onChange callback so
+      // the wrapper does not race with the in-process listener.
       const watcher = new FileWatcher({
         path: initialConfigPath,
         debounceMs: 500,
         onChange: async hash => {
-          // Code-first flow: file changed -> build orchestrator if not
-          // already -> run the full detect/classify/prompt/apply/restart
-          // sequence. The orchestrator serializes via shared mutex so a
-          // simultaneous UI-first apply cannot race with a code-first save.
-          logger.debug(`Config change detected (hash=${hash.slice(0, 8)}...)`);
-          try {
-            const orch = await getOrchestrator();
-            if (!orch) {
-              logger.warn(
-                "Skipping code-first apply: orchestrator not available (check DATABASE_URL)."
-              );
-              return;
-            }
-            await orch.handleConfigChange();
-          } catch (err) {
-            logger.error(
-              `Code-first change handling failed: ${err instanceof Error ? err.message : String(err)}`
-            );
-          }
+          logger.debug(
+            `Config change detected (hash=${hash.slice(0, 8)}...) - ` +
+              `dispatch handled by in-process HMR listener (F1 PR 2)`
+          );
+          // No-op: the in-process HMR listener now handles this.
+          await Promise.resolve();
         },
         onError: err => {
           logger.warn(
@@ -389,7 +287,9 @@ export function registerDevCommand(program: Command): void {
         },
       });
       await watcher.start();
-      logger.info(`Watching ${initialConfigPath} for changes`);
+      logger.info(
+        `Watching ${initialConfigPath} for changes (handled by in-process HMR listener)`
+      );
 
       // Poll the child's IPC dispatcher for UI-first apply requests. When
       // admin UI submits a schema apply, the child's collection-dispatcher

@@ -90,7 +90,12 @@
     "TEST_DATABASE_URL_POSTGRES", // @revnixhq/adapter-postgres integration tests
     "TEST_DATABASE_URL_MYSQL", // @revnixhq/adapter-mysql integration tests
     "DB_PROVIDER", // @revnixhq/adapter-postgres runtime driver selection
-    "TMPDIR" // @revnixhq/create-nextly-app temp dir override
+    "TMPDIR", // @revnixhq/create-nextly-app temp dir override
+    "PORT", // @revnixhq/nextly HMR listener: Next.js dev port
+    "USE_HTTPS", // @revnixhq/nextly HMR listener: dev server protocol
+    "__NEXT_ASSET_PREFIX", // @revnixhq/nextly HMR listener: Next.js asset prefix
+    "NEXTLY_DISABLE_HMR", // @revnixhq/nextly HMR listener: opt-out escape hatch
+    "NEXTLY_HMR_URL_OVERRIDE" // @revnixhq/nextly HMR listener: custom URL for proxy setups
   ],
 
   "tasks": {
