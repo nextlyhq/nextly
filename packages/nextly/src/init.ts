@@ -46,10 +46,20 @@ import {
 } from "./init/build-service-config";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
+import { reloadNextlyConfig } from "./init/reload-config";
 // Imported here (not lazy) because bumpSchemaVersion is tiny and used in the
 // IPC server onApplied callback set up during init. Lazy-loading it adds no
 // value for a non-heavy module.
 import { bumpSchemaVersion } from "./routeHandler";
+// HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
+// detects code-first config edits and flips a reload flag; the next
+// getNextly() call drains the flag, calls reloadNextlyConfig, and then
+// returns the cached instance with refreshed schema state.
+import {
+  ensureHmrListener,
+  consumeHmrReloadFlag,
+  markHmrReloadInFlight,
+} from "./runtime/hmr-listener";
 
 // ============================================================
 // Re-exports
@@ -263,6 +273,16 @@ if (process.env.NEXTLY_IPC_PORT && process.env.NEXTLY_IPC_TOKEN) {
 export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
   // Fast path: return already-initialised instance immediately.
   if (globalForInit.__nextly_cachedInstance) {
+    // F1 PR 2: drain HMR reload flag before returning cached instance.
+    // If the user edited nextly.config.ts since the last getNextly call,
+    // the WebSocket onmessage handler set the flag; we now reload the
+    // config and apply safe schema deltas. Destructive deltas log a
+    // warning and are skipped (see reload-config.ts safety stance).
+    if (consumeHmrReloadFlag()) {
+      const reloadPromise = reloadNextlyConfig();
+      markHmrReloadInFlight(reloadPromise);
+      await reloadPromise;
+    }
     // Even with cached instance, check if we need to register storage plugins.
     // This handles the case where services were initialised before config was
     // available (e.g. different Next.js worker process, or env vars not loaded
@@ -395,6 +415,13 @@ export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
       };
 
       globalForInit.__nextly_cachedInstance = instance;
+
+      // F1 PR 2: open the HMR WebSocket lazily after first init succeeds.
+      // ensureHmrListener is idempotent and gated on NODE_ENV / the
+      // NEXTLY_DISABLE_HMR escape hatch, so this is safe to call here
+      // even when the consumer is running tests or in production.
+      ensureHmrListener();
+
       return instance;
     } finally {
       // Always clear the in-flight promise so future calls use the cached
