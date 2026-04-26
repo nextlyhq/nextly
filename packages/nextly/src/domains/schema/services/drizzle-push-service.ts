@@ -1,13 +1,21 @@
 // Wraps drizzle-kit/api pushSchema() with preview/apply flow.
 // Replaces raw SQL DDL generation in SchemaPushService.
-// Supports all three dialects via the drizzle-kit-api wrapper.
+// Supports all three dialects via the drizzle-kit-lazy module.
+//
+// F1 PR 1: migrated from the sync createRequire-based drizzle-kit-api
+// wrapper to the async drizzle-kit-lazy module. The lazy module uses
+// webpackIgnore + turbopackIgnore magic comments to prevent the bundler
+// from tracing through to drizzle-kit/api (which pulls @libsql native
+// binaries that fail to resolve during `next build`). All call sites
+// in this file are already inside async methods, so adding `await`
+// to each kit accessor is mechanical.
 
 import {
-  requireDrizzleKit,
-  requireDrizzleKitMySQL,
-  requireDrizzleKitSQLite,
+  getPgDrizzleKit,
+  getMySQLDrizzleKit,
+  getSQLiteDrizzleKit,
   type PushSchemaResult,
-} from "../../../database/drizzle-kit-api";
+} from "../../../database/drizzle-kit-lazy";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -109,7 +117,7 @@ export class DrizzlePushService {
   private async applyViaPushSchemaSQLite(
     schema: Record<string, unknown>
   ): Promise<PushPreviewResult> {
-    const kit = requireDrizzleKitSQLite();
+    const kit = await getSQLiteDrizzleKit();
     const result = await kit.pushSchema(schema, this.db);
 
     if (
@@ -223,8 +231,8 @@ export class DrizzlePushService {
   ): Promise<PushPreviewResult> {
     const kit =
       dialect === "mysql"
-        ? requireDrizzleKitMySQL()
-        : requireDrizzleKitSQLite();
+        ? await getMySQLDrizzleKit()
+        : await getSQLiteDrizzleKit();
 
     const curJson = await kit.generateDrizzleJson(schema);
     const prevJson = await kit.generateDrizzleJson({});
@@ -240,7 +248,15 @@ export class DrizzlePushService {
       };
     }
 
-    const db = this.db as { execute: (sql: unknown) => Promise<unknown> };
+    // Drizzle's better-sqlite3 driver exposes synchronous .run() while the
+    // MySQL/Postgres drivers expose async .execute(). this.db is typed as
+    // unknown in the constructor (deliberately, so the service can swap
+    // drivers without leaking the dialect type upward), so we narrow with
+    // small structural interfaces here at the call site instead of using
+    // `as any`.
+    type SqliteRunDb = { run: (sql: unknown) => unknown };
+    type AsyncExecuteDb = { execute: (sql: unknown) => Promise<unknown> };
+
     const executedStatements: string[] = [];
 
     for (const migrationSql of sqlStatements) {
@@ -266,9 +282,9 @@ export class DrizzlePushService {
 
           const { sql: sqlTag } = await import("drizzle-orm");
           if (dialect === "sqlite") {
-            (this.db as any).run(sqlTag.raw(stmt));
+            (this.db as SqliteRunDb).run(sqlTag.raw(stmt));
           } else {
-            await (this.db as any).execute(sqlTag.raw(stmt));
+            await (this.db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
           }
           executedStatements.push(stmt);
         } catch (err) {
@@ -315,22 +331,28 @@ export class DrizzlePushService {
   ): Promise<PushSchemaResult> {
     switch (this.dialect) {
       case "postgresql": {
-        const kit = requireDrizzleKit();
+        const kit = await getPgDrizzleKit();
         return kit.pushSchema(schema, this.db, ["public"]);
       }
       case "mysql": {
-        const kit = requireDrizzleKitMySQL();
+        const kit = await getMySQLDrizzleKit();
         // MySQL pushSchema requires the database name as the 3rd parameter
         // so drizzle-kit knows which schema to introspect for diff comparison.
         // Without it, it finds zero existing tables and returns zero DDL.
         return kit.pushSchema(schema, this.db, this.databaseName ?? "");
       }
       case "sqlite": {
-        const kit = requireDrizzleKitSQLite();
+        const kit = await getSQLiteDrizzleKit();
         return kit.pushSchema(schema, this.db);
       }
-      default:
-        throw new Error(`Unsupported dialect: ${this.dialect}`);
+      default: {
+        // Exhaustiveness check: TypeScript narrows this.dialect to never
+        // here because all SupportedDialect cases are handled above. The
+        // String() coerces the runtime value defensively in case a caller
+        // bypasses the type system.
+        const exhaustive: never = this.dialect;
+        throw new Error(`Unsupported dialect: ${String(exhaustive)}`);
+      }
     }
   }
 }
