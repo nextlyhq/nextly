@@ -266,6 +266,26 @@
       "cache": true // Cache test results (only re-run if inputs change)
     },
 
+    // test:integration - Run integration tests against real DBs (F18).
+    //
+    // - Runs only *.integration.test.ts files via vitest.integration.config.ts.
+    // - Reads TEST_<DIALECT>_URL env vars to skip-or-run per dialect.
+    // - cache: false because results depend on the DB container's state, which
+    //   turbo cannot fingerprint. Re-runs every time.
+    // - dependsOn ^build because tests import workspace packages from dist/.
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*.{ts,tsx}",
+        "src/**/*.integration.test.{ts,tsx}",
+        "vitest.integration.config.ts",
+        "tsconfig.json"
+      ],
+      "outputs": [],
+      "cache": false,
+      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"]
+    },
+
     // test:coverage - Generate and display code coverage report
     //
     // Same as 'test' but with coverage reporting enabled.
