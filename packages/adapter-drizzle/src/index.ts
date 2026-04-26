@@ -124,3 +124,16 @@ export const version = "0.1.0";
  */
 export { DrizzleAdapter } from "./adapter";
 export type { TableResolver } from "./types/core";
+
+// F17: shared connect-time DB version check used by every adapter.
+// Why exported from the main entry: adapters import it during connect();
+// keeping it on the main entry avoids a separate subpath export.
+export {
+  checkDialectVersion,
+  NEXTLY_MIN_DB_VERSIONS,
+  UnsupportedDialectVersionError,
+} from "./version-check";
+export type {
+  VersionQueryClient,
+  CheckDialectVersionOptions,
+} from "./version-check";
