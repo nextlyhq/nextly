@@ -23,6 +23,12 @@ export default [
       // config files aren't in any tsconfig project; they are meant to be
       // maintained by hand, not linted as TS source
       "**/eslint.config.{js,mjs,cjs,ts}",
+      // reason: vitest config files aren't in any tsconfig project either.
+      // F18 added vitest.integration.config.ts as a sibling of vitest.config.ts
+      // to split unit/integration suites; both are config-only and not
+      // application source.
+      "**/vitest.config.ts",
+      "**/vitest.*.config.ts",
     ],
   },
 ];

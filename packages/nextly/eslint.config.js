@@ -46,6 +46,8 @@ export default [
       "node_modules/**",
       "test-*.ts",
       "tsup.config.js",
+      "vitest.config.ts",
+      "vitest.*.config.ts",
       "scripts/*.cjs",
       "scripts/*.js",
     ],
