@@ -396,7 +396,7 @@ describe("generateTypesDirectory", () => {
     const [placeholderPath, placeholderContent] = mockWriteFile.mock.calls[1];
     expect(placeholderPath).toContain("nextly-types.ts");
     expect(placeholderContent).toContain("Nextly Generated Types");
-    expect(placeholderContent).toContain("npx @revnixhq/nextly dev");
+    expect(placeholderContent).toContain("next dev");
   });
 
   it("should create types directory without src", async () => {
