@@ -157,7 +157,7 @@ const COLLECTIONS_METHODS: Record<
       // even though the runtime values are interchangeable.
       const currentFields = (collection.fields ??
         []) as unknown as FieldDefinition[];
-      const tableName = collection.tableName ?? `dc_${collection.slug}`;
+      const tableName = collection.tableName;
       const preview = await schemaChangeService.preview(
         tableName,
         currentFields,
@@ -213,13 +213,15 @@ const COLLECTIONS_METHODS: Record<
 
       const currentFields = (collection.fields ??
         []) as unknown as FieldDefinition[];
-      const tableName = collection.tableName ?? `dc_${collection.slug}`;
+      const tableName = collection.tableName;
 
-      // SchemaChangeService.apply takes a CollectionRegistryLike interface
+      // SchemaChangeService.apply expects a CollectionRegistryLike interface
       // whose getCollectionBySlug returns Record<string, unknown> | null;
       // CollectionRegistryService returns the more-specific
-      // DynamicCollectionRecord. Cast through unknown to bridge the
-      // structural-vs-nominal gap without using `as any`.
+      // DynamicCollectionRecord. The interface is not exported (intentional,
+      // to avoid pulling its full DI graph through schema-change-service),
+      // so we read its shape via Parameters<typeof apply>[5] and cast through
+      // unknown to bridge the structural-vs-nominal gap without `as any`.
       const result = await schemaChangeService.apply(
         p.collectionName,
         tableName,
