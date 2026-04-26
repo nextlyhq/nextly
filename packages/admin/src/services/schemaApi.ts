@@ -65,22 +65,6 @@ export interface FieldResolution {
   value?: string;
 }
 
-// What: shape of the pending schema change exposed by the wrapper.
-// Why: the admin UI's PendingSchemaBanner polls this to know when a
-// code-first edit is waiting for confirmation (only populated when running
-// under `nextly dev` wrapper). null when no change is pending or when
-// running plain `next dev`.
-export interface PendingSchemaChangeResponse {
-  pending: {
-    slug: string;
-    classification: "safe" | "destructive" | "interactive";
-    diff: SchemaPreviewChange;
-    ddlPreview?: string[];
-    rowCounts?: Record<string, number>;
-    receivedAt: string;
-  } | null;
-}
-
 export const schemaApi = {
   // Preview schema changes (dry-run, returns diff without applying)
   preview: async (
@@ -103,13 +87,6 @@ export const schemaApi = {
     return protectedApi.post<SchemaApplyResponse>(
       `/collections/schema/${slug}/apply`,
       { fields, confirmed: true, schemaVersion, resolutions }
-    );
-  },
-
-  // Fetch the wrapper's current pending schema change, if any.
-  getPending: async (): Promise<PendingSchemaChangeResponse> => {
-    return protectedApi.get<PendingSchemaChangeResponse>(
-      `/admin-meta/schema-pending`
     );
   },
 };
