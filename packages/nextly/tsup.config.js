@@ -42,6 +42,7 @@ const serverEntries = [
   // Unified error system entry points (Task 21)
   "src/errors/index.ts",
   "src/observability/index.ts",
+  "src/database/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims
