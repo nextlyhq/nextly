@@ -27,7 +27,7 @@ import type {
   RadioFieldConfig,
   RelationshipFieldConfig,
   UploadFieldConfig,
-  ArrayFieldConfig,
+  RepeaterFieldConfig,
   GroupFieldConfig,
 } from "@revnixhq/nextly/config";
 import {
@@ -230,7 +230,7 @@ export async function validateFieldValue(
     try {
       const customResult = await dataField.validate(value as never, {
         data,
-        req: {} as never, // Minimal request context for client-side
+        req: {}, // Minimal request context for client-side
       });
 
       if (typeof customResult === "string") {
@@ -663,7 +663,7 @@ function convertUploadFieldToZod(field: UploadFieldConfig): z.ZodTypeAny {
 // ============================================================
 
 function convertArrayFieldToZod(
-  field: ArrayFieldConfig,
+  field: RepeaterFieldConfig,
   options: GenerateSchemaOptions
 ): z.ZodTypeAny {
   // Get validation values from both flat and nested formats

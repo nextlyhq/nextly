@@ -17,7 +17,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   Input,
-  Skeleton,
   Table,
   TableBody,
   TableCell,
@@ -45,7 +44,6 @@ import {
   forwardRef,
 } from "react";
 
-import { SearchBar } from "@admin/components/shared/search-bar";
 
 import { BulkActionBar } from "./BulkActionBar";
 import {
@@ -353,12 +351,12 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
       return table
         .getSelectedRowModel()
         .rows.map(row => row.original.id as string);
-    }, [rowSelection]);
+    }, [table]);
 
     // Notify parent when selection changes
     useEffect(() => {
       onSelectionChange?.(selectedEntryIds);
-    }, [selectedEntryIds]);
+    }, [selectedEntryIds, onSelectionChange]);
 
     // ---------------------------------------------------------------------------
     // Imperative Handle

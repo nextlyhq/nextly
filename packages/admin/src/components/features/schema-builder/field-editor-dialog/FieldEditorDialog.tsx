@@ -15,9 +15,8 @@ import {
 import { useState, useRef } from "react";
 
 import { FIELD_TYPES } from "@admin/constants/field-categories";
-import {
+import type {
   FieldConfig,
-  FieldType,
   TextFieldConfig,
   TextAreaFieldConfig,
   NumberFieldConfig,
@@ -29,7 +28,9 @@ import {
   RadioFieldConfig,
   PasswordFieldConfig,
   UserFieldConfig,
-  ChipsFieldConfig,
+  ChipsFieldConfig} from "@admin/types/field-types";
+import {
+  FieldType
 } from "@admin/types/field-types";
 
 import { BooleanFieldEditor } from "../field-types/BooleanFieldEditor";

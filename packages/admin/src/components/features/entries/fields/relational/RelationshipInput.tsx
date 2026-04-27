@@ -128,7 +128,7 @@ function getCollections(relationTo: string | string[]): string[] {
  */
 function valueToSelectedItems(
   value: RelationshipValue,
-  hasMany: boolean
+  _hasMany: boolean
 ): RelatedItem[] {
   if (value == null) {
     return [];
@@ -150,7 +150,7 @@ function valueToSelectedItems(
       }
       // Object with id (populated relationship)
       if (typeof item === "object" && "id" in item) {
-        return item as RelatedItem;
+        return item;
       }
       // Fallback
       return { id: String(item) };
@@ -164,7 +164,7 @@ function valueToSelectedItems(
 
   // Handle single object (populated relationship)
   if (typeof value === "object" && "id" in value) {
-    return [value as RelatedItem];
+    return [value];
   }
 
   // Handle simple string ID
@@ -277,7 +277,7 @@ export function RelationshipInput<
 
   // Convert value to display items
   const selectedItems = valueToSelectedItems(
-    value as RelationshipValue,
+    value,
     hasMany
   );
   const selectedIds = getSelectedIds(selectedItems);
@@ -317,7 +317,7 @@ export function RelationshipInput<
             // Non-polymorphic: store full item for display
             currentValues.push(item);
           }
-          onChange(currentValues as TFieldValues[Path<TFieldValues>]);
+          onChange(currentValues);
         }
       } else {
         // Single selection
@@ -326,9 +326,9 @@ export function RelationshipInput<
             relationTo: collectionSlug,
             value: item.id,
             ...item,
-          } as TFieldValues[Path<TFieldValues>]);
+          });
         } else {
-          onChange(item as TFieldValues[Path<TFieldValues>]);
+          onChange(item);
         }
         setIsSearchOpen(false);
       }
@@ -356,9 +356,9 @@ export function RelationshipInput<
             return (v as { value: string }).value !== itemId;
           return true;
         });
-        onChange(filtered as TFieldValues[Path<TFieldValues>]);
+        onChange(filtered);
       } else {
-        onChange(null as TFieldValues[Path<TFieldValues>]);
+        onChange(null);
       }
     },
     [hasMany, value, onChange]
@@ -392,7 +392,7 @@ export function RelationshipInput<
           // Non-polymorphic: store full item for display
           currentValues.push(newItem);
         }
-        onChange(currentValues as TFieldValues[Path<TFieldValues>]);
+        onChange(currentValues);
       } else {
         // Single selection
         if (isPolymorphicField) {
@@ -400,9 +400,9 @@ export function RelationshipInput<
             relationTo: collectionSlug,
             value: entry.id,
             ...newItem,
-          } as TFieldValues[Path<TFieldValues>]);
+          });
         } else {
-          onChange(newItem as TFieldValues[Path<TFieldValues>]);
+          onChange(newItem);
         }
       }
     },
@@ -454,7 +454,7 @@ export function RelationshipInput<
           }
           return v;
         });
-        onChange(updatedValues as TFieldValues[Path<TFieldValues>]);
+        onChange(updatedValues);
       } else {
         // Single selection
         if (isPolymorphicField) {
@@ -462,9 +462,9 @@ export function RelationshipInput<
             relationTo: editingItem.relationTo,
             value: editingItem.id,
             ...updatedItem,
-          } as TFieldValues[Path<TFieldValues>]);
+          });
         } else {
-          onChange(updatedItem as TFieldValues[Path<TFieldValues>]);
+          onChange(updatedItem);
         }
       }
 

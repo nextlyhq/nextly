@@ -10,14 +10,14 @@
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
-import React, { useMemo } from "react";
+import type React from "react";
+import { useMemo } from "react";
 
 import {
   EntryForm,
   type EntryFormCollection,
-  type EntryData,
 } from "@admin/components/features/entries/EntryForm";
-import { ChevronRight, Home, Loader2 } from "@admin/components/icons";
+import { ChevronRight, Home } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -192,7 +192,9 @@ function getEntryTitle(
   // 1. Try designated title field
   if (useAsTitle && useAsTitle !== "id") {
     const value = entry[useAsTitle];
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     if (value !== undefined && value !== null && String(value).trim()) {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       return String(value);
     }
   }
@@ -366,7 +368,7 @@ export default function EditEntryPage({
   const entryTitle = getEntryTitle(
     entryData,
     id,
-    collection.admin?.useAsTitle as string | undefined
+    collection.admin?.useAsTitle
   );
 
   // Check for custom Edit view component from plugins
@@ -424,7 +426,7 @@ export default function EditEntryPage({
         {/* Entry Form */}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
-          entry={entry as unknown as EntryData}
+          entry={entry}
           mode="edit"
           onSuccess={handleSuccess}
           onDelete={handleDelete}

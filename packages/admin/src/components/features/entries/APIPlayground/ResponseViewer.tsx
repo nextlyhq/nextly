@@ -67,6 +67,7 @@ export function ResponseViewer({
     try {
       return JSON.stringify(data, null, 2);
     } catch {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       return String(data);
     }
   }, [data]);
@@ -148,7 +149,7 @@ export function ResponseViewer({
         <Button
           variant="ghost"
           size="sm"
-          onClick={handleCopy}
+          onClick={() => { void handleCopy(); }}
           className="h-7 gap-2 px-3 rounded-none text-[10px] font-bold uppercase tracking-tighter hover:bg-background/80"
         >
           {copied ? (

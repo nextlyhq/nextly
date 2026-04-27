@@ -5,7 +5,7 @@ import { Avatar, AvatarFallback, Separator } from "@revnixhq/ui";
 import { LogOut, User as UserIcon, HelpCircle } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { useLogout } from "@admin/hooks/useLogout";
-import { User } from "@admin/types/user";
+import type { User } from "@admin/types/user";
 
 interface UserInfoSectionProps {
   user: Partial<User> | null;
@@ -71,7 +71,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
           </Link>
 
           <button
-            onClick={logout}
+            onClick={() => { void logout(); }}
             className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 mt-2 cursor-pointer"
           >
             <LogOut className="h-4 w-4" />

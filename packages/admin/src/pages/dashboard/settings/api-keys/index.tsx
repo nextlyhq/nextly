@@ -1,13 +1,14 @@
 "use client";
 
 import { Button } from "@revnixhq/ui";
-import React, { useCallback, useState } from "react";
+import type React from "react";
+import { useCallback, useState } from "react";
 
 import { ApiKeyTable } from "@admin/components/features/api-keys/ApiKeyTable";
 import { EditApiKeyDialog } from "@admin/components/features/api-keys/EditApiKeyDialog";
 import { RevokeApiKeyDialog } from "@admin/components/features/api-keys/RevokeApiKeyDialog";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
-import { Key, Plus } from "@admin/components/icons";
+import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";

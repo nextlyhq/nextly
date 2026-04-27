@@ -11,7 +11,8 @@
  * @module pages/dashboard/plugins
  */
 
-import React, { Suspense } from "react";
+import type React from "react";
+import { Suspense } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";

@@ -29,7 +29,8 @@ import {
   Users,
   ChevronRight,
 } from "lucide-react";
-import React, { useMemo } from "react";
+import type React from "react";
+import { useMemo } from "react";
 
 import { StatsCard } from "@admin/components/features/dashboard/StatsCard";
 import { Link } from "@admin/components/ui/link";

@@ -7,7 +7,8 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import React, { useState, useCallback } from "react";
+import type React from "react";
+import { useState, useCallback } from "react";
 import { z } from "zod";
 
 import { BuilderPageTemplate } from "@admin/components/features/schema-builder";
@@ -59,7 +60,7 @@ export default function ComponentBuilderPage(): React.ReactElement {
     const userFields = builder.fields.filter(f => !f.isSystem);
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
-      toast.error(validation.errorMessage!);
+      toast.error(validation.errorMessage);
       return;
     }
 
@@ -111,7 +112,7 @@ export default function ComponentBuilderPage(): React.ReactElement {
       breadcrumbCurrentLabel="Create Component"
       headerTitle="Create Component"
       headerDescription="Design a reusable component with custom fields."
-      onSave={handleSave}
+      onSave={() => { void handleSave(); }}
       onCancel={() => navigateTo(ROUTES.COMPONENTS)}
       isSaving={isSaving}
       saveLabel="Save Component"

@@ -7,7 +7,7 @@ import {
   Skeleton,
 } from "@revnixhq/ui";
 import { AlertCircle, ChevronRight, FileText } from "lucide-react";
-import React from "react";
+import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";

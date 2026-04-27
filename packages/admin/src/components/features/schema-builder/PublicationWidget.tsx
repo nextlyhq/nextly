@@ -9,7 +9,6 @@ import {
   CardTitle,
   Spinner,
 } from "@revnixhq/ui";
-import React from "react";
 
 import { Save, X, Calendar, Clock, User } from "@admin/components/icons";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";

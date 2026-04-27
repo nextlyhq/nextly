@@ -1,4 +1,4 @@
-import { UseFormReturn } from "react-hook-form";
+import type { UseFormReturn } from "react-hook-form";
 
 import {
   FormControl,
@@ -7,7 +7,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
-import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 import { cn } from "@admin/lib/utils";
 
 interface RoleStatusSectionProps {

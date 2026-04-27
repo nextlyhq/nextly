@@ -50,7 +50,7 @@ export function FieldList({
   selectedFieldId,
   onFieldSelect,
   onFieldDelete,
-  onFieldAdd,
+  _onFieldAdd,
   validationErrors = [],
   collapsedFieldIds: externalCollapsedIds,
   onToggleCollapse: externalToggleCollapse,

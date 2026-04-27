@@ -103,4 +103,4 @@ export const editUserFormSchema = getUserFormSchema(true);
 
 export type CreateUserFormValues = z.infer<typeof createUserFormSchema>;
 export type EditUserFormValues = z.infer<typeof editUserFormSchema>;
-export type UserFormValues = CreateUserFormValues | EditUserFormValues;
+export type UserFormValues = CreateUserFormValues  ;

@@ -112,7 +112,7 @@ function ImageComponent({
     editor.update(() => {
       const node = editor.getEditorState()._nodeMap.get(nodeKey);
       if (node && $isImageNode(node)) {
-        const writableNode = node.getWritable() as ImageNode;
+        const writableNode = node.getWritable();
         writableNode.setAltText(editData.altText || "");
         writableNode.setTitle(editData.title || undefined);
         writableNode.setCaption(editData.caption || undefined);

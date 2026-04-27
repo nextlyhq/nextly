@@ -1,5 +1,5 @@
-import { Card, CardContent, CardHeader, Skeleton } from "@revnixhq/ui";
-import React from "react";
+import { Skeleton } from "@revnixhq/ui";
+import type React from "react";
 
 /**
  * GeneralSettingsSkeleton Component

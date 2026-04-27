@@ -6,6 +6,7 @@ export default defineConfig({
     "src/types/index.ts",
     "src/schema/index.ts",
     "src/migrations.ts",
+    "src/version-check.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

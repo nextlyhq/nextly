@@ -1,6 +1,5 @@
 "use client";
 
-import React from "react";
 
 import {
   AlignLeft,
@@ -14,7 +13,7 @@ import {
   Type,
   type LucideIcon,
 } from "@admin/components/icons";
-import { UserFieldType } from "@admin/services/userFieldsApi";
+import type { UserFieldType } from "@admin/services/userFieldsApi";
 
 const FIELD_TYPE_OPTIONS: {
   value: UserFieldType;

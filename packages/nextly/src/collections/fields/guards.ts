@@ -28,7 +28,7 @@ import type {
   // Relational field types
   RelationshipFieldConfig,
   // Structured field types
-  ArrayFieldConfig,
+  RepeaterFieldConfig,
   GroupFieldConfig,
   JSONFieldConfig,
   // Component field types
@@ -262,7 +262,7 @@ export const isRelationshipField =
  * }
  * ```
  */
-export function isArrayField(field: FieldConfig): field is ArrayFieldConfig {
+export function isArrayField(field: FieldConfig): field is RepeaterFieldConfig {
   return field.type === "repeater";
 }
 
@@ -362,7 +362,7 @@ export function isDataField(field: FieldConfig): field is DataFieldConfig {
  */
 export function hasNestedFields(
   field: FieldConfig
-): field is ArrayFieldConfig | GroupFieldConfig {
+): field is RepeaterFieldConfig | GroupFieldConfig {
   return ["repeater", "group"].includes(field.type);
 }
 

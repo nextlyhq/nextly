@@ -15,12 +15,13 @@
  * @since 1.0.0
  */
 
+import { Card, CardContent } from "@revnixhq/ui";
+import type React from "react";
+
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
-import { Card, CardContent } from "@revnixhq/ui";
-import React from "react";
 
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
@@ -217,7 +218,7 @@ export function EntryForm({
     label: previewLabel,
   } = useEntryPreview({
     collection,
-    entry: entry as Record<string, unknown> | null | undefined,
+    entry: entry,
     getFormValues: () => form.getValues(),
   });
 
@@ -227,7 +228,7 @@ export function EntryForm({
 
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
-    onSave: handleSubmit,
+    onSave: () => { void handleSubmit(); },
     onCancel: handleCancel,
     isDirty,
     isSubmitting,
@@ -239,7 +240,7 @@ export function EntryForm({
   if (embedded) {
     return (
       <EntryFormContextProvider
-        entryId={entry?.id as string | undefined}
+        entryId={entry?.id}
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
       >
@@ -269,7 +270,7 @@ export function EntryForm({
   // Standalone mode: full layout with header, sidebar, and actions
   return (
     <EntryFormContextProvider
-      entryId={entry?.id as string | undefined}
+      entryId={entry?.id}
       collectionSlug={collection.name}
       isCreateMode={mode === "create"}
     >

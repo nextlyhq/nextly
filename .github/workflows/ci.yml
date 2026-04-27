@@ -45,6 +45,12 @@ jobs:
         env:
           NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
 
+      # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
+      # `packages/nextly/package.json` `dependencies` (no caret/tilde,
+      # not in peerDependencies). Cheap check, fails fast.
+      - name: Check drizzle-kit pin
+        run: pnpm check:drizzle-kit-pin
+
       # TODO(release-flow): remove continue-on-error once existing lint debt is
       # resolved. As of 2026-04-15 there are ~3.7k pre-existing warnings across
       # 9 packages (mostly no-explicit-any in nextly + admin). Tracked in a

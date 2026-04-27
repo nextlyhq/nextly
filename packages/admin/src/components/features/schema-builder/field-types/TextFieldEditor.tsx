@@ -20,7 +20,8 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import { TextFieldConfig, FieldType } from "@admin/types/field-types";
+import type { TextFieldConfig} from "@admin/types/field-types";
+import { FieldType } from "@admin/types/field-types";
 
 import { ValidationPatternField } from "./shared/ValidationPatternField";
 
@@ -88,7 +89,7 @@ export function TextFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={handleSubmit}
+        onSubmit={(e) => { void handleSubmit(e); }}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

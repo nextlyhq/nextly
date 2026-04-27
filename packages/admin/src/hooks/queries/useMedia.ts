@@ -361,7 +361,7 @@ export function useUploadMedia(options?: { disableAutoInvalidate?: boolean }) {
         // Use await to ensure cache is properly invalidated before continuing
         await queryClient.invalidateQueries({ queryKey: ["media"] });
         // Invalidate dashboard caches so media stats refresh immediately
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+        void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       }
     },
   });
@@ -435,7 +435,7 @@ export function useUpdateMedia() {
       // Remove all cached media data so navigating to any folder refetches fresh data
       queryClient.removeQueries({ queryKey: ["media"] });
       queryClient.removeQueries({ queryKey: ["media-infinite"] });
-      queryClient.invalidateQueries({ queryKey: ["folders"] });
+      void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
 }
@@ -498,7 +498,7 @@ export function useDeleteMedia() {
     },
     onSuccess: () => {
       // Invalidate all media queries to refetch data
-      queryClient.invalidateQueries({ queryKey: ["media"] });
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
     },
   });
 }
@@ -588,7 +588,7 @@ export function useBulkDeleteMedia() {
     defaultOptions: {
       onComplete: () => {
         // Invalidate media cache after all mutations complete
-        queryClient.invalidateQueries({ queryKey: ["media"] });
+        void queryClient.invalidateQueries({ queryKey: ["media"] });
       },
     },
   });
@@ -728,7 +728,7 @@ export function useBulkUpdateMedia() {
     defaultOptions: {
       onComplete: () => {
         // Invalidate media cache after all mutations complete
-        queryClient.invalidateQueries({ queryKey: ["media"] });
+        void queryClient.invalidateQueries({ queryKey: ["media"] });
       },
     },
   });
@@ -817,7 +817,7 @@ export function useCreateFolder() {
     },
     onSuccess: () => {
       // Invalidate folder queries to refetch
-      queryClient.invalidateQueries({ queryKey: ["folders"] });
+      void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
 }
@@ -840,7 +840,7 @@ export function useUpdateFolder() {
     },
     onSuccess: () => {
       // Invalidate folder queries to refetch
-      queryClient.invalidateQueries({ queryKey: ["folders"] });
+      void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
 }
@@ -863,9 +863,9 @@ export function useDeleteFolder() {
     },
     onSuccess: () => {
       // Invalidate folder, media, and infinite queries (folder deletion removes media)
-      queryClient.invalidateQueries({ queryKey: ["folders"] });
-      queryClient.invalidateQueries({ queryKey: ["media"] });
-      queryClient.invalidateQueries({ queryKey: ["media-infinite"] });
+      void queryClient.invalidateQueries({ queryKey: ["folders"] });
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+      void queryClient.invalidateQueries({ queryKey: ["media-infinite"] });
     },
   });
 }
@@ -890,7 +890,7 @@ export function useMoveMediaToFolder() {
       // Remove all cached media/folder data so navigating to any folder refetches fresh data
       queryClient.removeQueries({ queryKey: ["media"] });
       queryClient.removeQueries({ queryKey: ["media-infinite"] });
-      queryClient.invalidateQueries({ queryKey: ["folders"] });
+      void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
 }

@@ -23,7 +23,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@revnixhq/ui";
-import React, { useCallback, useEffect, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { AlertTriangle, Check, Copy } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
@@ -58,7 +59,7 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
 
   const handleCopy = useCallback(() => {
     if (!rawKey) return;
-    navigator.clipboard.writeText(rawKey).then(() => {
+    void navigator.clipboard.writeText(rawKey).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
     });

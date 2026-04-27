@@ -316,7 +316,7 @@ export function useCreateCollection() {
     },
     onSuccess: () => {
       // Invalidate all collections queries using query key factory
-      queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
+      void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
     },
   });
 }
@@ -385,8 +385,8 @@ export function useUpdateCollection() {
     },
     onSuccess: (_, { collectionName }) => {
       // Invalidate all collections queries using query key factory
-      queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
+      void queryClient.invalidateQueries({
         queryKey: collectionKeys.detail(collectionName),
       });
     },
@@ -451,7 +451,7 @@ export function useDeleteCollection() {
     },
     onSuccess: () => {
       // Invalidate all collections queries using query key factory
-      queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
+      void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
     },
   });
 }
@@ -549,7 +549,7 @@ export function useBulkDeleteCollections() {
     },
     defaultOptions: {
       onComplete: () => {
-        queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
+        void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
       },
     },
   });
@@ -658,7 +658,7 @@ export function useBulkUpdateCollections() {
     },
     defaultOptions: {
       onComplete: () => {
-        queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
+        void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
       },
     },
   });

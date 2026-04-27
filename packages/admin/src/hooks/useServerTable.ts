@@ -5,7 +5,7 @@ import type {
   SortInfo,
   TableParams,
 } from "@revnixhq/ui";
-import { SortingState } from "@tanstack/react-table";
+import type { SortingState } from "@tanstack/react-table";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PAGINATION } from "../constants/pagination";
@@ -249,7 +249,7 @@ export function useServerTable<TData>({
       }
     };
 
-    fetchData();
+    void fetchData();
     // Reason: fetcher is intentionally omitted — it is expected to be stable
     // (wrapped in useCallback by caller or defined outside component). Including
     // it would cause unnecessary re-fetches when parent re-renders.
