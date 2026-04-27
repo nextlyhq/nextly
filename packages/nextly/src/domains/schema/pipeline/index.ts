@@ -1,37 +1,41 @@
 // Public exports for the schema apply pipeline.
 //
-// Two entry-point shapes coexist intentionally during the F2 shim era:
+// Two entry-point shapes coexist intentionally during the F3 transition:
 //
 //   1. The factory `createApplyDesiredSchema(deps)` from ./apply.js — used
 //      by today's in-process callers (init/reload-config.ts and the UI
 //      dispatcher). They construct per-call factories with locally-resolved
-//      services so existing test seams (resolver-pattern + vi.hoisted spies
-//      on schemaChangeService.apply) keep working without DI mocking, and
-//      the dispatcher can capture per-call state (resolutions, the freshly
-//      bumped version) via closure.
+//      services so they can wire MySQL `databaseName` from the connection
+//      URL into the pipeline's apply() args, and so existing test seams
+//      keep working without DI mocking.
 //
 //   2. The DI-bound `applyDesiredSchema` re-exported below — positioned for
 //      future external / plugin / integration-test callers that want a
 //      zero-wiring entry point. Resolves services from the DI container at
-//      first call and caches.
-//
-// F8 absorbs both call sites' factory wiring into the unified pipeline
-// (the body of `createApplyDesiredSchema` becomes the real PushSchemaPipeline
-// instead of the SchemaChangeService.apply shim), at which point the
-// dual-entry-point seam can be collapsed. See progress tracker for the
-// follow-up plan.
+//      first call and caches. MySQL via this entry point requires the
+//      caller to extract databaseName themselves and pass it through —
+//      F8 will wire this fully when it absorbs the callers.
 
 import {
+  getAdapterFromDI,
   getCollectionRegistryFromDI,
-  getSchemaChangeServiceFromDI,
 } from "../../../dispatcher/helpers/di.js";
+import { DrizzleStatementExecutor } from "../services/drizzle-statement-executor.js";
 
 import {
   createApplyDesiredSchema,
-  type AnyDesiredResource,
   type ApplyDesiredSchemaDeps,
   type ApplyDesiredSchemaFn,
 } from "./apply.js";
+import {
+  noopClassifier,
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+  noopPromptDispatcher,
+  noopRenameDetector,
+} from "./pushschema-pipeline-stubs.js";
+import { PushSchemaPipeline } from "./pushschema-pipeline.js";
+import type { DesiredSchema } from "./types.js";
 
 export type {
   DesiredCollection,
@@ -42,7 +46,7 @@ export type {
 
 export type { SchemaApplyErrorCode } from "./errors.js";
 
-export type { ApplyResult, AnyDesiredResource } from "./apply.js";
+export type { ApplyResult } from "./apply.js";
 
 export {
   buildDesiredSchemaFromRegistry,
@@ -74,63 +78,47 @@ export function _resetApplyDesiredSchemaForTests(): void {
 
 function buildProductionDeps(): ApplyDesiredSchemaDeps {
   return {
-    async applySingleResource(resource: AnyDesiredResource, source, _channel) {
-      // F2 only ships the collection apply path. iterateResources in
-      // apply.ts already filters singles + components out of the loop,
-      // so this branch should not fire in normal operation. The defensive
-      // throw catches a future regression where iterateResources changes
-      // before applySingleResource is updated.
-      if (resource.kind !== "collection") {
+    async applyPipeline(
+      desired: DesiredSchema,
+      source: "ui" | "code",
+      promptChannel: "browser" | "terminal"
+    ) {
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
         throw new Error(
-          `applyDesiredSchema: ${resource.kind} apply is not yet supported in F2 (collections only). ` +
-            `Singles and components land in F8.`
+          "applyDesiredSchema: database adapter not registered in DI container"
         );
       }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter dialect API not strictly typed
+      const dialect = (adapter as any).getDialect() as
+        | "postgresql"
+        | "mysql"
+        | "sqlite";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter Drizzle accessor
+      const db = (adapter as any).getDrizzle();
 
-      const schemaChangeService = getSchemaChangeServiceFromDI();
-      const registry = getCollectionRegistryFromDI();
-      if (!schemaChangeService || !registry) {
-        throw new Error(
-          "applyDesiredSchema: required services not registered in DI container"
-        );
-      }
+      const pipeline = new PushSchemaPipeline({
+        executor: new DrizzleStatementExecutor(dialect, db),
+        renameDetector: noopRenameDetector,
+        classifier: noopClassifier,
+        promptDispatcher: noopPromptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        migrationJournal: noopMigrationJournal,
+      });
 
-      const current = await registry.getCollectionBySlug(resource.slug);
-      const currentFields = current?.fields ?? [];
-      const currentSchemaVersion = current?.schemaVersion ?? 0;
-
-      const result = await schemaChangeService.apply(
-        resource.slug,
-        resource.tableName,
-        // FieldConfig and FieldDefinition are structurally compatible but
-        // nominally distinct; cast through unknown bridges the gap.
-        currentFields as unknown as Parameters<
-          typeof schemaChangeService.apply
-        >[2],
-        resource.fields as unknown as Parameters<
-          typeof schemaChangeService.apply
-        >[3],
-        currentSchemaVersion,
-        registry as unknown as Parameters<typeof schemaChangeService.apply>[5],
-        undefined,
-        { source }
-      );
-
-      if (!result.success) {
-        // Surface as a thrown error so the pipeline's classifyError
-        // turns it into the discriminated failure shape.
-        const detail = result.error ? `: ${result.error}` : "";
-        throw new Error(`${result.message}${detail}`);
-      }
-
-      // SchemaChangeService.apply does not expose statementsExecuted /
-      // renamesApplied today. F2 reports placeholder zeros; F3 will
-      // replace this callback with a richer call that returns these.
-      return {
-        success: true,
-        statementsExecuted: 0,
-        renamesApplied: 0,
-      };
+      // MySQL note: the DI-bound entry point doesn't have access to
+      // the caller's connection URL, so it can't auto-extract
+      // databaseName for MySQL. Per-call factories (in reload-config.ts
+      // and collection-dispatcher.ts) do extract it themselves. F8 will
+      // collapse the two paths — until then, MySQL via this entry point
+      // throws loudly inside PushSchemaPipeline.importDrizzleKit.
+      return pipeline.apply({
+        desired,
+        db,
+        dialect,
+        source,
+        promptChannel,
+      });
     },
 
     async readSchemaVersionForSlug(slug: string): Promise<number | null> {
