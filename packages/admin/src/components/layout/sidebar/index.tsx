@@ -11,11 +11,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@revnixhq/ui";
-import { VariantProps, cva } from "class-variance-authority";
+import { type VariantProps, cva } from "class-variance-authority";
 import * as React from "react";
 
 import {
-  MOBILE_DRAWER_WIDTH_REM,
   SIDEBAR_WIDTH_COLLAPSED_REM,
   SIDEBAR_WIDTH_EXPANDED_REM,
 } from "@admin/constants/sidebar";
@@ -28,7 +27,6 @@ const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 
 // Import width constants from centralized location
 const SIDEBAR_WIDTH = SIDEBAR_WIDTH_EXPANDED_REM;
-const SIDEBAR_WIDTH_MOBILE = MOBILE_DRAWER_WIDTH_REM;
 const SIDEBAR_WIDTH_ICON = SIDEBAR_WIDTH_COLLAPSED_REM;
 
 type SidebarContextProps = {
@@ -556,10 +554,7 @@ const SidebarMenuButton = React.forwardRef<
           align="center"
           hidden={state !== "collapsed"}
           {...tooltip}
-          className={cn(
-            "bg-black text-white",
-            (tooltip as React.ComponentProps<typeof TooltipContent>).className
-          )}
+          className={cn("bg-black text-white", tooltip.className)}
           style={{ backgroundColor: "black", color: "white" }}
         />
       </Tooltip>
@@ -582,7 +577,7 @@ const SidebarMenuAction = React.forwardRef<
       ref={ref}
       data-sidebar="menu-action"
       className={cn(
-        "absolute right-1 top-1.5 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground outline-none ring-sidebar-ring transition-transform hover-unified focus-visible:ring-2 peer-hover/menu-button:text-primary [&>svg]:size-4 [&>svg]:shrink-0",
+        "absolute right-1 top-1.5 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground outline-none ring-sidebar-ring transition-transform hover-unified focus-visible:ring-2 peer-hover/menu-button:text-white [&>svg]:size-4 [&>svg]:shrink-0",
         // Increases the hit area of the button on mobile.
         "after:absolute after:-inset-2 after:md:hidden",
         "peer-data-[size=sm]/menu-button:top-1",
