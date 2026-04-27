@@ -58,7 +58,6 @@ import {
   useDeleteComponent,
   useBulkDeleteComponents,
 } from "@admin/hooks/queries";
-import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -162,7 +161,7 @@ export default function ComponentTable() {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
       return next;
     });
   };
@@ -278,7 +277,7 @@ export default function ComponentTable() {
       .filter(c => selectedIds.includes(c.id) && !c.locked)
       .map(c => c.slug);
 
-    bulkDeleteComponents(selectedComponentSlugs, undefined, {
+    void bulkDeleteComponents(selectedComponentSlugs, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Components deleted", {
@@ -333,29 +332,32 @@ export default function ComponentTable() {
 
   // No-op handlers for bulk actions not applicable to components
 
-  const handleBulkAssignRole = useCallback(() => {
+  const _handleBulkAssignRole = useCallback(() => {
     // Not applicable to components
   }, []);
 
-  const handleBulkToggleStatus = useCallback(() => {
+  const _handleBulkToggleStatus = useCallback(() => {
     // Not applicable to components
   }, []);
 
   // Format date helper (using centralized utility)
-  const formatDate = (dateValue?: string) => formatDateTime(dateValue);
+  const formatDate = useCallback(
+    (dateValue?: string) => formatDateTime(dateValue),
+    []
+  );
 
   // Get field count from component
-  const getFieldCount = (component: ApiComponent): number => {
+  const getFieldCount = useCallback((component: ApiComponent): number => {
     if (component.fieldCount !== undefined) {
       return component.fieldCount;
     }
     return component.fields?.length || 0;
-  };
+  }, []);
 
   // ResponsiveTable columns
   const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
 
-  const columnDefs: Column<ApiComponent>[] = [
+  const columnDefs = useMemo<Column<ApiComponent>[]>(() => [
     // Checkbox column for bulk selection
     {
       key: "select" as keyof ApiComponent,
@@ -424,7 +426,7 @@ export default function ComponentTable() {
       },
     },
     {
-      key: "admin" as keyof ApiComponent,
+      key: "admin",
       label: "CATEGORY",
       render: (_value, component) => {
         const category = component.admin?.category;
@@ -439,7 +441,7 @@ export default function ComponentTable() {
       },
     },
     {
-      key: "source" as keyof ApiComponent,
+      key: "source",
       label: "SOURCE",
       render: (_value, component) => {
         const sourceBadge = getSourceBadge(component.source);
@@ -455,7 +457,7 @@ export default function ComponentTable() {
       },
     },
     {
-      key: "migrationStatus" as keyof ApiComponent,
+      key: "migrationStatus",
       label: "STATUS",
       render: (_value, component) => {
         const migrationBadge = getMigrationBadge(component.migrationStatus);
@@ -465,7 +467,7 @@ export default function ComponentTable() {
       },
     },
     {
-      key: "fields" as keyof ApiComponent,
+      key: "fields",
       label: "FIELDS",
       render: (_value, component) => (
         <span className="text-sm tabular-nums">{getFieldCount(component)}</span>
@@ -528,7 +530,16 @@ export default function ComponentTable() {
         );
       },
     },
-  ];
+  ], [
+    selectAllCheckboxState,
+    handleToggleSelectAllOnPage,
+    isSelected,
+    toggleSelection,
+    handleEdit,
+    handleDelete,
+    formatDate,
+    getFieldCount,
+  ]);
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),

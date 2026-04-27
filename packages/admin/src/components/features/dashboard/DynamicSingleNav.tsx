@@ -1,5 +1,9 @@
 "use client";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
+import React from "react";
+
+
 import * as Icons from "@admin/components/icons";
 import { Bookmark, Globe, type LucideIcon } from "@admin/components/icons";
 import {
@@ -15,8 +19,6 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { useSidebarPins } from "@admin/hooks/useSidebarPins";
 import { filterSingleItems } from "@admin/lib/permissions/authorization";
 import { cn } from "@admin/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
-import React from "react";
 
 interface DynamicSingleNavProps {
   isActive: (href?: string) => boolean;
@@ -26,22 +28,6 @@ interface DynamicSingleNavProps {
 
 const iconMap = Icons as unknown as Record<string, LucideIcon>;
 const PINNED_SINGLES_STORAGE_KEY = "nextly:sidebar:pinned-singles";
-
-/**
- * Empty state when no singles exist
- */
-function EmptySingles({ hasSearch }: { hasSearch?: boolean }) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton disabled className="opacity-60">
-        <Globe className="h-4 w-4 text-muted-foreground" />
-        <span className="text-muted-foreground text-sm">
-          {hasSearch ? "No matching singles" : "No singles"}
-        </span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
-}
 
 /**
  * DynamicSingleNav Component
@@ -159,7 +145,7 @@ export function DynamicSingleNav({
                   e.preventDefault();
                   e.stopPropagation();
                   togglePin(single.slug);
-                  (e.currentTarget as HTMLButtonElement).blur();
+                  e.currentTarget.blur();
                 }}
                 aria-label={singlePinned ? "Unpin single" : "Pin single"}
                 aria-pressed={singlePinned}

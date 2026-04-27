@@ -1,16 +1,14 @@
 "use client";
-import React, { useMemo } from "react";
+import type React from "react";
+import { useMemo, useCallback } from "react";
 
 import * as Icons from "@admin/components/icons";
 import {
-  Database,
   Bookmark,
-  Globe,
   Loader2,
   type LucideIcon,
 } from "@admin/components/icons";
 import {
-  SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -30,7 +28,7 @@ import {
 } from "@admin/lib/permissions/authorization";
 import type { ApiCollection } from "@admin/types/entities";
 
-const iconMap = Icons as unknown as Record<string, LucideIcon>;
+const _iconMap = Icons as unknown as Record<string, LucideIcon>;
 const BUILTIN_GROUPS = ["collections", "singles"];
 /**
  * Props for the DynamicCollectionNav component
@@ -53,21 +51,6 @@ function CollectionSkeleton() {
       <SidebarMenuButton disabled className="opacity-50">
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         <span className="text-muted-foreground">Loading collections...</span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
-}
-/**
- * Empty state when no collections exist
- */
-function EmptyCollections({ hasSearch }: { hasSearch?: boolean }) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton disabled className="opacity-60">
-        <Database className="h-4 w-4 text-muted-foreground" />
-        <span className="text-muted-foreground text-sm">
-          {hasSearch ? "No matching collections" : "No collections"}
-        </span>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
@@ -137,15 +120,16 @@ export function DynamicCollectionNav({
    * plugin's collections list, then returns that plugin's placement.
    * Priority: 1. Plugin metadata placement  2. Plugin metadata group (deprecated)  3. undefined (stays in Plugins)
    */
-  const getPluginPlacement = (
-    collection: ApiCollection
-  ): string | undefined => {
-    if (!pluginMetadata) return undefined;
-    const meta = pluginMetadata.find(p =>
-      (p.collections ?? []).includes(collection.name)
-    );
-    return meta?.placement ?? meta?.group ?? undefined;
-  };
+  const getPluginPlacement = useCallback(
+    (collection: ApiCollection): string | undefined => {
+      if (!pluginMetadata) return undefined;
+      const meta = pluginMetadata.find(p =>
+        (p.collections ?? []).includes(collection.name)
+      );
+      return meta?.placement ?? meta?.group ?? undefined;
+    },
+    [pluginMetadata]
+  );
 
   // Filter to collections belonging to the "Collections" sidebar group
   const visibleCollections = (data?.data ?? []).filter(collection => {
@@ -313,7 +297,7 @@ export function DynamicCollectionNav({
       return nameA.localeCompare(nameB);
     });
     return allSections;
-  }, [data, singlesData, capabilities, pluginMetadata, customGroups]);
+  }, [data, singlesData, capabilities, customGroups, getPluginPlacement]);
   if (isLoading) {
     if (isCollapsed) return null;
     return <CollectionSkeleton />;
@@ -363,7 +347,7 @@ export function DynamicCollectionNav({
                   e.preventDefault();
                   e.stopPropagation();
                   togglePin(collection.name);
-                  (e.currentTarget as HTMLButtonElement).blur();
+                  e.currentTarget.blur();
                 }}
                 aria-label={
                   collectionPinned ? "Unpin collection" : "Pin collection"
@@ -385,41 +369,5 @@ export function DynamicCollectionNav({
         );
       })}
     </>
-  );
-}
-/** Renders a single collection/single item in the sidebar */
-function CollectionItem({
-  entry,
-  isActive,
-  isCollapsed,
-}: {
-  entry: SidebarEntry;
-  isActive: (href?: string) => boolean;
-  isCollapsed: boolean;
-}) {
-  // Capitalize first letter of a string
-  const capitalizeFirstLetter = (str: string) => {
-    if (!str) return str;
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  };
-
-  const isActiveItem = isActive(entry.href);
-  const DefaultIcon = entry.type === "collection" ? Database : Globe;
-  const IconComponent = iconMap[entry.icon] || DefaultIcon;
-  const displayLabel = capitalizeFirstLetter(entry.label);
-
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip={displayLabel} isActive={isActiveItem}>
-        <Link href={entry.href}>
-          <IconComponent className="h-4 w-4 shrink-0" />
-          {!isCollapsed && (
-            <>
-              <span>{displayLabel}</span>
-            </>
-          )}
-        </Link>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
   );
 }

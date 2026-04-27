@@ -29,7 +29,7 @@ import {
   Switch,
   Textarea,
 } from "@revnixhq/ui";
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 
 import type { LucideIcon } from "@admin/components/icons";
 import * as Icons from "@admin/components/icons";

@@ -151,7 +151,7 @@ function VideoComponent({
     editor.update(() => {
       const node = editor.getEditorState()._nodeMap.get(nodeKey);
       if (node && $isVideoNode(node)) {
-        const writableNode = node.getWritable() as VideoNode;
+        const writableNode = node.getWritable();
         writableNode.setAltText(editData.altText || undefined);
         writableNode.setTitle(editData.title || undefined);
         writableNode.setCaption(editData.caption || undefined);

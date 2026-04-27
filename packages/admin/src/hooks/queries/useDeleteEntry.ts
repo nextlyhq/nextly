@@ -156,12 +156,12 @@ export function useDeleteEntry<T = Entry>({
 
     onSuccess: (data, entryId) => {
       // Invalidate entry list queries for this collection
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
       });
 
       // Invalidate count queries
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: entryKeys.counts(),
       });
 
@@ -171,7 +171,7 @@ export function useDeleteEntry<T = Entry>({
       });
 
       // Invalidate dashboard caches so stats/recent-entries refresh immediately
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
         toast.success("Entry deleted successfully");

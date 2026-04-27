@@ -17,12 +17,10 @@ import {
   type NodeKey,
   type SerializedElementNode,
   type Spread,
-  $createParagraphNode,
   type RangeSelection,
   type DOMConversionMap,
   type DOMConversionOutput,
   type DOMExportOutput,
-  type LexicalEditor,
 } from "lexical";
 
 // ============================================================
@@ -50,7 +48,7 @@ export class CollapsibleContainerNode extends ElementNode {
     this.__open = open;
   }
 
-  createDOM(config: EditorConfig): HTMLElement {
+  createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("details");
     dom.classList.add(
       "my-4",
@@ -142,7 +140,7 @@ export class CollapsibleTitleNode extends ElementNode {
     return new CollapsibleTitleNode(node.__key);
   }
 
-  createDOM(config: EditorConfig): HTMLElement {
+  createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("summary");
     dom.classList.add(
       "px-4",
@@ -211,7 +209,7 @@ export class CollapsibleContentNode extends ElementNode {
     return new CollapsibleContentNode(node.__key);
   }
 
-  createDOM(config: EditorConfig): HTMLElement {
+  createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("div");
     dom.classList.add("px-4", "py-3", "border-t", "border-border");
     return dom;

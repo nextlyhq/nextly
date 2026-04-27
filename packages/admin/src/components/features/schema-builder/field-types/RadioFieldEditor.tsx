@@ -34,7 +34,8 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import { RadioFieldConfig, FieldType } from "@admin/types/field-types";
+import type { RadioFieldConfig} from "@admin/types/field-types";
+import { FieldType } from "@admin/types/field-types";
 
 // Define schema for radio field form
 const radioFieldSchema = z.object({
@@ -146,7 +147,7 @@ export function RadioFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={handleSubmit}
+        onSubmit={(e) => { void handleSubmit(e); }}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

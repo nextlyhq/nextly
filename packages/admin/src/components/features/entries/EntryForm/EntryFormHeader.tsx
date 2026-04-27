@@ -8,7 +8,6 @@
  * @since 1.0.0
  */
 
-import { MoreHorizontal, Trash2, Loader2, Code } from "@admin/components/icons";
 import {
   Button,
   DropdownMenu,
@@ -17,6 +16,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@revnixhq/ui";
+
+import { MoreHorizontal, Trash2, Loader2, Code } from "@admin/components/icons";
 
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -78,7 +79,7 @@ export function EntryFormHeader({
   onDelete,
   isDeleting = false,
   embedded = false,
-  isDirty = false,
+  _isDirty = false,
 }: EntryFormHeaderProps) {
   // Don't render header in embedded mode (modal)
   if (embedded) {

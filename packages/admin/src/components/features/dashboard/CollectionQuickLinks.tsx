@@ -8,7 +8,8 @@ import {
   Layout,
   Puzzle,
 } from "lucide-react";
-import React, { useMemo } from "react";
+import type React from "react";
+import { useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";

@@ -1,6 +1,5 @@
 import { Button, Skeleton } from "@revnixhq/ui";
 import { Plus } from "lucide-react";
-import React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";

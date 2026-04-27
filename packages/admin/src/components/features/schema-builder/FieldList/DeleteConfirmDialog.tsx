@@ -39,7 +39,7 @@ export function DeleteConfirmDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete Field?</AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete "{fieldName || "this field"}"?
+            Are you sure you want to delete &quot;{fieldName || "this field"}&quot;?
             {hasNestedFields && nestedCount > 0 && (
               <>
                 {" "}

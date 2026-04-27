@@ -1,11 +1,5 @@
-import React from "react";
-
 import { AlignLeft } from "@admin/components/icons";
 import { useSidebar } from "@admin/components/layout/sidebar";
-
-interface DashboardHeaderProps {
-  user: { id: string; name: string; email: string; avatar?: string } | null;
-}
 
 export function DashboardHeader() {
   const { toggleSidebar } = useSidebar();

@@ -48,6 +48,7 @@ export function normalizePermissions(permissions: unknown): string[] {
 
           // Validate id is not null/undefined before converting
           if (id !== undefined && id !== null) {
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string
             return String(id);
           }
         }

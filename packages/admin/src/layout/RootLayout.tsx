@@ -1,7 +1,8 @@
 "use client";
 import { PortalProvider } from "@revnixhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import React, { Suspense, lazy, useEffect, useState } from "react";
+import type React from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { PermissionGuard } from "../components/guards/PermissionGuard";

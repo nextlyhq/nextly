@@ -6,7 +6,7 @@ import {
   CollapsibleTrigger,
 } from "@revnixhq/ui";
 import { ChevronDown } from "lucide-react";
-import React from "react";
+import type React from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Loader2, Puzzle } from "@admin/components/icons";

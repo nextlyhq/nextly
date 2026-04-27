@@ -48,7 +48,7 @@ import type {
   // Relational field types
   RelationshipFieldConfig,
   // Structured field types
-  ArrayFieldConfig,
+  RepeaterFieldConfig,
   GroupFieldConfig,
   JSONFieldConfig,
   // Component field types
@@ -509,8 +509,8 @@ export const relationship = (
  * ```
  */
 export const array = (
-  config: Omit<ArrayFieldConfig, "type">
-): ArrayFieldConfig => ({
+  config: Omit<RepeaterFieldConfig, "type">
+): RepeaterFieldConfig => ({
   ...config,
   type: "repeater",
 });
@@ -536,8 +536,8 @@ export const array = (
  * ```
  */
 export const repeater = (
-  config: Omit<ArrayFieldConfig, "type">
-): ArrayFieldConfig => ({
+  config: Omit<RepeaterFieldConfig, "type">
+): RepeaterFieldConfig => ({
   ...config,
   type: "repeater",
 });

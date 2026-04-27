@@ -21,7 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@revnixhq/ui";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ChevronLeft,
@@ -371,7 +372,7 @@ export function EntryTablePagination({
                 );
               }
 
-              const pageNum = item as number;
+              const pageNum = item;
               const isCurrentPage = pageNum === page;
 
               return (

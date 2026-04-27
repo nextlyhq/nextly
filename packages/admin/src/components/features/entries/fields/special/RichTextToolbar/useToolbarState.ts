@@ -21,6 +21,7 @@ import {
 import { INSERT_HORIZONTAL_RULE_COMMAND } from "@lexical/react/LexicalHorizontalRuleNode";
 import {
   $createHeadingNode,
+  $createQuoteNode,
   $isHeadingNode,
   type HeadingTagType,
 } from "@lexical/rich-text";
@@ -35,6 +36,7 @@ import {
   mergeRegister,
 } from "@lexical/utils";
 import {
+  $createParagraphNode,
   $getSelection,
   $isRangeSelection,
   $isElementNode,
@@ -227,10 +229,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
           if (blockType === headingType) {
-            $setBlocksType(selection, () => {
-              const { $createParagraphNode } = require("lexical");
-              return $createParagraphNode();
-            });
+            $setBlocksType(selection, () => $createParagraphNode());
           } else {
             $setBlocksType(selection, () => $createHeadingNode(headingType));
           }
@@ -245,10 +244,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {
         if (blockType === "code") {
-          $setBlocksType(selection, () => {
-            const { $createParagraphNode } = require("lexical");
-            return $createParagraphNode();
-          });
+          $setBlocksType(selection, () => $createParagraphNode());
         } else {
           $setBlocksType(selection, () => $createCodeNode());
         }
@@ -287,12 +283,8 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {
         if (blockType === "quote") {
-          $setBlocksType(selection, () => {
-            const { $createParagraphNode } = require("lexical");
-            return $createParagraphNode();
-          });
+          $setBlocksType(selection, () => $createParagraphNode());
         } else {
-          const { $createQuoteNode } = require("@lexical/rich-text");
           $setBlocksType(selection, () => $createQuoteNode());
         }
       }
@@ -304,10 +296,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {
         if (blockType !== "paragraph") {
-          $setBlocksType(selection, () => {
-            const { $createParagraphNode } = require("lexical");
-            return $createParagraphNode();
-          });
+          $setBlocksType(selection, () => $createParagraphNode());
         }
       }
     });

@@ -106,7 +106,7 @@ export function EntryFormContent({
 function getFieldKey(field: FieldConfig, index: number): string {
   // Use field name if available, otherwise fall back to index
   if ("name" in field && field.name) {
-    return field.name as string;
+    return field.name;
   }
   // For layout fields without names, use type + index
   return `${field.type}-${index}`;

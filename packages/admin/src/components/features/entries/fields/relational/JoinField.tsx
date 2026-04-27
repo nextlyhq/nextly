@@ -139,6 +139,23 @@ export function JoinField({ field, className }: JoinFieldProps) {
   const limit = field.defaultLimit ?? 10;
   const sort = field.defaultSort;
 
+  // Build where clause - safe when entryId is undefined because enabled: !!entryId prevents fetching
+  const whereClause = entryId
+    ? { [field.on]: { equals: entryId }, ...(field.where || {}) }
+    : {};
+
+  // Query entries that reference this document
+  const { data, isLoading, error } = useEntries({
+    collectionSlug: field.collection,
+    params: {
+      limit,
+      sort,
+      where: whereClause,
+      depth: field.maxDepth ?? 1,
+    },
+    enabled: !!entryId,
+  });
+
   // Show placeholder for new entries that haven't been saved yet
   if (isCreateMode || !entryId) {
     return (
@@ -153,24 +170,6 @@ export function JoinField({ field, className }: JoinFieldProps) {
       </div>
     );
   }
-
-  // Build where clause combining the relationship filter with any additional filters
-  const whereClause = {
-    [field.on]: { equals: entryId },
-    ...(field.where || {}),
-  };
-
-  // Query entries that reference this document
-  const { data, isLoading, error } = useEntries({
-    collectionSlug: field.collection,
-    params: {
-      limit,
-      sort,
-      where: whereClause,
-      depth: field.maxDepth ?? 1,
-    },
-    enabled: !!entryId,
-  });
 
   const entries = data?.docs || [];
   const totalDocs = data?.totalDocs ?? entries.length;

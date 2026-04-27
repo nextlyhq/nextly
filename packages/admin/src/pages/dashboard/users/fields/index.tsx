@@ -34,7 +34,8 @@ import {
   TableRow,
   TableSkeleton,
 } from "@revnixhq/ui";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
 import {

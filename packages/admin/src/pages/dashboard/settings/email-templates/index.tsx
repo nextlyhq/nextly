@@ -29,7 +29,8 @@ import {
   Skeleton,
   TableSkeleton,
 } from "@revnixhq/ui";
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import type React from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
@@ -481,7 +482,7 @@ function EmailTemplateTable() {
     setPreviewDialogOpen(true);
   }, []);
 
-  const handleDuplicate = useCallback(async (template: EmailTemplateRecord) => {
+  const handleDuplicate = useCallback((template: EmailTemplateRecord) => {
     // Navigate to create page with template ID as query parameter
     navigateTo(
       `${ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE}?duplicate=${template.id}`
@@ -607,7 +608,7 @@ function EmailTemplateTable() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
-                onClick={() => handleDuplicate(template)}
+                onClick={() => { void handleDuplicate(template); }}
               >
                 <Copy className="h-4 w-4" />
                 Duplicate

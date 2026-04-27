@@ -135,7 +135,7 @@ export function FieldWrapper({
   const description = fieldWithCommonProps.admin?.description;
   const width = fieldWithCommonProps.admin?.width || "100%";
   const isHidden = fieldWithCommonProps.admin?.hidden;
-  const fieldType = field.type as string;
+  const _fieldType = field.type as string;
 
   // Don't render if hidden
   if (isHidden) {
@@ -156,7 +156,7 @@ export function FieldWrapper({
           className
         )}
         style={
-          fieldWithCommonProps.admin?.style as React.CSSProperties | undefined
+          fieldWithCommonProps.admin?.style
         }
         data-field={fieldName}
         data-field-type={field.type}
@@ -208,7 +208,7 @@ export function FieldWrapper({
         className
       )}
       style={
-        fieldWithCommonProps.admin?.style as React.CSSProperties | undefined
+        fieldWithCommonProps.admin?.style
       }
       data-field={fieldName}
       data-field-type={field.type}

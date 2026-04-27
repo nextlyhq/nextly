@@ -63,7 +63,8 @@
  */
 
 import { Checkbox } from "@revnixhq/ui";
-import React, { useState } from "react";
+import type React from "react";
+import { useState } from "react";
 
 import {
   Copy,
@@ -278,7 +279,7 @@ export function MediaCard({
         )}
         {onDownload && (
           <button
-            onClick={handleDownloadClick}
+            onClick={(e) => { void handleDownloadClick(e); }}
             className="text-muted-foreground hover:text-foreground hover:scale-110 transition-all cursor-pointer"
             aria-label="Download"
             title="Download"
