@@ -24,6 +24,7 @@ import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 import { generateRuntimeSchema } from "../services/runtime-schema-generator.js";
 
+import { queryLiveColumnTypes } from "./live-column-types.js";
 import {
   MANAGED_TABLE_PREFIXES_REGEX,
   isManagedTable,
@@ -117,6 +118,14 @@ export interface PushSchemaPipelineTestHooks {
     dialect: SupportedDialect
   ) => Record<string, unknown>;
   _txOverride?: DbTransactionRunner;
+  // F4 PR-2: lets tests stub the live-column-types introspection without
+  // needing a real database. Production path uses queryLiveColumnTypes
+  // imported below.
+  _liveColumnTypesOverride?: (
+    db: unknown,
+    dialect: SupportedDialect,
+    tableNames: string[]
+  ) => Promise<Map<string, Map<string, string>>>;
 }
 
 export class PushSchemaPipeline {
@@ -155,6 +164,22 @@ export class PushSchemaPipeline {
         ? this.testHooks._kitOverride
         : await this.importDrizzleKit(dialect, databaseName);
 
+      // Step 3.5: introspect live column types for the managed tables in
+      // the desired snapshot. Used by Step 5's RenameDetector to populate
+      // `fromType` and compute `typesCompatible` (the DROP COLUMN SQL
+      // doesn't carry type info; pushSchema warnings are template strings;
+      // F5/F6 also benefit from this map). One round-trip per apply().
+      const managedTableNames = Object.values(desired.collections).map(
+        c => c.tableName
+      );
+      const liveColumnTypes = this.testHooks._liveColumnTypesOverride
+        ? await this.testHooks._liveColumnTypesOverride(
+            db,
+            dialect,
+            managedTableNames
+          )
+        : await queryLiveColumnTypes(db, dialect, managedTableNames);
+
       // Step 4: first pushSchema pass — get the SQL diff.
       // Wrapped in its own try/catch so we can attribute pushSchema
       // failures specifically (vs DDL execution failures below).
@@ -171,13 +196,13 @@ export class PushSchemaPipeline {
         firstPassRaw.statementsToExecute
       );
 
-      // Step 5: rename detection.
-      // F4 PR-2 will replace `new Map()` with the result of
-      // queryLiveColumnTypes(...) introspected before the first pushSchema.
+      // Step 5: rename detection. liveColumnTypes was populated in Step 3.5
+      // by querying information_schema.columns (PG/MySQL) or PRAGMA
+      // table_info (SQLite); the detector reads it to compute typesCompatible.
       const candidates = this.deps.renameDetector.detect(
         firstPassSafe,
         dialect,
-        new Map<string, Map<string, string>>()
+        liveColumnTypes
       );
 
       // Step 6: classification (F5 stub: returns "safe").

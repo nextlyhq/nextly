@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 
+import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
+
 import type { DesiredSchema } from "../types.js";
 import {
   noopClassifier,
@@ -47,6 +49,13 @@ function makePipeline(
     >;
     dbTransactionImpl?: Mock<
       <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>
+    >;
+    liveColumnTypesImpl?: Mock<
+      (
+        db: unknown,
+        dialect: SupportedDialect,
+        tableNames: string[]
+      ) => Promise<Map<string, Map<string, string>>>
     >;
   } = {}
 ) {
@@ -114,6 +123,21 @@ function makePipeline(
       .fn<<T>(fn: (tx: unknown) => Promise<T>) => Promise<T>>()
       .mockImplementation(async fn => fn({}));
 
+  // Mock the live-column-types introspection: returns empty map by default.
+  // Tests that exercise rename detection with non-empty types pass an
+  // override returning a stubbed map.
+  const liveColumnTypesImpl =
+    overrides.liveColumnTypesImpl ??
+    vi
+      .fn<
+        (
+          db: unknown,
+          dialect: SupportedDialect,
+          tableNames: string[]
+        ) => Promise<Map<string, Map<string, string>>>
+      >()
+      .mockResolvedValue(new Map<string, Map<string, string>>());
+
   const pipeline = new PushSchemaPipeline(
     {
       executor,
@@ -129,6 +153,7 @@ function makePipeline(
       _txOverride: dbTransactionImpl as <T>(
         fn: (tx: unknown) => Promise<T>
       ) => Promise<T>,
+      _liveColumnTypesOverride: liveColumnTypesImpl,
     }
   );
 
@@ -143,6 +168,7 @@ function makePipeline(
       migrationJournal,
       pushSchema: pushSchemaImpl,
       dbTransaction: dbTransactionImpl,
+      liveColumnTypes: liveColumnTypesImpl,
     },
   };
 }
@@ -160,6 +186,66 @@ const onePostsCollection: DesiredSchema = {
   singles: {},
   components: {},
 };
+
+describe("PushSchemaPipeline live-column-types introspection (F4 PR 2)", () => {
+  it("calls queryLiveColumnTypes with managed table names from desired", async () => {
+    const { pipeline, mocks } = makePipeline();
+
+    const desired: DesiredSchema = {
+      collections: {
+        posts: { slug: "posts", tableName: "dc_posts", fields: [] },
+        users: { slug: "users", tableName: "dc_users", fields: [] },
+      },
+      singles: {},
+      components: {},
+    };
+
+    await pipeline.apply({
+      desired,
+      db: { sentinel: "db" },
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(mocks.liveColumnTypes).toHaveBeenCalledTimes(1);
+    expect(mocks.liveColumnTypes).toHaveBeenCalledWith(
+      { sentinel: "db" },
+      "postgresql",
+      ["dc_posts", "dc_users"]
+    );
+  });
+
+  it("forwards introspection result into renameDetector.detect()", async () => {
+    const stubbedTypes = new Map([["dc_posts", new Map([["title", "text"]])]]);
+    const liveColumnTypesImpl = vi
+      .fn<
+        (
+          db: unknown,
+          dialect: SupportedDialect,
+          tableNames: string[]
+        ) => Promise<Map<string, Map<string, string>>>
+      >()
+      .mockResolvedValue(stubbedTypes);
+
+    const { pipeline, mocks } = makePipeline({ liveColumnTypesImpl });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(mocks.renameDetector.detect).toHaveBeenCalledTimes(1);
+    expect(mocks.renameDetector.detect).toHaveBeenCalledWith(
+      [],
+      "postgresql",
+      stubbedTypes
+    );
+  });
+});
 
 describe("PushSchemaPipeline (safe path with all stubs)", () => {
   it("returns success when no statements to execute", async () => {
