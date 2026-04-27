@@ -6,6 +6,4 @@ export {
   setGlobalOnError,
   getGlobalOnError,
 } from "./on-error";
-
-// Note: createNextlyInstrumentation is added in Task 3 once withErrorHandler
-// and withAction exist.
+export { createNextlyInstrumentation } from "./instrumentation";

@@ -43,6 +43,7 @@ const serverEntries = [
   "src/errors/index.ts",
   "src/observability/index.ts",
   "src/database/index.ts",
+  "src/api/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims

@@ -31,6 +31,14 @@
       "types": "./dist/database/index.d.ts",
       "import": "./dist/database/index.mjs"
     },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "import": "./dist/api/index.mjs"
+    },
+    "./actions": {
+      "types": "./dist/actions/index.d.ts",
+      "import": "./dist/actions/index.mjs"
+    },
     "./api/health": {
       "types": "./dist/api/health.d.ts",
       "import": "./dist/api/health.mjs"
