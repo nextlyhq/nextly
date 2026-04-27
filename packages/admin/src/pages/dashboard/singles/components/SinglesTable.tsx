@@ -44,7 +44,6 @@ import React, { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
-import { Plus } from "@admin/components/icons";
 import {
   Code,
   FileText,
@@ -57,7 +56,6 @@ import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbo
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { ActionColumn } from "@admin/components/ui/table/ActionColumn";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -65,7 +63,6 @@ import {
   useDeleteSingle,
   useBulkDeleteSingles,
 } from "@admin/hooks/queries";
-import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -179,7 +176,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
       return next;
     });
   };
@@ -307,7 +304,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       .filter(s => selectedIds.includes(s.id) && !s.locked)
       .map(s => s.slug);
 
-    bulkDeleteSingles(selectedSingleSlugs, undefined, {
+    void bulkDeleteSingles(selectedSingleSlugs, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Singles deleted", {
@@ -327,7 +324,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         });
       },
     });
-  }, [selectedIds, bulkDeleteSingles, clearSelection]);
+  }, [selectedIds, bulkDeleteSingles, clearSelection, filteredData]);
 
   // Helper: Get page Single IDs for select all
   const pageSingleIds = useMemo(() => {
@@ -359,7 +356,10 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
   ]);
 
   // Format date helper (using centralized utility)
-  const formatDate = (dateValue?: string) => formatDateTime(dateValue);
+  const formatDate = useCallback(
+    (dateValue?: string) => formatDateTime(dateValue),
+    []
+  );
 
   // Get field count from Single
   const getFieldCount = useCallback((single: ApiSingle): number => {
@@ -371,7 +371,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
 
   const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
 
-  const columnDefs: Column<ApiSingle>[] = [
+  const columnDefs = useMemo<Column<ApiSingle>[]>(() => [
     // Checkbox column for bulk selection
     {
       key: "select" as keyof ApiSingle,
@@ -439,7 +439,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       },
     },
     {
-      key: "source" as keyof ApiSingle,
+      key: "source",
       label: "SOURCE",
       render: (_value, single) => {
         const sourceBadge = getSourceBadge(single.source);
@@ -455,7 +455,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       },
     },
     {
-      key: "migrationStatus" as keyof ApiSingle,
+      key: "migrationStatus",
       label: "STATUS",
       render: (_value, single) => {
         const migrationBadge = getMigrationBadge(single.migrationStatus);
@@ -465,7 +465,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       },
     },
     {
-      key: "fields" as keyof ApiSingle,
+      key: "fields",
       label: "FIELDS",
       render: (_value, single) => (
         <span className="text-sm tabular-nums">{getFieldCount(single)}</span>
@@ -537,7 +537,17 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         );
       },
     },
-  ];
+  ], [
+    selectAllCheckboxState,
+    handleToggleSelectAllOnPage,
+    isSelected,
+    toggleSelection,
+    handleEdit,
+    handleViewDocument,
+    handleDelete,
+    formatDate,
+    getFieldCount,
+  ]);
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),

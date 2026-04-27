@@ -179,7 +179,7 @@ function ModalContent({
   return (
     <EntryForm
       collection={collection as unknown as EntryFormCollection}
-      entry={entry as EntryData}
+      entry={entry}
       mode="edit"
       embedded
       onSuccess={updatedEntry => onUpdate(updatedEntry)}
@@ -248,10 +248,10 @@ export function RelationshipQuickEdit({
   const handleUpdate = useCallback(
     (updatedEntry: EntryData) => {
       // Invalidate related queries to ensure data consistency
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: entryKeys.detail(collectionSlug, entryId),
       });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: entryKeys.lists(),
       });
 

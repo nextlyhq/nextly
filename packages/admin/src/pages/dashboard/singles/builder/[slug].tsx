@@ -8,7 +8,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import type React from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { z } from "zod";
 
 import {
@@ -109,7 +110,7 @@ export default function SingleBuilderEditPage({
     const userFields = builder.fields.filter(f => !f.isSystem);
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
-      toast.error(validation.errorMessage!);
+      toast.error(validation.errorMessage);
       return;
     }
 
@@ -199,7 +200,7 @@ export default function SingleBuilderEditPage({
       headerIcon={<Icons.FileText className="h-5 w-5" />}
       headerTitle={builder.form.watch("singularName") || "Edit Single"}
       headerDescription="Define the structure of this global content"
-      onSave={handleSave}
+      onSave={() => { void handleSave(); }}
       onCancel={() => navigateTo(ROUTES.SINGLES)}
       isSaving={isSaving}
       saveLabel="Update"

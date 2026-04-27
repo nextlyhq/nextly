@@ -152,7 +152,7 @@ export function RelationshipSearch({
     if (data?.docs) {
       if (currentPage === 1) {
         // First page - replace all results
-        setAccumulatedResults(data.docs as SearchResultItem[]);
+        setAccumulatedResults(data.docs);
       } else {
         // Subsequent pages - append only new results (avoid duplicates)
         setAccumulatedResults(prev => {
@@ -168,7 +168,7 @@ export function RelationshipSearch({
 
   // Filter out already selected items
   const results = accumulatedResults.filter(
-    item => !excludeIds.includes(item.id as string)
+    item => !excludeIds.includes(item.id)
   );
 
   // Check if there are more pages to load

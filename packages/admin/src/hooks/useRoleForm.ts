@@ -1,7 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useForm, UseFormReturn } from "react-hook-form";
+import type { UseFormReturn } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { toast } from "@admin/components/ui";
@@ -13,8 +14,8 @@ import { PAGINATION } from "../constants/pagination";
 import { ROUTES } from "../constants/routes";
 import { protectedApi } from "../lib/api/protectedApi";
 import { roleApi } from "../services/roleApi";
-import { FetchRolesParams } from "../types/role";
-import { Permission, RoleWithPermissions } from "../types/ui/form";
+import type { FetchRolesParams } from "../types/role";
+import type { Permission, RoleWithPermissions } from "../types/ui/form";
 
 /**
  * Loading state for async data fetching
@@ -24,6 +25,19 @@ interface LoadingState {
   role: { loaded: boolean; loading: boolean };
   allRoles: { loaded: boolean; loading: boolean };
 }
+
+// System resources that belong in the "Settings" tab of the permission matrix.
+// Keep this list in sync with SYSTEM_RESOURCES in packages/nextly/src/schemas/rbac.ts
+const SYSTEM_RESOURCE_SLUGS = new Set([
+  "users",
+  "roles",
+  "permissions",
+  "media",
+  "settings",
+  "email-providers",
+  "email-templates",
+  "api-keys",
+]);
 
 // Helper function to fetch and process inherited permissions (robust per-id fetch)
 const fetchInheritedPermissions = async (childIds: string[]) => {
@@ -39,7 +53,7 @@ const fetchInheritedPermissions = async (childIds: string[]) => {
       childIds.map(async id => {
         try {
           return await roleApi.getRoleById(id);
-        } catch (e) {
+        } catch (_e) {
           toast.error(
             `Failed to load base role permissions. Some inherited permissions may not be available.`
           );
@@ -56,7 +70,7 @@ const fetchInheritedPermissions = async (childIds: string[]) => {
       }
       perms.forEach(p => allPermissions.add(p));
     }
-  } catch (e) {
+  } catch (_e) {
     toast.error(
       "Failed to load inherited permissions from base roles. Some permissions may not be available."
     );
@@ -221,19 +235,6 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setError(null);
   };
 
-  // System resources that belong in the "Settings" tab of the permission matrix.
-  // Keep this list in sync with SYSTEM_RESOURCES in packages/nextly/src/schemas/rbac.ts
-  const SYSTEM_RESOURCE_SLUGS = new Set([
-    "users",
-    "roles",
-    "permissions",
-    "media",
-    "settings",
-    "email-providers",
-    "email-templates",
-    "api-keys",
-  ]);
-
   // Load permissions from server
   useEffect(() => {
     if (loadingState.permissions.loaded || loadingState.permissions.loading)
@@ -313,7 +314,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       }
     };
 
-    loadPermissions();
+    void loadPermissions();
     // Dependencies ensure effect only runs once per load cycle
     // The early return guard prevents infinite loops even though we depend on state we modify
   }, [loadingState.permissions.loaded, loadingState.permissions.loading]);
@@ -399,7 +400,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             const merged = Array.from(new Set([...current, ...allPermissions]));
             form.setValue("permissions", merged, { shouldDirty: false });
           }
-        } catch (err) {
+        } catch (_err) {
           toast.error(
             "Failed to process role inheritance. Some permissions may not be loaded correctly."
           );
@@ -419,7 +420,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       }
     };
 
-    loadRole();
+    void loadRole();
     // Dependencies ensure effect only runs once per load cycle per roleId
     // The early return guard prevents infinite loops even though we depend on state we modify
   }, [roleId, form, loadingState.role.loaded, loadingState.role.loading]);
@@ -460,7 +461,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           ...prev,
           allRoles: { loaded: true, loading: false },
         }));
-      } catch (e) {
+      } catch (_e) {
         setAllRoles([]);
         toast.error(
           "Failed to load available roles. Please refresh the page and try again."
@@ -471,7 +472,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         }));
       }
     };
-    loadRoles();
+    void loadRoles();
     // Dependencies ensure effect only runs once per load cycle per roleId
     // The early return guard prevents infinite loops even though we depend on state we modify
   }, [roleId, loadingState.allRoles.loaded, loadingState.allRoles.loading]);

@@ -10,7 +10,7 @@ import {
   Switch,
   Textarea,
 } from "@revnixhq/ui";
-import React, { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 
 import { Info, Loader2, SlidersHorizontal } from "@admin/components/icons";
@@ -25,10 +25,9 @@ import {
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import {
+import type {
   UserFieldType,
-  type UserFieldDefinitionRecord,
-} from "@admin/services/userFieldsApi";
+  type UserFieldDefinitionRecord} from "@admin/services/userFieldsApi";
 
 import { DefaultValueField } from "./DefaultValueField";
 import { FieldTypePicker } from "./FieldTypeSelector";
@@ -130,7 +129,7 @@ export function UserFieldForm({
 
       {/* Form */}
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             {/* Page Header */}
             <div className="border-b border-border bg-muted/20 px-6 py-5">

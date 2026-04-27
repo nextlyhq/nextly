@@ -7,7 +7,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@revnixhq/ui";
-import React from "react";
 
 import { User as UserIcon, HelpCircle, LogOut } from "@admin/components/icons";
 import { ROUTES, buildRoute } from "@admin/constants/routes";

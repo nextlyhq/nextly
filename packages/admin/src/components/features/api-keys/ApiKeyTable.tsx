@@ -25,11 +25,11 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Input,
   ResponsiveTable,
   TableSkeleton,
 } from "@revnixhq/ui";
-import React, { useCallback, useMemo, useState } from "react";
+import type React from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   AlertTriangle,
@@ -41,9 +41,6 @@ import {
   Filter,
 } from "@admin/components/icons";
 import { SearchBar } from "@admin/components/shared/search-bar";
-import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
-import { navigateTo } from "@admin/lib/navigation";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
 // ============================================================
@@ -161,7 +158,11 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
       return next;
     });
   };
@@ -175,7 +176,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   // Toggleable columns (exclude actions)
   const ALWAYS_VISIBLE = new Set(["actions"]);
 
-  const columnDefs: Column<ApiKeyMeta>[] = [
+  const columnDefs: Column<ApiKeyMeta>[] = useMemo(() => [
     {
       key: "name",
       label: "Name",
@@ -309,7 +310,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
         );
       },
     },
-  ];
+  ], [handleEdit, handleRevoke]);
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),

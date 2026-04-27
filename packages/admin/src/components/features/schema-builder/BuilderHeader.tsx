@@ -12,7 +12,7 @@
 import { Button, Input, Spinner } from "@revnixhq/ui";
 import { useFormContext } from "react-hook-form";
 
-import { ArrowLeft, Save, X, Download } from "@admin/components/icons";
+import { ArrowLeft, Save, X } from "@admin/components/icons";
 import {
   FormControl,
   FormField,

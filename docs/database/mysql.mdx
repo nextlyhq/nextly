@@ -5,6 +5,8 @@ description: Set up Nextly with MySQL. Covers installation, configuration, conne
 
 MySQL is supported for teams with existing MySQL infrastructure. The adapter uses the `mysql2` driver and handles MySQL-specific differences like the lack of a RETURNING clause automatically.
 
+> **Minimum version: MySQL 8.0+.** MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) are recognized at connect with a warning and continue to work on best-effort support. See [database support](./support) for variant policy and behavior details.
+
 ## Installation
 
 Install the MySQL adapter alongside its peer dependency:

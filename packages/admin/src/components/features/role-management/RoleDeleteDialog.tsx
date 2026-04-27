@@ -37,7 +37,7 @@ export function RoleDeleteDialog({
   const isPending = isDeleting || isLoading;
   const deleteDisabled = isPending || isSystemRole;
 
-  const handleConfirm = useCallback(async () => {
+  const handleConfirm = useCallback(() => {
     if (isPending) return;
 
     try {
@@ -52,7 +52,7 @@ export function RoleDeleteDialog({
         return;
       }
 
-      await onConfirm();
+      onConfirm();
 
       toast.success("Role deleted successfully", {
         description: `The role "${role?.name}" has been removed.`,
@@ -141,7 +141,7 @@ export function RoleDeleteDialog({
           </Button>
           <Button
             variant="destructive"
-            onClick={handleConfirm}
+            onClick={() => { void handleConfirm(); }}
             disabled={deleteDisabled}
             ref={deleteButtonRef}
           >

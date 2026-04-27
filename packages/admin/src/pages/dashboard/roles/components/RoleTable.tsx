@@ -10,9 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   ResponsiveTable,
-  TableSkeleton,
 } from "@revnixhq/ui";
-import { Columns, Filter, Shield } from "lucide-react";
+import { Columns, Shield } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -114,7 +113,7 @@ export default function RoleTable() {
     filters: { search: debouncedSearch }, // Use debounced search
   };
 
-  const { data, isLoading, isError, error } = useRoles(params);
+  const { data, isLoading, _isError, _error } = useRoles(params);
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
@@ -213,7 +212,7 @@ export default function RoleTable() {
       return;
     }
 
-    bulkDeleteRoles(deletableRoleIds, undefined, {
+    void bulkDeleteRoles(deletableRoleIds, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Roles deleted", {
@@ -238,7 +237,7 @@ export default function RoleTable() {
   };
 
   // Helper: Check if role is a system role
-  const isSystemRole = (role: Role) => role.type === "System";
+  const isSystemRole = useCallback((role: Role) => role.type === "System", []);
 
   // Helper: Get count of system roles in current selection
   const systemRoleCount = useMemo(() => {
@@ -408,13 +407,13 @@ export default function RoleTable() {
     setPage(0);
   }, []);
 
-  const handleTypeFilterChange = useCallback((value: string) => {
-    setTypeFilter(value as Role["type"] | "all");
+  const _handleTypeFilterChange = useCallback((value: string) => {
+    setTypeFilter(value);
     setPage(0);
   }, []);
 
-  const handleStatusFilterChange = useCallback((value: string) => {
-    setStatusFilter(value as Role["status"] | "all");
+  const _handleStatusFilterChange = useCallback((value: string) => {
+    setStatusFilter(value);
     setPage(0);
   }, []);
 

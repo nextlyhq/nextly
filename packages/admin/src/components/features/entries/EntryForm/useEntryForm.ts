@@ -171,7 +171,7 @@ function getDefaultValues(
       continue;
     }
 
-    const fieldName = field.name as string;
+    const fieldName = field.name;
     // Entry API may return DB column names (snake_case) while field configs
     // use camelCase. Try camelCase first, then fall back to snake_case.
     const existingValue =
@@ -453,7 +453,7 @@ export function useEntryForm({
         // Type assertion needed because fallback schema produces Record<string, unknown>
         // but mutations expect Record<string, EntryValue>. The actual runtime data
         // conforms to EntryValue types.
-        const data = rawData as Record<string, unknown>;
+        const data = rawData;
         try {
           if (mode === "create") {
             const result = await createMutation.mutateAsync(
@@ -461,7 +461,7 @@ export function useEntryForm({
             );
             // Reset form to mark as clean after successful create
             form.reset(data);
-            onSuccess?.(result as EntryData);
+            onSuccess?.(result);
           } else {
             if (!entry?.id) {
               throw new Error("Entry ID is required for update");
@@ -472,7 +472,7 @@ export function useEntryForm({
             );
             // Reset form to mark as clean after successful update
             form.reset(data);
-            onSuccess?.(result as EntryData);
+            onSuccess?.(result);
           }
         } catch (error) {
           // Server errors are automatically mapped to form fields via setError
@@ -509,7 +509,7 @@ export function useEntryForm({
   return {
     form,
     handleSubmit,
-    handleDelete,
+    handleDelete: () => { void handleDelete(); },
     handleCancel,
     isSubmitting: createMutation.isPending || updateMutation.isPending,
     isDeleting: deleteMutation.isPending,

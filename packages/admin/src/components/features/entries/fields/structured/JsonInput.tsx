@@ -221,7 +221,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
         const result = tryParseJSON(newText);
         if (result.success) {
           setParseError(null);
-          onChange(result.data as TFieldValues[Path<TFieldValues>]);
+          onChange(result.data);
         } else {
           setParseError(result.error);
           // Don't update form value for invalid JSON
@@ -237,7 +237,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
 
     if (result.success) {
       setParseError(null);
-      onChange(result.data as TFieldValues[Path<TFieldValues>]);
+      onChange(result.data);
 
       // Format on blur if enabled
       if (formatOnBlur && result.data !== null) {

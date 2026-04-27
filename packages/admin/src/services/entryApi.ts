@@ -414,11 +414,11 @@ export const entryApi = {
         "docs" in result.data
       ) {
         // Response is already PaginatedDocs format from backend
-        return result.data as PaginatedDocs<Entry>;
+        return result.data;
       }
 
       // Legacy format: result.data is Entry[] directly
-      const docs = result.data as Entry[];
+      const docs = result.data;
 
       if (result.meta) {
         return buildPaginatedDocs(docs, {
@@ -513,7 +513,7 @@ export const entryApi = {
           // Try fetching as a Single (id is ignored/redundant as slug defines it)
           const singleUrl = `/singles/${collectionSlug}`;
           return await protectedApi.get<Entry>(singleUrl);
-        } catch (singleError) {
+        } catch (_singleError) {
           // Ignore
         }
       }

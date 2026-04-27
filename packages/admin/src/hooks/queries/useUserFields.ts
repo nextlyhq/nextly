@@ -114,7 +114,7 @@ export function useCreateUserField() {
   return useMutation<UserFieldDefinitionRecord, Error, CreateUserFieldPayload>({
     mutationFn: data => createField(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: userFieldKeys.all(),
       });
     },
@@ -135,7 +135,7 @@ export function useUpdateUserField() {
   >({
     mutationFn: ({ id, data }) => updateField(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: userFieldKeys.all(),
       });
     },
@@ -152,7 +152,7 @@ export function useDeleteUserField() {
   return useMutation<void, Error, string>({
     mutationFn: id => deleteField(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: userFieldKeys.all(),
       });
     },
@@ -170,7 +170,7 @@ export function useReorderUserFields() {
   return useMutation<{ data: UserFieldDefinitionRecord[] }, Error, string[]>({
     mutationFn: fieldIds => reorderFields(fieldIds),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: userFieldKeys.all(),
       });
     },

@@ -87,7 +87,7 @@ export function refreshAccessToken(): Promise<boolean> {
     }
   })().finally(() => {
     inFlight = null;
-  }) as Promise<boolean>;
+  });
 
   return inFlight;
 }

@@ -33,7 +33,8 @@ import {
 } from "@admin/components/ui/form";
 import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import { createSlugSchema } from "@admin/lib/validation";
-import { RelationFieldConfig, FieldType } from "@admin/types/field-types";
+import type { RelationFieldConfig} from "@admin/types/field-types";
+import { FieldType } from "@admin/types/field-types";
 
 const relationFieldSchema = z.object({
   name: createSlugSchema(),
@@ -104,7 +105,7 @@ export function RelationFieldEditor({
 
   // Fetch content types on component mount
   useEffect(() => {
-    fetchContentTypes();
+    void fetchContentTypes();
   }, []);
 
   // Update content fields when content type changes
@@ -242,7 +243,7 @@ export function RelationFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={handleSubmit}
+        onSubmit={(e) => { void handleSubmit(e); }}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

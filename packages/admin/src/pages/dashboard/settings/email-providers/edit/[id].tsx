@@ -178,7 +178,7 @@ export default function EditEmailProviderPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => refetch()}
+                onClick={() => { void refetch(); }}
                 className="ml-2"
               >
                 Retry

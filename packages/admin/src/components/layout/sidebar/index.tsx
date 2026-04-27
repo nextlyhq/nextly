@@ -11,7 +11,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@revnixhq/ui";
-import { VariantProps, cva } from "class-variance-authority";
+import type { VariantProps} from "class-variance-authority";
+import { cva } from "class-variance-authority";
 import * as React from "react";
 
 import {
@@ -28,7 +29,7 @@ const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 
 // Import width constants from centralized location
 const SIDEBAR_WIDTH = SIDEBAR_WIDTH_EXPANDED_REM;
-const SIDEBAR_WIDTH_MOBILE = MOBILE_DRAWER_WIDTH_REM;
+const _SIDEBAR_WIDTH_MOBILE = MOBILE_DRAWER_WIDTH_REM;
 const SIDEBAR_WIDTH_ICON = SIDEBAR_WIDTH_COLLAPSED_REM;
 
 type SidebarContextProps = {
@@ -558,7 +559,7 @@ const SidebarMenuButton = React.forwardRef<
           {...tooltip}
           className={cn(
             "bg-black text-white",
-            (tooltip as React.ComponentProps<typeof TooltipContent>).className
+            (tooltip).className
           )}
           style={{ backgroundColor: "black", color: "white" }}
         />

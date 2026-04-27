@@ -47,13 +47,15 @@ export function useRouter() {
     window.addEventListener("locationchange", handleLocationChange);
 
     // Patch history API to detect pushState/replaceState
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const originalPushState = window.history.pushState;
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const originalReplaceState = window.history.replaceState;
 
     window.history.pushState = function (
       data: unknown,
       unused: string,
-      url?: string | URL | null | undefined
+      url?: string | URL | null  
     ) {
       const result = originalPushState.apply(this, [
         data as Parameters<History["pushState"]>[0],
@@ -67,7 +69,7 @@ export function useRouter() {
     window.history.replaceState = function (
       data: unknown,
       unused: string,
-      url?: string | URL | null | undefined
+      url?: string | URL | null  
     ) {
       const result = originalReplaceState.apply(this, [
         data as Parameters<History["replaceState"]>[0],

@@ -124,3 +124,8 @@ export const version = "0.1.0";
  */
 export { DrizzleAdapter } from "./adapter";
 export type { TableResolver } from "./types/core";
+
+// Why no F17 re-exports here: the main index follows a strict tree-shaking
+// policy (only DrizzleAdapter + version are exported). F17's
+// checkDialectVersion / NEXTLY_MIN_DB_VERSIONS / UnsupportedDialectVersionError
+// live behind the dedicated subpath @revnixhq/adapter-drizzle/version-check.

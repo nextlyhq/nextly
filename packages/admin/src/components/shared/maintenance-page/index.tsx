@@ -8,7 +8,7 @@ import { useRouter } from "@admin/hooks/useRouter";
 import { navigateTo } from "@admin/lib/navigation";
 
 export function MaintenancePage() {
-  const { pathname } = useRouter();
+  const { _pathname } = useRouter();
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[80vh] w-full bg-background p-4">

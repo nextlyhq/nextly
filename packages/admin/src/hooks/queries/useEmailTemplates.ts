@@ -124,7 +124,7 @@ export function useCreateEmailTemplate() {
   return useMutation<EmailTemplateRecord, Error, CreateEmailTemplatePayload>({
     mutationFn: data => createTemplate(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: emailTemplateKeys.all(),
       });
     },
@@ -145,7 +145,7 @@ export function useUpdateEmailTemplate() {
   >({
     mutationFn: ({ id, data }) => updateTemplate(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: emailTemplateKeys.all(),
       });
     },
@@ -198,7 +198,7 @@ export function useDeleteEmailTemplate() {
     },
     // Always refetch after error or success to ensure consistency
     onSettled: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: emailTemplateKeys.all(),
       });
     },
@@ -215,7 +215,7 @@ export function useUpdateEmailLayout() {
   return useMutation<void, Error, Partial<EmailLayout>>({
     mutationFn: data => updateLayout(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: emailTemplateKeys.layout(),
       });
     },
