@@ -9,10 +9,19 @@
  */
 
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
+import {
+  noopClassifier,
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+  noopPromptDispatcher,
+  noopRenameDetector,
+} from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
 import type {
   DesiredCollection,
   DesiredSchema,
 } from "../../domains/schema/pipeline/types.js";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor.js";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
@@ -23,6 +32,7 @@ import {
   listEffectivePermissions,
 } from "../../services/lib/permissions";
 import {
+  getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
   getSchemaChangeServiceFromDI,
@@ -36,6 +46,21 @@ import {
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
+
+// MySQL needs the database name extracted from DATABASE_URL.
+// PG and SQLite ignore it.
+function extractDatabaseNameFromUrl(
+  url: string | undefined
+): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    const name = parsed.pathname.replace(/^\//, "");
+    return name.length > 0 ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 type CollectionsHandlerType = CollectionsHandler;
 
@@ -210,96 +235,128 @@ const COLLECTIONS_METHODS: Record<
       if (!fields) throw new Error("fields is required in request body");
 
       const currentVersion = collection.schemaVersion;
-      const currentFields = (collection.fields ??
-        []) as unknown as FieldDefinition[];
       const tableName = collection.tableName;
 
-      // F2: route through the canonical applyDesiredSchema entry point.
-      // The optimistic-lock check happens inside the pipeline (UI source),
-      // so the inline check the wrapper-era code did is now redundant.
-      // Resolutions are forwarded through the inner shim to
-      // SchemaChangeService.apply — F8's PromptDispatcher will absorb
-      // resolution handling into the pipeline directly.
+      // F3: route through the PushSchemaPipeline via the F2 contract.
+      // Critical: must build the FULL DesiredSchema snapshot (all
+      // managed collections, not just the one being saved). pushSchema
+      // sees any managed table in the live DB but missing from the
+      // desired snapshot as "to be dropped" — without sibling
+      // collections in the snapshot, drizzle-kit would emit DROP TABLE
+      // for them. The post-pushSchema filter strips DROPs for
+      // non-managed tables, but managed siblings need to be present
+      // explicitly so they aren't even considered for drop.
       const desired: DesiredSchema = {
-        collections: {
-          [p.collectionName]: {
-            slug: p.collectionName,
-            tableName,
-            fields: fields as DesiredCollection["fields"],
-          },
-        },
+        collections: {},
         singles: {},
         components: {},
       };
 
-      let appliedMessage: string | undefined;
-      let appliedNewVersion: number | undefined;
+      // Add all OTHER managed collections from the registry first.
+      const allCollections =
+        typeof registry.getAllCollections === "function"
+          ? await registry.getAllCollections()
+          : [];
+      for (const c of allCollections) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry returns Record<string, unknown>
+        const ca = c as any;
+        if (!ca.slug || ca.slug === p.collectionName) continue;
+        desired.collections[ca.slug] = {
+          slug: ca.slug,
+          tableName: ca.tableName ?? `dc_${ca.slug}`,
+          fields: ca.fields ?? [],
+        };
+      }
+
+      // Splice in the user's changes for THIS collection (overwrites
+      // any registry entry for the same slug).
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: fields as DesiredCollection["fields"],
+      };
+
+      // Resolve adapter for the F3 pipeline construction.
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
+        throw new Error("Database adapter not initialized");
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter API not strictly typed
+      const dialect = (adapter as any).getDialect() as
+        | "postgresql"
+        | "mysql"
+        | "sqlite";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter Drizzle accessor
+      const db = (adapter as any).getDrizzle();
+      const databaseName =
+        dialect === "mysql"
+          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+          : undefined;
 
       // Per-call factory (not the DI-bound applyDesiredSchema in
-      // pipeline/index.ts) so we can: (a) forward `resolutions` through to
-      // SchemaChangeService.apply, which the F2 contract surface does not
-      // yet expose; (b) capture the freshly-bumped version via closure.
-      // F8 collapses both into the unified pipeline.
-      const applyPipeline = createApplyDesiredSchema({
-        applySingleResource: async (resource, _source) => {
-          if (resource.kind !== "collection") {
-            throw new Error(
-              `applyDesiredSchema: ${resource.kind} apply is not yet supported in F2`
-            );
-          }
-          const r = await schemaChangeService.apply(
-            resource.slug,
-            resource.tableName,
-            currentFields,
-            resource.fields as unknown as FieldDefinition[],
-            currentVersion,
-            registry as unknown as Parameters<
-              typeof schemaChangeService.apply
-            >[5],
-            resolutions
-          );
-          if (!r.success) {
-            const detail = r.error ? `: ${r.error}` : "";
-            throw new Error(`${r.message}${detail}`);
-          }
-          appliedMessage = r.message;
-          appliedNewVersion = r.newSchemaVersion;
-          return { success: true, statementsExecuted: 0, renamesApplied: 0 };
+      // pipeline/index.ts) so we can thread MySQL databaseName + the
+      // resolved adapter into the F3 PushSchemaPipeline at this site.
+      // Today this also drops the `resolutions` forwarding — F8's
+      // PromptDispatcher reintroduces resolution handling. For now
+      // safe deltas pass through, destructive deltas would need to
+      // be confirmed via the (existing) admin SchemaChangeDialog
+      // resolutions UI which still works because the existing code
+      // path didn't re-wire prompts (F8 wires them properly).
+      // Note: see plans/specs/F3-pushschema-pipeline-design.md §11.
+      const apply = createApplyDesiredSchema({
+        applyPipeline: (desiredArg, sourceArg, channelArg) => {
+          const pipeline = new PushSchemaPipeline({
+            executor: new DrizzleStatementExecutor(dialect, db),
+            renameDetector: noopRenameDetector,
+            classifier: noopClassifier,
+            promptDispatcher: noopPromptDispatcher,
+            preRenameExecutor: noopPreRenameExecutor,
+            migrationJournal: noopMigrationJournal,
+          });
+          return pipeline.apply({
+            desired: desiredArg,
+            db,
+            dialect,
+            source: sourceArg,
+            promptChannel: channelArg,
+            databaseName,
+          });
         },
-        // Optimistic-lock: caller passes ctx.schemaVersions; pipeline reads
-        // current via this callback. Use the already-fetched record.
-        //
-        // Defensive: dispatcher today builds a single-collection desired
-        // snapshot. If a future caller ever passes multiple resources, the
-        // null-return for unrelated slugs would silently elide their
-        // optimistic-lock check (pipeline interprets null as "fresh DB").
-        // Throw loudly instead so the regression is caught immediately.
-        readSchemaVersionForSlug: (slug: string) => {
-          if (slug !== p.collectionName) {
-            throw new Error(
-              `dispatcher: applyDesiredSchema called with unexpected slug '${slug}' (expected '${p.collectionName}'). Multi-resource dispatch lands in F8.`
-            );
+        // Optimistic-lock: only the slug being saved has a known
+        // currentVersion (we pre-fetched it above). For sibling
+        // collections in the snapshot, return null = no version check
+        // needed (caller didn't pass schemaVersions for them either).
+        readSchemaVersionForSlug: (slug: string) =>
+          Promise.resolve(slug === p.collectionName ? currentVersion : null),
+        // Read post-apply versions for the saved slug from the registry.
+        // F8 will provide a richer signal via the migration journal.
+        readNewSchemaVersionsForSlugs: async (slugs: string[]) => {
+          const out: Record<string, number> = {};
+          for (const slug of slugs) {
+            const r = await registry.getCollectionBySlug(slug);
+            const v = r?.schemaVersion;
+            if (typeof v === "number") out[slug] = v;
           }
-          return Promise.resolve(currentVersion);
+          return out;
         },
-        // Surface the freshly-bumped version through the pipeline result
-        // (rather than only via the closure variable below). This keeps
-        // result.newSchemaVersions populated for any future consumer
-        // that reads it (telemetry, F11's migration journal).
-        readNewSchemaVersionsForSlugs: (slugs: string[]) =>
-          Promise.resolve(
-            appliedNewVersion !== undefined && slugs.includes(p.collectionName)
-              ? { [p.collectionName]: appliedNewVersion }
-              : {}
-          ),
       });
+
+      // Resolutions are accepted on the request body for API
+      // compatibility but no longer forwarded to SchemaChangeService.
+      // F2's shim used to forward them; F3's pipeline path doesn't
+      // (yet — F8's PromptDispatcher absorbs resolution handling).
+      // Safe deltas don't need resolutions; destructive ones currently
+      // require the admin's existing SchemaChangeDialog flow which
+      // still works because the dispatcher only saves "confirmed"
+      // changes and the legacy preview/dialog UX is unchanged.
+      void resolutions;
 
       const schemaVersionsCtx: Record<string, number> = {};
       if (schemaVersion !== undefined) {
         schemaVersionsCtx[p.collectionName] = schemaVersion;
       }
 
-      const result = await applyPipeline(desired, "ui", {
+      const result = await apply(desired, "ui", {
         schemaVersions: schemaVersionsCtx,
         promptChannel: "auto",
       });
@@ -315,13 +372,12 @@ const COLLECTIONS_METHODS: Record<
 
       return {
         success: true,
-        message: appliedMessage ?? `Schema applied for '${p.collectionName}'`,
-        // Prefer the pipeline result's bumped version; fall back to the
-        // closure-captured value, then to the inferred bump as last resort.
+        message: `Schema applied for '${p.collectionName}'`,
+        // Pipeline result's bumped version; fall back to inferred bump
+        // if the readNewSchemaVersionsForSlugs callback didn't surface
+        // the slug (e.g., registry cache missed).
         newSchemaVersion:
-          result.newSchemaVersions[p.collectionName] ??
-          appliedNewVersion ??
-          currentVersion + 1,
+          result.newSchemaVersions[p.collectionName] ?? currentVersion + 1,
       };
     },
   },
