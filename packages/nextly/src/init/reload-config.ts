@@ -3,8 +3,8 @@
 // flipped the reload flag.
 //
 // Why a helper: keeps init.ts clean. The actual config-loading + DDL apply
-// happens via existing services (config-loader, SchemaChangeService).
-// reloadNextlyConfig just orchestrates them.
+// flows through the F2 applyDesiredSchema pipeline (which currently shims
+// over SchemaChangeService.apply). reloadNextlyConfig just orchestrates them.
 //
 // Safety stance: code-first auto-apply runs only for SAFE deltas (additive
 // changes, type-compatible widenings). Destructive deltas (drops, narrowing
@@ -14,6 +14,12 @@
 // later task; until then, destructive code-first edits require either
 // (a) reverting the config, (b) using the admin Schema Builder, or
 // (c) waiting for F8.
+
+import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply.js";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../domains/schema/pipeline/types.js";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
@@ -180,21 +186,62 @@ export async function reloadNextlyConfig(opts?: {
         continue;
       }
 
-      // Safe delta: apply with no resolutions, source 'code'.
-      const applyResult = await schemaChangeService.apply(
-        slug,
-        tableName,
-        currentFields,
-        newFields,
-        currentSchemaVersion,
-        registry,
-        undefined,
-        { source: "code" }
-      );
+      // Safe delta: route through the F2 applyDesiredSchema entry point.
+      // Code-first source skips the optimistic-lock check (HMR is the
+      // source of truth). promptChannel: 'terminal' is mandatory here —
+      // there is no admin UI client during HMR.
+      const desired: DesiredSchema = {
+        collections: {
+          [slug]: {
+            slug,
+            tableName,
+            fields: newFields as DesiredCollection["fields"],
+          },
+        },
+        singles: {},
+        components: {},
+      };
+
+      // Per-call factory (not the DI-bound applyDesiredSchema in
+      // pipeline/index.ts) so the existing resolver-pattern test seam
+      // and vi.hoisted spies on schemaChangeService.apply keep working
+      // without us having to mock the DI container in tests. F8 collapses
+      // both seams into the unified pipeline.
+      const applyPipeline = createApplyDesiredSchema({
+        applySingleResource: async (resource, source) => {
+          if (resource.kind !== "collection") {
+            throw new Error(
+              `applyDesiredSchema: ${resource.kind} apply is not yet supported in F2`
+            );
+          }
+          const r = await schemaChangeService.apply(
+            resource.slug,
+            resource.tableName,
+            currentFields,
+            resource.fields,
+            currentSchemaVersion,
+            registry,
+            undefined,
+            { source }
+          );
+          if (!r.success) {
+            throw new Error(r.error ?? "apply failed");
+          }
+          return { success: true, statementsExecuted: 0, renamesApplied: 0 };
+        },
+        // Unused for source='code' — HMR skips the version check.
+        readSchemaVersionForSlug: () => Promise.resolve(null),
+        // Unused for HMR — we don't surface bumped versions in the log.
+        readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
+      });
+
+      const applyResult = await applyPipeline(desired, "code", {
+        promptChannel: "terminal",
+      });
 
       if (!applyResult.success) {
         logger?.error(
-          `[Nextly HMR] Apply failed for '${slug}': ${applyResult.error ?? "unknown error"}`
+          `[Nextly HMR] Apply failed for '${slug}' (${applyResult.error.code}): ${applyResult.error.message}`
         );
       }
     } catch (err) {

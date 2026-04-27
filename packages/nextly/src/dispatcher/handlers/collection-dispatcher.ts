@@ -8,6 +8,11 @@
  * collections they can actually read.
  */
 
+import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types.js";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
@@ -203,42 +208,120 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("Schema changes must be confirmed");
       }
       if (!fields) throw new Error("fields is required in request body");
-      // Optimistic locking: reject if version changed since preview.
-      const currentVersion = collection.schemaVersion;
-      if (schemaVersion !== undefined && schemaVersion !== currentVersion) {
-        throw new Error(
-          "Schema was modified by another session. Please refresh."
-        );
-      }
 
+      const currentVersion = collection.schemaVersion;
       const currentFields = (collection.fields ??
         []) as unknown as FieldDefinition[];
       const tableName = collection.tableName;
 
-      // SchemaChangeService.apply expects a CollectionRegistryLike interface
-      // whose getCollectionBySlug returns Record<string, unknown> | null;
-      // CollectionRegistryService returns the more-specific
-      // DynamicCollectionRecord. The interface is not exported (intentional,
-      // to avoid pulling its full DI graph through schema-change-service),
-      // so we read its shape via Parameters<typeof apply>[5] and cast through
-      // unknown to bridge the structural-vs-nominal gap without `as any`.
-      const result = await schemaChangeService.apply(
-        p.collectionName,
-        tableName,
-        currentFields,
-        fields as FieldDefinition[],
-        currentVersion,
-        registry as unknown as Parameters<typeof schemaChangeService.apply>[5],
-        resolutions
-      );
-      if (!result.success) {
-        const detail = result.error ? `: ${result.error}` : "";
-        throw new Error(`${result.message}${detail}`);
+      // F2: route through the canonical applyDesiredSchema entry point.
+      // The optimistic-lock check happens inside the pipeline (UI source),
+      // so the inline check the wrapper-era code did is now redundant.
+      // Resolutions are forwarded through the inner shim to
+      // SchemaChangeService.apply — F8's PromptDispatcher will absorb
+      // resolution handling into the pipeline directly.
+      const desired: DesiredSchema = {
+        collections: {
+          [p.collectionName]: {
+            slug: p.collectionName,
+            tableName,
+            fields: fields as DesiredCollection["fields"],
+          },
+        },
+        singles: {},
+        components: {},
+      };
+
+      let appliedMessage: string | undefined;
+      let appliedNewVersion: number | undefined;
+
+      // Per-call factory (not the DI-bound applyDesiredSchema in
+      // pipeline/index.ts) so we can: (a) forward `resolutions` through to
+      // SchemaChangeService.apply, which the F2 contract surface does not
+      // yet expose; (b) capture the freshly-bumped version via closure.
+      // F8 collapses both into the unified pipeline.
+      const applyPipeline = createApplyDesiredSchema({
+        applySingleResource: async (resource, _source) => {
+          if (resource.kind !== "collection") {
+            throw new Error(
+              `applyDesiredSchema: ${resource.kind} apply is not yet supported in F2`
+            );
+          }
+          const r = await schemaChangeService.apply(
+            resource.slug,
+            resource.tableName,
+            currentFields,
+            resource.fields as unknown as FieldDefinition[],
+            currentVersion,
+            registry as unknown as Parameters<
+              typeof schemaChangeService.apply
+            >[5],
+            resolutions
+          );
+          if (!r.success) {
+            const detail = r.error ? `: ${r.error}` : "";
+            throw new Error(`${r.message}${detail}`);
+          }
+          appliedMessage = r.message;
+          appliedNewVersion = r.newSchemaVersion;
+          return { success: true, statementsExecuted: 0, renamesApplied: 0 };
+        },
+        // Optimistic-lock: caller passes ctx.schemaVersions; pipeline reads
+        // current via this callback. Use the already-fetched record.
+        //
+        // Defensive: dispatcher today builds a single-collection desired
+        // snapshot. If a future caller ever passes multiple resources, the
+        // null-return for unrelated slugs would silently elide their
+        // optimistic-lock check (pipeline interprets null as "fresh DB").
+        // Throw loudly instead so the regression is caught immediately.
+        readSchemaVersionForSlug: (slug: string) => {
+          if (slug !== p.collectionName) {
+            throw new Error(
+              `dispatcher: applyDesiredSchema called with unexpected slug '${slug}' (expected '${p.collectionName}'). Multi-resource dispatch lands in F8.`
+            );
+          }
+          return Promise.resolve(currentVersion);
+        },
+        // Surface the freshly-bumped version through the pipeline result
+        // (rather than only via the closure variable below). This keeps
+        // result.newSchemaVersions populated for any future consumer
+        // that reads it (telemetry, F11's migration journal).
+        readNewSchemaVersionsForSlugs: (slugs: string[]) =>
+          Promise.resolve(
+            appliedNewVersion !== undefined && slugs.includes(p.collectionName)
+              ? { [p.collectionName]: appliedNewVersion }
+              : {}
+          ),
+      });
+
+      const schemaVersionsCtx: Record<string, number> = {};
+      if (schemaVersion !== undefined) {
+        schemaVersionsCtx[p.collectionName] = schemaVersion;
       }
+
+      const result = await applyPipeline(desired, "ui", {
+        schemaVersions: schemaVersionsCtx,
+        promptChannel: "auto",
+      });
+
+      if (!result.success) {
+        if (result.error.code === "SCHEMA_VERSION_CONFLICT") {
+          throw new Error(
+            "Schema was modified by another session. Please refresh."
+          );
+        }
+        throw new Error(result.error.message);
+      }
+
       return {
         success: true,
-        message: result.message,
-        newSchemaVersion: result.newSchemaVersion,
+        message: appliedMessage ?? `Schema applied for '${p.collectionName}'`,
+        // Prefer the pipeline result's bumped version; fall back to the
+        // closure-captured value, then to the inferred bump as last resort.
+        newSchemaVersion:
+          result.newSchemaVersions[p.collectionName] ??
+          appliedNewVersion ??
+          currentVersion + 1,
       };
     },
   },
