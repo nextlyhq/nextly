@@ -326,11 +326,12 @@ export async function generatePackageJson(
     version: "0.1.0",
     private: true,
     scripts: {
-      // `nextly dev` is the Task 11 wrapper - it spawns `next dev` as a
-      // child, owns the terminal for schema-change prompts, watches
-      // nextly.config.ts, and respawns the child when the schema changes.
-      // Using `next dev --turbopack` directly skips DB init + prompts.
-      dev: "nextly dev",
+      // F1 PR 4: dev now boots Nextly in single-process mode via `next dev`.
+      // The lazy drizzle-kit/api import (PR 1) plus the in-process HMR
+      // listener (PR 2) replaced the wrapper that previously owned the
+      // terminal, schema prompts, and child supervision. `nextly dev` is
+      // gone; the only supported dev command is the standard `next dev`.
+      dev: "next dev --turbopack",
       // Build: migrate DB + compile Next.js + (if present) generate
       // the Pagefind search index. Templates without the search
       // script silently skip the last step.
@@ -341,8 +342,6 @@ export async function generatePackageJson(
       lint: "next lint",
       nextly: "nextly",
       // First-time setup: create system tables, seed demo content.
-      // Renamed from `nextly dev --seed` in Task 11 sub-task 2 because
-      // `nextly dev` is now the wrapper CLI.
       "db:setup": "nextly db:sync --seed",
       "db:migrate": "nextly migrate",
       "db:migrate:status": "nextly migrate:status",

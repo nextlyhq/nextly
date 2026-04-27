@@ -5,6 +5,8 @@ description: Set up Nextly with PostgreSQL. Covers installation, configuration, 
 
 PostgreSQL is the recommended database for production Nextly deployments. It provides the most comprehensive feature set of all supported databases, including JSONB, array types, full-text search, ILIKE, savepoints, and RETURNING clause support.
 
+> **Minimum version: PostgreSQL 15.0+.** Older versions hard-fail at connect with a clear upgrade pointer. See [database support](./support) for the full version policy and cloud-provider compatibility.
+
 ## Installation
 
 Install the PostgreSQL adapter alongside its peer dependency:

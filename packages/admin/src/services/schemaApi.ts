@@ -49,10 +49,12 @@ export interface SchemaPreviewResponse {
   schemaVersion: number;
 }
 
-// Response from the apply endpoint
+// Response from the apply endpoint.
+// F1 PR 3: dropped the `restarting` field (single-process model means
+// no child to restart). The dispatcher no longer emits it; this interface
+// matches the new server shape.
 export interface SchemaApplyResponse {
   success: boolean;
-  restarting: boolean;
   message: string;
   newSchemaVersion: number;
 }
@@ -61,22 +63,6 @@ export interface SchemaApplyResponse {
 export interface FieldResolution {
   action: "provide_default" | "mark_nullable" | "cancel";
   value?: string;
-}
-
-// What: shape of the pending schema change exposed by the wrapper.
-// Why: the admin UI's PendingSchemaBanner polls this to know when a
-// code-first edit is waiting for confirmation (only populated when running
-// under `nextly dev` wrapper). null when no change is pending or when
-// running plain `next dev`.
-export interface PendingSchemaChangeResponse {
-  pending: {
-    slug: string;
-    classification: "safe" | "destructive" | "interactive";
-    diff: SchemaPreviewChange;
-    ddlPreview?: string[];
-    rowCounts?: Record<string, number>;
-    receivedAt: string;
-  } | null;
 }
 
 export const schemaApi = {
@@ -101,13 +87,6 @@ export const schemaApi = {
     return protectedApi.post<SchemaApplyResponse>(
       `/collections/schema/${slug}/apply`,
       { fields, confirmed: true, schemaVersion, resolutions }
-    );
-  },
-
-  // Fetch the wrapper's current pending schema change, if any.
-  getPending: async (): Promise<PendingSchemaChangeResponse> => {
-    return protectedApi.get<PendingSchemaChangeResponse>(
-      `/admin-meta/schema-pending`
     );
   },
 };
