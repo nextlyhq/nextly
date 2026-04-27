@@ -33,6 +33,17 @@ type RouteContext = {
  * (Server Components, middleware, Pages Router) flows through the unified
  * pipeline and pairs `error.digest` with our `requestId`.
  *
+ * **Idempotency:** calling this twice in the same runtime overwrites the
+ * prior logger / onError registration. In practice `instrumentation.ts`
+ * runs once per Next.js runtime (Node and Edge get their own module graph),
+ * so this is fine — but later calls win.
+ *
+ * **Framework-kind error wrapping:** when the global onError hook fires
+ * with `kind: "framework"`, the `err` is always a NextlyError. If the
+ * original framework error wasn't already a NextlyError, it gets wrapped
+ * via `NextlyError.internal({ cause })`. Sentry-style handlers should read
+ * `err.cause ?? err` to surface the original.
+ *
  * Typical usage:
  *
  * ```ts

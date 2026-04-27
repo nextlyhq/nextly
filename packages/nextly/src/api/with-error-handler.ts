@@ -137,13 +137,16 @@ export function withErrorHandler<TArgs extends unknown[]>(
       const responseHeaders: Record<string, string> = {
         "content-type": "application/problem+json",
       };
-      // Set Retry-After for rate-limited responses.
+      // Set Retry-After for rate-limited responses. Type-narrow on shape
+      // rather than cast — defends against future PublicData variants.
       if (nextlyErr.code === "RATE_LIMITED") {
-        const retry = (
-          nextlyErr.publicData as { retryAfterSeconds?: number } | undefined
-        )?.retryAfterSeconds;
-        if (retry !== undefined) {
-          responseHeaders["retry-after"] = String(retry);
+        const data = nextlyErr.publicData;
+        if (
+          data &&
+          "retryAfterSeconds" in data &&
+          typeof data.retryAfterSeconds === "number"
+        ) {
+          responseHeaders["retry-after"] = String(data.retryAfterSeconds);
         }
       }
       response = new Response(JSON.stringify({ error: responseJson }), {

@@ -194,15 +194,12 @@ describe("withAction — onError hooks", () => {
 });
 
 describe("withAction — Next.js sentinels", () => {
-  it("re-throws Next.js redirect via unstable_rethrow", async () => {
-    const redirectError = new Error("NEXT_REDIRECT") as Error & {
-      digest?: string;
-    };
-    redirectError.digest = "NEXT_REDIRECT;replace;/login;307;";
+  it("re-throws Next.js redirect() via unstable_rethrow", async () => {
+    const { redirect } = await import("next/navigation");
     const action = withAction(async () => {
-      throw redirectError;
+      redirect("/login");
     });
-    await expect(action()).rejects.toBe(redirectError);
+    await expect(action()).rejects.toThrow();
   });
 });
 

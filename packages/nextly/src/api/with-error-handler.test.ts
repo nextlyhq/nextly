@@ -145,6 +145,9 @@ describe("withErrorHandler — error path", () => {
     expect(body.error.message).toBe("An unexpected error occurred.");
     expect(body.error.message).not.toContain("internal boom");
     expect(body.error).not.toHaveProperty("stack");
+    expect(body.error).not.toHaveProperty("cause");
+    expect(body.error).not.toHaveProperty("data");
+    expect(body.error).not.toHaveProperty("logContext");
   });
 
   it("respects a custom internalErrorMessage option", async () => {
@@ -179,22 +182,22 @@ describe("withErrorHandler — error path", () => {
 });
 
 describe("withErrorHandler — unstable_rethrow", () => {
-  it("re-throws Next.js redirect sentinel via unstable_rethrow", async () => {
-    const redirectError = new Error("NEXT_REDIRECT") as Error & {
-      digest?: string;
-    };
-    redirectError.digest = "NEXT_REDIRECT;replace;/login;307;";
+  // Use the real redirect() / notFound() rather than synthesizing the
+  // sentinel digest format. The exact digest format is internal to Next.js
+  // and has changed between major versions; calling the real APIs keeps
+  // the tests honest across upgrades.
+
+  it("re-throws Next.js redirect() sentinel via unstable_rethrow", async () => {
+    const { redirect } = await import("next/navigation");
     const handler = withErrorHandler(async () => {
-      throw redirectError;
+      redirect("/login");
     });
-    await expect(handler(new Request("http://localhost/api/x"))).rejects.toBe(
-      redirectError
-    );
+    await expect(
+      handler(new Request("http://localhost/api/x"))
+    ).rejects.toThrow();
   });
 
   it("re-throws Next.js notFound() sentinel via unstable_rethrow", async () => {
-    // Use the real notFound() so the digest format matches whatever Next.js
-    // actually emits for the running version (varies across 14/15/16).
     const { notFound } = await import("next/navigation");
     const handler = withErrorHandler(async () => {
       notFound();
