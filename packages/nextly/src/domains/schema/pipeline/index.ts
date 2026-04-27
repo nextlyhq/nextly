@@ -89,13 +89,11 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
           "applyDesiredSchema: database adapter not registered in DI container"
         );
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter dialect API not strictly typed
-      const dialect = (adapter as any).getDialect() as
-        | "postgresql"
-        | "mysql"
-        | "sqlite";
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter Drizzle accessor
-      const db = (adapter as any).getDrizzle();
+      // dialect is an abstract readonly property on DrizzleAdapter,
+      // not a method (a previous iteration mistakenly called .getDialect()
+      // which would crash at runtime; tsc missed it because of `as any`).
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
 
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),

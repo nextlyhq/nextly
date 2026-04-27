@@ -9,6 +9,7 @@
  */
 
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
 import {
   noopClassifier,
   noopMigrationJournal,
@@ -46,21 +47,6 @@ import {
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
-
-// MySQL needs the database name extracted from DATABASE_URL.
-// PG and SQLite ignore it.
-function extractDatabaseNameFromUrl(
-  url: string | undefined
-): string | undefined {
-  if (!url) return undefined;
-  try {
-    const parsed = new URL(url);
-    const name = parsed.pathname.replace(/^\//, "");
-    return name.length > 0 ? name : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 type CollectionsHandlerType = CollectionsHandler;
 
@@ -237,6 +223,35 @@ const COLLECTIONS_METHODS: Record<
       const currentVersion = collection.schemaVersion;
       const tableName = collection.tableName;
 
+      // F3 transition gate: destructive saves require resolutions
+      // (default values, mark-nullable choices, backfills) collected
+      // by the admin SchemaChangeDialog. F2's shim forwarded these to
+      // SchemaChangeService.apply; F3's pipeline does not yet — F8's
+      // PromptDispatcher reintroduces resolution handling.
+      //
+      // Until F8 lands, fail loudly on destructive saves at the
+      // dispatcher rather than silently dropping the user's resolution
+      // input. Same posture as HMR's destructive-skip (reload-config.ts).
+      const currentFieldsForPreview = (collection.fields ??
+        []) as unknown as FieldDefinition[];
+      const preview = await schemaChangeService.preview(
+        tableName,
+        currentFieldsForPreview,
+        fields as FieldDefinition[]
+      );
+      if (preview.hasDestructiveChanges) {
+        throw new Error(
+          `Destructive schema changes for '${p.collectionName}' (classification: ${preview.classification}) ` +
+            `are temporarily unavailable while the apply pipeline migrates to F3. ` +
+            `Track: F8 PromptDispatcher will reintroduce resolution handling. ` +
+            `For now, revert the change or wait for the F8 release.`
+        );
+      }
+      // Resolutions collected from the dialog are intentionally NOT
+      // forwarded — F8 absorbs that flow. We void to silence lint and
+      // make the deferral explicit.
+      void resolutions;
+
       // F3: route through the PushSchemaPipeline via the F2 contract.
       // Critical: must build the FULL DesiredSchema snapshot (all
       // managed collections, not just the one being saved). pushSchema
@@ -253,18 +268,16 @@ const COLLECTIONS_METHODS: Record<
       };
 
       // Add all OTHER managed collections from the registry first.
-      const allCollections =
-        typeof registry.getAllCollections === "function"
-          ? await registry.getAllCollections()
-          : [];
+      // CollectionRegistryService.getAllCollections returns
+      // DynamicCollectionRecord[] — slug + tableName are required
+      // fields, no defensive guards needed.
+      const allCollections = await registry.getAllCollections();
       for (const c of allCollections) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry returns Record<string, unknown>
-        const ca = c as any;
-        if (!ca.slug || ca.slug === p.collectionName) continue;
-        desired.collections[ca.slug] = {
-          slug: ca.slug,
-          tableName: ca.tableName ?? `dc_${ca.slug}`,
-          fields: ca.fields ?? [],
+        if (c.slug === p.collectionName) continue;
+        desired.collections[c.slug] = {
+          slug: c.slug,
+          tableName: c.tableName,
+          fields: c.fields ?? [],
         };
       }
 
@@ -281,13 +294,11 @@ const COLLECTIONS_METHODS: Record<
       if (!adapter) {
         throw new Error("Database adapter not initialized");
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter API not strictly typed
-      const dialect = (adapter as any).getDialect() as
-        | "postgresql"
-        | "mysql"
-        | "sqlite";
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter Drizzle accessor
-      const db = (adapter as any).getDrizzle();
+      // dialect is an abstract readonly property on DrizzleAdapter — not
+      // a method (a previous iteration mistakenly called .getDialect()
+      // which would crash at runtime; tsc missed it because of `as any`).
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
       const databaseName =
         dialect === "mysql"
           ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
@@ -340,16 +351,6 @@ const COLLECTIONS_METHODS: Record<
           return out;
         },
       });
-
-      // Resolutions are accepted on the request body for API
-      // compatibility but no longer forwarded to SchemaChangeService.
-      // F2's shim used to forward them; F3's pipeline path doesn't
-      // (yet — F8's PromptDispatcher absorbs resolution handling).
-      // Safe deltas don't need resolutions; destructive ones currently
-      // require the admin's existing SchemaChangeDialog flow which
-      // still works because the dispatcher only saves "confirmed"
-      // changes and the legacy preview/dialog UX is unchanged.
-      void resolutions;
 
       const schemaVersionsCtx: Record<string, number> = {};
       if (schemaVersion !== undefined) {

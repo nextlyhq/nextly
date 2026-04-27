@@ -83,7 +83,9 @@ describe("reloadNextlyConfig", () => {
       },
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       databaseAdapter: {
-        getDialect: () => "sqlite" as const,
+        // F3 PR-2 review C1: dialect is a readonly property on
+        // DrizzleAdapter, not a method. Test fakes must match.
+        dialect: "sqlite" as const,
         getDrizzle: () => ({}),
       },
     };

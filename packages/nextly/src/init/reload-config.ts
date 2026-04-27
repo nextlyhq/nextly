@@ -16,6 +16,7 @@
 // (c) waiting for F8.
 
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply.js";
+import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url.js";
 import {
   noopClassifier,
   noopMigrationJournal,
@@ -216,15 +217,28 @@ export async function reloadNextlyConfig(opts?: {
   // Resolves the database adapter so we can construct the F3 pipeline
   // with the right dialect + drizzle client. MySQL needs databaseName
   // extracted from DATABASE_URL; PG and SQLite ignore it.
+  const safeCount = Object.keys(desiredCollections).length;
   let adapter: AdapterLike | undefined;
   try {
     adapter = (await resolve("databaseAdapter")) as AdapterLike;
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not resolve database adapter to apply ${safeCount} safe deltas: ${msg}`
+    );
     return;
   }
-  if (!adapter) return;
+  if (!adapter) {
+    logger?.error(
+      `[Nextly HMR] Database adapter unavailable; ${safeCount} safe deltas not applied`
+    );
+    return;
+  }
 
-  const dialect = adapter.getDialect();
+  // dialect is an abstract readonly property on DrizzleAdapter, not a
+  // method (a previous iteration mistakenly called .getDialect() which
+  // would crash at runtime).
+  const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
   const databaseName =
     dialect === "mysql"
@@ -277,27 +291,11 @@ export async function reloadNextlyConfig(opts?: {
   }
 }
 
-// Minimal duck-typed shape for the database adapter — only the methods
-// we actually invoke. Avoids importing the full adapter interface.
+// Minimal duck-typed shape for the database adapter — only the
+// readonly `dialect` property and `getDrizzle()` method we invoke.
+// Matches the public surface of DrizzleAdapter; full type imported
+// from adapter-drizzle would couple this module to the adapter package.
 interface AdapterLike {
-  getDialect(): "postgresql" | "mysql" | "sqlite";
+  readonly dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle(): unknown;
-}
-
-// Extract the database name from a DATABASE_URL connection string.
-// Returns undefined if the URL is missing or malformed. MySQL's
-// drizzle-kit pushSchema requires this; PG and SQLite ignore it.
-function extractDatabaseNameFromUrl(
-  url: string | undefined
-): string | undefined {
-  if (!url) return undefined;
-  try {
-    const parsed = new URL(url);
-    // Pathname is "/dbname" (with the leading slash) for mysql://
-    // and postgres:// URLs. Strip the slash.
-    const name = parsed.pathname.replace(/^\//, "");
-    return name.length > 0 ? name : undefined;
-  } catch {
-    return undefined;
-  }
 }
