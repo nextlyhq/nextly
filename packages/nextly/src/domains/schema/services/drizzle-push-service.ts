@@ -77,15 +77,49 @@ export class DrizzlePushService {
     };
   }
 
-  // Apply schema changes immediately.
-  // For PG: calls pushSchema() and then apply().
-  // For SQLite: calls pushSchema() to get statements diffed against the live
-  //   DB (proper ALTER TABLE ADD COLUMN etc.), then executes them with .run()
-  //   because drizzle-kit 0.31.10's apply() uses .all() for DDL which
-  //   fails on statements that do not return rows.
-  // For MySQL: uses the generateDrizzleJson + generateMigration workaround
-  //   because drizzle-kit 0.31.10's logSuggestionsAndReturn silently drops
-  //   non-destructive DDL on the apply path.
+  /**
+   * Apply schema changes immediately.
+   *
+   * For PG: calls pushSchema() and then apply().
+   * For SQLite: calls pushSchema() to get statements diffed against the live
+   *   DB (proper ALTER TABLE ADD COLUMN etc.), then executes them with .run()
+   *   because drizzle-kit 0.31.10's apply() uses .all() for DDL which
+   *   fails on statements that do not return rows.
+   * For MySQL: uses the generateDrizzleJson + generateMigration workaround
+   *   because drizzle-kit 0.31.10's logSuggestionsAndReturn silently drops
+   *   non-destructive DDL on the apply path.
+   *
+   * @deprecated F3 introduced PushSchemaPipeline (in
+   *   `packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts`)
+   *   as the canonical schema-apply entry point. F2's two callers
+   *   (init/reload-config.ts and dispatcher/handlers/collection-dispatcher.ts)
+   *   were migrated in F3 PR-2 to call PushSchemaPipeline via the
+   *   applyDesiredSchema contract. This method is still used by three
+   *   non-F2 CLI/init-time callers — migration of those was DEFERRED
+   *   from F3 PR-3 to F8:
+   *
+   *     - cli/commands/dev-server.ts (boot-time push + runtime re-push)
+   *     - cli/commands/migrate-fresh.ts (`nextly db:sync --fresh`)
+   *     - domains/schema/services/schema-push-service.ts (internal helper)
+   *
+   *   F8 absorbs the F2 shim entirely AND migrates these last three
+   *   callers in one pass, then deletes this method + the surrounding
+   *   class. The new DrizzleStatementExecutor in
+   *   `services/drizzle-statement-executor.ts` is the long-term
+   *   per-dialect statement-execution layer.
+   *
+   *   Until F8: these CLI/init paths use the OLD code (this method).
+   *   They do NOT benefit from the F3 unsafe-DROP-TABLE filter or the
+   *   unified db.transaction() wrapping. For boot/db:sync flows, this
+   *   is acceptable:
+   *     - Boot-time: live DB has all Nextly static tables registered
+   *       in the SchemaRegistry, so pushSchema sees them in the desired
+   *       schema and won't drop them. User app tables (orders etc.)
+   *       are still at risk if they share the same schema as Nextly.
+   *     - db:sync --fresh: explicitly destructive on purpose — user
+   *       opted into wiping the schema. Same risk profile as boot.
+   *   F8's migration of these callers will close the gap.
+   */
   async apply(schema: Record<string, unknown>): Promise<PushPreviewResult> {
     if (this.dialect === "mysql") {
       return this.applyViaGenerate(schema, "mysql");
