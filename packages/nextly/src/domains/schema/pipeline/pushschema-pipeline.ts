@@ -171,10 +171,13 @@ export class PushSchemaPipeline {
         firstPassRaw.statementsToExecute
       );
 
-      // Step 5: rename detection (F4 stub: returns []).
+      // Step 5: rename detection.
+      // F4 PR-2 will replace `new Map()` with the result of
+      // queryLiveColumnTypes(...) introspected before the first pushSchema.
       const candidates = this.deps.renameDetector.detect(
         firstPassSafe,
-        dialect
+        dialect,
+        new Map<string, Map<string, string>>()
       );
 
       // Step 6: classification (F5 stub: returns "safe").
