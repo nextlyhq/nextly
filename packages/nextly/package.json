@@ -157,6 +157,7 @@
     "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
     "db:seed": "tsx scripts/seed-permissions.ts",
     "db:seed:all": "tsx scripts/seed-all.ts",
+    "capture:pushschema-fixtures": "tsx scripts/capture-pushschema-fixtures.ts",
     "drizzle:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
     "drizzle:check": "drizzle-kit check --config=drizzle.config.ts",
     "drizzle:pull": "drizzle-kit pull --config=drizzle.config.ts"

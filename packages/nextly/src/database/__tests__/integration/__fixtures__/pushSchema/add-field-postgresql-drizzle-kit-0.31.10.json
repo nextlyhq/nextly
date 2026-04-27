@@ -1,0 +1,20 @@
+{
+  "scenario": "add-field",
+  "dialect": "postgresql",
+  "drizzleKitVersion": "0.31.10",
+  "tableName": "dc_capture_addfield",
+  "beforeColumnTypes": {
+    "dc_capture_addfield": {
+      "id": "int4"
+    }
+  },
+  "pushSchemaResult": {
+    "statementsToExecute": [
+      "ALTER TABLE \"dc_capture_addfield\" DROP CONSTRAINT \"dc_capture_addfield_pkey\"",
+      "ALTER TABLE \"dc_capture_addfield\" ALTER COLUMN \"id\" DROP NOT NULL;",
+      "ALTER TABLE \"dc_capture_addfield\" ADD COLUMN \"name\" text;"
+    ],
+    "warnings": [],
+    "hasDataLoss": false
+  }
+}

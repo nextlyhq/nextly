@@ -1,0 +1,21 @@
+{
+  "scenario": "drop-field",
+  "dialect": "postgresql",
+  "drizzleKitVersion": "0.31.10",
+  "tableName": "dc_capture_dropfield",
+  "beforeColumnTypes": {
+    "dc_capture_dropfield": {
+      "id": "int4",
+      "name": "text"
+    }
+  },
+  "pushSchemaResult": {
+    "statementsToExecute": [
+      "ALTER TABLE \"dc_capture_dropfield\" DROP CONSTRAINT \"dc_capture_dropfield_pkey\"",
+      "ALTER TABLE \"dc_capture_dropfield\" ALTER COLUMN \"id\" DROP NOT NULL;",
+      "ALTER TABLE \"dc_capture_dropfield\" DROP COLUMN \"name\";"
+    ],
+    "warnings": [],
+    "hasDataLoss": false
+  }
+}
