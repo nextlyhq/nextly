@@ -60,7 +60,7 @@
     "lucide-react": "^0.469.0",
     "tsup": "^8.0.0",
     "typescript": "^5.3.0",
-    "vitest": "^2.0.0",
+    "vitest": "^4.0.8",
     "@nextly/tsconfig": "workspace:*",
     "@revnixhq/admin": "workspace:*",
     "@revnixhq/nextly": "workspace:*",
