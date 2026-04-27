@@ -55,10 +55,21 @@ const ERROR_CODE_TO_STATUS: Record<NextlyErrorCode, number> = {
 
 /**
  * Legacy direct-api NextlyError. Extends the core NextlyError so it
- * satisfies the new wrappers' structural checks and serializes correctly,
- * while keeping the legacy positional constructor signature.
+ * satisfies `NextlyError.is(...)` via the inherited brand and serializes
+ * correctly through the canonical wire path. Keeps the legacy positional
+ * constructor and the legacy `data`/`toJSON`/`isClientError`/`isServerError`
+ * surface that external SDK consumers depend on.
+ *
+ * `data` is stored on the subclass (kept structurally separate from core's
+ * typed `publicData`) so it can hold arbitrary unknown payloads without
+ * coercion. Direct-api errors are consumed by external SDK callers, not
+ * routed through `withErrorHandler`, so the legacy `data` does not need to
+ * round-trip through the new `toResponseJSON` shape.
  */
 export class NextlyError extends CoreNextlyError {
+  /** Legacy free-form payload. Kept for SDK backward compatibility. */
+  public readonly data?: unknown;
+
   constructor(
     message: string,
     code: NextlyErrorCode | string = NextlyErrorCode.INTERNAL_ERROR,
@@ -75,14 +86,38 @@ export class NextlyError extends CoreNextlyError {
         statusCode !== 500 || !(code in ERROR_CODE_TO_STATUS)
           ? statusCode
           : ERROR_CODE_TO_STATUS[code as NextlyErrorCode],
-      // Direct-api callers pass `data` for both validation field maps and
-      // generic context. Funnel into publicData so the new toResponseJSON
-      // path emits it correctly.
-      publicData: data as never,
       cause,
     });
     this.name = "NextlyError";
+    this.data = data;
     Error.captureStackTrace?.(this, this.constructor);
+  }
+
+  /** Legacy JSON shape used by external SDK consumers. */
+  toJSON(): {
+    name: string;
+    code: string;
+    message: string;
+    statusCode: number;
+    data?: unknown;
+    timestamp: string;
+  } {
+    return {
+      name: this.name,
+      code: String(this.code),
+      message: this.publicMessage,
+      statusCode: this.statusCode,
+      ...(this.data !== undefined && { data: this.data }),
+      timestamp: this.timestamp.toISOString(),
+    };
+  }
+
+  isClientError(): boolean {
+    return this.statusCode >= 400 && this.statusCode < 500;
+  }
+
+  isServerError(): boolean {
+    return this.statusCode >= 500;
   }
 }
 
@@ -94,7 +129,19 @@ export class NotFoundError extends NextlyError {
 }
 
 export class ValidationError extends NextlyError {
-  /** Field-specific validation errors (legacy shape). */
+  /**
+   * Field-specific validation errors in the LEGACY shape:
+   * `Record<fieldName, string[]>`.
+   *
+   * The new wire format (spec §10.1) is an array of
+   * `{ path, code, message }`. ValidationError instances thrown by the
+   * direct-api SDK preserve the legacy shape for SDK-consumer compatibility
+   * during the shim period; they are not routed through `withErrorHandler`.
+   *
+   * PR 10 is responsible for ensuring the admin frontend reads
+   * `data.errors` from the new array shape (services throw
+   * `NextlyError.validation({ errors: [...] })` directly post PR 4).
+   */
   public readonly errors: Record<string, string[]>;
 
   constructor(

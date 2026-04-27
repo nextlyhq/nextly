@@ -17,8 +17,6 @@
 
 import { isDbError, type DbErrorKind } from "../database/errors";
 
-import type { PublicData } from "./public-data";
-
 const NEXTLY_ERROR_BRAND: unique symbol = Symbol.for(
   "@revnixhq/nextly/NextlyError"
 );
@@ -107,8 +105,6 @@ export class ServiceError extends Error {
   public readonly statusCode: number;
   /** Alias for `message`, matches the new NextlyError API surface. */
   public readonly publicMessage: string;
-  /** Alias for `details` exposed structurally as PublicData for wrapper compatibility. */
-  public readonly publicData?: PublicData;
   public readonly logContext?: Record<string, unknown>;
   public readonly details?: unknown;
   public override readonly cause?: Error;
@@ -148,17 +144,19 @@ export class ServiceError extends Error {
     ] = true;
   }
 
-  /** New wire format. Used by withErrorHandler / withAction. */
+  /**
+   * New wire format. Used by withErrorHandler / withAction. ServiceError
+   * intentionally does not emit `data` — its legacy `details` field carries
+   * operator-only context (handled separately by `toLogJSON`).
+   */
   toResponseJSON(requestId: string): {
     code: string;
     message: string;
-    data?: PublicData;
     requestId: string;
   } {
     return {
       code: this.code,
       message: this.publicMessage,
-      ...(this.publicData !== undefined && { data: this.publicData }),
       requestId,
     };
   }

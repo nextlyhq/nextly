@@ -120,46 +120,6 @@ export class NextlyError extends Error {
     return json;
   }
 
-  /**
-   * Legacy alias: direct-api callers read `error.data` for what is now
-   * `publicData`. Kept during the migration shim period; PR 12 removes
-   * usages and this getter can be deleted then.
-   */
-  get data(): PublicData {
-    return this.publicData;
-  }
-
-  /**
-   * Legacy `toJSON()` shape used by direct-api callers and JSON.stringify.
-   * The new wire path goes through `toResponseJSON(requestId)` instead.
-   * Kept for backward compatibility during the migration shim period.
-   */
-  toJSON(): {
-    name: string;
-    code: string;
-    message: string;
-    statusCode: number;
-    data?: unknown;
-    timestamp: string;
-  } {
-    return {
-      name: this.name,
-      code: String(this.code),
-      message: this.publicMessage,
-      statusCode: this.statusCode,
-      ...(this.publicData !== undefined && { data: this.publicData }),
-      timestamp: this.timestamp.toISOString(),
-    };
-  }
-
-  isClientError(): boolean {
-    return this.statusCode >= 400 && this.statusCode < 500;
-  }
-
-  isServerError(): boolean {
-    return this.statusCode >= 500;
-  }
-
   /** Operator-facing JSON for log lines. Includes everything. */
   toLogJSON(requestId: string): Record<string, unknown> {
     return {

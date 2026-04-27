@@ -261,6 +261,24 @@ describe("NextlyError factories", () => {
   });
 });
 
+describe("Brand interoperability with the migration shims", () => {
+  it("NextlyError.is recognises a ServiceError instance via the brand", async () => {
+    // The shim ServiceError stamps the same Symbol.for brand on its prototype.
+    const { ServiceError, ServiceErrorCode } = await import("./service-error");
+    const err = new ServiceError(ServiceErrorCode.NOT_FOUND, "thing not found");
+    expect(NextlyError.is(err)).toBe(true);
+    expect(NextlyError.isCode(err, "NOT_FOUND")).toBe(true);
+    expect(NextlyError.isNotFound(err)).toBe(true);
+  });
+
+  it("NextlyError.is recognises a direct-api NotFoundError via prototype-chain inheritance of the brand", async () => {
+    const { NotFoundError } = await import("../direct-api/errors");
+    const err = new NotFoundError("missing", { id: "p_99" });
+    expect(NextlyError.is(err)).toBe(true);
+    expect(NextlyError.isNotFound(err)).toBe(true);
+  });
+});
+
 describe("NextlyError type guards", () => {
   it("is identifies NextlyError instances structurally", () => {
     const err = NextlyError.notFound();
