@@ -884,6 +884,9 @@ importers:
       tree-kill:
         specifier: ^1.2.2
         version: 1.2.2
+      ws:
+        specifier: ^8.18.0
+        version: 8.18.3
       zod:
         specifier: ^4.1.12
         version: 4.1.12
@@ -928,6 +931,9 @@ importers:
       '@types/react':
         specifier: ^19.1.8
         version: 19.2.0
+      '@types/ws':
+        specifier: ^8.5.13
+        version: 8.18.1
       '@vitest/coverage-v8':
         specifier: ^4.0.8
         version: 4.0.8(vitest@4.0.8(@types/node@20.19.17)(@vitest/ui@4.0.8)(happy-dom@20.9.0)(jiti@2.6.1)(jsdom@27.1.0)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3))
