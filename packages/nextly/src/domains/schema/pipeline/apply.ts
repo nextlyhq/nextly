@@ -93,6 +93,12 @@ export function createApplyDesiredSchema(
 
     // Optimistic-lock check — UI-source only. HMR (code) is the source
     // of truth for code-first edits and skips the check.
+    //
+    // Race window: this loop reads each slug's version sequentially,
+    // so a write to slug A could land between the A check and the B
+    // check. The whole batch is non-atomic until F3 wraps the apply
+    // loop in db.transaction(). For F2's per-resource UI saves this
+    // is acceptable — callers process one resource at a time today.
     if (source === "ui" && ctx.schemaVersions) {
       for (const r of resources) {
         const expected = ctx.schemaVersions[r.slug];
@@ -151,16 +157,17 @@ export function createApplyDesiredSchema(
 // for sequential processing. Order: collections, then singles, then
 // components — matches the FK dependency direction (collections may
 // reference components but not vice versa).
+//
+// F2 only ships the collections apply path; singles and components
+// are silently skipped here so that a caller passing a full snapshot
+// (e.g. via buildDesiredSchemaFromRegistryAsync) does not trip on
+// "not yet implemented" surprises. Singles + components arrive in F8.
 function iterateResources(desired: DesiredSchema): AnyDesiredResource[] {
   const out: AnyDesiredResource[] = [];
   for (const c of Object.values(desired.collections)) {
     out.push({ ...c, kind: "collection" });
   }
-  for (const s of Object.values(desired.singles)) {
-    out.push({ ...s, kind: "single" });
-  }
-  for (const cm of Object.values(desired.components)) {
-    out.push({ ...cm, kind: "component" });
-  }
+  // F8 will re-enable these. Until then, callers see them silently
+  // skipped — by design, not a bug.
   return out;
 }

@@ -50,8 +50,11 @@ export const applyDesiredSchema: ApplyDesiredSchemaFn = (
   return cached(desired, source, ctx);
 };
 
-// Test-only: reset the cached binding so a subsequent applyDesiredSchema
-// call re-resolves DI. Used by integration tests that swap the container.
+/**
+ * Test-only: reset the cached binding so a subsequent applyDesiredSchema
+ * call re-resolves DI. Used by integration tests that swap the container.
+ * @internal
+ */
 export function _resetApplyDesiredSchemaForTests(): void {
   cached = null;
 }
@@ -59,8 +62,11 @@ export function _resetApplyDesiredSchemaForTests(): void {
 function buildProductionDeps(): ApplyDesiredSchemaDeps {
   return {
     async applySingleResource(resource: AnyDesiredResource, source, _channel) {
-      // F2 supports collection apply only — singles and components
-      // gain their own apply paths in F8.
+      // F2 only ships the collection apply path. iterateResources in
+      // apply.ts already filters singles + components out of the loop,
+      // so this branch should not fire in normal operation. The defensive
+      // throw catches a future regression where iterateResources changes
+      // before applySingleResource is updated.
       if (resource.kind !== "collection") {
         throw new Error(
           `applyDesiredSchema: ${resource.kind} apply is not yet supported in F2 (collections only). ` +
