@@ -1,22 +1,30 @@
-// F2 integration test scaffold for the applyDesiredSchema pipeline.
+// F2 integration test scaffold — DEFERRED IMPLEMENTATION.
 //
-// PR-2 ships this file as a documented scaffold (mirroring the F18 PR-4
-// fixtures pattern: shipped empty + README, filled in by F4/F8 when the
-// real consumers land).
+// Status: the F2 spec §8 calls for 3 working integration tests against
+// PG + SQLite. PR-2 ships this file as `it.skip` scaffolds with the real
+// bodies deferred to F8. This is a deliberate scope reduction, NOT an
+// application of the F18 PR-4 fixtures-scaffold precedent (PR-4's
+// consumers genuinely did not exist; F2's pipeline does and could be
+// exercised today).
 //
-// Why not real implementations now: F2's pipeline body is a thin shim
-// over the existing SchemaChangeService.apply. F8 absorbs the shim
-// entirely and replaces the body with the proper PushSchemaPipeline
-// (rename detection, prompt dispatch, transaction wrapping, migration
-// journal). Integration tests written against the F2 shim would be
-// rewritten in F8. Unit tests in apply.test.ts cover the contract
-// surface; existing reload-config.test.ts covers the HMR migration
-// mechanically; the UI dispatcher's migration is structurally
-// preserving (same SchemaChangeService.apply call inside a closure).
+// Why deferred:
+//   - F8 absorbs the F2 shim entirely and replaces the body with the
+//     real PushSchemaPipeline (rename detection, prompt dispatch,
+//     transaction wrapping, migration journal). Integration tests
+//     written against the F2 shim would be rewritten in F8.
+//   - The bootstrap cost (DrizzleAdapter + SchemaRegistry +
+//     DrizzlePushService + SchemaChangeService + dynamic_collections
+//     seeding, in dialect-specific variants) is substantial for code
+//     about to be replaced.
+//   - F2's contract behavior is already covered by 17 unit tests in
+//     apply.test.ts / errors.test.ts / snapshot.test.ts (PR-1) plus
+//     the existing 6 reload-config.test.ts cases (verified to still
+//     pass on PR-2). The dispatcher migration is structurally
+//     preserving — same SchemaChangeService.apply call inside a closure.
 //
-// What this file documents: the three scenarios from the F2 spec §8
-// that the F8 PushSchemaPipeline must satisfy when its real body
-// lands. Each it.skip below points to a TODO with the filling-in plan.
+// Tracker: progress note for F2 records this deferral and the F8
+// follow-up commitment. Each it.skip below documents the exact
+// scenario for filling in.
 
 import { describe, it } from "vitest";
 

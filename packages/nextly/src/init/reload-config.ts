@@ -202,6 +202,11 @@ export async function reloadNextlyConfig(opts?: {
         components: {},
       };
 
+      // Per-call factory (not the DI-bound applyDesiredSchema in
+      // pipeline/index.ts) so the existing resolver-pattern test seam
+      // and vi.hoisted spies on schemaChangeService.apply keep working
+      // without us having to mock the DI container in tests. F8 collapses
+      // both seams into the unified pipeline.
       const applyPipeline = createApplyDesiredSchema({
         applySingleResource: async (resource, source) => {
           if (resource.kind !== "collection") {

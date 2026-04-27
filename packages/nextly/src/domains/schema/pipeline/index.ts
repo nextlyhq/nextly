@@ -1,12 +1,25 @@
 // Public exports for the schema apply pipeline.
 //
-// applyDesiredSchema is the canonical entry point both the admin UI
-// dispatcher and the HMR config-reload listener call. Internally it
-// resolves dependencies from the DI container and delegates to the
-// pure pipeline factory in apply.ts.
+// Two entry-point shapes coexist intentionally during the F2 shim era:
 //
-// Existing SchemaChangeService.apply() is now an internal implementation
-// detail of this pipeline. F8 will absorb it entirely.
+//   1. The factory `createApplyDesiredSchema(deps)` from ./apply.js — used
+//      by today's in-process callers (init/reload-config.ts and the UI
+//      dispatcher). They construct per-call factories with locally-resolved
+//      services so existing test seams (resolver-pattern + vi.hoisted spies
+//      on schemaChangeService.apply) keep working without DI mocking, and
+//      the dispatcher can capture per-call state (resolutions, the freshly
+//      bumped version) via closure.
+//
+//   2. The DI-bound `applyDesiredSchema` re-exported below — positioned for
+//      future external / plugin / integration-test callers that want a
+//      zero-wiring entry point. Resolves services from the DI container at
+//      first call and caches.
+//
+// F8 absorbs both call sites' factory wiring into the unified pipeline
+// (the body of `createApplyDesiredSchema` becomes the real PushSchemaPipeline
+// instead of the SchemaChangeService.apply shim), at which point the
+// dual-entry-point seam can be collapsed. See progress tracker for the
+// follow-up plan.
 
 import {
   getCollectionRegistryFromDI,

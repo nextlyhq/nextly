@@ -235,6 +235,11 @@ const COLLECTIONS_METHODS: Record<
       let appliedMessage: string | undefined;
       let appliedNewVersion: number | undefined;
 
+      // Per-call factory (not the DI-bound applyDesiredSchema in
+      // pipeline/index.ts) so we can: (a) forward `resolutions` through to
+      // SchemaChangeService.apply, which the F2 contract surface does not
+      // yet expose; (b) capture the freshly-bumped version via closure.
+      // F8 collapses both into the unified pipeline.
       const applyPipeline = createApplyDesiredSchema({
         applySingleResource: async (resource, _source) => {
           if (resource.kind !== "collection") {
@@ -263,11 +268,30 @@ const COLLECTIONS_METHODS: Record<
         },
         // Optimistic-lock: caller passes ctx.schemaVersions; pipeline reads
         // current via this callback. Use the already-fetched record.
-        readSchemaVersionForSlug: (slug: string) =>
-          Promise.resolve(slug === p.collectionName ? currentVersion : null),
-        // We surface the new version directly via the closure variable
-        // above (since SchemaChangeService.apply returns it inline).
-        readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
+        //
+        // Defensive: dispatcher today builds a single-collection desired
+        // snapshot. If a future caller ever passes multiple resources, the
+        // null-return for unrelated slugs would silently elide their
+        // optimistic-lock check (pipeline interprets null as "fresh DB").
+        // Throw loudly instead so the regression is caught immediately.
+        readSchemaVersionForSlug: (slug: string) => {
+          if (slug !== p.collectionName) {
+            throw new Error(
+              `dispatcher: applyDesiredSchema called with unexpected slug '${slug}' (expected '${p.collectionName}'). Multi-resource dispatch lands in F8.`
+            );
+          }
+          return Promise.resolve(currentVersion);
+        },
+        // Surface the freshly-bumped version through the pipeline result
+        // (rather than only via the closure variable below). This keeps
+        // result.newSchemaVersions populated for any future consumer
+        // that reads it (telemetry, F11's migration journal).
+        readNewSchemaVersionsForSlugs: (slugs: string[]) =>
+          Promise.resolve(
+            appliedNewVersion !== undefined && slugs.includes(p.collectionName)
+              ? { [p.collectionName]: appliedNewVersion }
+              : {}
+          ),
       });
 
       const schemaVersionsCtx: Record<string, number> = {};
@@ -292,7 +316,12 @@ const COLLECTIONS_METHODS: Record<
       return {
         success: true,
         message: appliedMessage ?? `Schema applied for '${p.collectionName}'`,
-        newSchemaVersion: appliedNewVersion ?? currentVersion + 1,
+        // Prefer the pipeline result's bumped version; fall back to the
+        // closure-captured value, then to the inferred bump as last resort.
+        newSchemaVersion:
+          result.newSchemaVersions[p.collectionName] ??
+          appliedNewVersion ??
+          currentVersion + 1,
       };
     },
   },
