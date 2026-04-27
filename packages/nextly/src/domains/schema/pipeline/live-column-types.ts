@@ -59,6 +59,16 @@ export async function queryLiveColumnTypes(
   const out = new Map<string, Map<string, string>>();
   if (tableNames.length === 0) return out;
 
+  // Build a parameterized list `(?, ?, ?)` for the IN clause. Used by
+  // both PG and MySQL branches. drizzle's `sql.join` is the canonical
+  // helper - bare-array interpolation (`IN ${tableNames}`) flattens
+  // incorrectly for PG `ANY()` (verified empirically against real PG;
+  // emits `ANY(($1))` with only the first array element bound).
+  const tableNamesIn = sql.join(
+    tableNames.map(t => sql`${t}`),
+    sql`, `
+  );
+
   if (dialect === "postgresql") {
     const dbTyped = db as PgMysqlExecute;
     // udt_name (not data_type) returns drizzle-friendly tokens that align
@@ -66,13 +76,18 @@ export async function queryLiveColumnTypes(
     // bpchar (for char(N)) / etc. data_type would return "character",
     // "integer", "timestamp with time zone" - more verbose, still valid,
     // but less greppable.
-    const rows = (await dbTyped.execute(
+    //
+    // drizzle-orm/node-postgres `db.execute()` returns the pg QueryResult
+    // object with a `.rows` array, NOT a flat row array. Verified
+    // empirically against real PG - reading `result` directly as an
+    // array iterates zero rows even when the query returns matches.
+    const result = (await dbTyped.execute(
       sql`SELECT table_name, column_name, udt_name
           FROM information_schema.columns
           WHERE table_schema = 'public'
-            AND table_name = ANY(${tableNames})`
-    )) as PgRow[];
-    for (const row of rows) {
+            AND table_name IN (${tableNamesIn})`
+    )) as { rows: PgRow[] };
+    for (const row of result.rows) {
       let cols = out.get(row.table_name);
       if (!cols) {
         cols = new Map<string, string>();
@@ -87,17 +102,11 @@ export async function queryLiveColumnTypes(
     const dbTyped = db as PgMysqlExecute;
     // MySQL execute() returns [rows, fieldPackets] tuple from mysql2; some
     // wrappers flatten to just rows. Handle both shapes defensively.
-    // drizzle-orm wraps a JS array bare-interpolated into IN as a
-    // parenthesized parameter list (?, ?, ?) - undocumented but verified
-    // in node_modules/drizzle-orm/sql/sql.cjs SQL.buildQueryFromSourceParams.
-    // Other call sites in this repo use the explicit sql.join form; we use
-    // the bare-array form here for brevity since tableNames is always a
-    // small list of managed tables.
     const result = (await dbTyped.execute(
       sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE
           FROM information_schema.columns
           WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME IN ${tableNames}`
+            AND TABLE_NAME IN (${tableNamesIn})`
     )) as MysqlRow[] | [MysqlRow[], unknown];
     const rows: MysqlRow[] =
       Array.isArray(result) &&

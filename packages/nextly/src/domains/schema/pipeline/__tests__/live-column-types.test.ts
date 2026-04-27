@@ -4,11 +4,15 @@ import { queryLiveColumnTypes } from "../live-column-types.js";
 
 describe("queryLiveColumnTypes - postgresql", () => {
   it("queries information_schema.columns and builds the map", async () => {
-    const execute = vi.fn().mockResolvedValue([
-      { table_name: "dc_posts", column_name: "id", udt_name: "int4" },
-      { table_name: "dc_posts", column_name: "title", udt_name: "text" },
-      { table_name: "dc_users", column_name: "id", udt_name: "int4" },
-    ]);
+    // drizzle-orm/node-postgres returns pg QueryResult { rows: [...], ... }
+    // - mock the production shape so test honesty matches real DB behavior.
+    const execute = vi.fn().mockResolvedValue({
+      rows: [
+        { table_name: "dc_posts", column_name: "id", udt_name: "int4" },
+        { table_name: "dc_posts", column_name: "title", udt_name: "text" },
+        { table_name: "dc_users", column_name: "id", udt_name: "int4" },
+      ],
+    });
     const db = { execute };
 
     const result = await queryLiveColumnTypes(db, "postgresql", [
@@ -33,7 +37,7 @@ describe("queryLiveColumnTypes - postgresql", () => {
   });
 
   it("returns empty map when no rows returned", async () => {
-    const execute = vi.fn().mockResolvedValue([]);
+    const execute = vi.fn().mockResolvedValue({ rows: [] });
     const db = { execute };
 
     const result = await queryLiveColumnTypes(db, "postgresql", [

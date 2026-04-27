@@ -22,6 +22,10 @@ import { makeTestContext } from "../../../../database/__tests__/integration/help
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor.js";
 
 import { PushSchemaPipeline } from "../pushschema-pipeline.js";
+import type {
+  PromptDispatcher,
+  RenameCandidate,
+} from "../pushschema-pipeline-interfaces.js";
 import {
   noopClassifier,
   noopMigrationJournal,
@@ -29,6 +33,7 @@ import {
   noopPromptDispatcher,
   noopRenameDetector,
 } from "../pushschema-pipeline-stubs.js";
+import { RegexRenameDetector } from "../rename-detector.js";
 
 const ctx = makeTestContext("postgresql");
 
@@ -48,7 +53,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
     // Pre-create three tables: two managed (dc_*), one unmanaged
     // (orders) so scenario #6 can verify it survives.
     await pool.query(
-      `DROP TABLE IF EXISTS "${ctx.prefix}_dc_posts", "${ctx.prefix}_dc_pages", "${ctx.prefix}_orders" CASCADE`
+      `DROP TABLE IF EXISTS "${ctx.prefix}_dc_posts", "${ctx.prefix}_dc_pages", "${ctx.prefix}_dc_users", "${ctx.prefix}_orders" CASCADE`
     );
   });
 
@@ -56,7 +61,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
     if (pool) {
       await pool
         .query(
-          `DROP TABLE IF EXISTS "${ctx.prefix}_dc_posts", "${ctx.prefix}_dc_pages", "${ctx.prefix}_orders" CASCADE`
+          `DROP TABLE IF EXISTS "${ctx.prefix}_dc_posts", "${ctx.prefix}_dc_pages", "${ctx.prefix}_dc_users", "${ctx.prefix}_orders" CASCADE`
         )
         .catch(() => {});
       await pool.end();
@@ -129,6 +134,91 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
       r => (r as { column_name: string }).column_name
     );
     expect(names).toContain("body");
+  });
+
+  it("scenario #2: rename detection emits candidate via recording PromptDispatcher (F4 PR 2)", async () => {
+    // F4 PR 2 end-to-end assertion: drizzle-kit emits DROP+ADD on the same
+    // managed table, RegexRenameDetector identifies the (DROP, ADD) pair as
+    // a rename candidate, the pipeline forwards it to PromptDispatcher.
+    //
+    // We assert the candidate the detector produced reaches the dispatcher
+    // with the right shape (including typesCompatible: true derived from
+    // live column-type introspection). We do NOT yet assert "rename
+    // preserves data" - F6 (PreRenameExecutor) and F7 (real PromptDispatcher
+    // with confirm) are still stubs/unimplemented; the recording dispatcher
+    // here returns confirmedRenames: [] so the pipeline still drops+adds.
+    await pool.query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_users" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${ctx.prefix}_dc_users" (id integer PRIMARY KEY, title text)`
+    );
+
+    const captured: RenameCandidate[][] = [];
+    const recordingDispatcher: PromptDispatcher = {
+      dispatch: async ({ candidates }) => {
+        captured.push(candidates);
+        return { confirmedRenames: [], resolutions: {} };
+      },
+    };
+
+    const pipeline = new PushSchemaPipeline(
+      {
+        executor: new DrizzleStatementExecutor("postgresql", db),
+        renameDetector: new RegexRenameDetector(),
+        classifier: noopClassifier,
+        promptDispatcher: recordingDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        migrationJournal: noopMigrationJournal,
+      },
+      {
+        _kitOverride: {
+          pushSchema: () =>
+            Promise.resolve({
+              statementsToExecute: [
+                `ALTER TABLE "${ctx.prefix}_dc_users" DROP COLUMN "title"`,
+                `ALTER TABLE "${ctx.prefix}_dc_users" ADD COLUMN "name" text`,
+              ],
+              warnings: [],
+              hasDataLoss: false,
+            }),
+        },
+        _buildDrizzleSchemaOverride: () => ({}),
+      }
+    );
+
+    const result = await pipeline.apply({
+      desired: {
+        collections: {
+          users: {
+            slug: "users",
+            tableName: `${ctx.prefix}_dc_users`,
+            fields: [],
+          },
+        },
+        singles: {},
+        components: {},
+      },
+      db,
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(result.success).toBe(true);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toEqual([
+      {
+        tableName: `${ctx.prefix}_dc_users`,
+        fromColumn: "title",
+        toColumn: "name",
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        defaultSuggestion: "rename",
+      },
+    ]);
+
+    await pool.query(`DROP TABLE IF EXISTS "${ctx.prefix}_dc_users" CASCADE`);
   });
 
   it("scenario #6: nextly_* / unmanaged tables are NOT dropped by pipeline", async () => {
