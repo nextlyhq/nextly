@@ -1,10 +1,12 @@
 // Tests for reloadNextlyConfig: the helper that drains an HMR reload flag
 // and reapplies code-first schema state.
-// What: verifies config re-read, safe deltas auto-apply, destructive deltas
-// log + skip.
-// Why: this is the in-process replacement for the wrapper's chokidar-driven
-// schema apply flow. Unit-level coverage protects the safety invariant
-// (no automatic destructive DDL without explicit resolutions).
+//
+// F3 PR-2 rewrite: the reload-config flow no longer calls
+// SchemaChangeService.apply per-collection. It now batches safe
+// collections into a single PushSchemaPipeline.apply() call. Tests
+// verify (1) preview-based destructive-skip behavior is preserved,
+// (2) safe collections are batched into one pipeline call, (3) the
+// pipeline is NOT called when nothing safe to apply.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -12,17 +14,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const {
   loadConfigSpy,
   clearConfigCacheSpy,
-  applySpy,
+  pipelineApplySpy,
   previewSpy,
   getCollectionBySlugSpy,
   warnSpy,
+  errorSpy,
 } = vi.hoisted(() => ({
   loadConfigSpy: vi.fn(),
   clearConfigCacheSpy: vi.fn(),
-  applySpy: vi.fn(),
+  pipelineApplySpy: vi.fn(),
   previewSpy: vi.fn(),
   getCollectionBySlugSpy: vi.fn(),
   warnSpy: vi.fn(),
+  errorSpy: vi.fn(),
 }));
 
 vi.mock("../../cli/utils/config-loader.js", () => ({
@@ -30,14 +34,40 @@ vi.mock("../../cli/utils/config-loader.js", () => ({
   clearConfigCache: clearConfigCacheSpy,
 }));
 
+// Mock the F3 pipeline construction. Every `new PushSchemaPipeline(...)`
+// returns a stub whose .apply() routes to pipelineApplySpy.
+vi.mock("../../domains/schema/pipeline/pushschema-pipeline.js", () => ({
+  PushSchemaPipeline: class {
+    apply(args: unknown) {
+      return pipelineApplySpy(args);
+    }
+  },
+}));
+
+// Mock the executor — constructor only needed (no method calls in this
+// test path).
+vi.mock("../../domains/schema/services/drizzle-statement-executor.js", () => ({
+  DrizzleStatementExecutor: class {
+    executeStatements() {
+      return Promise.resolve();
+    }
+  },
+}));
+
 describe("reloadNextlyConfig", () => {
   beforeEach(() => {
     loadConfigSpy.mockReset();
     clearConfigCacheSpy.mockReset();
-    applySpy.mockReset();
+    pipelineApplySpy.mockReset();
     previewSpy.mockReset();
     getCollectionBySlugSpy.mockReset();
     warnSpy.mockReset();
+    errorSpy.mockReset();
+    pipelineApplySpy.mockResolvedValue({
+      success: true,
+      statementsExecuted: 1,
+      renamesApplied: 0,
+    });
   });
 
   // Build a service resolver fake. Returns the service or undefined per
@@ -46,12 +76,18 @@ describe("reloadNextlyConfig", () => {
     const withSchemaChangeService = opts?.withSchemaChangeService ?? true;
     const services: Record<string, unknown> = {
       schemaChangeService: withSchemaChangeService
-        ? { preview: previewSpy, apply: applySpy }
+        ? { preview: previewSpy, apply: vi.fn() }
         : undefined,
       collectionRegistryService: {
         getCollectionBySlug: getCollectionBySlugSpy,
       },
-      logger: { warn: warnSpy, info: vi.fn(), error: vi.fn() },
+      logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
+      databaseAdapter: {
+        // F3 PR-2 review C1: dialect is a readonly property on
+        // DrizzleAdapter, not a method. Test fakes must match.
+        dialect: "sqlite" as const,
+        getDrizzle: () => ({}),
+      },
     };
     return (name: string) => services[name];
   }
@@ -64,7 +100,7 @@ describe("reloadNextlyConfig", () => {
     expect(loadConfigSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("applies safe deltas via SchemaChangeService.apply with source 'code'", async () => {
+  it("batches safe deltas into ONE PushSchemaPipeline.apply call with source 'code'", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -87,22 +123,22 @@ describe("reloadNextlyConfig", () => {
       hasDestructiveChanges: false,
       classification: "safe",
     });
-    applySpy.mockResolvedValue({ success: true, newSchemaVersion: 1 });
 
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(applySpy).toHaveBeenCalledTimes(1);
-    const applyCall = applySpy.mock.calls[0];
-    expect(applyCall?.[0]).toBe("posts"); // slug
-    expect(applyCall?.[1]).toBe("dc_posts"); // tableName
-    // 7th positional arg (resolutions) is undefined for code-first auto-apply
-    expect(applyCall?.[6]).toBeUndefined();
-    // 8th arg is the options object with source: 'code'
-    expect(applyCall?.[7]).toEqual({ source: "code" });
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const call = pipelineApplySpy.mock.calls[0]?.[0] as {
+      desired: { collections: Record<string, unknown> };
+      source: string;
+      promptChannel: string;
+    };
+    expect(call.source).toBe("code");
+    expect(call.promptChannel).toBe("terminal");
+    expect(Object.keys(call.desired.collections)).toEqual(["posts"]);
   });
 
-  it("skips destructive deltas and logs a warning instead of applying", async () => {
+  it("skips destructive deltas and logs a warning instead of including them in the batch", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -129,12 +165,10 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(applySpy).not.toHaveBeenCalled();
+    // Pipeline NOT called because there are no safe collections to batch.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
     const warningArg = warnSpy.mock.calls[0]?.[0] as string;
-    // The classification string is in the message, even though the
-    // headline avoids the word "destructive" (see reload-config.ts
-    // explanatory comment for why).
     expect(warningArg).toContain("destructive");
     expect(warningArg).toContain("users");
     expect(warningArg).toContain("needs review");
@@ -167,7 +201,7 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(applySpy).not.toHaveBeenCalled();
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
   });
 
   it("does not crash when SchemaChangeService is unavailable from DI", async () => {
@@ -180,7 +214,7 @@ describe("reloadNextlyConfig", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("continues to the next collection if one fails", async () => {
+  it("continues to next collection if one preview fails; batches the survivor", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -210,13 +244,54 @@ describe("reloadNextlyConfig", () => {
         hasDestructiveChanges: false,
         classification: "safe",
       });
-    applySpy.mockResolvedValue({ success: true, newSchemaVersion: 1 });
 
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    // First collection failed at preview; second proceeded.
-    expect(applySpy).toHaveBeenCalledTimes(1);
-    expect(applySpy.mock.calls[0]?.[0]).toBe("second");
+    // Pipeline called once with only the survivor in the batch.
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const call = pipelineApplySpy.mock.calls[0]?.[0] as {
+      desired: { collections: Record<string, unknown> };
+    };
+    expect(Object.keys(call.desired.collections)).toEqual(["second"]);
+  });
+
+  it("logs an error if the batch pipeline call returns failure", async () => {
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      },
+    });
+    getCollectionBySlugSpy.mockResolvedValue({
+      slug: "posts",
+      tableName: "dc_posts",
+      fields: [],
+      schemaVersion: 0,
+    });
+    previewSpy.mockResolvedValue({
+      hasChanges: true,
+      hasDestructiveChanges: false,
+      classification: "safe",
+    });
+    pipelineApplySpy.mockResolvedValue({
+      success: false,
+      statementsExecuted: 0,
+      renamesApplied: 0,
+      error: { code: "PUSHSCHEMA_FAILED", message: "drizzle-kit error" },
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(errorSpy).toHaveBeenCalled();
+    const errorArg = errorSpy.mock.calls[0]?.[0] as string;
+    expect(errorArg).toContain("PUSHSCHEMA_FAILED");
+    expect(errorArg).toContain("drizzle-kit error");
   });
 });
