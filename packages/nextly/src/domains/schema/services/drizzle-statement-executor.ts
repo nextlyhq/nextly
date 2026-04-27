@@ -94,70 +94,78 @@ export class DrizzleStatementExecutor
     // wraps statements in the active transaction context automatically.
     const dbTyped = this.db as SqliteSyncRunClient;
 
-    // PRAGMA foreign_keys = OFF before applying the recreate-table
-    // pattern (CREATE __new + INSERT + DROP + RENAME). The intermediate
-    // states would otherwise trigger FK violations even when the final
-    // state is correct. drizzle-kit 0.31.x emits this pattern for any
-    // type change on SQLite.
+    // PRAGMA foreign_keys = OFF/ON wrapping for the recreate-table
+    // pattern is handled by PushSchemaPipeline.apply (BEFORE/AFTER the
+    // db.transaction() wrapper). SQLite silently no-ops PRAGMA
+    // foreign_keys changes INSIDE a transaction, so we can't toggle
+    // here. See pipeline comments at the txFn call site for the full
+    // rationale.
     //
-    // After the loop, PRAGMA foreign_key_check verifies the final state
-    // — any orphaned rows surface as a thrown error (real schema bugs
-    // surface loudly instead of leaving the DB in a broken state).
-    //
-    // PRAGMA foreign_keys = ON runs in finally so it's always restored,
-    // even on partial-apply failures.
-    dbTyped.run(sqlTag.raw("PRAGMA foreign_keys = OFF"));
-    try {
-      for (const rawStmt of statements) {
-        const pieces = rawStmt
-          .split("\n")
-          .map((line: string) => line.replace(/--> statement-breakpoint/g, ""))
-          .join("\n")
-          .split(";")
-          .map((s: string) => s.trim())
-          .filter(
-            (s: string) =>
-              s.length > 0 &&
-              !s.startsWith("--") &&
-              /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
-          );
-        for (const raw of pieces) {
-          const stmt = await this.rewriteRecreateInsertForMissingCols(raw);
-          try {
-            dbTyped.run(sqlTag.raw(stmt));
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (
-              msg.includes("already exists") ||
-              msg.includes("duplicate column name")
-            ) {
-              continue;
-            }
-            throw err;
+    // We DO run PRAGMA foreign_key_check after the loop here — that
+    // pragma works inside a transaction. If it surfaces violations,
+    // the throw propagates up, the transaction rolls back, and the
+    // pipeline restores foreign_keys = ON in its finally block.
+    for (const rawStmt of statements) {
+      const pieces = rawStmt
+        .split("\n")
+        .map((line: string) => line.replace(/--> statement-breakpoint/g, ""))
+        .join("\n")
+        .split(";")
+        .map((s: string) => s.trim())
+        .filter(
+          (s: string) =>
+            s.length > 0 &&
+            !s.startsWith("--") &&
+            /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
+        );
+      for (const raw of pieces) {
+        const stmt = await this.rewriteRecreateInsertForMissingCols(raw);
+        try {
+          dbTyped.run(sqlTag.raw(stmt));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (
+            msg.includes("already exists") ||
+            msg.includes("duplicate column name")
+          ) {
+            // TODO(F8/F15): if a previous apply was aborted mid-recreate,
+            // a stale __new_<t> table may survive. The skip-on-already-
+            // exists branch then operates against it. Cleanup deferred.
+            continue;
           }
+          throw err;
         }
       }
+    }
 
-      // Verify FK integrity post-apply. Returns rows for any orphan
-      // (child rows with no matching parent). If the recreate pattern
-      // left the schema sound, this returns zero rows.
-      const violations = dbTyped.all(
-        sqlTag.raw("PRAGMA foreign_key_check")
-      ) as Array<{
-        table: string;
-        rowid: number;
-        parent: string;
-        fkid: number;
-      }>;
-      if (violations.length > 0) {
-        const sample = JSON.stringify(violations.slice(0, 5));
-        throw new Error(
-          `SQLite foreign_key_check found ${violations.length} violation(s) after schema apply. ` +
-            `First few: ${sample}`
-        );
+    // Verify FK integrity post-apply. Returns rows for any orphan
+    // (child rows with no matching parent). If the recreate pattern
+    // left the schema sound, this returns zero rows.
+    //
+    // Aggregating by table makes the error message scannable in a CLI;
+    // raw fkid is the index into PRAGMA foreign_key_list and not useful
+    // without a separate lookup.
+    const violations = dbTyped.all(
+      sqlTag.raw("PRAGMA foreign_key_check")
+    ) as Array<{
+      table: string;
+      rowid: number;
+      parent: string;
+      fkid: number;
+    }>;
+    if (violations.length > 0) {
+      const byTable = new Map<string, number>();
+      for (const v of violations) {
+        byTable.set(v.table, (byTable.get(v.table) ?? 0) + 1);
       }
-    } finally {
-      dbTyped.run(sqlTag.raw("PRAGMA foreign_keys = ON"));
+      const summary = [...byTable.entries()]
+        .map(([t, n]) => `${t}: ${n} orphan(s)`)
+        .join(", ");
+      const sample = JSON.stringify(violations.slice(0, 5));
+      throw new Error(
+        `SQLite foreign_key_check found ${violations.length} FK violation(s) after schema apply (${summary}). ` +
+          `First few rows: ${sample}`
+      );
     }
   }
 
