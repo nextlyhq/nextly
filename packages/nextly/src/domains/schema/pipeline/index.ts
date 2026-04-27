@@ -32,9 +32,9 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
   noopPromptDispatcher,
-  noopRenameDetector,
 } from "./pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "./pushschema-pipeline.js";
+import { RegexRenameDetector } from "./rename-detector.js";
 import type { DesiredSchema } from "./types.js";
 
 export type {
@@ -97,7 +97,7 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
 
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: noopRenameDetector,
+        renameDetector: new RegexRenameDetector(),
         classifier: noopClassifier,
         promptDispatcher: noopPromptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,

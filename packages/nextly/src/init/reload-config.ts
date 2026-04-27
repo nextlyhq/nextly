@@ -22,9 +22,9 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
   noopPromptDispatcher,
-  noopRenameDetector,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline.js";
+import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector.js";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -259,7 +259,7 @@ export async function reloadNextlyConfig(opts?: {
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: noopRenameDetector,
+        renameDetector: new RegexRenameDetector(),
         classifier: noopClassifier,
         promptDispatcher: noopPromptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
