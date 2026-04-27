@@ -41,6 +41,11 @@ export class DrizzleStatementExecutor
     private db: unknown
   ) {}
 
+  // tx is load-bearing for PG and MySQL (we execute via tx.execute so
+  // the statements run inside the pipeline's transaction). For SQLite,
+  // tx is intentionally ignored — better-sqlite3's driver is sync and
+  // automatically associates this.db.run() calls with the active
+  // transaction context (started by drizzle's db.transaction()).
   async executeStatements(tx: unknown, statements: string[]): Promise<void> {
     if (statements.length === 0) return;
     switch (this.dialect) {

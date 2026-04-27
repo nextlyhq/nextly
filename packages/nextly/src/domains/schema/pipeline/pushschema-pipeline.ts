@@ -67,6 +67,35 @@ interface DbTransactionRunner {
   <T>(fn: (tx: unknown) => Promise<T>): Promise<T>;
 }
 
+// Internal marker error: thrown when drizzle-kit's pushSchema itself
+// fails (vs a DDL execution failure later in the pipeline). The catch
+// block in apply() classifies based on this constructor identity rather
+// than fragile stack-string matching.
+class PushSchemaError extends Error {
+  constructor(
+    message: string,
+    public override readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = "PushSchemaError";
+  }
+}
+
+// Same idea for DDL execution failures — distinct error code so
+// callers can tell apart "drizzle-kit couldn't compute the diff" from
+// "the SQL we tried to run blew up."
+class DdlExecutionError extends Error {
+  constructor(
+    message: string,
+    public override readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = "DdlExecutionError";
+  }
+}
+
+// Production deps. Public surface — F4-F8 implement these and consumers
+// instantiate the pipeline with them.
 export interface PushSchemaPipelineDeps {
   executor: DrizzleStatementExecutor;
   renameDetector: RenameDetector;
@@ -74,8 +103,14 @@ export interface PushSchemaPipelineDeps {
   promptDispatcher: PromptDispatcher;
   preRenameExecutor: PreRenameExecutor;
   migrationJournal: MigrationJournal;
-  // Test-only override hooks. Production callers leave these undefined
-  // and the pipeline uses real implementations.
+}
+
+// Test-only override hooks. Kept off the public deps interface so
+// IntelliSense for production callers stays clean. Tests pass these
+// as the optional second constructor arg.
+//
+// @internal
+export interface PushSchemaPipelineTestHooks {
   _kitOverride?: DrizzleKitLike;
   _buildDrizzleSchemaOverride?: (
     desired: DesiredSchema,
@@ -85,7 +120,10 @@ export interface PushSchemaPipelineDeps {
 }
 
 export class PushSchemaPipeline {
-  constructor(private deps: PushSchemaPipelineDeps) {}
+  constructor(
+    private deps: PushSchemaPipelineDeps,
+    private testHooks: PushSchemaPipelineTestHooks = {}
+  ) {}
 
   async apply(args: {
     desired: DesiredSchema;
@@ -93,8 +131,14 @@ export class PushSchemaPipeline {
     dialect: SupportedDialect;
     source: "ui" | "code";
     promptChannel: "browser" | "terminal";
+    // MySQL-only: drizzle-kit's MySQL pushSchema requires the database
+    // name (extracted from the connection URL by the caller). Empty/
+    // undefined silently no-ops on MySQL — drizzle-kit returns zero DDL
+    // statements. Caller must thread this through for MySQL to work.
+    // PG and SQLite ignore this. F15 will address MySQL safety further.
+    databaseName?: string;
   }): Promise<PipelineResult> {
-    const { desired, db, dialect, source, promptChannel } = args;
+    const { desired, db, dialect, source, promptChannel, databaseName } = args;
     const journalId = await this.deps.migrationJournal.recordStart({
       source,
       statementsPlanned: 0,
@@ -102,17 +146,27 @@ export class PushSchemaPipeline {
 
     try {
       // Step 2: build Drizzle schema objects from DesiredSchema.
-      const drizzleSchema = this.deps._buildDrizzleSchemaOverride
-        ? this.deps._buildDrizzleSchemaOverride(desired, dialect)
+      const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
+        ? this.testHooks._buildDrizzleSchemaOverride(desired, dialect)
         : this.buildDrizzleSchema(desired, dialect);
 
       // Step 3: lazy-import drizzle-kit/api (F1's helper) per dialect.
-      const kit: DrizzleKitLike = this.deps._kitOverride
-        ? this.deps._kitOverride
-        : await this.importDrizzleKit(dialect);
+      const kit: DrizzleKitLike = this.testHooks._kitOverride
+        ? this.testHooks._kitOverride
+        : await this.importDrizzleKit(dialect, databaseName);
 
       // Step 4: first pushSchema pass — get the SQL diff.
-      const firstPassRaw = await kit.pushSchema(drizzleSchema, db);
+      // Wrapped in its own try/catch so we can attribute pushSchema
+      // failures specifically (vs DDL execution failures below).
+      let firstPassRaw;
+      try {
+        firstPassRaw = await kit.pushSchema(drizzleSchema, db);
+      } catch (err) {
+        throw new PushSchemaError(
+          err instanceof Error ? err.message : String(err),
+          err
+        );
+      }
       const firstPassSafe = this.filterUnsafeStatements(
         firstPassRaw.statementsToExecute
       );
@@ -141,8 +195,8 @@ export class PushSchemaPipeline {
           : { confirmedRenames: [], resolutions: {} };
 
       // Step 8: execute inside transaction.
-      const txFn: DbTransactionRunner = this.deps._txOverride
-        ? this.deps._txOverride
+      const txFn: DbTransactionRunner = this.testHooks._txOverride
+        ? this.testHooks._txOverride
         : this.makeTransactionRunner(db);
 
       const statementsExecuted = await txFn(async (tx: unknown) => {
@@ -153,13 +207,28 @@ export class PushSchemaPipeline {
         );
 
         // Step 8b: re-call pushSchema against post-rename DB.
-        const secondPassRaw = await kit.pushSchema(drizzleSchema, db);
+        let secondPassRaw;
+        try {
+          secondPassRaw = await kit.pushSchema(drizzleSchema, db);
+        } catch (err) {
+          throw new PushSchemaError(
+            err instanceof Error ? err.message : String(err),
+            err
+          );
+        }
         const secondPassSafe = this.filterUnsafeStatements(
           secondPassRaw.statementsToExecute
         );
 
         // Step 8c: execute remaining statements via the executor.
-        await this.deps.executor.executeStatements(tx, secondPassSafe);
+        try {
+          await this.deps.executor.executeStatements(tx, secondPassSafe);
+        } catch (err) {
+          throw new DdlExecutionError(
+            err instanceof Error ? err.message : String(err),
+            err
+          );
+        }
 
         return secondPassSafe.length;
       });
@@ -207,19 +276,22 @@ export class PushSchemaPipeline {
   // Gap 8 integration point: extend MANAGED_TABLE_PREFIXES_REGEX (or
   // replace this filter with a richer isManagedTable() that consults
   // a plugin / user-config table list) when plugins land.
+  //
+  // Regex shape:
+  //   - Optional schema prefix (PG): ["`]?(\w+)["`]?\.
+  //   - Table name itself: ["`]?(\w+)["`]?
+  //   The schema prefix is captured but discarded; we want the bare
+  //   table name. Without the explicit (\w+\.)? group, the simpler
+  //   ["`]?[^"`]+["`]? would capture only "public" (stopping at the
+  //   first closing quote) for `"public"."dc_x"` — silently filtering
+  //   out legitimate managed-table DROPs.
   private filterUnsafeStatements(statements: string[]): string[] {
     return statements.filter(stmt => {
       const dropMatch = stmt.match(
-        /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?["`]?([^"`\s;(]+)["`]?/i
+        /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
       if (!dropMatch) return true;
-      const tableName = dropMatch[1];
-      // Some PG outputs use schema-qualified names like "public"."dc_x".
-      // Strip the schema prefix before checking the prefix.
-      const bareName = tableName.includes(".")
-        ? tableName.split(".").pop()!
-        : tableName;
-      return isManagedTable(bareName);
+      return isManagedTable(dropMatch[1]);
     });
   }
 
@@ -251,8 +323,15 @@ export class PushSchemaPipeline {
   // Lazy-import drizzle-kit/api via F1's per-dialect helpers.
   // Wraps each dialect's kit in a unified DrizzleKitLike so the
   // orchestrator code stays dialect-agnostic.
+  //
+  // databaseName is required for MySQL — drizzle-kit's MySQL pushSchema
+  // takes the database name as its 3rd arg. Without it, drizzle-kit
+  // compares against no tables and returns zero DDL silently. Caller
+  // (PR-2/PR-3 wiring) must extract this from the connection URL and
+  // thread it through apply()'s args. PG and SQLite ignore it.
   private async importDrizzleKit(
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    databaseName: string | undefined
   ): Promise<DrizzleKitLike> {
     const { getPgDrizzleKit, getMySQLDrizzleKit, getSQLiteDrizzleKit } =
       await import("../../../database/drizzle-kit-lazy.js");
@@ -267,11 +346,17 @@ export class PushSchemaPipeline {
         };
       }
       case "mysql": {
+        if (!databaseName) {
+          throw new Error(
+            "PushSchemaPipeline: MySQL requires databaseName in apply() args. " +
+              "Caller (e.g. dev-server.ts, dispatcher) must extract the database " +
+              "name from the connection URL and pass it through. Empty/undefined " +
+              "would silently no-op in drizzle-kit's MySQL pushSchema."
+          );
+        }
         const kit = await getMySQLDrizzleKit();
         return {
-          // Empty databaseName = use connection's default (matches the
-          // existing DrizzlePushService MySQL path).
-          pushSchema: (schema, db) => kit.pushSchema(schema, db, ""),
+          pushSchema: (schema, db) => kit.pushSchema(schema, db, databaseName),
         };
       }
       case "sqlite": {
@@ -297,11 +382,27 @@ export class PushSchemaPipeline {
     return fn => dbTyped.transaction(fn);
   }
 
+  // Classifies an error caught from the apply() flow into one of the
+  // F2 SchemaApplyErrorCode strings. Uses constructor identity (not
+  // stack-string matching, which is brittle across bundlers / source
+  // maps / production builds).
+  //
+  // Contract for the `code` field on the failure result:
+  //   - PUSHSCHEMA_FAILED: drizzle-kit's pushSchema raised (introspection
+  //     failed, snapshot mismatch, etc.). Connection-related root causes
+  //     surface this way.
+  //   - DDL_EXECUTION_FAILED: a SQL statement we generated failed at run
+  //     time (constraint violation, syntax error, etc.).
+  //   - INTERNAL_ERROR: anything else (programmer error in the pipeline,
+  //     unexpected throw from a stub, etc.).
+  //
+  // Callers SHOULD use this code for diagnostics / telemetry / log
+  // filtering. Branching control flow on it is OK but should be wrapped
+  // in a string-literal match (the value space may grow in F4-F8).
   private classifyErrorCode(err: unknown): string {
-    if (err instanceof Error && err.stack?.includes("drizzle-kit")) {
-      return "PUSHSCHEMA_FAILED";
-    }
-    return "DDL_EXECUTION_FAILED";
+    if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
+    if (err instanceof DdlExecutionError) return "DDL_EXECUTION_FAILED";
+    return "INTERNAL_ERROR";
   }
 }
 
