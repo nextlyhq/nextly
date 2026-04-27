@@ -119,18 +119,32 @@ describe("NextlyError.fromDatabaseError", () => {
       expect(err.cause).toBe(dbErr);
     });
 
-    it("copies dbKind, constraint, dialect, and meta into logContext", () => {
+    it("copies dbKind, dialect, dbCode, and meta into logContext", () => {
+      // makeDbError passes `constraint` through as DbError.code (the
+      // dialect-specific error code, e.g. SQLSTATE). NextlyError surfaces
+      // that as `dbCode` rather than `constraint` to be honest about what
+      // it is — actual constraint-name extraction is per-call-site.
       const dbErr = makeDbError("unique-violation", {
-        constraint: "users_email_key",
+        constraint: "23505",
         meta: { table: "users" },
       });
       const err = NextlyError.fromDatabaseError(dbErr);
       expect(err.logContext).toMatchObject({
         dbKind: "unique-violation",
         dialect: "postgresql",
+        dbCode: "23505",
+        meta: { table: "users" },
       });
-      // constraint and meta should be present (constraint is sent via DbError.code per the existing class).
-      expect(err.logContext?.meta).toEqual({ table: "users" });
+    });
+
+    it("omits dbCode and meta from logContext when absent", () => {
+      const err = NextlyError.fromDatabaseError(makeDbError("timeout"));
+      expect(err.logContext).toEqual({
+        dbKind: "timeout",
+        dialect: "postgresql",
+      });
+      expect(err.logContext).not.toHaveProperty("dbCode");
+      expect(err.logContext).not.toHaveProperty("meta");
     });
 
     it("never leaks DB constraint name into publicMessage", () => {

@@ -7,11 +7,12 @@ import type { PublicData, ValidationPublicData } from "./public-data";
  * Default mapping from DbErrorKind to NextlyError contract. Used by
  * `NextlyError.fromDatabaseError`. Public messages are intentionally generic
  * per spec §13.8 — no DB driver text, no constraint names, no field hints.
+ *
+ * `satisfies Record<DbErrorKind, ...>` makes the mapping exhaustive at
+ * compile time: adding a new DbErrorKind without updating this table is a
+ * type error.
  */
-const DB_ERROR_MAPPING: Record<
-  DbErrorKind,
-  { code: string; statusCode: number; publicMessage: string }
-> = {
+const DB_ERROR_MAPPING = {
   "unique-violation": {
     code: "DUPLICATE",
     statusCode: 409,
@@ -62,13 +63,10 @@ const DB_ERROR_MAPPING: Record<
     statusCode: 500,
     publicMessage: "An unexpected error occurred.",
   },
-};
-
-const DB_ERROR_FALLBACK = {
-  code: "INTERNAL_ERROR",
-  statusCode: 500,
-  publicMessage: "An unexpected error occurred.",
-} as const;
+} satisfies Record<
+  DbErrorKind,
+  { code: string; statusCode: number; publicMessage: string }
+>;
 
 /**
  * Code accepted by NextlyError: canonical codes get autocomplete, but plugin
@@ -330,20 +328,28 @@ export class NextlyError extends Error {
    */
   static fromDatabaseError(error: unknown): NextlyError {
     if (isDbError(error)) {
-      const mapping = DB_ERROR_MAPPING[error.kind] ?? DB_ERROR_FALLBACK;
+      // DB_ERROR_MAPPING is exhaustive over DbErrorKind via `satisfies` so
+      // this lookup always succeeds at compile time.
+      const mapping = DB_ERROR_MAPPING[error.kind];
+      // Build logContext conditionally so log lines aren't cluttered with
+      // `undefined` keys for absent fields.
+      const logContext: Record<string, unknown> = {
+        dbKind: error.kind,
+        dialect: error.dialect,
+      };
+      // DbError.code is the dialect-specific code (SQLSTATE, errno, etc.) —
+      // not an actual constraint name. Surface it as `dbCode` so operators
+      // know what they're reading. Constraint-name-to-field mapping is
+      // per-call-site (§8.6).
+      if (error.code !== undefined) logContext.dbCode = error.code;
+      if (error.meta !== undefined) logContext.meta = error.meta;
+
       return new NextlyError({
         code: mapping.code,
         statusCode: mapping.statusCode,
         publicMessage: mapping.publicMessage,
         logMessage: "Database error",
-        logContext: {
-          dbKind: error.kind,
-          dialect: error.dialect,
-          // DbError stores the dialect-specific code at `code`. Surface it
-          // as `constraint` for operator readability when present.
-          constraint: error.code,
-          meta: error.meta,
-        },
+        logContext,
         cause: error,
       });
     }
@@ -352,9 +358,9 @@ export class NextlyError extends Error {
     // it is an Error. Non-Error values (strings, numbers) flow through
     // without a cause but still get the generic public message.
     return new NextlyError({
-      code: DB_ERROR_FALLBACK.code,
-      statusCode: DB_ERROR_FALLBACK.statusCode,
-      publicMessage: DB_ERROR_FALLBACK.publicMessage,
+      code: "INTERNAL_ERROR",
+      statusCode: 500,
+      publicMessage: "An unexpected error occurred.",
       logMessage: "Non-DbError passed to fromDatabaseError",
       cause: error instanceof Error ? error : undefined,
       logContext: error instanceof Error ? undefined : { value: String(error) },
