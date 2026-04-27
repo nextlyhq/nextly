@@ -105,7 +105,7 @@ export function EntryFormActions({
                 variant="outline"
                 onClick={onPreview}
                 disabled={isSubmitting}
-                className="flex-1 shadow-none bg-background border-border hover-unified"
+                className="flex-1 shadow-none bg-background border-border hover:bg-secondary hover:text-secondary-foreground transition-colors"
               >
                 <Eye className="mr-2 h-4 w-4" />
                 {previewLabel}
@@ -118,7 +118,7 @@ export function EntryFormActions({
                 variant="outline"
                 onClick={onCancel}
                 disabled={isSubmitting}
-                className="flex-1 shadow-none bg-background border-border hover-unified"
+                className="flex-1 shadow-none bg-background border-border hover:bg-secondary hover:text-secondary-foreground transition-colors"
               >
                 Cancel
               </Button>

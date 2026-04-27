@@ -2019,9 +2019,9 @@ button[data-slot="radio-group-item"][data-state="checked"],
   @apply hover:bg-black hover:text-white transition-colors;
 }
 
-.hover-unified:hover svg {
+/* .hover-unified:hover svg {
   color: #ffffff !important;
-}
+} */
 
 /**
  * SUBTLE ROW HOVER

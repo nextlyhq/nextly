@@ -220,6 +220,7 @@ export function APIPlayground({
 
   // Copy state
   const [copied, setCopied] = useState(false);
+  const [copiedBase, setCopiedBase] = useState(false);
 
   /**
    * Get the current action configuration
@@ -403,6 +404,23 @@ export function APIPlayground({
   }, [fullUrl]);
 
   /**
+   * Copy Base Endpoint to clipboard
+   */
+  const handleCopyBaseEndpoint = useCallback(async () => {
+    const basePath = isSingle
+      ? `/admin/api/singles/${collectionSlug}`
+      : `/admin/api/collections/${collectionSlug}/entries`;
+    try {
+      await navigator.clipboard.writeText(basePath);
+      setCopiedBase(true);
+      toast.success("Base endpoint copied to clipboard");
+      setTimeout(() => setCopiedBase(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
+    } catch {
+      toast.error("Failed to copy endpoint");
+    }
+  }, [isSingle, collectionSlug]);
+
+  /**
    * Open URL in new tab
    */
   const handleOpenInNewTab = useCallback(() => {
@@ -441,14 +459,14 @@ export function APIPlayground({
       <Card className="lg:col-span-5 flex flex-col rounded-none border-border shadow-none bg-background">
         <CardHeader className="pb-3 border-b border-border">
           <div className="flex items-center justify-between h-8">
-            <CardTitle className="text-[clamp(0.875rem,0.8rem+0.2vw,1rem)] font-bold uppercase tracking-[-0.02em] text-foreground/90">
+            <CardTitle className="text-sm font-bold tracking-tight text-foreground/90">
               Request
             </CardTitle>
             <Button
               variant="ghost"
               size="sm"
               onClick={handleReset}
-              className="gap-2 h-7 text-[10px] uppercase font-bold tracking-tighter"
+              className="gap-2 h-7 text-xs font-semibold"
             >
               <RotateCcw className="h-3 w-3" />
               Reset
@@ -456,27 +474,43 @@ export function APIPlayground({
           </div>
         </CardHeader>
         <CardContent className="flex-1 space-y-6 pt-6">
-          {/* Base Path (read-only) */}
-          <div className="space-y-2 group">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+          <div className="space-y-2">
+            <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
               Base Endpoint
             </Label>
-            <div className="flex items-center gap-2 p-3 bg-muted/30 border border-border/40 rounded-none font-mono text-xs transition-colors group-hover-unified">
-              <span className="text-muted-foreground">
-                {isSingle ? "/admin/api/singles/" : "/admin/api/collections/"}
-              </span>
-              <span className="font-bold text-foreground">
-                {collectionSlug}
-              </span>
-              {!isSingle && (
-                <span className="text-muted-foreground">/entries</span>
-              )}
+            <div className="relative flex items-center">
+              <div className="flex-1 flex items-center gap-2 p-3 bg-muted/30 border border-border/40 rounded-none font-mono text-xs">
+                <span className="text-muted-foreground">
+                  {isSingle ? "/admin/api/singles/" : "/admin/api/collections/"}
+                </span>
+                <span className="font-bold text-foreground">
+                  {collectionSlug}
+                </span>
+                {!isSingle && (
+                  <span className="text-muted-foreground">/entries</span>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  void handleCopyBaseEndpoint();
+                }}
+                className="absolute right-1 h-8 w-8 hover:bg-muted/50 rounded-none text-muted-foreground hover:text-foreground transition-colors"
+                title="Copy base endpoint"
+              >
+                {copiedBase ? (
+                  <Check className="h-3.5 w-3.5 text-green-500" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
             </div>
           </div>
 
           {/* Action Selector */}
           <div className="space-y-2">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
               Action
             </Label>
             <Select
@@ -516,14 +550,14 @@ export function APIPlayground({
           {/* Entry ID Input (conditional) */}
           {!isSingle && currentAction.requiresEntryId && (
             <div className="space-y-2">
-              <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+              <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
                 Entry ID <span className="text-destructive">*</span>
               </Label>
               <Input
                 value={entryId}
                 onChange={e => setEntryId(e.target.value)}
                 placeholder="Enter entry ID (e.g., abc123)"
-                className="font-mono text-xs rounded-none border-border h-11 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-foreground"
+                className="font-mono text-xs rounded-none border-border h-11 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-foreground placeholder:text-muted-foreground/60"
               />
               {entryIdMissing && (
                 <p className="text-[10px] text-destructive font-medium ml-1">
@@ -538,13 +572,13 @@ export function APIPlayground({
             <TabsList className="bg-transparent border-b border-border p-0 w-full justify-start rounded-none h-10">
               <TabsTrigger
                 value="params"
-                className="rounded-none border-b-2 border-transparent px-6 font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-transparent data-[state=active]:border-foreground data-[state=active]:shadow-none"
+                className="rounded-none border-b-2 border-transparent px-6 font-semibold text-xs data-[state=active]:bg-transparent data-[state=active]:border-foreground data-[state=active]:shadow-none"
               >
                 Query Params
               </TabsTrigger>
               <TabsTrigger
                 value="body"
-                className="rounded-none border-b-2 border-transparent px-6 font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-transparent data-[state=active]:border-foreground data-[state=active]:shadow-none"
+                className="rounded-none border-b-2 border-transparent px-6 font-semibold text-xs data-[state=active]:bg-transparent data-[state=active]:border-foreground data-[state=active]:shadow-none"
               >
                 Body
               </TabsTrigger>
@@ -561,13 +595,13 @@ export function APIPlayground({
 
             <TabsContent value="body" className="mt-6">
               <div className="space-y-3">
-                <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+                <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
                   Request Body (JSON)
                 </Label>
                 <textarea
                   value={requestBody}
                   onChange={e => setRequestBody(e.target.value)}
-                  className="w-full h-48 font-mono text-xs p-4 border border-border rounded-none bg-background resize-none focus:outline-none focus:border-foreground transition-colors"
+                  className="w-full h-48 font-mono text-xs p-4 border border-border rounded-none bg-background resize-none focus:outline-none focus:border-foreground transition-colors placeholder:text-muted-foreground/60"
                   placeholder={getBodyPlaceholder()}
                   disabled={!actionRequiresBody}
                 />
@@ -582,18 +616,20 @@ export function APIPlayground({
 
           {/* Request URL Display */}
           <div className="pt-6 border-t border-border">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
               Full Request URL
             </Label>
-            <div className="flex items-center gap-2 mt-2 group">
-              <code className="flex-1 text-[10px] bg-muted/40 p-3 border border-border/40 rounded-none break-all font-mono group-hover-unified transition-colors">
+            <div className="flex items-center gap-2 mt-2">
+              <code className="flex-1 text-[10px] bg-muted/40 p-3 border border-border/40 rounded-none break-all font-mono transition-colors">
                 <span className={METHOD_COLORS[method]}>{method}</span>{" "}
                 {fullUrl}
               </code>
               <Button
                 variant="outline"
                 size="icon"
-                onClick={handleCopyUrl}
+                onClick={() => {
+                  void handleCopyUrl();
+                }}
                 className="shrink-0 h-10 w-10 rounded-none border-border"
               >
                 {copied ? (
@@ -615,14 +651,16 @@ export function APIPlayground({
 
           {/* Execute Button */}
           <Button
-            onClick={executeRequest}
+            onClick={() => {
+              void executeRequest();
+            }}
             disabled={isLoading || entryIdMissing}
-            className="w-full gap-2 h-11 rounded-none text-xs font-bold uppercase tracking-widest active:scale-[0.98] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px]"
+            className="group w-full gap-2 h-11 rounded-none text-sm font-bold active:scale-[0.98] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] hover:bg-primary-foreground hover:text-primary"
           >
             {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin text-inherit transition-colors" />
             ) : (
-              <Play className="h-4 w-4" />
+              <Play className="h-4 w-4 fill-current text-inherit transition-colors" />
             )}
             {isLoading ? "Sending..." : "Send Request"}
           </Button>
@@ -633,26 +671,26 @@ export function APIPlayground({
       <Card className="lg:col-span-7 flex flex-col rounded-none border-border shadow-none bg-background">
         <CardHeader className="pb-3 border-b border-border">
           <div className="flex items-center justify-between h-8">
-            <CardTitle className="text-[clamp(0.875rem,0.8rem+0.2vw,1rem)] font-bold uppercase tracking-[-0.02em] text-foreground/90">
+            <CardTitle className="text-sm font-bold tracking-tight text-foreground/90">
               Response
             </CardTitle>
             {response && (
-              <div className="flex items-center gap-6 text-[10px] font-bold tracking-wider">
+              <div className="flex items-center gap-6 text-xs font-semibold tracking-tight">
                 <div className="flex items-center gap-2">
-                  <span className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] uppercase font-bold tracking-widest text-muted-foreground/40">
+                  <span className="text-muted-foreground/60 font-medium">
                     Status:
                   </span>
                   <span
-                    className={`${getStatusColor(response.status)} font-mono text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)]`}
+                    className={`${getStatusColor(response.status)} font-mono`}
                   >
                     {response.status} {response.statusText}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] uppercase font-bold tracking-widest text-muted-foreground/40">
+                  <span className="text-muted-foreground/60 font-medium">
                     Time:
                   </span>
-                  <span className="text-foreground font-mono text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)]">
+                  <span className="text-foreground font-mono">
                     {response.time}ms
                   </span>
                 </div>

@@ -259,7 +259,7 @@ export function QueryBuilder({
     <div className="space-y-6">
       {/* Common Parameters */}
       <div className="space-y-4">
-        <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/80 ml-1">
+        <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
           Common Parameters
         </Label>
         <div className="grid grid-cols-2 gap-4">
@@ -270,7 +270,7 @@ export function QueryBuilder({
               <div className="flex items-center gap-1.5 ml-1">
                 <Label
                   htmlFor={`param-${key}`}
-                  className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] uppercase font-bold tracking-widest text-muted-foreground/60"
+                  className="text-xs font-semibold text-muted-foreground/60"
                 >
                   {label}
                 </Label>
@@ -283,7 +283,7 @@ export function QueryBuilder({
                       side="top"
                       className="max-w-xs rounded-none border-border bg-popover text-popover-foreground shadow-none"
                     >
-                      <p className="text-[10px] font-medium leading-relaxed">
+                      <p className="text-xs font-medium leading-relaxed">
                         {description}
                       </p>
                     </TooltipContent>
@@ -295,7 +295,7 @@ export function QueryBuilder({
                 value={params[key] || ""}
                 onChange={e => updateParam(key, e.target.value)}
                 placeholder={placeholder}
-                className="h-9 text-xs font-mono rounded-none border-border bg-background focus-visible:ring-0 focus-visible:border-foreground transition-colors placeholder:text-muted-foreground/30"
+                className="h-9 text-xs font-mono rounded-none border-border bg-background focus-visible:ring-0 focus-visible:border-foreground transition-colors placeholder:text-muted-foreground/60"
               />
             </div>
           ))}
@@ -306,14 +306,14 @@ export function QueryBuilder({
       {!isSingle && (
         <div className="space-y-4 border-t border-border pt-6">
           <div className="flex items-center justify-between">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/80 ml-1">
+            <Label className="text-xs font-semibold text-muted-foreground/80 ml-1">
               Where Conditions
             </Label>
             <Button
               variant="outline"
               size="sm"
               onClick={addWhereCondition}
-              className="gap-1.5 h-7 text-[10px] uppercase font-bold tracking-tighter rounded-none border-border hover-unified transition-colors"
+              className="gap-1.5 h-7 text-xs font-semibold rounded-none border-border hover-unified transition-colors"
             >
               <Plus className="h-3 w-3" />
               Add Filter
@@ -322,7 +322,7 @@ export function QueryBuilder({
 
           {whereConditions.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 border border-dashed border-border/60 bg-muted/20">
-              <p className="text-[10px] text-muted-foreground/60 uppercase font-bold tracking-widest">
+              <p className="text-xs text-muted-foreground/60 font-semibold">
                 No active filters
               </p>
             </div>
@@ -342,7 +342,7 @@ export function QueryBuilder({
                       })
                     }
                     placeholder="field"
-                    className="h-9 w-28 text-xs font-mono rounded-none border-border bg-background focus-visible:ring-0 focus-visible:border-foreground"
+                    className="h-9 w-28 text-xs font-mono rounded-none border-border bg-background focus-visible:ring-0 focus-visible:border-foreground placeholder:text-muted-foreground/60"
                   />
 
                   {/* Operator */}
@@ -352,7 +352,7 @@ export function QueryBuilder({
                       updateWhereCondition(condition.id, { operator: v })
                     }
                   >
-                    <SelectTrigger className="h-9 w-32 text-[10px] uppercase font-bold tracking-tighter rounded-none border-border bg-background focus:ring-0 focus:border-foreground">
+                    <SelectTrigger className="h-9 w-32 text-xs font-semibold rounded-none border-border bg-background focus:ring-0 focus:border-foreground">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="rounded-none border-border">
@@ -360,7 +360,7 @@ export function QueryBuilder({
                         <SelectItem
                           key={op.value}
                           value={op.value}
-                          className="text-[10px] font-medium rounded-none"
+                          className="text-xs font-medium rounded-none"
                         >
                           {op.label}
                         </SelectItem>
@@ -377,7 +377,7 @@ export function QueryBuilder({
                       })
                     }
                     placeholder="value"
-                    className="h-9 flex-1 text-xs font-mono rounded-none border-border bg-background focus-visible:ring-0 focus-visible:border-foreground"
+                    className="h-9 flex-1 text-xs font-mono rounded-none border-border bg-background focus-visible:ring-0 focus-visible:border-foreground placeholder:text-muted-foreground/60"
                   />
 
                   {/* Remove button */}
@@ -397,10 +397,10 @@ export function QueryBuilder({
           {/* Where JSON Preview */}
           {params.where && (
             <div className="space-y-2">
-              <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+              <Label className="text-xs font-semibold text-muted-foreground/60 ml-1">
                 Generated Where Clause
               </Label>
-              <code className="block text-[10px] bg-muted/20 p-3 border border-border/40 rounded-none font-mono break-all text-muted-foreground">
+              <code className="block text-xs bg-muted/20 p-3 border border-border/40 rounded-none font-mono break-all text-muted-foreground">
                 {params.where}
               </code>
             </div>
