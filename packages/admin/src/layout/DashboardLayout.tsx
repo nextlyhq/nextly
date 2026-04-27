@@ -1,5 +1,6 @@
 import { Button, Sheet, SheetContent } from "@revnixhq/ui";
-import React, { useState, useEffect } from "react";
+import type React from "react";
+import { useState, useEffect } from "react";
 
 import { Menu } from "@admin/components/icons";
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";

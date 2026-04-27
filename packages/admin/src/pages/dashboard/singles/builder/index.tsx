@@ -6,7 +6,8 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import React, { useState, useCallback, useMemo } from "react";
+import type React from "react";
+import { useState, useCallback, useMemo } from "react";
 import { z } from "zod";
 
 import {
@@ -75,7 +76,7 @@ export default function SingleBuilderPage(): React.ReactElement {
     const userFields = builder.fields.filter(f => !f.isSystem);
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
-      toast.error(validation.errorMessage!);
+      toast.error(validation.errorMessage);
       return;
     }
 
@@ -122,7 +123,7 @@ export default function SingleBuilderPage(): React.ReactElement {
       breadcrumbCurrentLabel="Create Single"
       headerTitle="Create Single"
       headerDescription="Design a new single global content type."
-      onSave={handleSave}
+      onSave={() => { void handleSave(); }}
       onCancel={() => navigateTo(ROUTES.SINGLES)}
       isSaving={isSaving}
       saveLabel="Create"

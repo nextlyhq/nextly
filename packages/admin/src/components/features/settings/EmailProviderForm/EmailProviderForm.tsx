@@ -138,7 +138,7 @@ export function EmailProviderForm({
     <div className="space-y-6">
       {/* Form */}
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             {/* Page Header */}
             <div className="border-b border-border bg-muted/20 px-6 py-5">

@@ -124,6 +124,7 @@ function interpolateUrlTemplate(
         return null;
       }
 
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       result = result.replace(placeholder, String(value));
     }
 

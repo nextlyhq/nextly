@@ -43,22 +43,6 @@ interface DynamicPluginNavProps {
 }
 
 /**
- * Empty state when no plugins exist
- */
-function EmptyPlugins({ hasSearch }: { hasSearch?: boolean }) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton disabled className="opacity-60">
-        <Package className="h-4 w-4 text-muted-foreground" />
-        <span className="text-muted-foreground text-sm">
-          {hasSearch ? "No matching plugins" : "No plugins"}
-        </span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
-}
-
-/**
  * Loading skeleton for plugin items
  */
 function PluginSkeleton() {
@@ -82,16 +66,6 @@ function toSlug(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
-
-/**
- * Reserved sidebar group names that map to built-in sections.
- */
-const RESERVED_GROUPS = new Set([
-  "collections",
-  "singles",
-  "users",
-  "settings",
-]);
 
 interface PluginEntry {
   name: string;
@@ -148,12 +122,6 @@ export function DynamicPluginNav({
 
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
-
-  // Custom group slugs
-  const customGroupSlugs = React.useMemo(
-    () => new Set((branding?.customGroups ?? []).map(g => g.slug)),
-    [branding?.customGroups]
-  );
 
   // Build a lookup: collection group slug → plugin metadata
   // Matches by checking if any collection in the group belongs to a plugin's collections list
@@ -235,9 +203,8 @@ export function DynamicPluginNav({
   }, [
     allPluginCollections,
     visibleCollectionIds,
-    pluginMetadata,
-    customGroupSlugs,
     isPluginPlaced,
+    search,
   ]);
 
   if (isLoading) {

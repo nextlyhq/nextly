@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@revnixhq/ui";
 import type { Table } from "@tanstack/react-table";
-import React from "react";
+import type React from "react";
 
 import { Columns, RotateCcw, Filter } from "@admin/components/icons";
 import { SearchBar } from "@admin/components/shared/search-bar";
@@ -122,7 +122,7 @@ export function EntryTableToolbar({
       f => "name" in f && f.name === columnId
     );
     if (field && "label" in field && field.label) {
-      return field.label as string;
+      return field.label;
     }
 
     // Capitalize the column ID as fallback

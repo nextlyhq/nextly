@@ -7,7 +7,7 @@
  * @module components/shared/charts/RingChart
  */
 
-import React from "react";
+import type React from "react";
 
 import { cn } from "@admin/lib/utils";
 

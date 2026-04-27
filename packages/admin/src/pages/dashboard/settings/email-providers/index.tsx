@@ -34,7 +34,6 @@ import React, { useState, useCallback, useMemo } from "react";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
   Columns,
-  Download,
   Loader2,
   Plus,
   Star,
@@ -85,8 +84,8 @@ function maskConfiguration(
 ): string {
   switch (type) {
     case "smtp": {
-      const host = config.host || "unknown";
-      const port = config.port || "";
+      const host = (config.host as string | undefined) ?? "unknown";
+      const port = String((config.port as string | number | undefined) ?? "");
       return `${host}:${port}`;
     }
     case "resend":
@@ -293,7 +292,7 @@ function EmailProviderTable() {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
       return next;
     });
   };
@@ -444,7 +443,7 @@ function EmailProviderTable() {
   // Table columns
   const ALWAYS_VISIBLE = new Set(["id"]);
 
-  const columnDefs: Column<EmailProviderRecord>[] = [
+  const columnDefs = useMemo<Column<EmailProviderRecord>[]>(() => [
     {
       key: "name",
       label: "Name",
@@ -577,7 +576,13 @@ function EmailProviderTable() {
         </DropdownMenu>
       ),
     },
-  ];
+  ], [
+    handleEdit,
+    handleSetDefault,
+    handleTest,
+    handleDelete,
+    isTesting,
+  ]);
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),

@@ -10,7 +10,8 @@ import {
   TableSkeleton,
 } from "@revnixhq/ui";
 import { useQuery } from "@tanstack/react-query";
-import React, { useMemo, useState } from "react";
+import type React from "react";
+import { useMemo, useState } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Info, Shield } from "@admin/components/icons";
@@ -231,10 +232,9 @@ function PermissionsContent() {
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
-  const allPermissions = data?.data ?? [];
-
   // Apply search and type filters client-side
   const filteredGroups = useMemo<ResourceGroup[]>(() => {
+    const allPermissions = data?.data ?? [];
     let filtered = allPermissions;
 
     // Apply type filter
@@ -257,7 +257,7 @@ function PermissionsContent() {
     }
 
     return groupPermissionsByResource(filtered);
-  }, [allPermissions, search, typeFilter]);
+  }, [data?.data, search, typeFilter]);
 
   const totalPermissions = filteredGroups.reduce(
     (acc, g) => acc + g.permissions.length,

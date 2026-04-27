@@ -29,7 +29,8 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import { SelectFieldConfig, FieldType } from "@admin/types/field-types";
+import type { SelectFieldConfig} from "@admin/types/field-types";
+import { FieldType } from "@admin/types/field-types";
 
 // Define schema for select field form
 const selectFieldSchema = z.object({
@@ -135,7 +136,7 @@ export function SelectFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={handleSubmit}
+        onSubmit={(e) => { void handleSubmit(e); }}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

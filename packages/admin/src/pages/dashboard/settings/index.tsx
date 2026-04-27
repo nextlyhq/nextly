@@ -17,7 +17,8 @@ import {
   Monitor,
   Palette,
 } from "lucide-react";
-import React, { useEffect } from "react";
+import type React from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -319,7 +320,7 @@ const SettingsGeneralPage: React.FC = () => {
   return (
     <PageContainer>
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)}>
+        <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }}>
           <SettingsLayout
             actions={
               <Button

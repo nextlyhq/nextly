@@ -1,4 +1,4 @@
-import { TableParams, FilterInfo } from "@revnixhq/ui";
+import type { TableParams, FilterInfo } from "@revnixhq/ui";
 
 export interface RoleFilterParams {
   id?: {

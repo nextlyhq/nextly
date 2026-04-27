@@ -43,7 +43,7 @@ import {
   updateFieldById,
   deleteFieldById,
   reorderNestedFields,
-  nestedFieldPriorityCollision,
+  _nestedFieldPriorityCollision,
   findComponentFieldMissingReference,
   findSelectFieldMissingOptions,
 } from "@admin/lib/builder";
@@ -232,9 +232,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
       // Case 1: Dragging from palette → field list
       if (activeData.source === "palette") {
         const overId = String(over.id);
-        const overData = over.data.current as
-          | { type?: string; parentFieldId?: string }
-          | undefined;
+        const overData = over.data.current;
 
         // Case 1a: Dropped on an Array field's nested drop zone
         if (
@@ -253,7 +251,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
               type: activeData.fieldType,
               validation: {},
             };
-            setFields(prev => addFieldToArray(prev, arrayFieldId!, newField));
+            setFields(prev => addFieldToArray(prev, arrayFieldId, newField));
             setSelectedFieldId(newField.id);
           }
           return;
@@ -276,7 +274,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
               type: activeData.fieldType,
               validation: {},
             };
-            setFields(prev => addFieldToGroup(prev, groupFieldId!, newField));
+            setFields(prev => addFieldToGroup(prev, groupFieldId, newField));
             setSelectedFieldId(newField.id);
           }
           return;
@@ -325,9 +323,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
       // Case 2: Reordering within field list (top-level or nested)
       if (activeData.source === "field-list") {
         const overId = String(over.id);
-        const overData = over.data.current as
-          | { type?: string; parentFieldId?: string }
-          | undefined;
+        const overData = over.data.current;
 
         // Case 2a: Moving field into an Array drop zone
         if (
@@ -343,7 +339,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
               const fieldToMove = findFieldById(prev, String(active.id));
               if (!fieldToMove) return prev;
               const withoutActive = deleteFieldById(prev, String(active.id));
-              return addFieldToArray(withoutActive, arrayFieldId!, fieldToMove);
+              return addFieldToArray(withoutActive, arrayFieldId, fieldToMove);
             });
           }
           return;
@@ -363,7 +359,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
               const fieldToMove = findFieldById(prev, String(active.id));
               if (!fieldToMove) return prev;
               const withoutActive = deleteFieldById(prev, String(active.id));
-              return addFieldToGroup(withoutActive, groupFieldId!, fieldToMove);
+              return addFieldToGroup(withoutActive, groupFieldId, fieldToMove);
             });
           }
           return;
@@ -522,7 +518,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
   // -------------------------------------------------------------------------
 
   return {
-    form: form as unknown as UseFormReturn<T, unknown, T>,
+    form: form,
     fields,
     setFields,
     selectedField,

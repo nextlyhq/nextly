@@ -13,7 +13,7 @@
  * @since 1.0.0
  */
 
-import React from "react";
+import type React from "react";
 
 // ============================================================================
 // Helpers
@@ -90,7 +90,7 @@ export function SingleFormHeader({
   label,
   description,
   updatedAt,
-  isDirty,
+  _isDirty,
   actions,
 }: SingleFormHeaderProps) {
   const lastUpdatedText = updatedAt ? formatTimeAgo(new Date(updatedAt)) : null;

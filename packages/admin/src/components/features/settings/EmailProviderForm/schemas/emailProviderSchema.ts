@@ -202,7 +202,7 @@ export function providerToFormValues(
         type: "resend",
         apiKey:
           typeof config.apiKey === "string" && config.apiKey.length > 0
-            ? (config.apiKey as string)
+            ? (config.apiKey)
             : "",
       };
     case "sendlayer":
@@ -211,7 +211,7 @@ export function providerToFormValues(
         type: "sendlayer",
         apiKey:
           typeof config.apiKey === "string" && config.apiKey.length > 0
-            ? (config.apiKey as string)
+            ? (config.apiKey)
             : "",
       };
     default:

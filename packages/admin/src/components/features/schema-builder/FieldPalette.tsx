@@ -321,7 +321,7 @@ export function FieldPalette({
           {
             scrollbarWidth: "none",
             msOverflowStyle: "none",
-          } as React.CSSProperties
+          }
         }
       >
         {/* Hide webkit scrollbar via inline style approach */}

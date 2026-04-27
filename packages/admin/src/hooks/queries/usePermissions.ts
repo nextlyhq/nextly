@@ -246,8 +246,8 @@ export function useUpdatePermission() {
     },
     onSettled: (_, __, { permissionId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
-      queryClient.invalidateQueries({ queryKey: ["permissions"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["permissions"] });
+      void queryClient.invalidateQueries({
         queryKey: ["permissions", permissionId],
       });
     },
@@ -313,7 +313,7 @@ export function useDeletePermission() {
     },
     onSuccess: () => {
       // Invalidate all permissions queries to refetch data
-      queryClient.invalidateQueries({ queryKey: ["permissions"] });
+      void queryClient.invalidateQueries({ queryKey: ["permissions"] });
     },
   });
 }

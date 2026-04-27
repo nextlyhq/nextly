@@ -1,5 +1,5 @@
 import { Button } from "@revnixhq/ui";
-import React from "react";
+import type React from "react";
 
 import { Plus, ChevronRight, Home } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";

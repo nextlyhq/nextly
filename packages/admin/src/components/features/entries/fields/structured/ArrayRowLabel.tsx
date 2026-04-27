@@ -9,7 +9,7 @@
  */
 
 import type {
-  ArrayFieldConfig,
+  RepeaterFieldConfig,
   ArrayRowLabelProps,
 } from "@revnixhq/nextly/config";
 
@@ -26,7 +26,7 @@ export interface ArrayRowLabelComponentProps {
   /**
    * The array field configuration.
    */
-  field: ArrayFieldConfig;
+  field: RepeaterFieldConfig;
 
   /**
    * The data for this specific array row.
@@ -107,6 +107,7 @@ export function ArrayRowLabel({
     if (value !== undefined && value !== null && value !== "") {
       return (
         <span className="font-medium text-foreground truncate">
+          {/* eslint-disable-next-line @typescript-eslint/no-base-to-string */}
           {String(value)}
         </span>
       );
@@ -125,6 +126,7 @@ export function ArrayRowLabel({
     if (value !== undefined && value !== null && value !== "") {
       return (
         <span className="font-medium text-foreground truncate">
+          {/* eslint-disable-next-line @typescript-eslint/no-base-to-string */}
           {String(value)}
         </span>
       );

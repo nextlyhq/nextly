@@ -89,7 +89,7 @@ export function useCreateApiKey() {
   return useMutation<CreateApiKeyResult, Error, CreateApiKeyPayload>({
     mutationFn: data => createApiKey(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: apiKeyKeys.all() });
+      void queryClient.invalidateQueries({ queryKey: apiKeyKeys.all() });
     },
   });
 }
@@ -110,7 +110,7 @@ export function useUpdateApiKey() {
   >({
     mutationFn: ({ id, data }) => updateApiKey(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: apiKeyKeys.all() });
+      void queryClient.invalidateQueries({ queryKey: apiKeyKeys.all() });
     },
   });
 }
@@ -127,7 +127,7 @@ export function useRevokeApiKey() {
   return useMutation<void, Error, string>({
     mutationFn: id => revokeApiKey(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: apiKeyKeys.all() });
+      void queryClient.invalidateQueries({ queryKey: apiKeyKeys.all() });
     },
   });
 }
