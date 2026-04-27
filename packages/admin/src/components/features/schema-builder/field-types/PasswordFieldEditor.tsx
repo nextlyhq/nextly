@@ -9,7 +9,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 import { type Control, type FieldValues, useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -23,8 +23,7 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { PasswordFieldConfig} from "@admin/types/field-types";
-import { FieldType } from "@admin/types/field-types";
+import { PasswordFieldConfig, FieldType } from "@admin/types/field-types";
 
 import { ValidationPatternField } from "./shared/ValidationPatternField";
 
@@ -110,7 +109,7 @@ export function PasswordFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={handleSubmit}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

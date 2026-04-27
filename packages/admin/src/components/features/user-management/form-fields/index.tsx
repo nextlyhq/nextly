@@ -1,18 +1,18 @@
 import { Checkbox, Input, Label } from "@revnixhq/ui";
 import { useState } from "react";
-import type {
+import {
   Control,
   FieldErrors,
-  UseFormRegister} from "react-hook-form";
-import {
+  UseFormRegister,
   Controller,
 } from "react-hook-form";
 
 import { UserRoleSelector } from "@admin/components/features/users/UserRoleSelector";
 import { Eye, EyeOff } from "@admin/components/icons";
-import type { Role } from "@admin/types/entities";
-import type {
+import { Role } from "@admin/types/entities";
+import {
   CreateUserFormValues,
+  EditUserFormValues,
 } from "@admin/types/userform";
 
 interface UserFormFieldsProps {
@@ -26,19 +26,19 @@ interface UserFormFieldsProps {
    * React Hook Form register function
    * Used to register input fields with the form
    */
-  register: UseFormRegister<CreateUserFormValues  >;
+  register: UseFormRegister<CreateUserFormValues | EditUserFormValues>;
 
   /**
    * React Hook Form control object
    * Used for Controller components (checkboxes, etc.)
    */
-  control: Control<CreateUserFormValues  >;
+  control: Control<CreateUserFormValues | EditUserFormValues>;
 
   /**
    * React Hook Form errors object
    * Contains validation errors for all fields
    */
-  errors: FieldErrors<CreateUserFormValues  >;
+  errors: FieldErrors<CreateUserFormValues | EditUserFormValues>;
 
   /**
    * Available roles to display in the roles list

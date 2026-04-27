@@ -90,9 +90,9 @@ export function MediaListView({
   error = null,
   selectedIds = new Set(),
   onSelectionChange,
-  _onItemClick,
+  onItemClick,
   onEdit,
-  _onDelete,
+  onDelete,
   onRetry,
   className = "",
   emptyStateMessage,
@@ -168,7 +168,7 @@ export function MediaListView({
   }
 
   // Table header
-  const _columns = [
+  const columns = [
     { key: "select", label: "", width: "w-10" },
     { key: "preview", label: "", width: "w-12" },
     { key: "name", label: "Name", width: "flex-1" },

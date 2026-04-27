@@ -17,7 +17,7 @@ import {
   TabsTrigger,
   Textarea,
 } from "@revnixhq/ui";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useFieldArray,
   useForm,
@@ -28,6 +28,7 @@ import { z } from "zod";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import {
+  ArrowLeft,
   FileText,
   Loader2,
   Paperclip,
@@ -398,10 +399,7 @@ function DefaultAttachmentsSection({
   });
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const selectedIds = useMemo(
-    () => new Set(fields.map(f => f.mediaId)),
-    [fields]
-  );
+  const selectedIds = new Set(fields.map(f => f.mediaId));
 
   const handlePick = useCallback(
     (media: Media[]) => {
@@ -589,7 +587,7 @@ export function EmailTemplateForm({
     <div className="space-y-6">
       {/* Form */}
       <Form {...form}>
-        <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             {/* Page Header - Inside Card */}
             <div className="flex items-center gap-3 border-b bg-muted/20 px-6 py-5">

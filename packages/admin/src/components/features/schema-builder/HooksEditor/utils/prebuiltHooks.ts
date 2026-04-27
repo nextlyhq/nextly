@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 
-import type * as Icons from "@admin/components/icons";
+import * as Icons from "@admin/components/icons";
 
 // ============================================================
 // Pre-built Hook Definitions

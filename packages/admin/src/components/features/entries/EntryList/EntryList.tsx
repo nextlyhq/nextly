@@ -12,7 +12,7 @@
 import { Button } from "@revnixhq/ui";
 import { ChevronRight, Home } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useState, useCallback, useMemo, useRef } from "react";
+import React, { useState, useCallback, useMemo, useRef } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -363,7 +363,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   }, []);
 
   const handleConfirmDelete = useCallback(() => {
-    void bulkDelete.mutate(selectedForDelete, undefined);
+    bulkDelete.mutate(selectedForDelete, undefined);
   }, [bulkDelete, selectedForDelete]);
 
   const handlePageChange = useCallback((newPage: number) => {

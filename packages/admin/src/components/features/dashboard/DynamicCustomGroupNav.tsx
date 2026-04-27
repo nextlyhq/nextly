@@ -24,6 +24,7 @@ import {
 import { cn } from "@admin/lib/utils";
 
 const iconMap = Icons as unknown as Record<string, LucideIcon>;
+const BUILTIN_GROUPS = ["collections", "singles"];
 
 interface DynamicCustomGroupNavProps {
   /** Function to check if a route is active */
@@ -32,6 +33,27 @@ interface DynamicCustomGroupNavProps {
   search?: string;
 }
 
+/**
+ * Empty state for custom groups
+ */
+function EmptyCustomGroup({
+  label,
+  hasSearch,
+}: {
+  label: string;
+  hasSearch?: boolean;
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton disabled className="opacity-60">
+        <Database className="h-4 w-4 text-muted-foreground" />
+        <span className="text-muted-foreground text-sm">
+          {hasSearch ? `No matching items in ${label}` : `No items in ${label}`}
+        </span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
 
 interface GroupItem {
   type: "collection" | "single";

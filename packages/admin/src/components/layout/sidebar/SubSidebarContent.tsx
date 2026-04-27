@@ -1,4 +1,4 @@
-import type React from "react";
+import React from "react";
 
 import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";

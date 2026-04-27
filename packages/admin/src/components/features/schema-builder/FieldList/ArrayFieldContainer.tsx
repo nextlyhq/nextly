@@ -47,16 +47,16 @@ export interface ArrayFieldContainerProps {
 
 export function ArrayFieldContainer({
   parentFieldId,
-  _parentFieldLabel,
+  parentFieldLabel,
   nestedFields,
   depth: _depth,
   nestingDepth,
-  _selectedFieldId,
-  _onFieldSelect,
-  _onFieldDelete,
-  _validationErrors,
-  _collapsedFieldIds,
-  _onToggleCollapse,
+  selectedFieldId,
+  onFieldSelect,
+  onFieldDelete,
+  validationErrors,
+  collapsedFieldIds,
+  onToggleCollapse,
   onPlaceholderClick,
   renderField,
 }: ArrayFieldContainerProps) {

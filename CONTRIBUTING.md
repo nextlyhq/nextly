@@ -241,137 +241,32 @@ async findById(id: string): Promise<User> {
 
 ## Testing
 
-### Test Suites (F18+)
-
-Nextly has two test suites split by filename convention:
-
-| Suite       | What it covers                                                                                | Run with                |
-| ----------- | --------------------------------------------------------------------------------------------- | ----------------------- |
-| Unit        | Logic that does not need a database. Pure functions, mocked services, type guards.            | `pnpm test:unit`        |
-| Integration | Anything that hits a real database — adapters, the schema pipeline, query builder edge cases. | `pnpm test:integration` |
-
-Test files declare their suite by filename:
-
-- `*.test.ts` — unit test (no DB)
-- `*.integration.test.ts` — integration test (real DB required)
-
-### Running the unit suite
-
-No setup needed:
+### Running Tests
 
 ```bash
-pnpm test:unit
-```
+# Run all tests
+pnpm test
 
-This skips all `*.integration.test.ts` files. Should pass quickly.
+# Test specific package
+pnpm --filter nextly test
+pnpm --filter @revnixhq/admin test
 
-### Running the integration suite
-
-Step 1: Boot the test stack
-
-```bash
-docker compose -f docker-compose.test.yml up -d
-```
-
-This starts:
-
-- PostgreSQL 15 on port 5434 (Nextly's minimum supported version, F17)
-- PostgreSQL 17 on port 5435 (current latest)
-- PostgreSQL 16 on port 5433 (legacy default; will be removed in v2)
-- MySQL 8.0 on port 3307
-
-SQLite is in-memory and needs no service.
-
-Step 2: Run integration tests against the dialect of your choice
-
-```bash
-# All dialects (matches CI)
-pnpm test:integration
-
-# Single dialect (faster local iteration)
-pnpm test:integration:postgres15
-pnpm test:integration:postgres17
-pnpm test:integration:mysql
-pnpm test:integration:sqlite
-```
-
-Each script sets the appropriate `TEST_<DIALECT>_URL` env var. Tests skip themselves if their dialect's env var is unset.
-
-Step 3: Tear down
-
-```bash
-docker compose -f docker-compose.test.yml down
-```
-
-### Skipping integration tests locally
-
-If you only work on PG paths, you can skip the MySQL job:
-
-```bash
-# Boot only Postgres services
-docker compose -f docker-compose.test.yml up -d postgres15-test postgres17-test
-
-# Run only the postgres integration jobs
-pnpm test:integration:postgres15
-pnpm test:integration:postgres17
-```
-
-CI will catch any MySQL or SQLite failures on your PR.
-
-### Writing a new integration test
-
-1. Name the file `<basename>.integration.test.ts`. Example: `query-builder.integration.test.ts`.
-2. Use the helper:
-
-   ```ts
-   import { makeTestContext } from "@revnixhq/nextly/database/__tests__/integration/helpers/test-db";
-
-   const ctx = makeTestContext("postgresql");
-
-   describe("query builder against PG", () => {
-     if (!ctx.available) {
-       it.skip("TEST_POSTGRES_URL not set; skipping", () => {});
-       return;
-     }
-     // your tests here, using ctx.url for the connection.
-     // ctx.prefix gives a unique 8-char hex prefix to stamp on
-     // schema/table names so parallel tests don't collide.
-   });
-   ```
-
-3. Stamp `ctx.prefix` on every schema, database, or table name your test creates.
-4. Drop everything you created in `afterAll`.
-
-### Other test-related commands
-
-```bash
-# Watch mode (unit suite)
+# Watch mode
 pnpm --filter nextly test:watch
 
-# Coverage (unit suite)
+# With coverage
 pnpm --filter nextly test -- --coverage
 ```
 
 ### Test Location
 
 - Tests are co-located with source files in `__tests__/` directories
-- Test files use `.test.ts` (unit) or `.integration.test.ts` (integration)
-- Per-scenario integration tests live under `packages/nextly/src/database/__tests__/integration/`
-- pushSchema fixtures live under `packages/nextly/src/database/__tests__/integration/__fixtures__/pushSchema/`
+- Test files use `.test.ts` or `.spec.ts` suffix
 
 ### Test Frameworks
 
 - **Vitest** for unit and integration tests
-- Two configs per package: `vitest.config.ts` (unit) and `vitest.integration.config.ts` (integration with 30s timeouts + singleFork pool)
-
-### CI test workflows
-
-Two GitHub Actions workflows run on every PR:
-
-- `ci.yml` — lint, typecheck, build, and unit test suite. Lint + unit test currently `continue-on-error: true` due to legacy test debt (677 baseline failures pending separate triage task).
-- `test-integration.yml` — the 3-dialect matrix (PG 15, PG 17, MySQL 8, SQLite). No `continue-on-error`; any failure blocks merge.
-
-A PR is mergeable when all integration matrix jobs are green AND the build/lint/unit jobs pass (or are explicitly waived).
+- Test utilities configured in `vitest.config.ts` per package
 
 ---
 

@@ -19,8 +19,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@revnixhq/ui";
-import type React from "react";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { type Control, type FieldValues, useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -36,8 +35,7 @@ import {
 } from "@admin/components/ui/form";
 import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { UserFieldConfig} from "@admin/types/field-types";
-import { FieldType } from "@admin/types/field-types";
+import { UserFieldConfig, FieldType } from "@admin/types/field-types";
 
 // Define schema for user field form
 const userFieldSchema = z.object({
@@ -104,7 +102,7 @@ export function UserFieldEditor({
 
   // Fetch user roles on component mount
   useEffect(() => {
-    void fetchUserRoles();
+    fetchUserRoles();
   }, []);
 
   const fetchUserRoles = async () => {
@@ -168,7 +166,7 @@ export function UserFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={handleSubmit}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

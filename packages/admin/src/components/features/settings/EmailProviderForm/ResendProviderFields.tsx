@@ -1,4 +1,4 @@
-import type { Control, type FieldValues } from "react-hook-form";
+import { Control, type FieldValues } from "react-hook-form";
 
 import { SecretField } from "./SecretField";
 

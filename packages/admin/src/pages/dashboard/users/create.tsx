@@ -8,12 +8,12 @@ import {
   Skeleton,
   Spinner,
 } from "@revnixhq/ui";
-import type { ReactElement} from "react";
-import { useEffect } from "react";
+import { ReactElement, useEffect } from "react";
 import {
   useForm,
   FormProvider,
   type Control,
+  type FieldErrors,
   type FieldValues,
 } from "react-hook-form";
 
@@ -130,7 +130,7 @@ export default function CreateUserPage(): ReactElement {
   }, [isDirty, isCreating]);
 
   // Handle form submission
-  function onSubmit(values: CreateUserFormValues) {
+  async function onSubmit(values: CreateUserFormValues) {
     // Type-safe roles handling (validated by Zod schema - minimum 1 role required)
     const roles = filterStringArray(values.roles);
 
@@ -223,7 +223,7 @@ export default function CreateUserPage(): ReactElement {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { void refetchRoles(); }}
+              onClick={() => refetchRoles()}
               className="ml-2"
             >
               Retry
@@ -310,7 +310,7 @@ export default function CreateUserPage(): ReactElement {
           <FormProvider {...form}>
             <form
               id="create-user-form"
-              onSubmit={(e) => { void handleSubmit(onSubmit)(e); }}
+              onSubmit={handleSubmit(onSubmit)}
               className="space-y-8"
             >
               {/* Form Fields */}
@@ -325,7 +325,7 @@ export default function CreateUserPage(): ReactElement {
 
               <UserCustomFields
                 control={control as unknown as Control<FieldValues>}
-                errors={errors}
+                errors={errors as FieldErrors<FieldValues>}
                 disabled={isCreating}
               />
             </form>

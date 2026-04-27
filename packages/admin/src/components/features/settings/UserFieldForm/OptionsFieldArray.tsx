@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input } from "@revnixhq/ui";
+import React from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 
 import { Plus, Trash2 } from "@admin/components/icons";

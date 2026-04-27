@@ -20,6 +20,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -392,7 +393,7 @@ export function MediaDetailDialog({
                         variant="outline"
                         size="sm"
                         className="h-10 px-4 shrink-0 text-xs font-semibold"
-                        onClick={() => { void handleCopyUrl(); }}
+                        onClick={handleCopyUrl}
                       >
                         {isCopied ? (
                           <Check className="h-3.5 w-3.5 text-green-500 mr-2" />
@@ -419,7 +420,7 @@ export function MediaDetailDialog({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { void handleDownload(); }}
+                    onClick={handleDownload}
                     className="h-8 text-xs font-semibold gap-2 border-primary/20 hover-unified"
                   >
                     <Download className="h-3.5 w-3.5" />
@@ -452,7 +453,7 @@ export function MediaDetailDialog({
             <AlertDialogDescription>
               Are you sure you want to delete{" "}
               <span className="font-medium text-foreground">
-                &quot;{media.filename}&quot;
+                "{media.filename}"
               </span>
               ? This action cannot be undone.
             </AlertDialogDescription>

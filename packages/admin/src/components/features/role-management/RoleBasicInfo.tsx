@@ -1,5 +1,5 @@
 import { Input, Textarea } from "@revnixhq/ui";
-import type { UseFormReturn } from "react-hook-form";
+import { UseFormReturn } from "react-hook-form";
 
 import {
   FormControl,
@@ -8,7 +8,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
-import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 
 interface RoleBasicInfoProps {
   form: UseFormReturn<RoleFormValuesType>;

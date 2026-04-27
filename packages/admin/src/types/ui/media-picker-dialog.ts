@@ -1,4 +1,4 @@
-import type { Media } from "../media";
+import { Media } from "../media";
 
 /**
  * Media Picker Dialog Props

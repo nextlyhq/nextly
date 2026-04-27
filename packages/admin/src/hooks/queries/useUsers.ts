@@ -231,7 +231,7 @@ export function useCreateUser() {
     },
     onSuccess: () => {
       // Invalidate all users queries to refetch data
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
     },
   });
 }
@@ -330,8 +330,8 @@ export function useUpdateUser() {
     },
     onSettled: (_, __, { userId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
-      void queryClient.invalidateQueries({ queryKey: ["users", userId] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["users", userId] });
     },
   });
 }
@@ -394,7 +394,7 @@ export function useDeleteUser() {
     },
     onSuccess: () => {
       // Invalidate all users queries to refetch data
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
     },
   });
 }
@@ -478,7 +478,7 @@ export function useBulkUpdateUsers() {
       onComplete: () => {
         // Invalidate users cache after all mutations complete
         // This triggers a refetch of the users list to show updated data
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+        queryClient.invalidateQueries({ queryKey: ["users"] });
       },
     },
   });
@@ -583,7 +583,7 @@ export function useBulkDeleteUsers() {
     defaultOptions: {
       onComplete: () => {
         // Invalidate users cache after all mutations complete
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+        queryClient.invalidateQueries({ queryKey: ["users"] });
       },
     },
   });
@@ -714,7 +714,7 @@ export function useBulkAssignRole() {
     defaultOptions: {
       onComplete: () => {
         // Invalidate users cache after all mutations complete
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+        queryClient.invalidateQueries({ queryKey: ["users"] });
       },
     },
   });

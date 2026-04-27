@@ -1,10 +1,10 @@
-import type React from "react";
-import { forwardRef } from "react";
+import React, { forwardRef } from "react";
 
+import { RouteValue } from "@admin/constants/routes";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface LinkProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
-  href: string; // Accept any string (RouteValue is a string subset — TypeScript collapses the union)
+  href: RouteValue | string; // Accept RouteValue or any string for dynamic routes
   children: React.ReactNode;
 }
 
@@ -18,7 +18,7 @@ export const Link = forwardRef<HTMLAnchorElement, LinkProps>(
       onClick?.(e);
 
       // Navigate using SPA routing
-      navigateTo(href);
+      navigateTo(href as RouteValue);
     };
 
     return (

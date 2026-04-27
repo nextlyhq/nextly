@@ -166,10 +166,10 @@ export function useBulkDeleteEntries({
     defaultOptions: {
       onComplete: result => {
         // Invalidate entry queries
-        void queryClient.invalidateQueries({
+        queryClient.invalidateQueries({
           queryKey: entryKeys.listsByCollection(collectionSlug),
         });
-        void queryClient.invalidateQueries({
+        queryClient.invalidateQueries({
           queryKey: entryKeys.counts(),
         });
 
@@ -302,13 +302,13 @@ export function useBulkUpdateEntries({
     defaultOptions: {
       onComplete: result => {
         // Invalidate entry list queries
-        void queryClient.invalidateQueries({
+        queryClient.invalidateQueries({
           queryKey: entryKeys.listsByCollection(collectionSlug),
         });
 
         // Invalidate updated entries
         result.succeededIds.forEach(id => {
-          void queryClient.invalidateQueries({
+          queryClient.invalidateQueries({
             queryKey: entryKeys.detail(collectionSlug, id),
           });
         });

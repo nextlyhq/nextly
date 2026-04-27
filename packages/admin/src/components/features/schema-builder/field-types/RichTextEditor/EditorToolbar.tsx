@@ -16,20 +16,23 @@
 
 "use client";
 
-import { $createCodeNode } from "@lexical/code";
+import { $createCodeNode, $isCodeNode } from "@lexical/code";
 import {
   INSERT_ORDERED_LIST_COMMAND,
   INSERT_UNORDERED_LIST_COMMAND,
+  REMOVE_LIST_COMMAND,
   $isListNode,
+  ListNode,
 } from "@lexical/list";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
   $createHeadingNode,
   $createQuoteNode,
-  $isHeadingNode
+  $isHeadingNode,
+  HeadingTagType,
 } from "@lexical/rich-text";
 import { $setBlocksType } from "@lexical/selection";
-import { mergeRegister } from "@lexical/utils";
+import { $getNearestNodeOfType, mergeRegister } from "@lexical/utils";
 import {
   Button,
   Select,
@@ -55,14 +58,16 @@ import {
   Strikethrough,
   List,
   ListOrdered,
+  Link as LinkIcon,
   Image as ImageIcon,
   Code,
+  Quote,
 } from "@admin/components/icons";
 import type { Media } from "@admin/types/media";
 
 import { INSERT_IMAGE_COMMAND } from "./ImagePlugin";
 
-const _blockTypeToBlockName = {
+const blockTypeToBlockName = {
   code: "Code Block",
   h1: "Heading 1",
   h2: "Heading 2",
@@ -138,7 +143,6 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
           const type = $isHeadingNode(element)
             ? element.getTag()
             : element.getType();
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
           setBlockType(type as BlockType);
         }
       }
@@ -191,7 +195,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
           $setBlocksType(selection, () =>
-            $createHeadingNode(type)
+            $createHeadingNode(type as HeadingTagType)
           );
         }
       });
@@ -243,7 +247,6 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
         {/* Block type selector */}
         <Select
           value={blockType}
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
           onValueChange={value => formatBlock(value as BlockType)}
         >
           <SelectTrigger className="w-[140px] h-8 text-xs">

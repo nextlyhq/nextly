@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import { AlertCircle, Home, RefreshCw } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";

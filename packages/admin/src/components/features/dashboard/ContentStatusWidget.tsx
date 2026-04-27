@@ -6,7 +6,7 @@ import {
   Skeleton,
 } from "@revnixhq/ui";
 import { AlertCircle, FileText, ChevronRight } from "lucide-react";
-import type React from "react";
+import React from "react";
 
 import { RingChart } from "@admin/components/shared/charts/RingChart";
 import { Link } from "@admin/components/ui/link";

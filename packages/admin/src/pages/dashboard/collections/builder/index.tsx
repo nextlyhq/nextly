@@ -6,8 +6,7 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import type React from "react";
-import { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { z } from "zod";
 
 import {
@@ -86,7 +85,7 @@ export default function CollectionBuilderPage(): React.ReactElement {
     const userFields = builder.fields.filter(f => !f.isSystem);
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
-      toast.error(validation.errorMessage);
+      toast.error(validation.errorMessage!);
       return;
     }
 
@@ -146,7 +145,7 @@ export default function CollectionBuilderPage(): React.ReactElement {
       breadcrumbCurrentLabel="Create Collection"
       headerTitle="Create Collection"
       headerDescription="Design a new collection with custom fields and settings."
-      onSave={() => { void handleSave(); }}
+      onSave={handleSave}
       onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
       isSaving={isSaving}
       saveLabel="Create"

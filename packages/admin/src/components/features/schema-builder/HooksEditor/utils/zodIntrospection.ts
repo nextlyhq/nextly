@@ -7,7 +7,7 @@
  * @module components/features/schema-builder/HooksEditor/utils/zodIntrospection
  */
 
-import type { z } from "zod";
+import { z } from "zod";
 
 // Zod internals (_zod.def, _def) have no public type definition;
 // we use Record<string, unknown> with targeted casts for runtime introspection.
@@ -82,16 +82,16 @@ export function unwrapZodType(schema: z.ZodTypeAny): {
 export function getDefaultConfig(schema: z.ZodSchema): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};
 
-  if (!isZodType(schema, "object")) {
+  if (!isZodType(schema as z.ZodTypeAny, "object")) {
     return defaults;
   }
 
   // Get shape from object schema
-  const objectDef = getZodDef(schema);
+  const objectDef = getZodDef(schema as z.ZodTypeAny);
   const shape = (objectDef?.shape || {}) as Record<string, z.ZodTypeAny>;
 
   for (const [key, fieldSchema] of Object.entries(shape)) {
-    const zodField = fieldSchema;
+    const zodField = fieldSchema as z.ZodTypeAny;
     const { innerSchema, hasDefault, defaultValue } = unwrapZodType(zodField);
 
     if (hasDefault && defaultValue !== undefined) {
@@ -114,7 +114,7 @@ export function getDefaultConfig(schema: z.ZodSchema): Record<string, unknown> {
 export function getObjectShape(
   schema: z.ZodSchema
 ): Record<string, z.ZodTypeAny> {
-  const def = getZodDef(schema);
+  const def = getZodDef(schema as z.ZodTypeAny);
   return (def?.shape || {}) as Record<string, z.ZodTypeAny>;
 }
 
@@ -134,7 +134,7 @@ export function getEnumValues(schema: z.ZodTypeAny): string[] {
   const def = getZodDef(schema);
   // Zod v4 stores enum values differently
   if (def?.entries) {
-    return Object.keys(def.entries);
+    return Object.keys(def.entries as Record<string, unknown>);
   }
   if (def?.values) {
     return def.values as string[];

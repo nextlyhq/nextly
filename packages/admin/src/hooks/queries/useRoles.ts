@@ -206,7 +206,7 @@ export function useCreateRole() {
     },
     onSuccess: () => {
       // Invalidate all roles queries to refetch data
-      void queryClient.invalidateQueries({ queryKey: ["roles"] });
+      queryClient.invalidateQueries({ queryKey: ["roles"] });
     },
   });
 }
@@ -307,8 +307,8 @@ export function useUpdateRole() {
     },
     onSettled: (_, __, { roleId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
-      void queryClient.invalidateQueries({ queryKey: ["roles"] });
-      void queryClient.invalidateQueries({ queryKey: ["roles", roleId] });
+      queryClient.invalidateQueries({ queryKey: ["roles"] });
+      queryClient.invalidateQueries({ queryKey: ["roles", roleId] });
     },
   });
 }
@@ -372,7 +372,7 @@ export function useDeleteRole() {
     },
     onSuccess: () => {
       // Invalidate all roles queries to refetch data
-      void queryClient.invalidateQueries({ queryKey: ["roles"] });
+      queryClient.invalidateQueries({ queryKey: ["roles"] });
     },
   });
 }
@@ -479,7 +479,7 @@ export function useBulkDeleteRoles() {
     },
     defaultOptions: {
       onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        queryClient.invalidateQueries({ queryKey: ["roles"] });
       },
     },
   });
@@ -616,7 +616,7 @@ export function useBulkUpdateRoles() {
     },
     defaultOptions: {
       onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        queryClient.invalidateQueries({ queryKey: ["roles"] });
       },
     },
   });

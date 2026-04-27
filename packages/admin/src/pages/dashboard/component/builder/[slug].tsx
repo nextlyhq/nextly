@@ -8,8 +8,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
-import type React from "react";
-import { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { z } from "zod";
 
 import { BuilderPageTemplate } from "@admin/components/features/schema-builder";
@@ -113,7 +112,7 @@ export default function ComponentBuilderEditPage({
     const userFields = builder.fields.filter(f => !f.isSystem);
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
-      toast.error(validation.errorMessage);
+      toast.error(validation.errorMessage!);
       return;
     }
 
@@ -212,7 +211,7 @@ export default function ComponentBuilderEditPage({
       headerIcon={<Icons.Puzzle className="h-5 w-5" />}
       headerTitle={builder.form.watch("singularName") || "Edit Component"}
       headerDescription="Define the internal structure of this component"
-      onSave={() => { void handleSave(); }}
+      onSave={handleSave}
       onCancel={() => navigateTo(ROUTES.COMPONENTS)}
       isSaving={isSaving}
       saveLabel="Update"

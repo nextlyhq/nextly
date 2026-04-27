@@ -1,5 +1,5 @@
 import { Button } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
 import { Plus } from "@admin/components/icons";

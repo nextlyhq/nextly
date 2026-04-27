@@ -19,7 +19,7 @@ import {
   Spinner,
 } from "@revnixhq/ui";
 import { Clock, ChevronRight } from "lucide-react";
-import type React from "react";
+import React from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";

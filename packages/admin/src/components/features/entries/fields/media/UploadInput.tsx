@@ -387,14 +387,14 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
 
         // Store only IDs in the form (this is what gets saved to DB)
         const ids = limitedMedia.map(m => m.id);
-        onChange(ids);
+        onChange(ids as TFieldValues[Path<TFieldValues>]);
 
         // Update local display cache with full media objects for immediate preview
         setDisplayFiles(limitedMedia.map(mediaToUploadedFile));
       } else {
         // For single selection, store just the ID
         const mediaId = selectedMedia[0].id;
-        onChange(mediaId);
+        onChange(mediaId as TFieldValues[Path<TFieldValues>]);
 
         // Update local display cache
         setDisplayFiles([mediaToUploadedFile(selectedMedia[0])]);
@@ -416,11 +416,11 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
         const updatedFiles = files.filter(f => f.id !== fileId);
         // Store only IDs in form
         const ids = updatedFiles.map(f => f.id);
-        onChange(ids);
+        onChange(ids as TFieldValues[Path<TFieldValues>]);
         // Update display cache
         setDisplayFiles(updatedFiles);
       } else {
-        onChange(null);
+        onChange(null as TFieldValues[Path<TFieldValues>]);
         setDisplayFiles([]);
       }
     },

@@ -39,7 +39,7 @@ export function findFieldById(
     if (field.type === "blocks" && field.blocks) {
       for (const block of field.blocks) {
         if (block.fields && block.fields.length > 0) {
-          const found = findFieldById(block.fields, fieldId);
+          const found = findFieldById(block.fields as BuilderField[], fieldId);
           if (found) return found;
         }
       }
@@ -64,7 +64,7 @@ export function findParentContainerId(
       if (field.fields.some(f => f.id === fieldId)) {
         return {
           containerId: field.id,
-          containerType: field.type,
+          containerType: field.type as "repeater" | "group",
         };
       }
       const found = findParentContainerId(field.fields, fieldId);
@@ -138,7 +138,7 @@ export function addFieldToArray(
           return {
             ...block,
             fields: addFieldToArray(
-              block.fields,
+              block.fields as BuilderField[],
               arrayFieldId,
               newField
             ),
@@ -179,7 +179,7 @@ export function addFieldToGroup(
           return {
             ...block,
             fields: addFieldToGroup(
-              block.fields,
+              block.fields as BuilderField[],
               groupFieldId,
               newField
             ),
@@ -216,7 +216,7 @@ export function updateFieldById(
           return {
             ...block,
             fields: updateFieldById(
-              block.fields,
+              block.fields as BuilderField[],
               updatedField
             ),
           };
@@ -250,7 +250,7 @@ export function deleteFieldById(
           if (block.fields && block.fields.length > 0) {
             return {
               ...block,
-              fields: deleteFieldById(block.fields, fieldId),
+              fields: deleteFieldById(block.fields as BuilderField[], fieldId),
             };
           }
           return block;
@@ -289,7 +289,7 @@ export function reorderNestedFields(
           return {
             ...block,
             fields: reorderNestedFields(
-              block.fields,
+              block.fields as BuilderField[],
               activeId,
               overId
             ),
@@ -347,7 +347,7 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
       slug: block.slug,
       labels: block.label ? { singular: block.label } : undefined,
       fields: block.fields
-        ? block.fields.map(f => convertToFieldDefinition(f))
+        ? block.fields.map(f => convertToFieldDefinition(f as BuilderField))
         : [],
     }));
   }
@@ -415,7 +415,7 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
       definition.validation = {
         ...(definition.validation ?? {}),
         ...chipsLimits,
-      };
+      } as FieldDefinition["validation"];
     }
   }
 

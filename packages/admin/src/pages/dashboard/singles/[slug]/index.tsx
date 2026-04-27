@@ -17,11 +17,12 @@
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import {
   SingleForm,
   type SingleSchema,
+  type SingleDocumentData,
 } from "@admin/components/features/singles";
 import { ChevronRight, Home, Code } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -308,7 +309,7 @@ export default function SingleEditPage({
       <PageContainer>
         <SingleForm
           schema={schema as unknown as SingleSchema}
-          document={document}
+          document={document as unknown as SingleDocumentData}
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
           onCancel={handleCancel}

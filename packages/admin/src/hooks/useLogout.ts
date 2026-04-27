@@ -44,7 +44,7 @@ export function useLogout() {
       toast.success("You have been logged out successfully.");
       // Redirect to login page
       navigateTo(ROUTES.LOGIN);
-    } catch (_error: unknown) {
+    } catch (error: unknown) {
       toast.error("Logout failed. Please try again later.");
     }
   };

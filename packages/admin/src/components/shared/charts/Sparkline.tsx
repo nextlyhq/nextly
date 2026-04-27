@@ -7,7 +7,7 @@
  * @module components/shared/charts/Sparkline
  */
 
-import type React from "react";
+import React from "react";
 
 import { cn } from "@admin/lib/utils";
 

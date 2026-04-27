@@ -20,8 +20,7 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { NumberFieldConfig} from "@admin/types/field-types";
-import { FieldType } from "@admin/types/field-types";
+import { NumberFieldConfig, FieldType } from "@admin/types/field-types";
 
 import { ValidationPatternField } from "./shared/ValidationPatternField";
 
@@ -87,7 +86,7 @@ export function NumberFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={handleSubmit}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

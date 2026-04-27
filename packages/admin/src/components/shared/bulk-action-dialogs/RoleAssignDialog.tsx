@@ -149,7 +149,7 @@ export function RoleAssignDialog({
             Assign {role.name} Role?
           </DialogTitle>
           <DialogDescription id="role-assign-description">
-            This will assign the &quot;{role.name}&quot; role to {users.length} user
+            This will assign the "{role.name}" role to {users.length} user
             {users.length === 1 ? "" : "s"}:
           </DialogDescription>
         </DialogHeader>

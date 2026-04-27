@@ -247,7 +247,7 @@ export function useCreateSingle() {
       return await singleApi.create(singleData);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+      queryClient.invalidateQueries({ queryKey: singleKeys.all() });
     },
   });
 }
@@ -290,9 +290,9 @@ export function useUpdateSingle() {
     },
     onSuccess: (_, { slug }) => {
       // Invalidate all Single caches including schema
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-      void queryClient.invalidateQueries({ queryKey: singleKeys.detail(slug) });
-      void queryClient.invalidateQueries({ queryKey: singleKeys.schema(slug) });
+      queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+      queryClient.invalidateQueries({ queryKey: singleKeys.detail(slug) });
+      queryClient.invalidateQueries({ queryKey: singleKeys.schema(slug) });
     },
   });
 }
@@ -327,7 +327,7 @@ export function useDeleteSingle() {
       return await singleApi.deleteSingle(slug);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+      queryClient.invalidateQueries({ queryKey: singleKeys.all() });
     },
     // Disable retry for delete operations - if deletion succeeds on first attempt,
     // a retry would fail with 404 (already deleted) and incorrectly show an error
@@ -366,7 +366,7 @@ export function useBulkDeleteSingles() {
     },
     defaultOptions: {
       onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+        queryClient.invalidateQueries({ queryKey: singleKeys.all() });
       },
     },
   });
@@ -541,11 +541,11 @@ export function useUpdateSingleDocument(slug: string) {
     },
     onSuccess: () => {
       // Invalidate the document cache
-      void queryClient.invalidateQueries({
+      queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.detail(slug),
       });
       // Also invalidate the general single documents list
-      void queryClient.invalidateQueries({ queryKey: singleDocumentKeys.all() });
+      queryClient.invalidateQueries({ queryKey: singleDocumentKeys.all() });
     },
   });
 }

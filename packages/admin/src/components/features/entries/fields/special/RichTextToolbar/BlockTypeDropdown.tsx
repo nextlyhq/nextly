@@ -100,7 +100,7 @@ export function BlockTypeDropdown({
       case "h4":
       case "h5":
       case "h6":
-        formatHeading(type);
+        formatHeading(type as HeadingTagType);
         break;
       case "ul":
         formatList("bullet");

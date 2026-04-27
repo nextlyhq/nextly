@@ -83,10 +83,10 @@ export function RestartProvider({ children }: { children: ReactNode }) {
       if (success) {
         toast.success(message ?? "Schema changes applied successfully");
         // Invalidate all collection + entry caches so UI refetches fresh data
-        void queryClient.invalidateQueries({ queryKey: ["collections"] });
-        void queryClient.invalidateQueries({ queryKey: ["entries"] });
-        void queryClient.invalidateQueries({ queryKey: ["singles"] });
-        void queryClient.invalidateQueries({ queryKey: ["components"] });
+        queryClient.invalidateQueries({ queryKey: ["collections"] });
+        queryClient.invalidateQueries({ queryKey: ["entries"] });
+        queryClient.invalidateQueries({ queryKey: ["singles"] });
+        queryClient.invalidateQueries({ queryKey: ["components"] });
       } else {
         toast.error(message ?? "Failed to apply schema changes");
       }

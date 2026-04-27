@@ -4,8 +4,8 @@ import {
   useSensor,
   useSensors,
   PointerSensor,
+  DragEndEvent,
 } from "@dnd-kit/core";
-import type { DragEndEvent } from "@dnd-kit/core";
 import {
   SortableContext,
   verticalListSortingStrategy,
@@ -16,7 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Badge, Button } from "@revnixhq/ui";
 
 import { Edit, Trash } from "@admin/components/icons";
-import type {
+import {
   FieldConfig,
   SortableFieldRowProps,
   FieldType,
@@ -81,13 +81,13 @@ function SortableFieldRow({
       <td className="px-6 py-4 whitespace-nowrap text-sm">{field.label}</td>
       <td className="px-6 py-4 whitespace-nowrap text-sm">
         <Badge variant="outline">
-          {formatFieldTypeLabel(field.type)}
+          {formatFieldTypeLabel(field.type as FieldType)}
         </Badge>
       </td>
       <td className="px-6 py-4 whitespace-nowrap text-sm">
         {"validation" in field &&
         field.validation &&
-        field.validation.required
+        (field.validation as { required?: boolean }).required
           ? "Yes"
           : "No"}
       </td>

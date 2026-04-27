@@ -24,7 +24,6 @@ export type DatabaseErrorKind =
   | "deadlock" // Transaction deadlock
   | "timeout" // Query or connection timeout
   | "serialization_failure" // Serializable transaction conflict
-  | "unsupported_version" // F17: DB version below minimum or unparseable at connect
   | "unknown"; // Unclassified error
 
 /**

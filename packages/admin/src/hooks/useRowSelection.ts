@@ -218,6 +218,7 @@ export function useRowSelection(options: UseRowSelectionOptions = {}) {
     (pageIds: string[]) => {
       setSelectedIds(prev => {
         const next = new Set(prev);
+        let addedCount = 0;
 
         for (const id of pageIds) {
           // Check maxSelections limit before adding each item
@@ -237,6 +238,7 @@ export function useRowSelection(options: UseRowSelectionOptions = {}) {
 
           if (!next.has(id)) {
             next.add(id);
+            addedCount++;
           }
         }
 

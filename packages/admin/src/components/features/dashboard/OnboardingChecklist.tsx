@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@revnixhq/ui";
 import { CheckCircle2, X } from "lucide-react";
-import type React from "react";
+import React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { useOnboardingProgress } from "@admin/hooks/queries/useOnboardingProgress";

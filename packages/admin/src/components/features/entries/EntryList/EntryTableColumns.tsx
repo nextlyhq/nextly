@@ -276,7 +276,7 @@ export function getDefaultVisibleColumns(
   // Remove any duplicates and structural columns that might have slipped in
   const uniqueDataColumns = Array.from(new Set(orderedDataColumns)).filter(
     col => !structural.includes(col)
-  );
+  ) as string[];
 
   return [
     structural[0], // "select"
@@ -622,7 +622,7 @@ declare module "@tanstack/react-table" {
   // Reason: TData is required by the generic interface signature for module
   // augmentation but is not referenced in the custom meta properties below.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface ColumnMeta<TData, TValue> {
+  interface ColumnMeta<TData extends unknown, TValue> {
     /** The field type for custom rendering */
     fieldType?: string;
     /** Full field configuration for advanced rendering */

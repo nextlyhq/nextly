@@ -31,6 +31,7 @@ import { useCollection } from "@admin/hooks/queries/useCollections";
 
 import { EntryForm } from "../../EntryForm/EntryForm";
 import type {
+  EntryData,
   EntryFormCollection,
 } from "../../EntryForm/useEntryForm";
 
@@ -200,7 +201,7 @@ function ModalContent({
       collection={collection as unknown as EntryFormCollection}
       mode="create"
       embedded
-      onSuccess={entry => onCreated(entry)}
+      onSuccess={entry => onCreated(entry as CreatedEntry)}
       onCancel={onCancel}
     />
   );

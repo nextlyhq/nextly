@@ -1,4 +1,4 @@
-import type * as LabelPrimitive from "@radix-ui/react-label";
+import * as LabelPrimitive from "@radix-ui/react-label";
 import { Slot } from "@radix-ui/react-slot";
 import {
   Label,
@@ -8,10 +8,9 @@ import {
   TooltipTrigger,
 } from "@revnixhq/ui";
 import { Info } from "lucide-react";
-import type * as React from "react";
-import type {
-  ComponentProps} from "react";
+import * as React from "react";
 import {
+  ComponentProps,
   createContext,
   useContext,
   useId,

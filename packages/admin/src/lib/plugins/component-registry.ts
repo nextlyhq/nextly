@@ -293,7 +293,6 @@ async function tryDynamicImport(
     // Use indirect dynamic import via Function constructor to prevent
     // bundler (Webpack/Turbopack) static analysis warnings.
     // This is intentional: plugin modules are optional and resolved at runtime.
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const importModule = new Function("m", "return import(m)") as (
       m: string
     ) => Promise<Record<string, unknown>>;

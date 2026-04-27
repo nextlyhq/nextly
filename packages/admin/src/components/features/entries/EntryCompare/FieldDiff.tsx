@@ -108,7 +108,6 @@ function formatValue(value: unknown, fieldType?: string): string {
   }
 
   // Handle primitives
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(value);
 }
 

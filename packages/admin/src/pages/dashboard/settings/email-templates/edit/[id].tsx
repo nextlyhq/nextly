@@ -130,7 +130,7 @@ export default function EditEmailTemplatePage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => { void refetch(); }}
+                onClick={() => refetch()}
                 className="ml-2"
               >
                 Retry

@@ -1,6 +1,6 @@
 "use client";
 
-import type React from "react";
+import React from "react";
 
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 

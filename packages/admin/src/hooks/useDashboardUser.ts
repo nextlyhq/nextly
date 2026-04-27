@@ -54,7 +54,7 @@ export function useDashboardUser() {
       }
     }
 
-    void fetchUser();
+    fetchUser();
     // Reason: api is stable from useApi() — including it would cause unnecessary
     // re-fetches. This effect should only run once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps

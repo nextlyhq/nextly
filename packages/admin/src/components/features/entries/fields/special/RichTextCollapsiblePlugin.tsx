@@ -17,8 +17,10 @@ import {
   $createTextNode,
   $insertNodes,
   COMMAND_PRIORITY_EDITOR,
+  COMMAND_PRIORITY_LOW,
   createCommand,
   type LexicalCommand,
+  KEY_ARROW_DOWN_COMMAND,
 } from "lexical";
 import { useEffect } from "react";
 
@@ -26,6 +28,7 @@ import {
   $createCollapsibleContainerNode,
   $createCollapsibleTitleNode,
   $createCollapsibleContentNode,
+  $isCollapsibleContainerNode,
 } from "./CollapsibleNode";
 
 // ============================================================
@@ -93,7 +96,7 @@ export function RichTextCollapsiblePlugin({
             // but sync the open state to Lexical
             const details = target.parentElement;
             if (details && details.tagName === "DETAILS") {
-              const _isOpen = !(details as HTMLDetailsElement).open;
+              const isOpen = !(details as HTMLDetailsElement).open;
               // The toggle event fires after the state changes,
               // so we read the opposite of current state
               editor.update(() => {

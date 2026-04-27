@@ -30,14 +30,14 @@ export function UserDeleteDialog({
 
   const isPending = isDeleting || isLoading;
 
-  const handleConfirm = useCallback(() => {
+  const handleConfirm = useCallback(async () => {
     if (isPending) return;
 
     try {
       setIsDeleting(true);
       setError(null);
 
-      onConfirm();
+      await onConfirm();
 
       toast.success("User deleted successfully", {
         description: `The user "${user?.name}" has been removed.`,
@@ -90,7 +90,7 @@ export function UserDeleteDialog({
           </Button>
           <Button
             variant="destructive"
-            onClick={() => { void handleConfirm(); }}
+            onClick={handleConfirm}
             disabled={isPending}
             ref={deleteButtonRef}
           >

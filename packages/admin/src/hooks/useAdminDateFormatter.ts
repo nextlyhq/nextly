@@ -40,7 +40,7 @@ export function useAdminDateFormatter() {
     return (options: FormatDateOptions = {}) => {
       return { ...options };
     };
-  }, []);
+  }, [timezone]);
 
   const formatDate = (
     value: string | number | Date | null | undefined,

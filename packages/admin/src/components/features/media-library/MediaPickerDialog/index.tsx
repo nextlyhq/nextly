@@ -20,8 +20,7 @@ import {
   TabsTrigger,
 } from "@revnixhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import type React from "react";
-import {
+import React, {
   useState,
   useCallback,
   useMemo,
@@ -48,8 +47,8 @@ import {
   useFolderContents,
 } from "@admin/hooks/queries/useMedia";
 import { cn } from "@admin/lib/utils";
-import type { Media, MediaFolder, MediaType } from "@admin/types/media";
-import type { MediaPickerDialogProps } from "@admin/types/ui/media-picker-dialog";
+import { Media, MediaType } from "@admin/types/media";
+import { MediaPickerDialogProps } from "@admin/types/ui/media-picker-dialog";
 
 import { MediaGrid } from "../MediaGrid";
 import { MediaUploadDropzone } from "../MediaUploadDropzone";
@@ -125,8 +124,8 @@ export function MediaPickerDialog({
   // Refetch folder/media data when dialog opens to ensure fresh data
   useEffect(() => {
     if (open) {
-      void queryClient.invalidateQueries({ queryKey: ["folders"] });
-      void queryClient.invalidateQueries({ queryKey: ["media-infinite"] });
+      queryClient.invalidateQueries({ queryKey: ["folders"] });
+      queryClient.invalidateQueries({ queryKey: ["media-infinite"] });
     }
   }, [open, queryClient]);
 
@@ -298,7 +297,7 @@ export function MediaPickerDialog({
     const observer = new IntersectionObserver(
       entries => {
         if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
-          void fetchNextPage();
+          fetchNextPage();
         }
       },
       {
@@ -855,7 +854,7 @@ export function MediaPickerDialog({
                 )}
               </div>
               <MediaUploadDropzone
-                onUploadComplete={(media) => { void handleUploadComplete(media); }}
+                onUploadComplete={handleUploadComplete}
                 isCollapsed={false}
                 accept={accept}
                 maxFileSize={maxFileSize}
@@ -904,7 +903,7 @@ export function MediaPickerDialog({
 }
 
 interface PickerFolderItemProps {
-  folder: MediaFolder;
+  folder: import("@admin/types/media").MediaFolder;
   level: number;
   activeFolderId: string | null;
   onSelect: (folderId: string) => void;

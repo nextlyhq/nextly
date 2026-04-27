@@ -8,8 +8,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
-import type React from "react";
-import { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { z } from "zod";
 
 import {
@@ -42,7 +41,7 @@ import {
 } from "@admin/services/schemaApi";
 import {
   type FieldDefinition,
-  type 
+  type Collection,
   getCollectionFields,
 } from "@admin/types/collection";
 
@@ -173,7 +172,7 @@ export default function CollectionBuilderEditPage({
     );
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
-      toast.error(validation.errorMessage);
+      toast.error(validation.errorMessage!);
       return null;
     }
     return userFields.map(convertToFieldDefinition);
@@ -321,6 +320,7 @@ export default function CollectionBuilderEditPage({
     slug,
     getValidatedFields,
     saveCollectionSettings,
+    applySchemaChanges,
   ]);
 
   // Resolve the header icon from settings
@@ -388,7 +388,7 @@ export default function CollectionBuilderEditPage({
         headerIcon={<HeaderIcon className="h-5 w-5" />}
         headerTitle={builder.form.watch("singularName") || "Edit Collection"}
         headerDescription="Manage your collection schema and settings."
-        onSave={() => { void handleSave(); }}
+        onSave={handleSave}
         onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
         isSaving={isSaving || isApplyingSchema}
         saveLabel="Update"
@@ -423,7 +423,7 @@ export default function CollectionBuilderEditPage({
           onConfirm={() => {
             const fieldDefs = getValidatedFields();
             if (fieldDefs) {
-              void applySchemaChanges(fieldDefs, previewData.schemaVersion, {});
+              applySchemaChanges(fieldDefs, previewData.schemaVersion, {});
             }
           }}
           isApplying={isApplyingSchema}
@@ -444,7 +444,7 @@ export default function CollectionBuilderEditPage({
           onConfirm={resolutions => {
             const fieldDefs = getValidatedFields();
             if (fieldDefs) {
-              void applySchemaChanges(
+              applySchemaChanges(
                 fieldDefs,
                 previewData.schemaVersion,
                 resolutions

@@ -1,4 +1,4 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import { TableParams, TableResponse } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { enhancedFetcher } from "../lib/api/enhancedFetcher";
@@ -10,7 +10,7 @@ import type {
   UpdateCollectionPayload,
   Entry,
 } from "../types/collection";
-import type { ApiCollection } from "../types/entities";
+import { ApiCollection } from "../types/entities";
 
 // Build query string for pagination and search using shared utility
 const buildQuery = (params: TableParams): string => {

@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, Skeleton } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 export const StatsGridSkeleton: React.FC = () => {
   return (

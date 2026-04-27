@@ -37,7 +37,7 @@ export const isUser = (data: unknown): data is User => {
     typeof data === "object" &&
     data !== null &&
     "id" in data &&
-    typeof (data).id === "string" &&
+    typeof (data as { id: unknown }).id === "string" &&
     "email" in data &&
     typeof (data as { email: unknown }).email === "string"
   );
@@ -65,7 +65,7 @@ export const isUserApiResponse = (data: unknown): data is UserApiResponse => {
     typeof data === "object" &&
     data !== null &&
     "id" in data &&
-    typeof (data).id === "number" &&
+    typeof (data as { id: unknown }).id === "number" &&
     "email" in data &&
     typeof (data as { email: unknown }).email === "string"
   );
@@ -94,7 +94,7 @@ export const isRole = (data: unknown): data is Role => {
     typeof data === "object" &&
     data !== null &&
     "id" in data &&
-    typeof (data).id === "string" &&
+    typeof (data as { id: unknown }).id === "string" &&
     "roleName" in data &&
     typeof (data as { roleName: unknown }).roleName === "string"
   );
@@ -125,7 +125,7 @@ export const isPermission = (data: unknown): data is Permission => {
     typeof data === "object" &&
     data !== null &&
     "id" in data &&
-    typeof (data).id === "string" &&
+    typeof (data as { id: unknown }).id === "string" &&
     "name" in data &&
     typeof (data as { name: unknown }).name === "string" &&
     "resource" in data &&

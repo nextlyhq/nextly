@@ -400,7 +400,7 @@ export function MediaUploadDropzone({
     maxSize: maxSize,
     maxFiles: MAX_FILES,
     disabled: uploadQueue.some(item => item.status === "uploading"),
-    onDrop: (acceptedFiles) => { void handleDrop(acceptedFiles); },
+    onDrop: handleDrop,
     noClick: true,
     noKeyboard: true,
   });

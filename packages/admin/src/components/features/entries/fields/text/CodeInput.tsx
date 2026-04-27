@@ -8,9 +8,10 @@
  * @since 1.0.0
  */
 
-import type { CodeFieldConfig } from "@revnixhq/nextly/config";
+import type { CodeFieldConfig, CodeLanguage } from "@revnixhq/nextly/config";
 import { useTheme } from "next-themes";
 import {
+  useMemo,
   useCallback,
   useState,
   useEffect,

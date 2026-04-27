@@ -10,8 +10,7 @@ import {
   TableSkeleton,
 } from "@revnixhq/ui";
 import { useQuery } from "@tanstack/react-query";
-import type React from "react";
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Info, Shield } from "@admin/components/icons";
@@ -232,9 +231,10 @@ function PermissionsContent() {
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
+  const allPermissions = data?.data ?? [];
+
   // Apply search and type filters client-side
   const filteredGroups = useMemo<ResourceGroup[]>(() => {
-    const allPermissions = data?.data ?? [];
     let filtered = allPermissions;
 
     // Apply type filter
@@ -257,7 +257,7 @@ function PermissionsContent() {
     }
 
     return groupPermissionsByResource(filtered);
-  }, [data?.data, search, typeFilter]);
+  }, [allPermissions, search, typeFilter]);
 
   const totalPermissions = filteredGroups.reduce(
     (acc, g) => acc + g.permissions.length,
@@ -350,7 +350,7 @@ function PermissionsContent() {
           <p className="mt-1 text-sm text-muted-foreground">
             {search || typeFilter !== "all"
               ? "Try adjusting your search or clearing the filter."
-              : "Permissions are auto-generated when you run next dev or create collections."}
+              : "Permissions are auto-generated when you run nextly dev or create collections."}
           </p>
           {(search || typeFilter !== "all") && (
             <Button

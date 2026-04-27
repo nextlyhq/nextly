@@ -1,5 +1,4 @@
-import type React from "react";
-import { useMemo } from "react";
+import React, { useMemo } from "react";
 
 import { ChevronRight, Home } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";

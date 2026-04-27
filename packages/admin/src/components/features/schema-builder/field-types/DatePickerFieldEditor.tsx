@@ -25,8 +25,7 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { DatePickerFieldConfig} from "@admin/types/field-types";
-import { FieldType } from "@admin/types/field-types";
+import { DatePickerFieldConfig, FieldType } from "@admin/types/field-types";
 
 // Define schema for date picker field form
 const datePickerFieldSchema = z.object({
@@ -93,7 +92,7 @@ export function DatePickerFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={handleSubmit}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

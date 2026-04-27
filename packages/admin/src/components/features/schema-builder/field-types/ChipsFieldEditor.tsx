@@ -20,8 +20,7 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { ChipsFieldConfig} from "@admin/types/field-types";
-import { FieldType } from "@admin/types/field-types";
+import { ChipsFieldConfig, FieldType } from "@admin/types/field-types";
 
 const chipsFieldSchema = z.object({
   name: createSlugSchema(),
@@ -94,7 +93,7 @@ export function ChipsFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={handleSubmit}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

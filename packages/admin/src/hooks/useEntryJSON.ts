@@ -144,7 +144,7 @@ export function useEntryJSON({
   // Fetch on mount if requested
   useEffect(() => {
     if (fetchOnMount) {
-      void fetchEntry();
+      fetchEntry();
     }
   }, [fetchOnMount, fetchEntry]);
 
@@ -152,7 +152,7 @@ export function useEntryJSON({
   useEffect(() => {
     if (data !== null || error !== null) {
       // Only refetch if we've already loaded once
-      void fetchEntry();
+      fetchEntry();
     }
     // Reason: only re-fetch when depth changes; fetchEntry/data/error are
     // intentionally excluded to avoid loops — the guard above ensures this

@@ -19,14 +19,6 @@
  * @since 1.0.0
  */
 
-import { zodResolver } from "@hookform/resolvers/zod";
-import type { FieldConfig } from "@revnixhq/nextly/config";
-import { Card, CardContent } from "@revnixhq/ui";
-import type React from "react";
-import { useEffect, useMemo, useCallback } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
-
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
@@ -34,6 +26,12 @@ import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRe
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
+import { zodResolver } from "@hookform/resolvers/zod";
+import type { FieldConfig } from "@revnixhq/nextly/config";
+import { Card, CardContent } from "@revnixhq/ui";
+import React, { useEffect, useMemo, useCallback } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
 
 import { SingleFormActions } from "./SingleFormActions";
 import { SingleFormHeader } from "./SingleFormHeader";
@@ -110,7 +108,7 @@ function getDefaultValues(
       continue;
     }
 
-    const fieldName = field.name;
+    const fieldName = field.name as string;
     // Single entry API returns DB column names (snake_case) but field configs
     // use camelCase. Try camelCase first, then fall back to snake_case.
     const existingValue =
@@ -289,7 +287,7 @@ export function SingleForm({
 
   // Generate default values from document data
   const defaultValues = useMemo(() => {
-    return getDefaultValues(schema.fields, document);
+    return getDefaultValues(schema.fields, document as Record<string, unknown>);
   }, [schema.fields, document]);
 
   // Initialize form
@@ -342,7 +340,7 @@ export function SingleForm({
   // ---------------------------------------------------------------------------
 
   useEntryFormShortcuts({
-    onSave: () => { void handleSubmit(); },
+    onSave: handleSubmit,
     onCancel: handleCancel,
     isDirty,
     isSubmitting,

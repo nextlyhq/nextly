@@ -198,7 +198,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * @example
  * ```typescript
  * // Basic array - social links
- * const socialLinks: RepeaterFieldConfig = {
+ * const socialLinks: ArrayFieldConfig = {
  *   name: 'socialLinks',
  *   type: 'array',
  *   label: 'Social Links',
@@ -223,7 +223,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * };
  *
  * // FAQ section with custom row labels
- * const faq: RepeaterFieldConfig = {
+ * const faq: ArrayFieldConfig = {
  *   name: 'faq',
  *   type: 'array',
  *   label: 'Frequently Asked Questions',
@@ -254,7 +254,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * };
  *
  * // Image gallery with validation
- * const gallery: RepeaterFieldConfig = {
+ * const gallery: ArrayFieldConfig = {
  *   name: 'gallery',
  *   type: 'array',
  *   label: 'Image Gallery',
@@ -290,7 +290,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * };
  *
  * // Nested arrays - product variants with options
- * const variants: RepeaterFieldConfig = {
+ * const variants: ArrayFieldConfig = {
  *   name: 'variants',
  *   type: 'array',
  *   label: 'Product Variants',
@@ -322,7 +322,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * };
  * ```
  */
-export interface RepeaterFieldConfig
+export interface ArrayFieldConfig
   extends Omit<
     BaseFieldConfig,
     "type" | "validate" | "defaultValue" | "admin"

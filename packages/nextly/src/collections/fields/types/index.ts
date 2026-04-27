@@ -17,7 +17,7 @@
 // Unified Field Config Types
 // ============================================================
 
-import type { RepeaterFieldConfig } from "./array";
+import type { ArrayFieldConfig } from "./array";
 import type { FieldType } from "./base";
 
 // Text field configs
@@ -130,7 +130,7 @@ export type DataFieldConfig =
   | RadioFieldConfig
   | UploadFieldConfig
   | RelationshipFieldConfig
-  | RepeaterFieldConfig
+  | ArrayFieldConfig
   | GroupFieldConfig
   | JSONFieldConfig
   | ComponentFieldConfig

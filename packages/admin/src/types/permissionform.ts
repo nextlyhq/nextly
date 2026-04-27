@@ -10,7 +10,7 @@ export interface PermissionFormProps {
   };
 }
 
-export function getPermissionFormSchema(_isEdit: boolean) {
+export function getPermissionFormSchema(isEdit: boolean) {
   return z.object({
     name: z.string().trim().min(1, "Name is required"),
     slug: z.string().trim().min(1, "Slug is required"),

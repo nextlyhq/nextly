@@ -22,6 +22,7 @@ import {
   FieldEditor,
   FieldList,
   FieldPalette,
+  type BuilderField,
   type FieldListDragData,
   type PaletteDragData,
 } from "@admin/components/features/schema-builder";

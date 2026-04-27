@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import { ChevronRight, Folder as FolderIcon } from "@admin/components/icons";
 import { useFolderContents } from "@admin/hooks/queries/useMedia";
 import { cn } from "@admin/lib/utils";

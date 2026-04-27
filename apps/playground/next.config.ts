@@ -22,8 +22,6 @@ const nextConfig: NextConfig = {
     "sharp",
     "drizzle-orm",
     "esbuild",
-    'esbuild',
-      'bundle-require',
   ],
   experimental: {
     esmExternals: true,

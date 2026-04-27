@@ -111,7 +111,7 @@ export function ShowJSONDialog({
   // Fetch data when dialog opens
   useEffect(() => {
     if (open && !data && !isLoading && !error) {
-      void refetch();
+      refetch();
     }
   }, [open, data, isLoading, error, refetch]);
 
@@ -157,7 +157,7 @@ export function ShowJSONDialog({
     const newDepth = parseInt(value, 10);
     setDepth(newDepth);
     // Refetch with new depth
-    setTimeout(() => { void refetch(); }, 0);
+    setTimeout(() => refetch(), 0);
   };
 
   // Generate depth options (0 to MAX_DEPTH)
@@ -222,7 +222,7 @@ export function ShowJSONDialog({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => { void handleCopy(); }}
+              onClick={handleCopy}
               disabled={!jsonString || isLoading}
               className="gap-2"
             >

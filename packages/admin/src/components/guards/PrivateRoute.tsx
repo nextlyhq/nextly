@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type React from "react";
-import { useEffect } from "react";
+import React, { useEffect } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
 import { publicApi } from "@admin/lib/api/publicApi";

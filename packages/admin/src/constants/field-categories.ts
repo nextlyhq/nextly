@@ -7,6 +7,8 @@
 
 import {
   FieldType,
+  type FieldConfig,
+  type GroupFieldConfig,
   type FieldTypeDefinition,
 } from "@admin/types/field-types";
 
@@ -164,7 +166,7 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       validation: {
         required: false,
       },
-    },
+    } as unknown as Partial<FieldConfig>,
   },
 
   // Choice
@@ -300,9 +302,9 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
   },
 
   // Layout
-  [FieldType.REPEATER]: {
-    type: FieldType.REPEATER,
-    label: "Repeater",
+  [FieldType.ARRAY]: {
+    type: FieldType.ARRAY,
+    label: "Array / Repeater",
     description: "Repeatable group of fields",
     icon: "layers",
     category: FIELD_CATEGORIES.LAYOUT,
@@ -334,7 +336,7 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
         description: "",
         collapsible: true,
       },
-    },
+    } as Partial<GroupFieldConfig>,
   },
 };
 

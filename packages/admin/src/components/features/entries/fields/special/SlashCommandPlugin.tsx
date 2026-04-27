@@ -24,11 +24,12 @@ import {
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { $createHeadingNode, $createQuoteNode } from "@lexical/rich-text";
 import { $setBlocksType } from "@lexical/selection";
-import type {
-  TextNode,
+import {
   $getSelection,
   $isRangeSelection,
-  type LexicalEditor} from "lexical";
+  TextNode,
+  type LexicalEditor,
+} from "lexical";
 import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -321,7 +322,7 @@ function SlashCommandMenuItem({
     <li
       key={option.key}
       tabIndex={-1}
-      ref={(el) => { option.setRefElement(el); }}
+      ref={option.setRefElement}
       role="option"
       aria-selected={isSelected}
       id={`typeahead-item-${index}`}

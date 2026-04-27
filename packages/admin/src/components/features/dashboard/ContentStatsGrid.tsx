@@ -11,7 +11,7 @@
 "use client";
 
 import { Alert, AlertDescription, Spinner } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import { StatsCard } from "@admin/components/features/dashboard/StatsCard";
 import {

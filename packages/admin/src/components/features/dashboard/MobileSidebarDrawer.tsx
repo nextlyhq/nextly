@@ -5,6 +5,7 @@ import {
   SheetClose,
   SheetTitle,
 } from "@revnixhq/ui";
+import React from "react";
 
 import { Laptop, X } from "@admin/components/icons";
 import { SidebarContent, SidebarGroup } from "@admin/components/layout/sidebar";

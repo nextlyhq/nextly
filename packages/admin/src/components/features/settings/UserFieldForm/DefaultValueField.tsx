@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@revnixhq/ui";
+import React from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {

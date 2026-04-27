@@ -47,16 +47,16 @@ export interface GroupFieldContainerProps {
 
 export function GroupFieldContainer({
   parentFieldId,
-  _parentFieldLabel,
+  parentFieldLabel,
   nestedFields,
   depth: _depth,
   nestingDepth,
-  _selectedFieldId,
-  _onFieldSelect,
-  _onFieldDelete,
-  _validationErrors,
-  _collapsedFieldIds,
-  _onToggleCollapse,
+  selectedFieldId,
+  onFieldSelect,
+  onFieldDelete,
+  validationErrors,
+  collapsedFieldIds,
+  onToggleCollapse,
   onPlaceholderClick,
   renderField,
 }: GroupFieldContainerProps) {

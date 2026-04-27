@@ -22,7 +22,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import type { RepeaterFieldConfig, FieldConfig } from "@revnixhq/nextly/config";
+import type { ArrayFieldConfig, FieldConfig } from "@revnixhq/nextly/config";
 import {
   Button,
   Card,
@@ -38,6 +38,7 @@ import {
   useFormContext,
   type Control,
   type FieldValues,
+  type Path,
   type FieldArrayPath,
 } from "react-hook-form";
 
@@ -62,7 +63,7 @@ export interface ArrayInputProps<
   /**
    * Array field configuration from collection schema.
    */
-  field: RepeaterFieldConfig;
+  field: ArrayFieldConfig;
 
   /**
    * React Hook Form control object.
@@ -363,7 +364,7 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
                       id={item.id}
                       index={index}
                       field={field}
-                      basePath={`${name}.${index}`}
+                      basePath={`${name}.${index}` as Path<TFieldValues>}
                       data={item as Record<string, unknown>}
                       control={control}
                       onRemove={() => remove(index)}

@@ -41,7 +41,7 @@ import {
 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { useRootFolders } from "@admin/hooks/queries/useMedia";
-import { formatFileSize } from "@admin/lib/media-utils";
+import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
 
@@ -203,7 +203,7 @@ function ImageSizesDisplay({
   const [copiedUrl, setCopiedUrl] = React.useState<string | null>(null);
 
   const handleCopyUrl = React.useCallback((url: string, name: string) => {
-    void navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(url);
     setCopiedUrl(name);
     setTimeout(() => setCopiedUrl(null), 2000);
   }, []);
@@ -351,7 +351,7 @@ export function MediaEditDialog({
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       e.stopPropagation();
-      void handleSubmit(e);
+      handleSubmit(e);
     },
     [handleSubmit]
   );

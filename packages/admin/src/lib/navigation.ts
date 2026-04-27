@@ -1,3 +1,5 @@
+import { RouteValue } from "../constants/routes";
+
 /**
  * Resolve a route path to an admin-prefixed path.
  */
@@ -14,7 +16,7 @@ function toAdminPath(path: string): string {
  *
  * Accepts both static routes (RouteValue) and dynamic routes built with buildRoute()
  */
-export function navigateTo(path: string): void {
+export function navigateTo(path: RouteValue | string): void {
   try {
     const adminPath = toAdminPath(path);
 
@@ -39,7 +41,7 @@ export function navigateTo(path: string): void {
  *
  * Accepts both static routes (RouteValue) and dynamic routes built with buildRoute()
  */
-export function replaceTo(path: string): void {
+export function replaceTo(path: RouteValue | string): void {
   try {
     const adminPath = toAdminPath(path);
 

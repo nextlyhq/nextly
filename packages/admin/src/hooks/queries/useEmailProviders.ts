@@ -113,7 +113,7 @@ export function useCreateEmailProvider() {
   return useMutation<EmailProviderRecord, Error, CreateEmailProviderPayload>({
     mutationFn: data => createProvider(data),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
+      queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
     },
   });
 }
@@ -132,7 +132,7 @@ export function useUpdateEmailProvider() {
   >({
     mutationFn: ({ id, data }) => updateProvider(id, data),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
+      queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
     },
   });
 }
@@ -183,7 +183,7 @@ export function useDeleteEmailProvider() {
     },
     // Always refetch after error or success to ensure consistency
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
+      queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
     },
   });
 }
@@ -198,7 +198,7 @@ export function useSetDefaultProvider() {
   return useMutation<void, Error, string>({
     mutationFn: id => setDefaultProvider(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
+      queryClient.invalidateQueries({ queryKey: emailProviderKeys.all() });
     },
   });
 }

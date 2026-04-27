@@ -15,18 +15,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     setupFiles: ["./src/__tests__/setup.ts"],
-    // Why explicit exclude of integration tests: F18 runs unit and integration
-    // suites separately. Unit run skips *.integration.test.ts so the suite
-    // stays green without a database. Integration run uses
-    // vitest.integration.config.ts.
     include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
-    exclude: [
-      "node_modules",
-      "dist",
-      ".turbo",
-      "**/*.d.ts",
-      "**/*.integration.test.ts",
-    ],
+    exclude: ["node_modules", "dist", ".turbo", "**/*.d.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html", "lcov"],

@@ -8,8 +8,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
+import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { cn } from "@admin/lib/utils";
 import { verifyEmail } from "@admin/services/authApi";
 
 type VerifyState = "loading" | "success" | "error" | "no-token";
@@ -19,6 +22,8 @@ interface VerifyEmailProps {
 }
 
 export function VerifyEmail({ searchParams }: VerifyEmailProps) {
+  const branding = useBranding();
+  const appName = branding.logoText ?? "Nextly";
   const token =
     typeof searchParams?.token === "string" ? searchParams.token : null;
 
@@ -50,7 +55,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
       }
     }
 
-    void verify();
+    verify();
   }, [token]);
 
   // No token in URL

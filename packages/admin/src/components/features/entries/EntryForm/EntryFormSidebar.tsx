@@ -1,7 +1,6 @@
 import type { FieldConfig } from "@revnixhq/nextly/config";
 import { ChevronDown } from "lucide-react";
-import type React from "react";
-import { useState } from "react";
+import React, { useState } from "react";
 
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
@@ -51,11 +50,11 @@ export function EntryFormSidebar({
   const { formatDate } = useAdminDateFormatter();
 
   const createdAt =
-    (entry?.createdAt) ??
+    (entry?.createdAt as string | undefined) ??
     (entry?.created_at as string | undefined) ??
     undefined;
   const updatedAt =
-    (entry?.updatedAt) ??
+    (entry?.updatedAt as string | undefined) ??
     (entry?.updated_at as string | undefined) ??
     undefined;
 

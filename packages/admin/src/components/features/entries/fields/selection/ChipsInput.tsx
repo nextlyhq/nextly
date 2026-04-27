@@ -87,7 +87,7 @@ export function ChipsInput<TFieldValues extends FieldValues = FieldValues>({
   function removeChip(index: number) {
     if (!isInteractive) return;
     const next = chips.filter((_, i) => i !== index);
-    onChange(next);
+    onChange(next as TFieldValues[Path<TFieldValues>]);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {

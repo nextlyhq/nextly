@@ -1,4 +1,4 @@
 {
   "title": "Database",
-  "pages": ["index", "postgres", "mysql", "sqlite", "support"]
+  "pages": ["index", "postgres", "mysql", "sqlite"]
 }

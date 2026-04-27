@@ -1,10 +1,10 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import { TableParams, TableResponse } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { enhancedFetcher } from "../lib/api/enhancedFetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
 import { isUser } from "../types/guards";
-import type {
+import {
   User,
   UserApiResponse,
   CreateUserPayload,

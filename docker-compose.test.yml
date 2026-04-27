@@ -17,21 +17,7 @@
 #   TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5433/nextly_test
 #   TEST_MYSQL_URL=mysql://root:root@localhost:3307/nextly_test
 #
-# Note: Uses ports 5433/5434/5435 (Postgres) and 3307 (MySQL) to avoid conflicts
-# with development databases.
-#
-# Service map (F18):
-#   postgres-test    -> PG 16 (legacy default; deprecated, will be removed in v2)
-#   postgres15-test  -> PG 15 (F17 minimum; matrix-tested)
-#   postgres17-test  -> PG 17 (current latest; matrix-tested)
-#   mysql-test       -> MySQL 8.0 (matrix-tested)
-#   SQLite           -> in-memory only, no service needed
-#
-# Test env vars per dialect (use the URL matching the version you target):
-#   TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5434/nextly_test  (PG 15)
-#   TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5435/nextly_test  (PG 17)
-#   TEST_MYSQL_URL=mysql://root:root@localhost:3307/nextly_test
-#   TEST_SQLITE_URL=:memory:  (or omit; sqlite tests default to in-memory)
+# Note: Uses ports 5433 and 3307 to avoid conflicts with development databases.
 
 services:
   # PostgreSQL Test Database
@@ -57,63 +43,13 @@ services:
       retries: 5
       start_period: 10s
 
-  # PostgreSQL 15 Test Database (F17 minimum version)
-  # Port: 5434 (mapped from container 5432)
-  # Credentials: postgres/postgres
-  # Database: nextly_test
-  # Why pinned: F17 declares PG 15.0 as the minimum supported version.
-  # CI tests at this version to catch regressions that would break
-  # users on the minimum.
-  postgres15-test:
-    image: postgres:15
-    container_name: nextly-postgres15-test
-    environment:
-      POSTGRES_DB: nextly_test
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5434:5432"
-    tmpfs:
-      - /var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d nextly_test"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  # PostgreSQL 17 Test Database (current latest at F18 ship time)
-  # Port: 5435 (mapped from container 5432)
-  # Credentials: postgres/postgres
-  # Database: nextly_test
-  # Why pinned: catches forward-compat issues. The PG 15 job catches
-  # PRs that accidentally rely on PG 17 features and would break PG 15
-  # minimum support; this job catches the inverse case.
-  postgres17-test:
-    image: postgres:17
-    container_name: nextly-postgres17-test
-    environment:
-      POSTGRES_DB: nextly_test
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5435:5432"
-    tmpfs:
-      - /var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d nextly_test"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   # MySQL Test Database
-  # Image: mysql:8.0 (explicit pin)
+  # Image: mysql:8
   # Port: 3307 (mapped from container 3306)
   # Credentials: root/root
   # Database: nextly_test
   mysql-test:
-    image: mysql:8.0
+    image: mysql:8
     container_name: nextly-mysql-test
     environment:
       MYSQL_DATABASE: nextly_test

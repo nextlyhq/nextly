@@ -202,9 +202,7 @@ export function useUnsavedChanges({
     if (disabled) return;
 
     // Store original methods
-    // eslint-disable-next-line @typescript-eslint/unbound-method
     originalPushState.current = window.history.pushState;
-    // eslint-disable-next-line @typescript-eslint/unbound-method
     originalReplaceState.current = window.history.replaceState;
 
     // Create interceptor for pushState

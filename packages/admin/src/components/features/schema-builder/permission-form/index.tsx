@@ -2,15 +2,14 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Input, Label, Switch } from "@revnixhq/ui";
-import type { ReactElement } from "react";
-import { useForm, type Resolver } from "react-hook-form";
+import { ReactElement } from "react";
+import { useForm, Controller, type Resolver } from "react-hook-form";
 
-import type {
-  PermissionFormProps,
-  PermissionFormValues} from "@admin/types/permissionform";
 import {
+  PermissionFormProps,
   createPermissionFormSchema,
-  editPermissionFormSchema
+  editPermissionFormSchema,
+  PermissionFormValues,
 } from "@admin/types/permissionform";
 
 export function PermissionForm({
@@ -21,7 +20,7 @@ export function PermissionForm({
 
   const {
     register,
-    _control,
+    control,
     handleSubmit,
     reset,
     watch,
@@ -37,9 +36,9 @@ export function PermissionForm({
   });
 
   const watchedName = watch("name");
-  const _watchedSlug = watch("slug");
-  const _watchedDescription = watch("description");
-  const _initial = (watchedName?.trim()?.[0] || "U").toUpperCase();
+  const watchedSlug = watch("slug");
+  const watchedDescription = watch("description");
+  const initial = (watchedName?.trim()?.[0] || "U").toUpperCase();
 
   function handleCancel() {
     reset({
@@ -60,7 +59,7 @@ export function PermissionForm({
         {/* Form */}
         <form
           id="permission-form"
-          onSubmit={(e) => { void handleSubmit(onValid)(e); }}
+          onSubmit={handleSubmit(onValid)}
           className="grid gap-2 flex-1"
         >
           <div className="form-field-wrapper">

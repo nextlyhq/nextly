@@ -246,7 +246,7 @@ export function useCreateComponent() {
       return await componentApi.create(componentData);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: componentKeys.all() });
+      queryClient.invalidateQueries({ queryKey: componentKeys.all() });
     },
   });
 }
@@ -300,8 +300,8 @@ export function useUpdateComponent() {
       return await componentApi.update(componentSlug, updates);
     },
     onSuccess: (_, { componentSlug }) => {
-      void queryClient.invalidateQueries({ queryKey: componentKeys.all() });
-      void queryClient.invalidateQueries({
+      queryClient.invalidateQueries({ queryKey: componentKeys.all() });
+      queryClient.invalidateQueries({
         queryKey: componentKeys.detail(componentSlug),
       });
     },
@@ -354,7 +354,7 @@ export function useDeleteComponent() {
       return await componentApi.deleteComponent(componentSlug);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: componentKeys.all() });
+      queryClient.invalidateQueries({ queryKey: componentKeys.all() });
     },
   });
 }
@@ -410,7 +410,7 @@ export function useBulkDeleteComponents() {
     },
     defaultOptions: {
       onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: componentKeys.all() });
+        queryClient.invalidateQueries({ queryKey: componentKeys.all() });
       },
     },
   });

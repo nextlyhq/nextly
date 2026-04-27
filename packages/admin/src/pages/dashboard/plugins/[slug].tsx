@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import * as Icons from "@admin/components/icons";
 import { ChevronRight, Home, Package, Puzzle } from "@admin/components/icons";

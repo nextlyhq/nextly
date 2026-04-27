@@ -17,6 +17,7 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  Sparkles,
 } from "@admin/components/icons";
 import { PasswordStrengthIndicator } from "@admin/components/shared";
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
@@ -152,7 +153,7 @@ export function Setup() {
 
         <CardContent className="pb-10">
           <FormProvider {...form}>
-            <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField
                 control={form.control}
                 name="fullName"

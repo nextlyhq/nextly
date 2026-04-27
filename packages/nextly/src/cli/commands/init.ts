@@ -603,7 +603,7 @@ function showNextSteps(cwd: string, context: CommandContext): void {
 
   // Step 3: Sync collections
   logger.info(
-    `  ${pc.cyan("3.")} Run ${pc.yellow(`${cmd} next dev`)} to sync collections`
+    `  ${pc.cyan("3.")} Run ${pc.yellow(`${cmd} nextly dev`)} to sync collections`
   );
 
   // Step 4: Generate migrations
@@ -641,7 +641,7 @@ export function registerInitCommand(program: Command): void {
     .option("-y, --yes", "Skip prompts and use defaults", false)
     .option("-f, --force", "Overwrite existing files", false)
     .action(async (cmdOptions: InitCommandOptions, cmd: Command) => {
-      const globalOpts: GlobalOptions = cmd.optsWithGlobals();
+      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
       const context = createContext(globalOpts);
 
       const resolvedOptions: ResolvedInitOptions = {

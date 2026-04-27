@@ -6,7 +6,7 @@ import {
   TableHeader,
   TableRow,
 } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 /** Shared animated gray bar */
 const GrayBar = ({ className }: { className?: string }) => (

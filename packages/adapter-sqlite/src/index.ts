@@ -35,10 +35,8 @@
  */
 
 import { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
-// F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
-  isDatabaseError,
   type SqliteAdapterConfig,
   type DatabaseCapabilities,
   type PoolStats,
@@ -60,7 +58,6 @@ import {
   type BaseAdapterConfig,
   type AdapterLogger,
 } from "@revnixhq/adapter-drizzle/types";
-import { checkDialectVersion } from "@revnixhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
 import {
   drizzle,
@@ -240,13 +237,6 @@ export class SqliteAdapter extends DrizzleAdapter {
       if (this.config.foreignKeys ?? DEFAULT_CONFIG.foreignKeys) {
         this.db.pragma("foreign_keys = ON");
       }
-
-      // F17: check SQLite version. Hard-fails on SQLite <3.38. SQLite has
-      // no recognized cloud variants we warn on, so onWarning is omitted.
-      // Note: better-sqlite3's bundled SQLite is set by the package
-      // version; users on this package's pinned better-sqlite3 (3.45+)
-      // will always pass.
-      await checkDialectVersion(this.db, "sqlite");
 
       this.connected = true;
 
@@ -734,12 +724,6 @@ export class SqliteAdapter extends DrizzleAdapter {
    * @returns DatabaseError with proper classification
    */
   private classifyError(error: unknown, sql?: string): DatabaseError {
-    // Why short-circuit on existing DatabaseError: F17's
-    // UnsupportedDialectVersionError is already a typed DatabaseError with
-    // kind: "unsupported_version" plus detectedVersion/requiredVersion
-    // fields. Re-wrapping it here would erase those fields.
-    if (isDatabaseError(error)) return error;
-
     const sqliteError = error as {
       code?: string;
       message?: string;

@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { Loader2, Search, X } from "@admin/components/icons";
+import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { cn } from "@admin/lib/utils";
 
 import type { SearchBarProps } from "./types";

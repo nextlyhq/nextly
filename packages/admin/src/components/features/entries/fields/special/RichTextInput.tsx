@@ -18,6 +18,7 @@ import { ListNode, ListItemNode } from "@lexical/list";
 import { TRANSFORMERS } from "@lexical/markdown";
 import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
+
 // Lexical core
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
@@ -30,9 +31,11 @@ import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPl
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
+
 // Lexical nodes
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
+
 // Types
 import type { RichTextFieldConfig } from "@revnixhq/nextly/config";
 import type { EditorState, SerializedEditorState } from "lexical";
@@ -57,6 +60,7 @@ import {
 import { DraggableBlockMenuPlugin } from "./DraggableBlockMenuPlugin";
 import { GalleryNode } from "./GalleryNode";
 import { ImageNode } from "./ImageNode";
+
 // Local plugins
 import { RichTextButtonGroupPlugin } from "./RichTextButtonGroupPlugin";
 import { RichTextButtonLinkPlugin } from "./RichTextButtonLinkPlugin";
@@ -247,7 +251,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   const handleChange = useCallback(
     (editorState: EditorState) => {
       const serializedState = editorState.toJSON();
-      onChange(serializedState);
+      onChange(serializedState as TFieldValues[Path<TFieldValues>]);
     },
     [onChange]
   );

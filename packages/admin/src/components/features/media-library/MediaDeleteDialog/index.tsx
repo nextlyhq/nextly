@@ -174,7 +174,7 @@ export function MediaDeleteDialog({
           </Button>
           <Button
             variant="destructive"
-            onClick={() => { void handleConfirm(); }}
+            onClick={handleConfirm}
             disabled={isPending}
             ref={deleteButtonRef}
           >

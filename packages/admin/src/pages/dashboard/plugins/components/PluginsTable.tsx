@@ -11,8 +11,7 @@ import {
   ResponsiveTable,
 } from "@revnixhq/ui";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import type React from "react";
-import { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
@@ -22,6 +21,7 @@ import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { UI } from "@admin/constants/ui";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { publicApi } from "@admin/lib/api/publicApi";
@@ -272,7 +272,7 @@ export default function PluginsTable() {
                     checked={!hiddenColumns.has(String(col.key))}
                     onCheckedChange={() => toggleColumn(String(col.key))}
                   >
-                    {col.label}
+                    {String(col.label)}
                   </DropdownMenuCheckboxItem>
                 ))}
             </DropdownMenuContent>

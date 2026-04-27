@@ -5,7 +5,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@revnixhq/ui";
-import type { UseFormReturn } from "react-hook-form";
+import { UseFormReturn } from "react-hook-form";
 
 import { Check as CheckIcon } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -16,7 +16,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
-import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 import { roleApi } from "@admin/services/roleApi";
 
@@ -227,7 +227,7 @@ export function RoleInheritance({
           <Select
             value=""
             disabled={allRoles.length === 0}
-            onValueChange={(value) => { void handleRoleSelection(value); }}
+            onValueChange={handleRoleSelection}
           >
             <SelectTrigger>
               {selectedBaseRoleIds.length > 0 ? (

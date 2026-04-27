@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import { AlertCircle, RefreshCw } from "@admin/components/icons";
 

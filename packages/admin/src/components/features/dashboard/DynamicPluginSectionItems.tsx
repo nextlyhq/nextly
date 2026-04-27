@@ -4,7 +4,7 @@ import { Badge } from "@revnixhq/ui";
 import React from "react";
 
 import * as Icons from "@admin/components/icons";
-import { Database } from "@admin/components/icons";
+import { Database, Package } from "@admin/components/icons";
 import {
   SidebarMenu,
   SidebarMenuButton,

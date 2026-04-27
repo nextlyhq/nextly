@@ -352,7 +352,7 @@ export function MoveToFolderDialog({
           </Button>
           <Button
             type="button"
-            onClick={() => { void handleMove(); }}
+            onClick={handleMove}
             disabled={
               isPending ||
               moveProgress !== null ||

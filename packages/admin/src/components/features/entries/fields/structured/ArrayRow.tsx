@@ -10,7 +10,7 @@
 
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { RepeaterFieldConfig, FieldConfig } from "@revnixhq/nextly/config";
+import type { ArrayFieldConfig, FieldConfig } from "@revnixhq/nextly/config";
 import {
   Button,
   Card,
@@ -69,7 +69,7 @@ export interface ArrayRowProps<TFieldValues extends FieldValues = FieldValues> {
   /**
    * The array field configuration containing sub-fields.
    */
-  field: RepeaterFieldConfig;
+  field: ArrayFieldConfig;
 
   /**
    * Base path for form field registration (e.g., "items.0").
@@ -132,7 +132,7 @@ export interface ArrayRowProps<TFieldValues extends FieldValues = FieldValues> {
  * <ArrayRow
  *   id={item.id}
  *   index={0}
- *   field={repeaterFieldConfig}
+ *   field={arrayFieldConfig}
  *   basePath="socialLinks.0"
  *   data={item}
  *   control={control}
@@ -267,7 +267,7 @@ export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
                   return (
                     <div key={(subField as { name: string }).name}>
                       {renderField(
-                        subField,
+                        subField as unknown as FieldConfig,
                         basePath,
                         control,
                         {

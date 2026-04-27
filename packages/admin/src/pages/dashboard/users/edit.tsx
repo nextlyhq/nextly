@@ -8,12 +8,12 @@ import {
   Skeleton,
   Spinner,
 } from "@revnixhq/ui";
-import type { ReactElement} from "react";
-import { useEffect, useRef } from "react";
+import { ReactElement, useEffect, useRef } from "react";
 import {
   useForm,
   FormProvider,
   type Control,
+  type FieldErrors,
   type FieldValues,
 } from "react-hook-form";
 
@@ -191,7 +191,7 @@ export default function EditUserPage(): ReactElement {
   }, []); // Empty dependency array - only register once
 
   // Handle form submission
-  function onSubmit(values: EditUserFormValues) {
+  async function onSubmit(values: EditUserFormValues) {
     if (!userId) {
       toast.error("Error", {
         description: USER_MESSAGES.MISSING_USER_ID,
@@ -315,7 +315,7 @@ export default function EditUserPage(): ReactElement {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { void refetchUser(); }}
+              onClick={() => refetchUser()}
               className="ml-2"
             >
               Retry
@@ -420,7 +420,7 @@ export default function EditUserPage(): ReactElement {
           <FormProvider {...form}>
             <form
               id="edit-user-form"
-              onSubmit={(e) => { void handleSubmit(onSubmit)(e); }}
+              onSubmit={handleSubmit(onSubmit)}
               className="space-y-8"
             >
               {/* Form Fields */}
@@ -432,13 +432,13 @@ export default function EditUserPage(): ReactElement {
                 roles={roles}
                 isLoadingRoles={isLoadingRoles}
                 rolesError={rolesError}
-                onRetryRoles={() => { void refetchRoles(); }}
+                onRetryRoles={refetchRoles}
                 showActiveAccount={true}
               />
 
               <UserCustomFields
                 control={control as unknown as Control<FieldValues>}
-                errors={errors}
+                errors={errors as FieldErrors<FieldValues>}
                 disabled={isUpdating}
               />
             </form>

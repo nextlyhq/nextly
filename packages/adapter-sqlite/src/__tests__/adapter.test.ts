@@ -60,22 +60,7 @@ vi.mock("better-sqlite3", () => {
 describe("SqliteAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Why: F17's connect() runs SELECT sqlite_version() AS version after
-    // PRAGMA setup. Route the version query to a real-SQLite-3.45 response
-    // and let everything else fall through to the default statement mock.
-    mockPrepare.mockImplementation((sql: string) => {
-      if (
-        typeof sql === "string" &&
-        sql.toLowerCase().includes("sqlite_version()")
-      ) {
-        return {
-          run: vi.fn(),
-          all: vi.fn().mockReturnValue([]),
-          get: vi.fn().mockReturnValue({ version: "3.45.0" }),
-        };
-      }
-      return mockStatement;
-    });
+    mockPrepare.mockReturnValue(mockStatement);
     mockStatement.run.mockReturnValue({ changes: 1, lastInsertRowid: 1 });
     mockStatement.all.mockReturnValue([]);
     mockStatement.get.mockReturnValue(undefined);

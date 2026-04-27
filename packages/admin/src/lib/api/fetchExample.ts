@@ -8,7 +8,6 @@ interface UserResponse {
 }
 
 export async function fetchSingleUser() {
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const { api } = useApi();
 
   try {
@@ -27,7 +26,6 @@ export async function fetchSingleUser() {
 }
 
 export async function fetchMultipleUsers() {
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const { api } = useApi();
 
   try {

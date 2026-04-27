@@ -242,7 +242,7 @@ export function useUpdateEntry<
           entryKeys.detail(collectionSlug, entryId),
           old => {
             if (!old) return old;
-            return { ...old, ...newData };
+            return { ...old, ...newData } as T;
           }
         );
       }
@@ -284,17 +284,17 @@ export function useUpdateEntry<
     // On success, invalidate queries to ensure fresh data
     onSuccess: data => {
       // Invalidate entry list queries for this collection
-      void queryClient.invalidateQueries({
+      queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
       });
 
       // Invalidate this specific entry detail
-      void queryClient.invalidateQueries({
+      queryClient.invalidateQueries({
         queryKey: entryKeys.detail(collectionSlug, entryId),
       });
 
       // Invalidate dashboard caches so recent-entries refresh immediately
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
         toast.success("Entry updated successfully");

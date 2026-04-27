@@ -17,6 +17,7 @@ import {
   SelectValue,
   Switch,
 } from "@revnixhq/ui";
+import { z } from "zod";
 
 import { cn } from "@admin/lib/utils";
 
@@ -51,7 +52,7 @@ export function HookConfigForm({
   const schema = hookConfig.configSchema;
 
   // Only handle object schemas
-  if (!isZodType(schema, "object")) {
+  if (!isZodType(schema as z.ZodTypeAny, "object")) {
     return (
       <div className="text-sm text-muted-foreground">
         No configuration options
@@ -77,7 +78,7 @@ export function HookConfigForm({
   return (
     <div className="space-y-3">
       {fields.map(([key, fieldSchema]) => {
-        const zodField = fieldSchema;
+        const zodField = fieldSchema as z.ZodTypeAny;
         const description = zodField.description || key;
         const value = config[key];
 
@@ -130,10 +131,7 @@ export function HookConfigForm({
                   )}
                 </Label>
                 <Select
-                  value={
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-                    String(value ?? "")
-                  }
+                  value={String(value || "")}
                   onValueChange={val =>
                     handleFieldChange(key, val === "__none__" ? "" : val)
                   }
@@ -173,10 +171,7 @@ export function HookConfigForm({
               </Label>
               <Input
                 id={`hook-${hookId}-${key}`}
-                value={
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-                    String(value ?? "")
-                  }
+                value={String(value || "")}
                 onChange={e => handleFieldChange(key, e.target.value)}
                 placeholder={description}
                 type={isUrl ? "url" : "text"}
@@ -245,10 +240,7 @@ export function HookConfigForm({
               {key.replace(/([A-Z])/g, " $1").trim()}
             </Label>
             <Input
-              value={
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-                    String(value ?? "")
-                  }
+              value={String(value || "")}
               onChange={e => handleFieldChange(key, e.target.value)}
               placeholder={description}
               className="h-8 text-sm"

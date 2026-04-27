@@ -27,7 +27,7 @@
 
 import { Button } from "@revnixhq/ui";
 import { Globe, Plus } from "lucide-react";
-import type React from "react";
+import React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";

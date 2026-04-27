@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import { Loader2 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";

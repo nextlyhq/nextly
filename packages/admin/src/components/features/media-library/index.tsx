@@ -234,7 +234,7 @@ export function MediaLibrary({
     (media: Media[]) => {
       console.log("[MediaLibrary] Upload complete:", media.length, "files");
       // Refetch to show new uploads
-      void refetch();
+      refetch();
       // Clear selection
       setSelectedIds(new Set());
     },
@@ -273,7 +273,7 @@ export function MediaLibrary({
 
   const handleConfirmBulkDelete = React.useCallback(() => {
     const idsArray = Array.from(selectedIds);
-    void bulkDeleteMedia(idsArray, undefined, {
+    bulkDeleteMedia(idsArray, undefined, {
       onSuccess: () => {
         setSelectedIds(new Set());
         setIsBulkDeleteDialogOpen(false);
@@ -702,7 +702,7 @@ export function MediaLibrary({
             onEdit={handleEditMedia}
             onDelete={(media: Media) => handleDeleteItem(media)}
             onCopyUrl={(url: string) => {
-              void navigator.clipboard.writeText(url);
+              navigator.clipboard.writeText(url);
             }}
             onDownload={(media: Media) => {
               const a = document.createElement("a");
@@ -710,7 +710,7 @@ export function MediaLibrary({
               a.download = media.filename;
               a.click();
             }}
-            onRetry={() => { void refetch(); }}
+            onRetry={refetch}
           />
         ) : (
           <MediaListView
@@ -721,7 +721,7 @@ export function MediaLibrary({
             onSelectionChange={handleSelectionChange}
             onEdit={handleEditMedia}
             onDelete={(media: Media) => handleDeleteItem(media)}
-            onRetry={() => { void refetch(); }}
+            onRetry={refetch}
           />
         )}
 
@@ -798,7 +798,7 @@ export function MediaLibrary({
           open={isCreateFolderDialogOpen}
           onOpenChange={setIsCreateFolderDialogOpen}
           parentId={createFolderParentId}
-          onSuccess={() => { void refetch(); }}
+          onSuccess={() => refetch()}
         />
 
         {/* Edit Folder Dialog */}
@@ -827,7 +827,7 @@ export function MediaLibrary({
           mediaIds={Array.from(selectedIds)}
           currentFolderId={activeFolderId}
           onSuccess={() => {
-            void refetch();
+            refetch();
             setSelectedIds(new Set());
           }}
         />

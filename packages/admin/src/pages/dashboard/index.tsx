@@ -10,7 +10,7 @@
 "use client";
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@revnixhq/ui";
-import type React from "react";
+import React from "react";
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";

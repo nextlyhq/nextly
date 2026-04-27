@@ -12,7 +12,7 @@ import { useState, useEffect } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
 
-import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
+import { ArrowLeft, ArrowRight, Key, Loader2 } from "@admin/components/icons";
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { toast } from "@admin/components/ui";
 import {
@@ -132,7 +132,7 @@ export function ForgotPassword() {
 
         <CardContent className="pb-10">
           <FormProvider {...form}>
-            <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField
                 control={form.control}
                 name="email"

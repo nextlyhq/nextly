@@ -8,11 +8,10 @@
  * Shows regeneration status when sizes change.
  */
 
-import type {
-  Column} from "@revnixhq/ui";
 import {
   Badge,
   Button,
+  Column,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -205,7 +204,7 @@ function SizeFormDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           {/* Name */}
           <div className="space-y-1.5">
             <Label htmlFor="size-name">Name</Label>
@@ -368,7 +367,7 @@ function ImageSizesContent({
   }, []);
 
   React.useEffect(() => {
-    void loadSizes();
+    loadSizes();
   }, [loadSizes]);
 
   // Handle create
@@ -501,7 +500,7 @@ function ImageSizesContent({
               item={size}
               callbacks={{
                 onEdit: handleEdit,
-                onDelete: size.isDefault ? undefined : (item) => { void handleDelete(item); },
+                onDelete: size.isDefault ? undefined : handleDelete,
               }}
             />
           </div>

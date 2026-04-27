@@ -1,19 +1,20 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import { TableParams, TableResponse } from "@revnixhq/ui";
 
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { enhancedFetcher } from "../lib/api/enhancedFetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
-import type {
+import {
   ApiRole,
   Role,
   ApiRoleCreatePayload,
   ApiRoleUpdatePayload,
 } from "../types/entities";
-import type {
-  ApiRoleWithRelations} from "../types/role";
 import {
+  ApiRoleWithRelations,
+  ApiPermission,
+  ApiChildRole,
 } from "../types/role";
 
 const fetchRolePermissionIds = async (roleId: string): Promise<string[]> => {

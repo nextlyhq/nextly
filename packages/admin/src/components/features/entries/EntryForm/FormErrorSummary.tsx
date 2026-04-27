@@ -8,10 +8,11 @@
  * @since 1.0.0
  */
 
-import { toast } from "@revnixhq/ui";
+import { Alert, AlertTitle, AlertDescription, toast } from "@revnixhq/ui";
 import { useEffect } from "react";
 import type { FieldErrors, FieldValues } from "react-hook-form";
 
+import { AlertCircle } from "@admin/components/icons";
 import {
   formatFieldPath,
   scrollToField,
@@ -95,7 +96,7 @@ function flattenErrors(
 
     // Check if this is a leaf error (has message property)
     if (typeof value === "object" && "message" in value && value.message) {
-      result.push({ path, message: String((value as { message: unknown }).message) });
+      result.push({ path, message: String(value.message) });
     } else if (typeof value === "object") {
       // Recursively process nested errors
       result.push(...flattenErrors(value as FieldErrors<FieldValues>, path));
@@ -110,10 +111,6 @@ export function FormErrorSummary({
   maxErrors = 5,
 }: FormErrorSummaryProps) {
   const errorList = flattenErrors(errors);
-
-  // Stringify path-list to only re-fire toast when the *set* of errors changes,
-  // avoiding infinite re-renders since `errors` object reference changes constantly.
-  const errorPathKey = errorList.map(e => e.path).join(",");
 
   useEffect(() => {
     if (errorList.length === 0) {
@@ -151,7 +148,12 @@ export function FormErrorSummary({
         </div>
       ),
     });
-  }, [errorList, errorPathKey, maxErrors]);
+  }, [
+    // Stringify path-list to only re-fire toast when the *set* of errors changes,
+    // avoiding infinite re-renders since `errors` object reference changes constantly.
+    errorList.map(e => e.path).join(","),
+    maxErrors,
+  ]);
 
   return null;
 }

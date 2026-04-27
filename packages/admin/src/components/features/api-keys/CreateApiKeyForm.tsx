@@ -32,7 +32,7 @@ import {
   Textarea,
 } from "@revnixhq/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -278,7 +278,7 @@ export function CreateApiKeyForm({
   return (
     <div className="space-y-6">
       <Form {...form}>
-        <form onSubmit={(e) => { void form.handleSubmit(handleSubmit)(e); }} className="space-y-6">
+        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             {/* Page Header */}
             <div className="border-b border-border bg-muted/20 px-6 py-5">
