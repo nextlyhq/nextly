@@ -99,16 +99,7 @@ describe("PostgresAdapter", () => {
 
     // Setup default responses
     mockPool.connect.mockResolvedValue(mockClient);
-    // Why: F17 added a SELECT version() call after the smoke-test SELECT 1.
-    // Route by SQL so both queries return their expected shape.
-    mockClient.query.mockImplementation((sql: string) => {
-      if (typeof sql === "string" && sql.toLowerCase().includes("version()")) {
-        return Promise.resolve({
-          rows: [{ version: "PostgreSQL 16.1 on x86_64-pc-linux-gnu" }],
-        });
-      }
-      return Promise.resolve({ rows: [{ result: 1 }] });
-    });
+    mockClient.query.mockResolvedValue({ rows: [{ result: 1 }] });
     mockPool.query.mockResolvedValue({ rows: [] });
     mockPool.end.mockResolvedValue(undefined);
 

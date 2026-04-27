@@ -156,7 +156,7 @@ describe("generatePackageJson", () => {
     const result = JSON.parse(await generatePackageJson("test", pgDatabase));
 
     expect(result.scripts.nextly).toBe("nextly");
-    expect(result.scripts["db:setup"]).toBe("nextly db:sync --seed");
+    expect(result.scripts["db:setup"]).toBe("nextly dev --seed");
     expect(result.scripts["db:migrate"]).toBe("nextly migrate");
     expect(result.scripts["db:migrate:status"]).toBe("nextly migrate:status");
     expect(result.scripts["db:migrate:fresh"]).toBe("nextly migrate:fresh");

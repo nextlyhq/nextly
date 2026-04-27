@@ -15,16 +15,7 @@ import { serializeCollection } from "../../domains/schema/services/code-generato
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service.js";
 import type { CommandContext } from "../program.js";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter.js";
-// F1 PR 4: switched from the deleted wrapper/config-loader (jiti-based,
-// took a positional cwd arg) to the canonical cli/utils/config-loader
-// (bundle-require-based, takes an options object). The wrapper helper
-// kept its own signature, so wrap the call here to preserve the
-// downstream code's expectation of `{ config, configPath, ... }`.
-import { loadConfig } from "../utils/config-loader.js";
-
-async function loadNextlyConfig(cwd: string) {
-  return loadConfig({ cwd });
-}
+import { loadNextlyConfig } from "../wrapper/config-loader.js";
 
 export async function runDemote(
   slug: string,
@@ -78,7 +69,7 @@ export async function runDemote(
   );
 
   // 3. Prompt before any write.
-  const fields = collection.fields ?? [];
+  const fields = (collection.fields ?? []) as unknown[];
   p.note(
     serializeCollection({ slug, fields: fields as never[] }),
     `About to move '${slug}' to UI source`
@@ -98,7 +89,7 @@ export async function runDemote(
     await registry.updateCollection(slug, {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fields: fields as any,
-      source: "ui",
+      source: "ui" as never,
     });
     logger.info(`Updated existing UI record for '${slug}'.`);
   } else {

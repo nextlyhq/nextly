@@ -90,12 +90,7 @@
     "TEST_DATABASE_URL_POSTGRES", // @revnixhq/adapter-postgres integration tests
     "TEST_DATABASE_URL_MYSQL", // @revnixhq/adapter-mysql integration tests
     "DB_PROVIDER", // @revnixhq/adapter-postgres runtime driver selection
-    "TMPDIR", // @revnixhq/create-nextly-app temp dir override
-    "PORT", // @revnixhq/nextly HMR listener: Next.js dev port
-    "USE_HTTPS", // @revnixhq/nextly HMR listener: dev server protocol
-    "__NEXT_ASSET_PREFIX", // @revnixhq/nextly HMR listener: Next.js asset prefix
-    "NEXTLY_DISABLE_HMR", // @revnixhq/nextly HMR listener: opt-out escape hatch
-    "NEXTLY_HMR_URL_OVERRIDE" // @revnixhq/nextly HMR listener: custom URL for proxy setups
+    "TMPDIR" // @revnixhq/create-nextly-app temp dir override
   ],
 
   "tasks": {
@@ -264,26 +259,6 @@
       ],
       "outputs": ["coverage/**"], // Coverage reports
       "cache": true // Cache test results (only re-run if inputs change)
-    },
-
-    // test:integration - Run integration tests against real DBs (F18).
-    //
-    // - Runs only *.integration.test.ts files via vitest.integration.config.ts.
-    // - Reads TEST_<DIALECT>_URL env vars to skip-or-run per dialect.
-    // - cache: false because results depend on the DB container's state, which
-    //   turbo cannot fingerprint. Re-runs every time.
-    // - dependsOn ^build because tests import workspace packages from dist/.
-    "test:integration": {
-      "dependsOn": ["^build"],
-      "inputs": [
-        "src/**/*.{ts,tsx}",
-        "src/**/*.integration.test.{ts,tsx}",
-        "vitest.integration.config.ts",
-        "tsconfig.json"
-      ],
-      "outputs": [],
-      "cache": false,
-      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"]
     },
 
     // test:coverage - Generate and display code coverage report

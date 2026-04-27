@@ -147,7 +147,6 @@
     "check-types": "tsc --noEmit",
     "clean": "rimraf dist",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
@@ -176,7 +175,6 @@
     "@types/nodemailer": "^7.0.9",
     "@types/pg": "^8.15.5",
     "@types/react": "^19.1.8",
-    "@types/ws": "^8.5.13",
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
     "acorn": "^8.15.0",
@@ -246,7 +244,6 @@
     "server-only": "^0.0.1",
     "sharp": "^0.33.5",
     "tree-kill": "^1.2.2",
-    "ws": "^8.18.0",
     "zod": "^4.1.12"
   },
   "repository": {

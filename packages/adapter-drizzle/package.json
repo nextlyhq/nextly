@@ -27,11 +27,6 @@
       "types": "./dist/migrations.d.ts",
       "import": "./dist/migrations.mjs",
       "require": "./dist/migrations.cjs"
-    },
-    "./version-check": {
-      "types": "./dist/version-check.d.ts",
-      "import": "./dist/version-check.mjs",
-      "require": "./dist/version-check.cjs"
     }
   },
   "files": [

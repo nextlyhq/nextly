@@ -18,6 +18,11 @@ import { registerBuildCommand } from "./commands/build.js";
 // Why: Task 11 renamed `nextly dev` (utility) to `nextly db:sync` so the
 // `nextly dev` name can be reused by the wrapper CLI in Sub-task 3.
 import { registerDbSyncCommand } from "./commands/db-sync.js";
+// What: import the Task 11 wrapper CLI entry.
+// Why: this is the new `nextly dev` - it spawns next dev as a child and
+// owns schema-change prompts + restart. Sub-task 3 registers a skeleton;
+// Sub-task 4 wires the full prompt/DDL flow.
+import { registerDevCommand } from "./commands/dev.js";
 import { registerGenerateTypesCommand } from "./commands/generate-types.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerMigrateCreateCommand } from "./commands/migrate-create.js";
@@ -133,7 +138,7 @@ export function createProgram(): Command {
       "after",
       `
 ${pc.bold("Examples:")}
-  ${pc.gray("$")} next dev                      ${pc.gray("# Start the dev server (Nextly boots in-process)")}
+  ${pc.gray("$")} nextly dev                    ${pc.gray("# Start development mode")}
   ${pc.gray("$")} nextly generate:types         ${pc.gray("# Generate TypeScript types")}
   ${pc.gray("$")} nextly migrate                ${pc.gray("# Run pending migrations")}
   ${pc.gray("$")} nextly migrate:status         ${pc.gray("# Show migration status")}
@@ -187,10 +192,8 @@ ${pc.bold("Documentation:")}
  * @param program - Commander program instance
  */
 function registerCommands(program: Command): void {
-  // Development commands.
-  // F1 PR 4: `nextly dev` removed entirely. The single supported dev
-  // command is now `next dev` directly (the schema apply pipeline runs
-  // in-process via the HMR listener shipped in F1 PR 2).
+  // Development commands
+  registerDevCommand(program);
   registerDbSyncCommand(program);
   registerBuildCommand(program);
   registerInitCommand(program);
@@ -274,7 +277,7 @@ function registerGenerateSchemaCommand(program: Command): void {
     .description("Generate Drizzle ORM schema files from collections")
     .option("-o, --output <path>", "Output directory path")
     .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
+      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
       const context = createContext(globalOpts);
       notImplemented("generate:schema", context);
     });
@@ -295,7 +298,7 @@ function registerMigrateDownCommand(program: Command): void {
     .description("Roll back the last batch of migrations")
     .option("--step <n>", "Roll back N migrations", parseInt)
     .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
+      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
       const context = createContext(globalOpts);
       notImplemented("migrate:down", context);
     });
@@ -311,7 +314,7 @@ function registerMigrateRefreshCommand(program: Command): void {
     .option("-f, --force", "Skip confirmation prompt", false)
     .option("--seed", "Run seeders after migrations", false)
     .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
+      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
       const context = createContext(globalOpts);
       notImplemented("migrate:refresh", context);
     });

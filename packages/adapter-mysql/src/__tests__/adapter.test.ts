@@ -51,14 +51,7 @@ describe("@nextly/adapter-mysql", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset mock implementations - use mockImplementation to handle all calls
-    // Why: F17 added a SELECT VERSION() AS version call after SELECT 1.
-    // Route by SQL so the version query returns a real-MySQL 8 response.
-    mockConnection.query.mockImplementation((sql: string) => {
-      if (typeof sql === "string" && sql.toLowerCase().includes("version()")) {
-        return Promise.resolve([[{ version: "8.0.33" }], []]);
-      }
-      return Promise.resolve([[], []]);
-    });
+    mockConnection.query.mockImplementation(() => Promise.resolve([[], []]));
     mockConnection.release.mockReturnValue(undefined);
     mockPool.getConnection.mockResolvedValue(mockConnection);
     mockPool.query.mockImplementation(() => Promise.resolve([[], []]));
@@ -676,11 +669,6 @@ describe("@nextly/adapter-mysql", () => {
         if (sql.startsWith("SELECT * FROM users")) {
           return Promise.resolve([mockRows, []]);
         }
-        // Why: F17's connect() runs SELECT VERSION() AS version after the
-        // smoke test. Honor it here so the version-check passes.
-        if (sql.toLowerCase().includes("version()")) {
-          return Promise.resolve([[{ version: "8.0.33" }], []]);
-        }
         return Promise.resolve([[], []]);
       });
 
@@ -706,11 +694,6 @@ describe("@nextly/adapter-mysql", () => {
         }
         if (sql.includes("WHERE id = ?")) {
           return Promise.resolve([[insertedRow], []]);
-        }
-        // Why: F17's connect() runs SELECT VERSION() AS version after the
-        // smoke test. Honor it here so the version-check passes.
-        if (sql.toLowerCase().includes("version()")) {
-          return Promise.resolve([[{ version: "8.0.33" }], []]);
         }
         return Promise.resolve([[], []]);
       });
