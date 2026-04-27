@@ -27,6 +27,10 @@
       "types": "./dist/observability/index.d.ts",
       "import": "./dist/observability/index.mjs"
     },
+    "./database": {
+      "types": "./dist/database/index.d.ts",
+      "import": "./dist/database/index.mjs"
+    },
     "./api/health": {
       "types": "./dist/api/health.d.ts",
       "import": "./dist/api/health.mjs"
