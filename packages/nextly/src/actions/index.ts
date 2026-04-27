@@ -64,3 +64,10 @@ export {
   type UploadMediaActionOptions,
   type UploadMediaActionResult,
 } from "./upload-media";
+
+// Unified error system Server Action wrapper (spec §12). Wrap your action
+// body in `withAction` to get typed `ActionResult<T>` returns instead of
+// thrown errors (which Next.js production digests strip), with the same
+// observability hooks and request-id correlation as `withErrorHandler`.
+export { withAction } from "./with-action";
+export type { ActionResult, ActionError } from "./action-result";
