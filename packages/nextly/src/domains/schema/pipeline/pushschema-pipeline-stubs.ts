@@ -1,0 +1,40 @@
+// No-op stub implementations of the F3 plug-in interfaces.
+// F4-F8 each replace one stub with a real implementation.
+//
+// Behavior contract:
+//   - RenameDetector stub: never detects a rename (returns empty array).
+//   - Classifier stub: every change is "safe".
+//   - PromptDispatcher stub: auto-confirms (returns empty result).
+//     Will only ever be called if RenameDetector or Classifier ever
+//     return non-default values, so in F3 (with all stubs) it never runs.
+//   - PreRenameExecutor stub: no-op.
+//   - MigrationJournal stub: returns dummy IDs, writes nothing.
+
+import type {
+  Classifier,
+  MigrationJournal,
+  PreRenameExecutor,
+  PromptDispatcher,
+  RenameDetector,
+} from "./pushschema-pipeline-interfaces.js";
+
+export const noopRenameDetector: RenameDetector = {
+  detect: () => [],
+};
+
+export const noopClassifier: Classifier = {
+  classify: () => "safe",
+};
+
+export const noopPromptDispatcher: PromptDispatcher = {
+  dispatch: () => Promise.resolve({ confirmedRenames: [], resolutions: {} }),
+};
+
+export const noopPreRenameExecutor: PreRenameExecutor = {
+  execute: () => Promise.resolve(),
+};
+
+export const noopMigrationJournal: MigrationJournal = {
+  recordStart: () => Promise.resolve("noop-journal-id"),
+  recordEnd: () => Promise.resolve(),
+};
