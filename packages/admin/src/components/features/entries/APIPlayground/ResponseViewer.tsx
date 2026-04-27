@@ -67,7 +67,7 @@ export function ResponseViewer({
     try {
       return JSON.stringify(data, null, 2);
     } catch {
-      return String(data);
+      return "";
     }
   }, [data]);
 
@@ -130,7 +130,8 @@ export function ResponseViewer({
           Response Pool
         </h3>
         <p className="text-xs text-muted-foreground/60 font-medium max-w-[200px] leading-relaxed tracking-tight">
-          Select an action and execute the request to view structured response data
+          Select an action and execute the request to view structured response
+          data
         </p>
       </div>
     );
