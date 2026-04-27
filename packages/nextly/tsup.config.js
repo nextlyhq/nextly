@@ -39,6 +39,9 @@ const serverEntries = [
   "src/cli/nextly.ts",
   "src/cli/utils/index.ts",
   "src/storage/index.ts",
+  // Unified error system entry points (Task 21)
+  "src/errors/index.ts",
+  "src/observability/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims
