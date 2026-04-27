@@ -104,9 +104,11 @@ export function splitMysqlCombinedStatement(stmt: string): string[] {
   for (let i = 0; i < body.length; i++) {
     const c = body[i];
     if (inString) {
-      // Closing quote (un-escaped). MySQL allows '' as escaped quote inside
-      // single-quoted strings; the simple "previous char != \\" check is
-      // good enough for drizzle-kit's emitted DEFAULT values.
+      // Closing quote, ignoring backslash escape. drizzle-kit emits
+      // backslash-escaped values inside DEFAULT strings (e.g., 'a\'b').
+      // Doubled-quote escape ('a''b') still parses correctly because the
+      // adjacent quotes act as exit-then-reenter; the comma-or-paren check
+      // sees the inner content as still inside a string scope.
       if (c === stringChar && body[i - 1] !== "\\") {
         inString = false;
         stringChar = null;

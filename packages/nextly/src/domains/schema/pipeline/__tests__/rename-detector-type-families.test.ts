@@ -38,6 +38,14 @@ describe("isTypesCompatible - PG", () => {
     expect(isTypesCompatible("text", "text", "postgresql")).toBe(true);
   });
 
+  it("PG bpchar (information_schema udt_name for char) joins text family", () => {
+    // Live PG introspection returns 'bpchar' for char(N) columns, not 'char'.
+    // Without bpchar in the family, a legitimate char(36) -> text rename
+    // would default to drop_and_add.
+    expect(isTypesCompatible("bpchar", "text", "postgresql")).toBe(true);
+    expect(isTypesCompatible("bpchar", "varchar(50)", "postgresql")).toBe(true);
+  });
+
   it("integer family is compatible within itself", () => {
     expect(isTypesCompatible("integer", "bigint", "postgresql")).toBe(true);
     expect(isTypesCompatible("smallint", "int", "postgresql")).toBe(true);

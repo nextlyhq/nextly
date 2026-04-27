@@ -64,6 +64,16 @@ describe("filterSqliteRecreateBlocks", () => {
     ]);
   });
 
+  it("tolerates optional IF NOT EXISTS on the CREATE TABLE", () => {
+    const stmts = [
+      `CREATE TABLE IF NOT EXISTS "__new_dc_posts" ("id" integer);`,
+      `INSERT INTO "__new_dc_posts" ("id") SELECT "id" FROM "dc_posts";`,
+      `DROP TABLE "dc_posts";`,
+      `ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts";`,
+    ];
+    expect(filterSqliteRecreateBlocks(stmts)).toEqual([]);
+  });
+
   it("does not depend on literal '__new' suffix (structural detection)", () => {
     const stmts = [
       `CREATE TABLE "tmp_dc_posts_xyz" ("id" integer);`,

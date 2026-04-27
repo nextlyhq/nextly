@@ -18,7 +18,12 @@
 // naming convention (e.g., "__new" -> "tmp_xxx"), structural detection
 // still works.
 
-const CREATE_RE = /^\s*CREATE\s+TABLE\s+"([^"]+)"\s*\(/i;
+// Tolerates optional `IF NOT EXISTS` defensively - current drizzle-kit
+// doesn't emit it for the recreate temp table (always a fresh name), but
+// matching the DROP regex's IF EXISTS tolerance keeps detection robust
+// against future version changes.
+const CREATE_RE =
+  /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"([^"]+)"\s*\(/i;
 const INSERT_RE =
   /^\s*INSERT\s+INTO\s+"([^"]+)"\s*\([^)]+\)\s+SELECT\s+[\s\S]+?FROM\s+"([^"]+)"/i;
 const DROP_RE = /^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?"([^"]+)"/i;

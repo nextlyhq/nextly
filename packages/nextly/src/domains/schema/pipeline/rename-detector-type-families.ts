@@ -32,7 +32,10 @@ type TypeFamily =
   | "binary";
 
 const PG_FAMILIES: Record<TypeFamily, readonly string[]> = {
-  text: ["text", "varchar", "char", "character", "character varying"],
+  // bpchar is what PG's information_schema.columns.udt_name returns for
+  // char(N) columns (blank-padded char). Without it here, a legitimate
+  // char(N) -> text rename would default to drop_and_add.
+  text: ["text", "varchar", "char", "bpchar", "character", "character varying"],
   integer: [
     "smallint",
     "integer",

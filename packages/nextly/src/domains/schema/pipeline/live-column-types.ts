@@ -61,6 +61,11 @@ export async function queryLiveColumnTypes(
 
   if (dialect === "postgresql") {
     const dbTyped = db as PgMysqlExecute;
+    // udt_name (not data_type) returns drizzle-friendly tokens that align
+    // with the type-family table: int4 / varchar / timestamptz / uuid /
+    // bpchar (for char(N)) / etc. data_type would return "character",
+    // "integer", "timestamp with time zone" - more verbose, still valid,
+    // but less greppable.
     const rows = (await dbTyped.execute(
       sql`SELECT table_name, column_name, udt_name
           FROM information_schema.columns
@@ -82,6 +87,12 @@ export async function queryLiveColumnTypes(
     const dbTyped = db as PgMysqlExecute;
     // MySQL execute() returns [rows, fieldPackets] tuple from mysql2; some
     // wrappers flatten to just rows. Handle both shapes defensively.
+    // drizzle-orm wraps a JS array bare-interpolated into IN as a
+    // parenthesized parameter list (?, ?, ?) - undocumented but verified
+    // in node_modules/drizzle-orm/sql/sql.cjs SQL.buildQueryFromSourceParams.
+    // Other call sites in this repo use the explicit sql.join form; we use
+    // the bare-array form here for brevity since tableNames is always a
+    // small list of managed tables.
     const result = (await dbTyped.execute(
       sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE
           FROM information_schema.columns
