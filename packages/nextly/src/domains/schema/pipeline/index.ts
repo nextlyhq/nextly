@@ -83,7 +83,11 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
       const result = await schemaChangeService.apply(
         resource.slug,
         resource.tableName,
-        currentFields,
+        // FieldConfig and FieldDefinition are structurally compatible but
+        // nominally distinct; cast through unknown bridges the gap.
+        currentFields as unknown as Parameters<
+          typeof schemaChangeService.apply
+        >[2],
         resource.fields as unknown as Parameters<
           typeof schemaChangeService.apply
         >[3],
