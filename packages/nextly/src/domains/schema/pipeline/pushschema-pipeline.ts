@@ -194,12 +194,11 @@ export class PushSchemaPipeline {
             })
           : { confirmedRenames: [], resolutions: {} };
 
-      // Step 8: execute inside transaction.
-      const txFn: DbTransactionRunner = this.testHooks._txOverride
-        ? this.testHooks._txOverride
-        : this.makeTransactionRunner(db);
+      // Step 8: execute inside transaction (PG/MySQL) or directly with
+      // PRAGMA wrapping (SQLite — see below).
+      const isSqlite = dialect === "sqlite";
 
-      const statementsExecuted = await txFn(async (tx: unknown) => {
+      const runStep8 = async (tx: unknown): Promise<number> => {
         // Step 8a: pre-rename ALTER TABLE RENAME COLUMN (F6 stub: no-op).
         await this.deps.preRenameExecutor.execute(
           tx,
@@ -231,7 +230,49 @@ export class PushSchemaPipeline {
         }
 
         return secondPassSafe.length;
-      });
+      };
+
+      let statementsExecuted: number;
+
+      if (isSqlite) {
+        // SQLite: drizzle-kit's recreate-table pattern (CREATE __new +
+        // INSERT + DROP + RENAME) trips FK violations on intermediate
+        // states unless we disable FK enforcement around the apply.
+        // SQLite silently no-ops PRAGMA foreign_keys = OFF/ON INSIDE a
+        // transaction (per SQLite docs), AND drizzle's better-sqlite3
+        // transaction wrapper interacts with PRAGMA in ways that make
+        // toggling-around-tx unreliable.
+        //
+        // Pragmatic approach: skip db.transaction() entirely for SQLite.
+        // The executor already ignores the tx arg for SQLite (uses
+        // this.db.run directly per the sync better-sqlite3 driver), so
+        // there's no behavioral change in the executor itself. We run
+        // PRAGMA OFF -> statements -> PRAGMA foreign_key_check (in
+        // executor) -> PRAGMA ON. If foreign_key_check throws, FK is
+        // re-enabled in our finally; partial DDL state remains in the
+        // DB (same risk profile as the existing
+        // DrizzlePushService.applyViaPushSchemaSQLite, which also runs
+        // without a transaction).
+        //
+        // F8/F15 can refactor to use better-sqlite3's NATIVE sync
+        // transaction (db.transaction(fn)() with sync fn) if real
+        // atomicity is needed.
+        await this.runSqlitePragma(db, "PRAGMA foreign_keys = OFF");
+        try {
+          statementsExecuted = await runStep8(db);
+        } finally {
+          await this.runSqlitePragma(db, "PRAGMA foreign_keys = ON");
+        }
+      } else {
+        // PG / MySQL: use db.transaction() for atomicity. PG provides
+        // true atomicity; MySQL DDL is auto-committed, so partial-apply
+        // failures leave the DB in a partially-applied state (F15
+        // adds pre-flight validation).
+        const txFn: DbTransactionRunner = this.testHooks._txOverride
+          ? this.testHooks._txOverride
+          : this.makeTransactionRunner(db);
+        statementsExecuted = await txFn(runStep8);
+      }
 
       // Step 9: journal end.
       await this.deps.migrationJournal.recordEnd(journalId, {
@@ -293,6 +334,23 @@ export class PushSchemaPipeline {
       if (!dropMatch) return true;
       return isManagedTable(dropMatch[1]);
     });
+  }
+
+  // Issue a SQLite PRAGMA against the underlying connection — outside
+  // any transaction. Used for `foreign_keys = OFF/ON` toggling around
+  // the recreate-table pattern (SQLite silently no-ops PRAGMA changes
+  // inside a BEGIN'd transaction, so we have to call this on the
+  // connection itself before BEGIN / after COMMIT).
+  //
+  // Type-narrowed to the better-sqlite3-via-drizzle shape we expect
+  // (the .run method exists on drizzle's better-sqlite3 wrapper).
+  private async runSqlitePragma(db: unknown, pragma: string): Promise<void> {
+    interface SqliteRunClient {
+      run(query: unknown): unknown;
+    }
+    const { sql: sqlTag } = await import("drizzle-orm");
+    const dbTyped = db as SqliteRunClient;
+    dbTyped.run(sqlTag.raw(pragma));
   }
 
   // Build Drizzle table objects from the DesiredSchema. Uses the existing

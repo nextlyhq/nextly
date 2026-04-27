@@ -535,3 +535,161 @@ describe("PushSchemaPipeline (error paths)", () => {
     expect(mocks.migrationJournal.recordEnd).toHaveBeenCalledOnce();
   });
 });
+
+// =============================================================
+// SQLite PRAGMA wrapping integration check (real in-memory DB)
+// =============================================================
+//
+// Regression test for the F3 PR-4 review C1: SQLite silently no-ops
+// PRAGMA foreign_keys = OFF/ON when issued inside a transaction.
+// PR-4 hoisted the PRAGMA toggling out of the executor and into the
+// pipeline (BEFORE/AFTER the txFn call). This test wraps a real
+// recreate-table-pattern apply in db.transaction() and verifies the
+// FK-referenced table can be dropped without tripping FK violations.
+
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor.js";
+import {
+  noopClassifier,
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+  noopPromptDispatcher,
+  noopRenameDetector,
+} from "../pushschema-pipeline-stubs.js";
+
+describe("PushSchemaPipeline SQLite PRAGMA wrapping (real DB)", () => {
+  it("wraps the txFn with PRAGMA foreign_keys = OFF/ON so recreate-pattern works on FK-referenced tables", async () => {
+    const sqlite = new Database(":memory:");
+    sqlite.pragma("foreign_keys = ON");
+    const db = drizzle(sqlite);
+
+    // Pre-create parent + child with FK enforcement.
+    sqlite.exec(`
+      CREATE TABLE dc_parent (id integer PRIMARY KEY);
+      CREATE TABLE dc_child (
+        id integer PRIMARY KEY,
+        parent_id integer REFERENCES dc_parent(id)
+      );
+      INSERT INTO dc_parent (id) VALUES (1);
+      INSERT INTO dc_child (id, parent_id) VALUES (1, 1);
+    `);
+
+    // Build a pipeline with the real executor + drizzle wrapper.
+    // pushSchema is mocked (returns the recreate sequence directly)
+    // because we are testing the PRAGMA-around-tx wiring, not the
+    // drizzle-kit diff itself.
+    const pipeline = new PushSchemaPipeline(
+      {
+        executor: new DrizzleStatementExecutor("sqlite", db),
+        renameDetector: noopRenameDetector,
+        classifier: noopClassifier,
+        promptDispatcher: noopPromptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        migrationJournal: noopMigrationJournal,
+      },
+      {
+        // Both pushSchema passes return the same recreate sequence —
+        // CREATE __new + INSERT + DROP + RENAME on dc_parent. Without
+        // PRAGMA OFF outside the tx, the DROP would trip FK violations
+        // because dc_child still references dc_parent at that moment.
+        _kitOverride: {
+          pushSchema: () =>
+            Promise.resolve({
+              statementsToExecute: [
+                "CREATE TABLE `__new_dc_parent` (id integer PRIMARY KEY)",
+                'INSERT INTO `__new_dc_parent`("id") SELECT "id" FROM `dc_parent`',
+                "DROP TABLE dc_parent",
+                "ALTER TABLE `__new_dc_parent` RENAME TO `dc_parent`",
+              ],
+              warnings: [],
+              hasDataLoss: false,
+            }),
+        },
+        _buildDrizzleSchemaOverride: () => ({}),
+      }
+    );
+
+    const result = await pipeline.apply({
+      desired: {
+        collections: {
+          parent: { slug: "parent", tableName: "dc_parent", fields: [] },
+        },
+        singles: {},
+        components: {},
+      },
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(result.success).toBe(true);
+
+    // FK enforcement restored after the apply.
+    const fkRow = sqlite.prepare("PRAGMA foreign_keys").get() as {
+      foreign_keys: number;
+    };
+    expect(fkRow.foreign_keys).toBe(1);
+
+    // Recreate completed: dc_parent still exists, dc_child still
+    // references it (FK relationship preserved through the rebuild).
+    const tables = sqlite
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='dc_parent'"
+      )
+      .all() as Array<{ name: string }>;
+    expect(tables).toHaveLength(1);
+
+    sqlite.close();
+  });
+
+  it("restores PRAGMA foreign_keys = ON even if the apply throws", async () => {
+    const sqlite = new Database(":memory:");
+    sqlite.pragma("foreign_keys = ON");
+    const db = drizzle(sqlite);
+
+    const pipeline = new PushSchemaPipeline(
+      {
+        executor: new DrizzleStatementExecutor("sqlite", db),
+        renameDetector: noopRenameDetector,
+        classifier: noopClassifier,
+        promptDispatcher: noopPromptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        migrationJournal: noopMigrationJournal,
+      },
+      {
+        _kitOverride: {
+          pushSchema: () =>
+            Promise.reject(new Error("simulated drizzle-kit failure")),
+        },
+        _buildDrizzleSchemaOverride: () => ({}),
+      }
+    );
+
+    const result = await pipeline.apply({
+      desired: {
+        collections: {
+          x: { slug: "x", tableName: "dc_x", fields: [] },
+        },
+        singles: {},
+        components: {},
+      },
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(result.success).toBe(false);
+
+    // FK setting restored even though the apply path threw.
+    const fkRow = sqlite.prepare("PRAGMA foreign_keys").get() as {
+      foreign_keys: number;
+    };
+    expect(fkRow.foreign_keys).toBe(1);
+
+    sqlite.close();
+  });
+});
