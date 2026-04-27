@@ -10,7 +10,6 @@ import {
   type LucideIcon,
 } from "@admin/components/icons";
 import {
-  SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -80,6 +79,8 @@ interface SidebarEntry {
   href: string;
   icon: string;
   order: number;
+  collectionName?: string;
+  singleSlug?: string;
 }
 /** A sortable section: either a standalone item or a named group */
 type SidebarSection =
@@ -94,10 +95,9 @@ type SidebarSection =
 /**
  * Dynamic Collection Navigation Component
  *
- * Renders both ungrouped collections and custom sidebar groups in a single
- * ordered list. Groups are interleaved with ungrouped items based on the
- * minimum `admin.order` of their members, so a group with order 2 can
- * appear above an ungrouped collection with order 100.
+ * Renders default (ungrouped) collections first, then custom sidebar groups.
+ * This mirrors DynamicSingleNav behavior so non-grouped items are always at
+ * the top of this section.
  */
 export function DynamicCollectionNav({
   isActive,
@@ -147,59 +147,24 @@ export function DynamicCollectionNav({
     return meta?.placement ?? meta?.group ?? undefined;
   };
 
-  // Filter to collections belonging to the "Collections" sidebar group
-  const visibleCollections = (data?.data ?? []).filter(collection => {
-    if (collection.admin?.hidden) return false;
-
-    // Filter by search query if provided
-    if (search) {
-      const displayName = (
-        collection.labels?.plural ||
-        collection.label ||
-        collection.name
-      ).toLowerCase();
-      if (!displayName.includes(search.toLowerCase())) return false;
-    }
-
-    const group = collection.admin?.sidebarGroup;
-    // Explicitly assigned to "collections" group
-    if (group === "collections") return true;
-    // Default collections: no group assigned and not a plugin
-    if (!group && !collection.admin?.isPlugin) return true;
-    // Plugin collections placed in "collections" via placement override or declared group
-    if (collection.admin?.isPlugin) {
-      return getPluginPlacement(collection) === "collections";
-    }
-    return false;
-  });
-
-  // Filter by user permissions (only show collections the user can read)
-  const permittedCollections = filterCollectionItems(
-    visibleCollections,
-    capabilities
-  );
-
-  // Sort by admin.order (ascending, default 100), then alphabetically by label
-  const collections = [...permittedCollections].sort((a, b) => {
-    const aPinned = pinnedCollections.has(a.name);
-    const bPinned = pinnedCollections.has(b.name);
-    if (aPinned !== bPinned) return aPinned ? -1 : 1;
-
-    const orderA = a.admin?.order ?? 100;
-    const orderB = b.admin?.order ?? 100;
-    if (orderA !== orderB) return orderA - orderB;
-    return (a.labels?.plural || a.label || a.name).localeCompare(
-      b.labels?.plural || b.label || b.name
-    );
-  });
-
   // Build the unified sorted sections list
   const sections = useMemo(() => {
     const allCollections = data?.data ?? [];
     const allSingles = singlesData?.data ?? [];
+    const lowerSearch = search.toLowerCase();
+
+    const matchesSearch = (label: string) => {
+      if (!search) return true;
+      return label.toLowerCase().includes(lowerSearch);
+    };
+
     // --- Ungrouped collections (belong to default "Collections" section) ---
     const ungroupedVisible = allCollections.filter(collection => {
       if (collection.admin?.hidden) return false;
+      const displayName =
+        collection.labels?.plural || collection.label || collection.name;
+      if (!matchesSearch(displayName)) return false;
+
       const group = collection.admin?.sidebarGroup;
       if (group === "collections") return true;
       if (!group && !collection.admin?.isPlugin) return true;
@@ -212,7 +177,20 @@ export function DynamicCollectionNav({
       ungroupedVisible,
       capabilities
     );
-    const ungroupedSections: SidebarSection[] = ungroupedPermitted.map(c => ({
+    const sortedUngrouped = [...ungroupedPermitted].sort((a, b) => {
+      const aPinned = pinnedCollections.has(a.name);
+      const bPinned = pinnedCollections.has(b.name);
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+
+      const orderA = a.admin?.order ?? 100;
+      const orderB = b.admin?.order ?? 100;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.labels?.plural || a.label || a.name).localeCompare(
+        b.labels?.plural || b.label || b.name
+      );
+    });
+
+    const ungroupedSections: SidebarSection[] = sortedUngrouped.map(c => ({
       kind: "item",
       order: Number(c.admin?.order) || 100,
       entry: {
@@ -223,6 +201,7 @@ export function DynamicCollectionNav({
         icon: c.admin?.icon || "Database",
         order: Number(c.admin?.order) || 100,
         migrationStatus: c.migrationStatus,
+        collectionName: c.name,
       },
     }));
     // --- Custom groups (derived from sidebarGroup field) ---
@@ -253,39 +232,56 @@ export function DynamicCollectionNav({
           override?.name ?? slug.charAt(0).toUpperCase() + slug.slice(1);
         const items: SidebarEntry[] = [];
         for (const collection of permittedCollections) {
+          const displayName =
+            collection.labels?.plural || collection.label || collection.name;
           if (
             collection.admin?.sidebarGroup === slug &&
-            !collection.admin?.hidden
+            !collection.admin?.hidden &&
+            matchesSearch(displayName)
           ) {
             items.push({
               type: "collection",
               key: `col-${collection.id}`,
-              label:
-                collection.labels?.plural ||
-                collection.label ||
-                collection.name,
+              label: displayName,
               href: buildRoute(ROUTES.COLLECTION_ENTRIES, {
                 slug: collection.name,
               }),
               icon: collection.admin?.icon || "Database",
               order: Number(collection.admin?.order) || 100,
+              collectionName: collection.name,
             });
           }
         }
         for (const single of permittedSingles) {
-          if (single.admin?.sidebarGroup === slug && !single.admin?.hidden) {
+          const displayName = single.label || single.slug;
+          if (
+            single.admin?.sidebarGroup === slug &&
+            !single.admin?.hidden &&
+            matchesSearch(displayName)
+          ) {
             items.push({
               type: "single",
               key: `single-${single.slug}`,
-              label: single.label || single.slug,
+              label: displayName,
               href: buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }),
               icon: single.admin?.icon || "",
               order: Number(single.admin?.order) || 100,
+              singleSlug: single.slug,
             });
           }
         }
         // Sort items within the group
         items.sort((a, b) => {
+          const aPinned =
+            a.type === "collection"
+              ? pinnedCollections.has(a.collectionName!)
+              : pinnedCollections.has(a.singleSlug!);
+          const bPinned =
+            b.type === "collection"
+              ? pinnedCollections.has(b.collectionName!)
+              : pinnedCollections.has(b.singleSlug!);
+          if (aPinned !== bPinned) return aPinned ? -1 : 1;
+
           if (a.order !== b.order) return a.order - b.order;
           return a.label.localeCompare(b.label);
         });
@@ -301,87 +297,70 @@ export function DynamicCollectionNav({
         };
       })
       .filter(g => g.items.length > 0);
-    // Merge and sort all sections by order, then alphabetically
-    const allSections: SidebarSection[] = [
-      ...ungroupedSections,
-      ...groupSections,
-    ];
-    allSections.sort((a, b) => {
+    // Keep ungrouped items at the top, then custom groups below.
+    groupSections.sort((a, b) => {
       if (a.order !== b.order) return a.order - b.order;
-      const nameA = a.kind === "item" ? a.entry.label : a.name;
-      const nameB = b.kind === "item" ? b.entry.label : b.name;
+      const nameA = a.kind === "group" ? a.name : "";
+      const nameB = b.kind === "group" ? b.name : "";
       return nameA.localeCompare(nameB);
     });
-    return allSections;
-  }, [data, singlesData, capabilities, pluginMetadata, customGroups]);
+
+    return [...ungroupedSections, ...groupSections];
+  }, [
+    data,
+    singlesData,
+    capabilities,
+    pluginMetadata,
+    customGroups,
+    search,
+    pinnedCollections,
+  ]);
   if (isLoading) {
     if (isCollapsed) return null;
     return <CollectionSkeleton />;
   }
-  if (error || sections.length === 0) {
+  if (error) {
     return null;
   }
-
-  const getCollectionUrl = (collection: ApiCollection) => {
-    return buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name });
-  };
+  if (sections.length === 0) {
+    if (isCollapsed) return null;
+    return <EmptyCollections hasSearch={Boolean(search)} />;
+  }
 
   return (
     <>
-      {collections.map(collection => {
-        const url = getCollectionUrl(collection);
-        const isActiveItem = isActive(url);
-        const collectionPinned = isPinned(collection.name);
-        const displayName =
-          collection.labels?.plural || collection.label || collection.name;
-
-        const iconName = collection.admin?.icon || "Database";
-        const IconComponent =
-          (Icons as Record<string, React.ElementType>)[iconName] ||
-          Icons.Database;
+      {sections.map(section => {
+        if (section.kind === "item") {
+          return (
+            <CollectionItem
+              key={section.entry.key}
+              entry={section.entry}
+              isActive={isActive}
+              isCollapsed={isCollapsed}
+              isPinned={isPinned}
+              togglePin={togglePin}
+            />
+          );
+        }
 
         return (
-          <SidebarMenuItem key={collection.id}>
-            <SidebarMenuButton
-              asChild
-              tooltip={displayName}
-              isActive={isActiveItem}
-            >
-              <Link href={url}>
-                <IconComponent className="h-4 w-4 shrink-0" />
-                {!isCollapsed && (
-                  <>
-                    <span>{displayName}</span>
-                  </>
-                )}
-              </Link>
-            </SidebarMenuButton>
+          <React.Fragment key={`group-${section.slug}`}>
             {!isCollapsed && (
-              <SidebarMenuAction
-                showOnHover={!collectionPinned}
-                onClick={e => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  togglePin(collection.name);
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-                aria-label={
-                  collectionPinned ? "Unpin collection" : "Pin collection"
-                }
-                aria-pressed={collectionPinned}
-                title={collectionPinned ? "Unpin collection" : "Pin collection"}
-                className={collectionPinned ? "opacity-100 text-primary" : ""}
-              >
-                <Bookmark
-                  className={
-                    collectionPinned
-                      ? "h-4 w-4 fill-current cursor-pointer"
-                      : "cursor-pointer"
-                  }
-                />
-              </SidebarMenuAction>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50 px-4 mt-3 mb-1 block">
+                {section.name}
+              </span>
             )}
-          </SidebarMenuItem>
+            {section.items.map(item => (
+              <CollectionItem
+                key={item.key}
+                entry={item}
+                isActive={isActive}
+                isCollapsed={isCollapsed}
+                isPinned={isPinned}
+                togglePin={togglePin}
+              />
+            ))}
+          </React.Fragment>
         );
       })}
     </>
@@ -392,10 +371,14 @@ function CollectionItem({
   entry,
   isActive,
   isCollapsed,
+  isPinned,
+  togglePin,
 }: {
   entry: SidebarEntry;
   isActive: (href?: string) => boolean;
   isCollapsed: boolean;
+  isPinned: (resource: string) => boolean;
+  togglePin: (resource: string) => void;
 }) {
   // Capitalize first letter of a string
   const capitalizeFirstLetter = (str: string) => {
@@ -407,6 +390,11 @@ function CollectionItem({
   const DefaultIcon = entry.type === "collection" ? Database : Globe;
   const IconComponent = iconMap[entry.icon] || DefaultIcon;
   const displayLabel = capitalizeFirstLetter(entry.label);
+
+  // Determine if this entry is pinned and what resource ID to use
+  const resourceId =
+    entry.type === "collection" ? entry.collectionName : entry.singleSlug;
+  const isPinnedItem = resourceId ? isPinned(resourceId) : false;
 
   return (
     <SidebarMenuItem>
@@ -420,6 +408,29 @@ function CollectionItem({
           )}
         </Link>
       </SidebarMenuButton>
+      {!isCollapsed && resourceId && (
+        <SidebarMenuAction
+          showOnHover={!isPinnedItem}
+          onClick={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            togglePin(resourceId);
+            e.currentTarget.blur();
+          }}
+          aria-label={isPinnedItem ? "Unpin" : "Pin"}
+          aria-pressed={isPinnedItem}
+          title={isPinnedItem ? "Unpin" : "Pin"}
+          className={isPinnedItem ? "opacity-100 text-primary" : ""}
+        >
+          <Bookmark
+            className={
+              isPinnedItem
+                ? "h-4 w-4 fill-current cursor-pointer"
+                : "cursor-pointer"
+            }
+          />
+        </SidebarMenuAction>
+      )}
     </SidebarMenuItem>
   );
 }
