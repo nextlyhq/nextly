@@ -19,8 +19,18 @@ export interface RenameCandidate {
 
 // F4: parses drizzle-kit's statementsToExecute, identifies DROP+ADD pairs
 // that might be column renames, returns one candidate per (drop, add) pair.
+//
+// `liveColumnTypes` is a Map<tableName, Map<columnName, type>> populated by
+// the pipeline via queryLiveColumnTypes() before its first pushSchema call.
+// The detector reads it to populate `RenameCandidate.fromType` and compute
+// `typesCompatible`. A column missing from the map yields fromType: '' and
+// typesCompatible: false (defensive - never silently claims compatibility).
 export interface RenameDetector {
-  detect(statements: string[], dialect: SupportedDialect): RenameCandidate[];
+  detect(
+    statements: string[],
+    dialect: SupportedDialect,
+    liveColumnTypes: Map<string, Map<string, string>>
+  ): RenameCandidate[];
 }
 
 export type ClassificationLevel = "safe" | "destructive" | "interactive";
