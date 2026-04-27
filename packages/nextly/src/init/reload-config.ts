@@ -16,10 +16,20 @@
 // (c) waiting for F8.
 
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply.js";
+import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url.js";
+import {
+  noopClassifier,
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+  noopPromptDispatcher,
+  noopRenameDetector,
+} from "../domains/schema/pipeline/pushschema-pipeline-stubs.js";
+import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline.js";
 import type {
   DesiredCollection,
   DesiredSchema,
 } from "../domains/schema/pipeline/types.js";
+import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor.js";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
@@ -145,7 +155,19 @@ export async function reloadNextlyConfig(opts?: {
 
   if (!schemaChangeService || !registry) return;
 
+  // Phase 1: per-collection preview to gate destructive changes.
+  // F3 stubs do no rename detection — destructive deltas (DROP+ADD,
+  // narrowing type changes, NOT NULL on non-empty columns without
+  // defaults) would silently lose data if we let them through. The
+  // preview step is the only protection HMR has until F4-F8 land
+  // real RenameDetector + Classifier + PromptDispatcher.
+  //
+  // Safe collections accumulate into a single DesiredSchema snapshot
+  // for one batch pipeline call (Phase 2 below). Destructive ones get
+  // logged + skipped with the existing user-facing message.
+  const desiredCollections: Record<string, DesiredCollection> = {};
   const collections = newConfig.collections ?? [];
+
   for (const collection of collections) {
     const slug = collection.slug;
     if (!slug) continue;
@@ -154,10 +176,7 @@ export async function reloadNextlyConfig(opts?: {
 
     try {
       const current = await registry.getCollectionBySlug(slug);
-      // New collection (no row yet): treat current as empty so apply runs
-      // as a CREATE TABLE path. [] -> [...new] is fully additive.
       const currentFields = current?.fields ?? [];
-      const currentSchemaVersion = current?.schemaVersion ?? 0;
 
       const preview = await schemaChangeService.preview(
         tableName,
@@ -168,14 +187,6 @@ export async function reloadNextlyConfig(opts?: {
       if (!preview.hasChanges) continue;
 
       if (preview.hasDestructiveChanges) {
-        // The "destructive" flag is set for any classification other than
-        // "safe" (includes "interactive" cases like NOT-NULL on a non-empty
-        // column without a default). The headline phrasing avoids the word
-        // "destructive" so users with an "interactive" classification do
-        // not mistake this for irreversible damage; the classification
-        // string itself is included in the message for accurate triage.
-        // Do not throw; other collections in the same reload pass should
-        // still be processed.
         logger?.warn(
           `[Nextly HMR] Code-first change for '${slug}' needs review ` +
             `(classification: ${preview.classification}). Auto-apply skipped ` +
@@ -186,70 +197,105 @@ export async function reloadNextlyConfig(opts?: {
         continue;
       }
 
-      // Safe delta: route through the F2 applyDesiredSchema entry point.
-      // Code-first source skips the optimistic-lock check (HMR is the
-      // source of truth). promptChannel: 'terminal' is mandatory here —
-      // there is no admin UI client during HMR.
-      const desired: DesiredSchema = {
-        collections: {
-          [slug]: {
-            slug,
-            tableName,
-            fields: newFields as DesiredCollection["fields"],
-          },
-        },
-        singles: {},
-        components: {},
+      desiredCollections[slug] = {
+        slug,
+        tableName,
+        fields: newFields as DesiredCollection["fields"],
       };
-
-      // Per-call factory (not the DI-bound applyDesiredSchema in
-      // pipeline/index.ts) so the existing resolver-pattern test seam
-      // and vi.hoisted spies on schemaChangeService.apply keep working
-      // without us having to mock the DI container in tests. F8 collapses
-      // both seams into the unified pipeline.
-      const applyPipeline = createApplyDesiredSchema({
-        applySingleResource: async (resource, source) => {
-          if (resource.kind !== "collection") {
-            throw new Error(
-              `applyDesiredSchema: ${resource.kind} apply is not yet supported in F2`
-            );
-          }
-          const r = await schemaChangeService.apply(
-            resource.slug,
-            resource.tableName,
-            currentFields,
-            resource.fields,
-            currentSchemaVersion,
-            registry,
-            undefined,
-            { source }
-          );
-          if (!r.success) {
-            throw new Error(r.error ?? "apply failed");
-          }
-          return { success: true, statementsExecuted: 0, renamesApplied: 0 };
-        },
-        // Unused for source='code' — HMR skips the version check.
-        readSchemaVersionForSlug: () => Promise.resolve(null),
-        // Unused for HMR — we don't surface bumped versions in the log.
-        readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
-      });
-
-      const applyResult = await applyPipeline(desired, "code", {
-        promptChannel: "terminal",
-      });
-
-      if (!applyResult.success) {
-        logger?.error(
-          `[Nextly HMR] Apply failed for '${slug}' (${applyResult.error.code}): ${applyResult.error.message}`
-        );
-      }
     } catch (err) {
-      // One collection failing must not block the rest. Log and continue.
       const msg = err instanceof Error ? err.message : String(err);
       logger?.warn(
-        `[Nextly HMR] Skipping '${slug}' due to error during reload: ${msg}`
+        `[Nextly HMR] Skipping '${slug}' due to error during preview: ${msg}`
       );
     }
   }
+
+  // Nothing safe to apply.
+  if (Object.keys(desiredCollections).length === 0) return;
+
+  // Phase 2: one batch pipeline call with the full safe-snapshot.
+  // Resolves the database adapter so we can construct the F3 pipeline
+  // with the right dialect + drizzle client. MySQL needs databaseName
+  // extracted from DATABASE_URL; PG and SQLite ignore it.
+  const safeCount = Object.keys(desiredCollections).length;
+  let adapter: AdapterLike | undefined;
+  try {
+    adapter = (await resolve("databaseAdapter")) as AdapterLike;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not resolve database adapter to apply ${safeCount} safe deltas: ${msg}`
+    );
+    return;
+  }
+  if (!adapter) {
+    logger?.error(
+      `[Nextly HMR] Database adapter unavailable; ${safeCount} safe deltas not applied`
+    );
+    return;
+  }
+
+  // dialect is an abstract readonly property on DrizzleAdapter, not a
+  // method (a previous iteration mistakenly called .getDialect() which
+  // would crash at runtime).
+  const dialect = adapter.dialect;
+  const db = adapter.getDrizzle();
+  const databaseName =
+    dialect === "mysql"
+      ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+      : undefined;
+
+  const desired: DesiredSchema = {
+    collections: desiredCollections,
+    singles: {},
+    components: {},
+  };
+
+  // Per-call factory (not the DI-bound applyDesiredSchema in
+  // pipeline/index.ts) so we can thread MySQL databaseName + the
+  // resolved adapter into the F3 PushSchemaPipeline at this site.
+  // F8 will collapse both seams into the unified pipeline.
+  const apply = createApplyDesiredSchema({
+    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+      const pipeline = new PushSchemaPipeline({
+        executor: new DrizzleStatementExecutor(dialect, db),
+        renameDetector: noopRenameDetector,
+        classifier: noopClassifier,
+        promptDispatcher: noopPromptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        migrationJournal: noopMigrationJournal,
+      });
+      return pipeline.apply({
+        desired: desiredArg,
+        db,
+        dialect,
+        source: sourceArg,
+        promptChannel: channelArg,
+        databaseName,
+      });
+    },
+    // Unused for source='code' — HMR skips the version check.
+    readSchemaVersionForSlug: () => Promise.resolve(null),
+    // Unused for HMR — we don't surface bumped versions in the log.
+    readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
+  });
+
+  const applyResult = await apply(desired, "code", {
+    promptChannel: "terminal",
+  });
+
+  if (!applyResult.success) {
+    logger?.error(
+      `[Nextly HMR] Batch apply failed (${applyResult.error.code}): ${applyResult.error.message}`
+    );
+  }
+}
+
+// Minimal duck-typed shape for the database adapter — only the
+// readonly `dialect` property and `getDrizzle()` method we invoke.
+// Matches the public surface of DrizzleAdapter; full type imported
+// from adapter-drizzle would couple this module to the adapter package.
+interface AdapterLike {
+  readonly dialect: "postgresql" | "mysql" | "sqlite";
+  getDrizzle(): unknown;
 }
