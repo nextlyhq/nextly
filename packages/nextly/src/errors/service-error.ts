@@ -1,13 +1,25 @@
 /**
- * Service Error Codes
+ * Migration shim: ServiceError is a standalone class (not a subclass of
+ * NextlyError) but stamps the cross-realm brand on its prototype so that
+ * `NextlyError.is(serviceErr)` returns true and the new withErrorHandler
+ * wrapper recognises it. ServiceError also implements `toResponseJSON` and
+ * `toLogJSON` with the canonical wire shape.
  *
- * These codes map to HTTP status codes and provide structured error handling.
- * Use generic codes with details for entity-specific information.
+ * Why composition rather than `extends NextlyError`: ServiceError's legacy
+ * static factories (`notFound(message, details)`) have positional signatures
+ * that TypeScript variance rules reject as overrides of NextlyError's
+ * options-based factories (`notFound(opts?: { logContext })`). 119+ callers
+ * use the legacy signatures; renaming or breaking them is unacceptable for
+ * the shim period.
+ *
+ * Deleted in PR 12 once every throw site has migrated to NextlyError factories.
  */
-/**
- * Import DbError types for integration
- */
+
 import { isDbError, type DbErrorKind } from "../database/errors";
+
+const NEXTLY_ERROR_BRAND: unique symbol = Symbol.for(
+  "@revnixhq/nextly/NextlyError"
+);
 
 export enum ServiceErrorCode {
   // Validation errors (400)
@@ -44,9 +56,6 @@ export enum ServiceErrorCode {
   EXTERNAL_SERVICE_ERROR = "EXTERNAL_SERVICE_ERROR",
 }
 
-/**
- * HTTP status code mapping for error codes
- */
 const ERROR_CODE_TO_STATUS: Record<ServiceErrorCode, number> = {
   [ServiceErrorCode.VALIDATION_ERROR]: 400,
   [ServiceErrorCode.INVALID_INPUT]: 400,
@@ -67,21 +76,16 @@ const ERROR_CODE_TO_STATUS: Record<ServiceErrorCode, number> = {
   [ServiceErrorCode.EXTERNAL_SERVICE_ERROR]: 500,
 };
 
-/**
- * Map DbErrorKind to ServiceErrorCode
- */
 function mapDbErrorKindToServiceCode(kind: DbErrorKind): ServiceErrorCode {
   switch (kind) {
     case "unique-violation":
       return ServiceErrorCode.DUPLICATE_KEY;
     case "fk-violation":
-      return ServiceErrorCode.VALIDATION_ERROR;
     case "not-null-violation":
+    case "constraint":
       return ServiceErrorCode.VALIDATION_ERROR;
     case "syntax":
       return ServiceErrorCode.INTERNAL_ERROR;
-    case "constraint":
-      return ServiceErrorCode.VALIDATION_ERROR;
     case "deadlock":
     case "serialization-failure":
       return ServiceErrorCode.CONFLICT;
@@ -94,29 +98,14 @@ function mapDbErrorKindToServiceCode(kind: DbErrorKind): ServiceErrorCode {
   }
 }
 
-/**
- * ServiceError - Exception class for service layer errors
- *
- * Usage:
- * ```typescript
- * // In service
- * throw new ServiceError(ServiceErrorCode.NOT_FOUND, 'Document not found', { entity: 'user', id });
- *
- * // In API route
- * try {
- *   const doc = await service.findById(id);
- *   return NextResponse.json({ data: doc });
- * } catch (error) {
- *   if (error instanceof ServiceError) {
- *     return NextResponse.json({ error: error.toJSON() }, { status: error.httpStatus });
- *   }
- *   throw error;
- * }
- * ```
- */
 export class ServiceError extends Error {
   public readonly code: ServiceErrorCode;
   public readonly httpStatus: number;
+  /** Alias for httpStatus, matches the new NextlyError API surface. */
+  public readonly statusCode: number;
+  /** Alias for `message`, matches the new NextlyError API surface. */
+  public readonly publicMessage: string;
+  public readonly logContext?: Record<string, unknown>;
   public readonly details?: unknown;
   public override readonly cause?: Error;
   public readonly timestamp: Date;
@@ -131,17 +120,67 @@ export class ServiceError extends Error {
     this.name = "ServiceError";
     this.code = code;
     this.httpStatus = ERROR_CODE_TO_STATUS[code] ?? 500;
+    this.statusCode = this.httpStatus;
+    this.publicMessage = message;
     this.details = details;
-    this.cause = cause;
+    // useDefineForClassFields (ES2022 default) resets values set by super(),
+    // so cast to bypass readonly and assign after super().
+    (this as { cause?: Error }).cause = cause;
     this.timestamp = new Date();
-
-    // Maintain proper stack trace (V8 environments only)
+    // logContext for the new wrapper's structured logger.
+    this.logContext =
+      details && typeof details === "object" && !Array.isArray(details)
+        ? (details as Record<string, unknown>)
+        : details !== undefined
+          ? { details }
+          : undefined;
     Error.captureStackTrace?.(this, ServiceError);
   }
 
+  static {
+    // Stamp the cross-realm brand so NextlyError.is(serviceErr) returns true.
+    (ServiceError.prototype as unknown as Record<symbol, unknown>)[
+      NEXTLY_ERROR_BRAND
+    ] = true;
+  }
+
   /**
-   * Convert to JSON-serializable object for API responses
+   * New wire format. Used by withErrorHandler / withAction. ServiceError
+   * intentionally does not emit `data` — its legacy `details` field carries
+   * operator-only context (handled separately by `toLogJSON`).
    */
+  toResponseJSON(requestId: string): {
+    code: string;
+    message: string;
+    requestId: string;
+  } {
+    return {
+      code: this.code,
+      message: this.publicMessage,
+      requestId,
+    };
+  }
+
+  /** New log format. Used by withErrorHandler / withAction. */
+  toLogJSON(requestId: string): Record<string, unknown> {
+    return {
+      code: this.code,
+      statusCode: this.statusCode,
+      publicMessage: this.publicMessage,
+      logContext: this.logContext,
+      cause: this.cause
+        ? {
+            name: this.cause.name,
+            message: this.cause.message,
+            stack: this.cause.stack,
+          }
+        : undefined,
+      timestamp: this.timestamp.toISOString(),
+      requestId,
+    };
+  }
+
+  /** Legacy JSON shape preserved for backward compatibility. */
   toJSON(): {
     code: string;
     message: string;
@@ -150,40 +189,29 @@ export class ServiceError extends Error {
   } {
     return {
       code: this.code,
-      message: this.message,
+      message: this.publicMessage,
       ...(this.details !== undefined && { details: this.details }),
       timestamp: this.timestamp.toISOString(),
     };
   }
 
-  /**
-   * Check if this is a client error (4xx)
-   */
   isClientError(): boolean {
     return this.httpStatus >= 400 && this.httpStatus < 500;
   }
 
-  /**
-   * Check if this is a server error (5xx)
-   */
   isServerError(): boolean {
     return this.httpStatus >= 500;
   }
 
-  /**
-   * Create a NOT_FOUND error
-   * @param message - Error message
-   * @param details - Optional details (e.g., { entity: 'user', id: '123' })
-   */
+  // ────────────────────────────────────────────────────────────────────
+  // Legacy static factories. Preserved at their original signatures so
+  // 119+ existing call sites continue to work unchanged.
+  // ────────────────────────────────────────────────────────────────────
+
   static notFound(message: string, details?: unknown): ServiceError {
     return new ServiceError(ServiceErrorCode.NOT_FOUND, message, details);
   }
 
-  /**
-   * Create a VALIDATION_ERROR
-   * @param message - Error message
-   * @param details - Optional validation details (e.g., { field: 'email', issue: 'format' })
-   */
   static validation(message: string, details?: unknown): ServiceError {
     return new ServiceError(
       ServiceErrorCode.VALIDATION_ERROR,
@@ -192,38 +220,18 @@ export class ServiceError extends Error {
     );
   }
 
-  /**
-   * Create a FORBIDDEN error
-   * @param message - Error message
-   * @param details - Optional details about required permissions
-   */
   static forbidden(message: string, details?: unknown): ServiceError {
     return new ServiceError(ServiceErrorCode.FORBIDDEN, message, details);
   }
 
-  /**
-   * Create an UNAUTHORIZED error
-   * @param message - Error message
-   * @param details - Optional details
-   */
   static unauthorized(message: string, details?: unknown): ServiceError {
     return new ServiceError(ServiceErrorCode.UNAUTHORIZED, message, details);
   }
 
-  /**
-   * Create a DUPLICATE_KEY error
-   * @param message - Error message
-   * @param details - Optional details (e.g., { field: 'email', value: 'test@test.com' })
-   */
   static duplicate(message: string, details?: unknown): ServiceError {
     return new ServiceError(ServiceErrorCode.DUPLICATE_KEY, message, details);
   }
 
-  /**
-   * Create an INTERNAL_ERROR (wrapping another error)
-   * @param message - Error message
-   * @param cause - Original error that caused this
-   */
   static internal(message: string, cause?: Error): ServiceError {
     return new ServiceError(
       ServiceErrorCode.INTERNAL_ERROR,
@@ -233,20 +241,10 @@ export class ServiceError extends Error {
     );
   }
 
-  /**
-   * Create a CONFLICT error
-   * @param message - Error message
-   * @param details - Optional details about the conflict
-   */
   static conflict(message: string, details?: unknown): ServiceError {
     return new ServiceError(ServiceErrorCode.CONFLICT, message, details);
   }
 
-  /**
-   * Create a BUSINESS_RULE_VIOLATION error
-   * @param message - Error message describing the violated rule
-   * @param details - Optional details about the rule
-   */
   static businessRule(message: string, details?: unknown): ServiceError {
     return new ServiceError(
       ServiceErrorCode.BUSINESS_RULE_VIOLATION,
@@ -255,22 +253,11 @@ export class ServiceError extends Error {
     );
   }
 
-  /**
-   * Wrap a database error into a ServiceError
-   *
-   * Accepts either a DbError instance or a raw database error.
-   * When given a DbError, maps DbErrorKind to appropriate ServiceErrorCode.
-   * When given a raw error, attempts to detect common database error patterns.
-   *
-   * @param error - Database error (DbError instance or raw error)
-   */
   static fromDatabaseError(error: unknown): ServiceError {
-    // Handle DbError instances with proper kind mapping
     if (isDbError(error)) {
       const code = mapDbErrorKindToServiceCode(error.kind);
       const message = error.message || "Database operation failed";
 
-      // Provide user-friendly messages for common cases
       let userMessage = message;
       if (error.kind === "unique-violation") {
         userMessage = "A record with this value already exists";
@@ -292,11 +279,9 @@ export class ServiceError extends Error {
       );
     }
 
-    // Handle raw errors - attempt to detect common patterns
     const err = error as Error & { code?: string };
     const message = err?.message || "Database operation failed";
 
-    // PostgreSQL unique violation
     if (err?.code === "23505") {
       return new ServiceError(
         ServiceErrorCode.DUPLICATE_KEY,
@@ -306,7 +291,6 @@ export class ServiceError extends Error {
       );
     }
 
-    // PostgreSQL foreign key violation
     if (err?.code === "23503") {
       return new ServiceError(
         ServiceErrorCode.VALIDATION_ERROR,
@@ -316,7 +300,6 @@ export class ServiceError extends Error {
       );
     }
 
-    // PostgreSQL not-null violation
     if (err?.code === "23502") {
       return new ServiceError(
         ServiceErrorCode.VALIDATION_ERROR,
@@ -326,7 +309,6 @@ export class ServiceError extends Error {
       );
     }
 
-    // Generic database error
     return new ServiceError(
       ServiceErrorCode.DATABASE_ERROR,
       message,
@@ -336,9 +318,7 @@ export class ServiceError extends Error {
   }
 }
 
-/**
- * Type guard to check if an error is a ServiceError
- */
+/** Type guard for ServiceError. */
 export function isServiceError(error: unknown): error is ServiceError {
   return error instanceof ServiceError;
 }

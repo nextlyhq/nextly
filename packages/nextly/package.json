@@ -19,6 +19,14 @@
       "types": "./dist/config.d.ts",
       "import": "./dist/config.mjs"
     },
+    "./errors": {
+      "types": "./dist/errors/index.d.ts",
+      "import": "./dist/errors/index.mjs"
+    },
+    "./observability": {
+      "types": "./dist/observability/index.d.ts",
+      "import": "./dist/observability/index.mjs"
+    },
     "./api/health": {
       "types": "./dist/api/health.d.ts",
       "import": "./dist/api/health.mjs"

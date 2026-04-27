@@ -1,60 +1,44 @@
 /**
- * Direct API Error Classes
+ * Direct API Error Classes — migration shim.
  *
- * This module provides error classes for the Nextly Direct API.
- * These errors provide a clean, consistent interface for error handling
- * while internally leveraging the ServiceError infrastructure.
+ * During the unified-error-system migration:
+ *   - The exported `NextlyError` here extends the core `NextlyError` from
+ *     `../errors/nextly-error` so structural type guards
+ *     (`NextlyError.is(err)`) and the new `withErrorHandler` wrapper recognize
+ *     direct-api errors.
+ *   - The legacy positional constructor `new NextlyError(message, code,
+ *     statusCode, data, cause)` is preserved.
+ *   - Subclasses (`NotFoundError`, `ValidationError`, ...) keep their
+ *     existing constructors and behavior.
  *
- * @example
- * ```typescript
- * import { NotFoundError, ValidationError } from 'nextly';
- *
- * try {
- *   const post = await nextly.findByID({ collection: 'posts', id: 'missing' });
- * } catch (error) {
- *   if (error instanceof NotFoundError) {
- *     console.log('Post not found');
- *   }
- * }
- * ```
+ * This file is deleted entirely in PR 12; namespaces switch to throwing
+ * `NextlyError` factory calls from `../errors`.
  *
  * @packageDocumentation
  */
 
+import { NextlyError as CoreNextlyError } from "../errors/nextly-error";
+
 /**
- * Error codes for Direct API errors.
- *
- * These codes provide machine-readable error identification
- * and map to appropriate HTTP status codes.
+ * Legacy direct-api error code enum. Differs from the new
+ * `NEXTLY_ERROR_STATUS` keyset (`AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS`,
+ * `DUPLICATE`, `RATE_LIMITED`) — preserved here so existing callers'
+ * `error.code === NextlyErrorCode.UNAUTHORIZED` checks continue to work.
  */
 export enum NextlyErrorCode {
-  /** Validation failed (400) */
   VALIDATION_ERROR = "VALIDATION_ERROR",
-  /** Invalid input provided (400) */
   INVALID_INPUT = "INVALID_INPUT",
-  /** Authentication required (401) */
   UNAUTHORIZED = "UNAUTHORIZED",
-  /** Invalid credentials (401) */
   INVALID_CREDENTIALS = "INVALID_CREDENTIALS",
-  /** Token expired (401) */
   TOKEN_EXPIRED = "TOKEN_EXPIRED",
-  /** Permission denied (403) */
   FORBIDDEN = "FORBIDDEN",
-  /** Resource not found (404) */
   NOT_FOUND = "NOT_FOUND",
-  /** Resource conflict (409) */
   CONFLICT = "CONFLICT",
-  /** Duplicate resource (409) */
   DUPLICATE = "DUPLICATE",
-  /** Internal server error (500) */
   INTERNAL_ERROR = "INTERNAL_ERROR",
-  /** Database error (500) */
   DATABASE_ERROR = "DATABASE_ERROR",
 }
 
-/**
- * HTTP status code mapping for error codes.
- */
 const ERROR_CODE_TO_STATUS: Record<NextlyErrorCode, number> = {
   [NextlyErrorCode.VALIDATION_ERROR]: 400,
   [NextlyErrorCode.INVALID_INPUT]: 400,
@@ -70,36 +54,21 @@ const ERROR_CODE_TO_STATUS: Record<NextlyErrorCode, number> = {
 };
 
 /**
- * Base error class for all Nextly Direct API errors.
+ * Legacy direct-api NextlyError. Extends the core NextlyError so it
+ * satisfies `NextlyError.is(...)` via the inherited brand and serializes
+ * correctly through the canonical wire path. Keeps the legacy positional
+ * constructor and the legacy `data`/`toJSON`/`isClientError`/`isServerError`
+ * surface that external SDK consumers depend on.
  *
- * Provides a consistent error interface with error codes,
- * HTTP status codes, and optional additional data.
- *
- * @example
- * ```typescript
- * throw new NextlyError(
- *   'Post not found',
- *   NextlyErrorCode.NOT_FOUND,
- *   404,
- *   { collection: 'posts', id: 'post-123' }
- * );
- * ```
+ * `data` is stored on the subclass (kept structurally separate from core's
+ * typed `publicData`) so it can hold arbitrary unknown payloads without
+ * coercion. Direct-api errors are consumed by external SDK callers, not
+ * routed through `withErrorHandler`, so the legacy `data` does not need to
+ * round-trip through the new `toResponseJSON` shape.
  */
-export class NextlyError extends Error {
-  /** Error code for machine-readable identification */
-  public readonly code: NextlyErrorCode | string;
-
-  /** HTTP status code */
-  public readonly statusCode: number;
-
-  /** Additional error data */
+export class NextlyError extends CoreNextlyError {
+  /** Legacy free-form payload. Kept for SDK backward compatibility. */
   public readonly data?: unknown;
-
-  /** Original error that caused this error */
-  public readonly cause?: Error;
-
-  /** Timestamp when the error occurred */
-  public readonly timestamp: Date;
 
   constructor(
     message: string,
@@ -108,25 +77,23 @@ export class NextlyError extends Error {
     data?: unknown,
     cause?: Error
   ) {
-    super(message);
+    super({
+      code,
+      publicMessage: message,
+      // Honor the explicit statusCode when given, otherwise resolve from the
+      // local enum mapping (for legacy code names not in NEXTLY_ERROR_STATUS).
+      statusCode:
+        statusCode !== 500 || !(code in ERROR_CODE_TO_STATUS)
+          ? statusCode
+          : ERROR_CODE_TO_STATUS[code as NextlyErrorCode],
+      cause,
+    });
     this.name = "NextlyError";
-    this.code = code;
-    this.statusCode =
-      typeof code === "string" && code in NextlyErrorCode
-        ? ERROR_CODE_TO_STATUS[code as NextlyErrorCode]
-        : statusCode;
     this.data = data;
-    this.cause = cause;
-    this.timestamp = new Date();
-
     Error.captureStackTrace?.(this, this.constructor);
   }
 
-  /**
-   * Convert error to JSON-serializable object.
-   *
-   * Useful for API responses and logging.
-   */
+  /** Legacy JSON shape used by external SDK consumers. */
   toJSON(): {
     name: string;
     code: string;
@@ -137,42 +104,23 @@ export class NextlyError extends Error {
   } {
     return {
       name: this.name,
-      code: this.code,
-      message: this.message,
+      code: String(this.code),
+      message: this.publicMessage,
       statusCode: this.statusCode,
       ...(this.data !== undefined && { data: this.data }),
       timestamp: this.timestamp.toISOString(),
     };
   }
 
-  /**
-   * Check if this is a client error (4xx).
-   */
   isClientError(): boolean {
     return this.statusCode >= 400 && this.statusCode < 500;
   }
 
-  /**
-   * Check if this is a server error (5xx).
-   */
   isServerError(): boolean {
     return this.statusCode >= 500;
   }
 }
 
-/**
- * Error thrown when a requested resource is not found.
- *
- * HTTP Status: 404
- *
- * @example
- * ```typescript
- * throw new NotFoundError('Post not found', {
- *   collection: 'posts',
- *   id: 'post-123',
- * });
- * ```
- */
 export class NotFoundError extends NextlyError {
   constructor(message: string = "Resource not found", data?: unknown) {
     super(message, NextlyErrorCode.NOT_FOUND, 404, data);
@@ -180,23 +128,20 @@ export class NotFoundError extends NextlyError {
   }
 }
 
-/**
- * Error thrown when validation fails.
- *
- * HTTP Status: 400
- *
- * @example
- * ```typescript
- * throw new ValidationError('Invalid input', {
- *   errors: {
- *     email: ['Invalid email format'],
- *     name: ['Name is required'],
- *   },
- * });
- * ```
- */
 export class ValidationError extends NextlyError {
-  /** Field-specific validation errors */
+  /**
+   * Field-specific validation errors in the LEGACY shape:
+   * `Record<fieldName, string[]>`.
+   *
+   * The new wire format (spec §10.1) is an array of
+   * `{ path, code, message }`. ValidationError instances thrown by the
+   * direct-api SDK preserve the legacy shape for SDK-consumer compatibility
+   * during the shim period; they are not routed through `withErrorHandler`.
+   *
+   * PR 10 is responsible for ensuring the admin frontend reads
+   * `data.errors` from the new array shape (services throw
+   * `NextlyError.validation({ errors: [...] })` directly post PR 4).
+   */
   public readonly errors: Record<string, string[]>;
 
   constructor(
@@ -206,44 +151,25 @@ export class ValidationError extends NextlyError {
   ) {
     super(message, NextlyErrorCode.VALIDATION_ERROR, 400, {
       errors,
-      ...((data as object) || {}),
+      ...(data && typeof data === "object" ? data : {}),
     });
     this.name = "ValidationError";
     this.errors = errors;
   }
 
-  /**
-   * Get all error messages as a flat array.
-   */
   getAllMessages(): string[] {
     return Object.values(this.errors).flat();
   }
 
-  /**
-   * Check if a specific field has errors.
-   */
   hasFieldError(field: string): boolean {
     return field in this.errors && this.errors[field].length > 0;
   }
 
-  /**
-   * Get error messages for a specific field.
-   */
   getFieldErrors(field: string): string[] {
     return this.errors[field] || [];
   }
 }
 
-/**
- * Error thrown when authentication is required but not provided.
- *
- * HTTP Status: 401
- *
- * @example
- * ```typescript
- * throw new UnauthorizedError('Authentication required');
- * ```
- */
 export class UnauthorizedError extends NextlyError {
   constructor(message: string = "Unauthorized", data?: unknown) {
     super(message, NextlyErrorCode.UNAUTHORIZED, 401, data);
@@ -251,19 +177,6 @@ export class UnauthorizedError extends NextlyError {
   }
 }
 
-/**
- * Error thrown when user lacks permission for an operation.
- *
- * HTTP Status: 403
- *
- * @example
- * ```typescript
- * throw new ForbiddenError('You do not have permission to edit this post', {
- *   requiredRole: 'editor',
- *   userRole: 'viewer',
- * });
- * ```
- */
 export class ForbiddenError extends NextlyError {
   constructor(message: string = "Forbidden", data?: unknown) {
     super(message, NextlyErrorCode.FORBIDDEN, 403, data);
@@ -271,19 +184,6 @@ export class ForbiddenError extends NextlyError {
   }
 }
 
-/**
- * Error thrown when there's a resource conflict.
- *
- * HTTP Status: 409
- *
- * @example
- * ```typescript
- * throw new ConflictError('Document has been modified by another user', {
- *   expectedVersion: 1,
- *   actualVersion: 2,
- * });
- * ```
- */
 export class ConflictError extends NextlyError {
   constructor(message: string = "Conflict", data?: unknown) {
     super(message, NextlyErrorCode.CONFLICT, 409, data);
@@ -291,19 +191,6 @@ export class ConflictError extends NextlyError {
   }
 }
 
-/**
- * Error thrown when attempting to create a duplicate resource.
- *
- * HTTP Status: 409
- *
- * @example
- * ```typescript
- * throw new DuplicateError('A user with this email already exists', {
- *   field: 'email',
- *   value: 'user@example.com',
- * });
- * ```
- */
 export class DuplicateError extends NextlyError {
   constructor(message: string = "Duplicate resource", data?: unknown) {
     super(message, NextlyErrorCode.DUPLICATE, 409, data);
@@ -311,16 +198,6 @@ export class DuplicateError extends NextlyError {
   }
 }
 
-/**
- * Error thrown for database-related failures.
- *
- * HTTP Status: 500
- *
- * @example
- * ```typescript
- * throw new DatabaseError('Failed to connect to database', originalError);
- * ```
- */
 export class DatabaseError extends NextlyError {
   constructor(message: string = "Database error", cause?: Error) {
     super(message, NextlyErrorCode.DATABASE_ERROR, 500, undefined, cause);
@@ -328,80 +205,44 @@ export class DatabaseError extends NextlyError {
   }
 }
 
-/**
- * Type guard to check if an error is a NextlyError.
- *
- * @example
- * ```typescript
- * try {
- *   await nextly.findByID({ collection: 'posts', id: 'missing' });
- * } catch (error) {
- *   if (isNextlyError(error)) {
- *     console.log(`Error code: ${error.code}`);
- *   }
- * }
- * ```
- */
 export function isNextlyError(error: unknown): error is NextlyError {
   return error instanceof NextlyError;
 }
 
-/**
- * Type guard to check if an error is a NotFoundError.
- */
 export function isNotFoundError(error: unknown): error is NotFoundError {
   return error instanceof NotFoundError;
 }
 
-/**
- * Type guard to check if an error is a ValidationError.
- */
 export function isValidationError(error: unknown): error is ValidationError {
   return error instanceof ValidationError;
 }
 
-/**
- * Type guard to check if an error is an UnauthorizedError.
- */
 export function isUnauthorizedError(
   error: unknown
 ): error is UnauthorizedError {
   return error instanceof UnauthorizedError;
 }
 
-/**
- * Type guard to check if an error is a ForbiddenError.
- */
 export function isForbiddenError(error: unknown): error is ForbiddenError {
   return error instanceof ForbiddenError;
 }
 
-/**
- * Type guard to check if an error is a ConflictError.
- */
 export function isConflictError(error: unknown): error is ConflictError {
   return error instanceof ConflictError;
 }
 
-/**
- * Type guard to check if an error is a DuplicateError.
- */
 export function isDuplicateError(error: unknown): error is DuplicateError {
   return error instanceof DuplicateError;
 }
 
-/**
- * Type guard to check if an error is a DatabaseError.
- */
 export function isDatabaseError(error: unknown): error is DatabaseError {
   return error instanceof DatabaseError;
 }
 
 /**
- * Convert a ServiceError to a NextlyError.
- *
- * This utility allows seamless integration between the service layer
- * and the Direct API error handling.
+ * Convert a ServiceError to a NextlyError. Used by direct-api namespaces
+ * to bridge from the service layer; deleted in PR 10 once services throw
+ * `NextlyError` directly.
  */
 export function fromServiceError(error: {
   code: string;
