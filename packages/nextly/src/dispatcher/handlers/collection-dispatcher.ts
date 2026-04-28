@@ -20,6 +20,7 @@ import {
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopPreCleanupExecutor,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
@@ -328,6 +329,7 @@ const COLLECTIONS_METHODS: Record<
             classifier: noopClassifier,
             promptDispatcher,
             preRenameExecutor: noopPreRenameExecutor,
+            preCleanupExecutor: noopPreCleanupExecutor,
             migrationJournal: noopMigrationJournal,
           });
           return pipeline.apply({

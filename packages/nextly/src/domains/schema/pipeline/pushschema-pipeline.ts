@@ -43,12 +43,95 @@ import type {
   Classifier,
   DrizzleStatementExecutor,
   MigrationJournal,
+  PreCleanupExecutor,
   PreRenameExecutor,
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces.js";
+import type { ClassifierEvent, Resolution } from "./resolution/types.js";
 import type { DesiredSchema } from "./types.js";
+
+// F5 PR 4: produces a copy of `desired` where any field targeted by a
+// make_optional resolution has its `required` flag flipped to false (or
+// removed) so the next pushSchema call sees the column as still-nullable
+// and emits no SET NOT NULL. Pure function; never mutates `desired`.
+//
+// Note: we patch the field's `required` attribute, not nullable. nullable
+// is the schema-level property; required is the field-config attribute
+// that drives buildDesiredTableFromFields' nullable mapping.
+function applyMakeOptionalToDesired(
+  desired: DesiredSchema,
+  resolutions: Resolution[],
+  events: ClassifierEvent[]
+): DesiredSchema {
+  const makeOptionalEventIds = new Set(
+    resolutions.filter(r => r.kind === "make_optional").map(r => r.eventId)
+  );
+  if (makeOptionalEventIds.size === 0) return desired;
+
+  // Map eventId -> { table, column } for kinds that own a column.
+  const targets = new Map<string, { table: string; column: string }>();
+  for (const event of events) {
+    if (
+      makeOptionalEventIds.has(event.id) &&
+      (event.kind === "add_not_null_with_nulls" ||
+        event.kind === "add_required_field_no_default")
+    ) {
+      targets.set(event.id, {
+        table: event.tableName,
+        column: event.columnName,
+      });
+    }
+  }
+  if (targets.size === 0) return desired;
+
+  const patchCollection = <
+    T extends {
+      tableName: string;
+      fields: DesiredSchema["collections"][string]["fields"];
+    },
+  >(
+    coll: T
+  ): T => {
+    const matchingTargets = [...targets.values()].filter(
+      t => t.table === coll.tableName
+    );
+    if (matchingTargets.length === 0) return coll;
+    return {
+      ...coll,
+      fields: coll.fields.map(field => {
+        const matched = matchingTargets.some(t => t.column === field.name);
+        if (!matched) return field;
+        // Spread + override `required` to false. Drizzle/runtime treats
+        // required:false as nullable column.
+        return { ...field, required: false };
+      }),
+    };
+  };
+
+  return {
+    ...desired,
+    collections: Object.fromEntries(
+      Object.entries(desired.collections).map(([slug, c]) => [
+        slug,
+        patchCollection(c),
+      ])
+    ),
+    singles: Object.fromEntries(
+      Object.entries(desired.singles).map(([slug, s]) => [
+        slug,
+        patchCollection(s),
+      ])
+    ),
+    components: Object.fromEntries(
+      Object.entries(desired.components).map(([slug, c]) => [
+        slug,
+        patchCollection(c),
+      ])
+    ),
+  };
+}
 
 export interface PipelineResult {
   success: boolean;
@@ -110,6 +193,9 @@ export interface PushSchemaPipelineDeps {
   // preRenameExecutor.execute() - the pre-resolution executor handles
   // everything. PR 4/5 callers will remove this dep.
   preRenameExecutor: PreRenameExecutor;
+  // F5 PR 4: runs UPDATE/DELETE pre-cleanup or patches the desired snapshot
+  // for make_optional. Slots between PreResolutionExecutor and pushSchema.
+  preCleanupExecutor: PreCleanupExecutor;
   migrationJournal: MigrationJournal;
 }
 
@@ -222,8 +308,17 @@ export class PushSchemaPipeline {
         throw new PromptCancelledError();
       }
 
-      // dispatchResult.resolutions is unused in PR 1 — PR 4 will wire a
-      // PreCleanupExecutor stage that reads it.
+      // F5 PR 4: patch desired.collections inline for make_optional
+      // resolutions BEFORE building drizzleSchema, so pushSchema sees the
+      // column as still-nullable and never emits SET NOT NULL. We patch
+      // `desired` rather than the snapshot because drizzleSchema is built
+      // from desired.collections; patching the snapshot only would have no
+      // effect on the SQL pushSchema generates.
+      const patchedDesired = applyMakeOptionalToDesired(
+        desired,
+        dispatchResult.resolutions,
+        classificationResult.events
+      );
 
       const resolvedOps = applyResolutionsToOperations(
         operations,
@@ -232,8 +327,8 @@ export class PushSchemaPipeline {
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
-        ? this.testHooks._buildDrizzleSchemaOverride(desired, dialect)
-        : this.buildDrizzleSchema(desired, dialect);
+        ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
+        : this.buildDrizzleSchema(patchedDesired, dialect);
 
       const kit: DrizzleKitLike = this.testHooks._kitOverride
         ? this.testHooks._kitOverride
@@ -249,6 +344,51 @@ export class PushSchemaPipeline {
         try {
           await preResExecutor(tx, resolvedOps, dialect);
         } catch (err) {
+          throw new DdlExecutionError(
+            err instanceof Error ? err.message : String(err),
+            err
+          );
+        }
+
+        // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
+        // provide_default + delete_nonconforming resolutions. Snapshot
+        // patching for make_optional was already applied above by patching
+        // `desired` before drizzleSchema was built. Aggregate fields across
+        // all collections so the executor can validate provide_default
+        // values against field types.
+        // FieldConfig.name is typed string|undefined (some field types like
+        // row containers have no name); filter to only named fields, which
+        // are the only ones the classifier could have emitted events for.
+        // Aggregate symmetrically with applyMakeOptionalToDesired which
+        // patches collections + singles + components — keeping the two in
+        // sync so a future classifier-on-singles event has field metadata
+        // to validate provide_default values against.
+        const aggregatedFields: Array<{ name: string; type: string }> = [
+          ...Object.values(desired.collections),
+          ...Object.values(desired.singles),
+          ...Object.values(desired.components),
+        ].flatMap(c =>
+          c.fields
+            .filter(
+              (f): f is typeof f & { name: string } =>
+                typeof f.name === "string"
+            )
+            .map(f => ({ name: f.name, type: f.type }))
+        );
+        try {
+          await this.deps.preCleanupExecutor.execute({
+            tx,
+            desiredSnapshot,
+            resolutions: dispatchResult.resolutions,
+            events: classificationResult.events,
+            fields: aggregatedFields,
+            dialect,
+          });
+        } catch (err) {
+          // PromptCancelledError from abort is not a DDL failure — let it
+          // propagate with its original type so the outer error mapper
+          // classifies it as CONFIRMATION_DECLINED.
+          if (err instanceof PromptCancelledError) throw err;
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
             err

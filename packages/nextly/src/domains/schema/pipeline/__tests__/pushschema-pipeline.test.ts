@@ -17,6 +17,7 @@ import type { NextlySchemaSnapshot, Operation } from "../diff/types.js";
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopPreCleanupExecutor,
   noopPreRenameExecutor,
   noopPromptDispatcher,
   noopRenameDetector,
@@ -184,6 +185,7 @@ function makePipeline(
       classifier,
       promptDispatcher,
       preRenameExecutor,
+      preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal,
     },
     {
