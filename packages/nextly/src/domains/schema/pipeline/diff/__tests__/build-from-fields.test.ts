@@ -1,21 +1,107 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDesiredTableFromFields } from "../build-from-fields.js";
+import type { ColumnSpec } from "../types.js";
 
 // Minimal FieldConfig shape used by the helper. The real type lives in
-// schemas/dynamic-collections/types.ts and has many more attrs; we only
-// need name + type + required for diffing.
+// schemas/dynamic-collections/types.ts; we only need name + type + required.
 interface MinimalField {
   name: string;
   type: string;
   required?: boolean;
 }
 
-describe("buildDesiredTableFromFields - postgresql", () => {
+const RESERVED_NAMES = new Set([
+  "id",
+  "title",
+  "slug",
+  "created_at",
+  "updated_at",
+]);
+
+function userColumns(columns: ColumnSpec[]): ColumnSpec[] {
+  return columns.filter(c => !RESERVED_NAMES.has(c.name));
+}
+
+function findColumn(
+  columns: ColumnSpec[],
+  name: string
+): ColumnSpec | undefined {
+  return columns.find(c => c.name === name);
+}
+
+describe("buildDesiredTableFromFields - reserved columns", () => {
+  it("PG: injects id + created_at + updated_at + title + slug", () => {
+    const table = buildDesiredTableFromFields("dc_x", [], "postgresql");
+    expect(findColumn(table.columns, "id")).toEqual({
+      name: "id",
+      type: "text",
+      nullable: false,
+    });
+    expect(findColumn(table.columns, "title")).toEqual({
+      name: "title",
+      type: "text",
+      nullable: false,
+    });
+    expect(findColumn(table.columns, "slug")).toEqual({
+      name: "slug",
+      type: "text",
+      nullable: false,
+    });
+    expect(findColumn(table.columns, "created_at")?.type).toBe("timestamp");
+    expect(findColumn(table.columns, "updated_at")?.type).toBe("timestamp");
+  });
+
+  it("MySQL: id is varchar(36); title/slug varchar(255); timestamps", () => {
+    const table = buildDesiredTableFromFields("dc_x", [], "mysql");
+    expect(findColumn(table.columns, "id")?.type).toBe("varchar(36)");
+    expect(findColumn(table.columns, "title")?.type).toBe("varchar(255)");
+    expect(findColumn(table.columns, "slug")?.type).toBe("varchar(255)");
+    expect(findColumn(table.columns, "created_at")?.type).toBe("timestamp");
+  });
+
+  it("SQLite: lowercase tokens (matches PRAGMA-as-declared)", () => {
+    const table = buildDesiredTableFromFields("dc_x", [], "sqlite");
+    expect(findColumn(table.columns, "id")?.type).toBe("text");
+    expect(findColumn(table.columns, "title")?.type).toBe("text");
+    expect(findColumn(table.columns, "created_at")?.type).toBe("integer");
+  });
+
+  it("user-defined `title` field replaces the auto-injected reserved `title`", () => {
+    const fields: MinimalField[] = [
+      { name: "title", type: "textarea", required: true },
+    ];
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      fields as never,
+      "postgresql"
+    );
+
+    // exactly one `title` - the user's field shape, not the reserved.
+    const titles = table.columns.filter(c => c.name === "title");
+    expect(titles).toHaveLength(1);
+    expect(titles[0].type).toBe("text"); // textarea -> pgText
+    expect(titles[0].nullable).toBe(false); // user marked required
+  });
+
+  it("user-defined `slug` field replaces the auto-injected reserved `slug`", () => {
+    const fields: MinimalField[] = [{ name: "slug", type: "text" }];
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      fields as never,
+      "postgresql"
+    );
+
+    const slugs = table.columns.filter(c => c.name === "slug");
+    expect(slugs).toHaveLength(1);
+    expect(slugs[0].nullable).toBe(true); // user did NOT mark required
+  });
+});
+
+describe("buildDesiredTableFromFields - postgresql user fields", () => {
   it("maps text fields to PG text type token", () => {
     const fields: MinimalField[] = [
-      { name: "title", type: "text", required: true },
-      { name: "summary", type: "text" },
+      { name: "summary", type: "text", required: true },
     ];
 
     const table = buildDesiredTableFromFields(
@@ -24,10 +110,8 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.name).toBe("dc_posts");
-    expect(table.columns).toEqual([
-      { name: "title", type: "text", nullable: false, default: undefined },
-      { name: "summary", type: "text", nullable: true, default: undefined },
+    expect(userColumns(table.columns)).toEqual([
+      { name: "summary", type: "text", nullable: false, default: undefined },
     ]);
   });
 
@@ -40,7 +124,7 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.columns[0]).toEqual({
+    expect(findColumn(table.columns, "price")).toEqual({
       name: "price",
       type: "float8",
       nullable: true,
@@ -57,7 +141,7 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.columns[0].type).toBe("bool");
+    expect(findColumn(table.columns, "is_published")?.type).toBe("bool");
   });
 
   it("maps date fields to timestamp (PG udt_name)", () => {
@@ -69,7 +153,7 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.columns[0].type).toBe("timestamp");
+    expect(findColumn(table.columns, "published_at")?.type).toBe("timestamp");
   });
 
   it("maps json/repeater/group/blocks fields to jsonb", () => {
@@ -85,9 +169,9 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.columns[0].type).toBe("jsonb");
-    expect(table.columns[1].type).toBe("jsonb");
-    expect(table.columns[2].type).toBe("jsonb");
+    expect(findColumn(table.columns, "tags")?.type).toBe("jsonb");
+    expect(findColumn(table.columns, "blocks_field")?.type).toBe("jsonb");
+    expect(findColumn(table.columns, "meta")?.type).toBe("jsonb");
   });
 
   it("converts field names to snake_case (matches DDL convention)", () => {
@@ -102,14 +186,17 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.columns.map(c => c.name)).toEqual(["published_at", "user_id"]);
+    expect(userColumns(table.columns).map(c => c.name)).toEqual([
+      "published_at",
+      "user_id",
+    ]);
   });
 
   it("skips layout-only field types (no DB column)", () => {
     const fields: MinimalField[] = [
       { name: "row1", type: "row" },
       { name: "tab1", type: "tabs" },
-      { name: "title", type: "text" },
+      { name: "summary", type: "text" },
     ];
 
     const table = buildDesiredTableFromFields(
@@ -118,14 +205,14 @@ describe("buildDesiredTableFromFields - postgresql", () => {
       "postgresql"
     );
 
-    expect(table.columns).toHaveLength(1);
-    expect(table.columns[0].name).toBe("title");
+    expect(userColumns(table.columns)).toHaveLength(1);
+    expect(userColumns(table.columns)[0].name).toBe("summary");
   });
 });
 
-describe("buildDesiredTableFromFields - mysql", () => {
+describe("buildDesiredTableFromFields - mysql user fields", () => {
   it("maps text fields to varchar(255) (matches mysql COLUMN_TYPE format)", () => {
-    const fields: MinimalField[] = [{ name: "title", type: "text" }];
+    const fields: MinimalField[] = [{ name: "summary", type: "text" }];
 
     const table = buildDesiredTableFromFields(
       "dc_posts",
@@ -133,7 +220,7 @@ describe("buildDesiredTableFromFields - mysql", () => {
       "mysql"
     );
 
-    expect(table.columns[0].type).toBe("varchar(255)");
+    expect(findColumn(table.columns, "summary")?.type).toBe("varchar(255)");
   });
 
   it("maps textarea fields to text (longer content)", () => {
@@ -145,7 +232,7 @@ describe("buildDesiredTableFromFields - mysql", () => {
       "mysql"
     );
 
-    expect(table.columns[0].type).toBe("text");
+    expect(findColumn(table.columns, "body")?.type).toBe("text");
   });
 
   it("maps checkbox fields to tinyint(1) (mysql boolean alias)", () => {
@@ -157,7 +244,7 @@ describe("buildDesiredTableFromFields - mysql", () => {
       "mysql"
     );
 
-    expect(table.columns[0].type).toBe("tinyint(1)");
+    expect(findColumn(table.columns, "is_pub")?.type).toBe("tinyint(1)");
   });
 
   it("maps number fields to double", () => {
@@ -169,7 +256,7 @@ describe("buildDesiredTableFromFields - mysql", () => {
       "mysql"
     );
 
-    expect(table.columns[0].type).toBe("double");
+    expect(findColumn(table.columns, "price")?.type).toBe("double");
   });
 
   it("maps json/blocks/group fields to json", () => {
@@ -181,13 +268,29 @@ describe("buildDesiredTableFromFields - mysql", () => {
       "mysql"
     );
 
-    expect(table.columns[0].type).toBe("json");
+    expect(findColumn(table.columns, "meta")?.type).toBe("json");
+  });
+
+  it("relationship/upload fields use varchar(36) (matches runtime FK-to-UUID-id width)", () => {
+    const fields: MinimalField[] = [
+      { name: "author_id", type: "relationship" },
+      { name: "cover", type: "upload" },
+    ];
+
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      fields as never,
+      "mysql"
+    );
+
+    expect(findColumn(table.columns, "author_id")?.type).toBe("varchar(36)");
+    expect(findColumn(table.columns, "cover")?.type).toBe("varchar(36)");
   });
 });
 
-describe("buildDesiredTableFromFields - sqlite", () => {
-  it("maps text fields to TEXT", () => {
-    const fields: MinimalField[] = [{ name: "title", type: "text" }];
+describe("buildDesiredTableFromFields - sqlite user fields", () => {
+  it("maps text fields to lowercase 'text' (matches drizzle's emitted DDL + PRAGMA)", () => {
+    const fields: MinimalField[] = [{ name: "summary", type: "text" }];
 
     const table = buildDesiredTableFromFields(
       "dc_posts",
@@ -195,10 +298,10 @@ describe("buildDesiredTableFromFields - sqlite", () => {
       "sqlite"
     );
 
-    expect(table.columns[0].type).toBe("TEXT");
+    expect(findColumn(table.columns, "summary")?.type).toBe("text");
   });
 
-  it("maps number fields to REAL", () => {
+  it("maps number fields to lowercase 'real'", () => {
     const fields: MinimalField[] = [{ name: "price", type: "number" }];
 
     const table = buildDesiredTableFromFields(
@@ -207,10 +310,10 @@ describe("buildDesiredTableFromFields - sqlite", () => {
       "sqlite"
     );
 
-    expect(table.columns[0].type).toBe("REAL");
+    expect(findColumn(table.columns, "price")?.type).toBe("real");
   });
 
-  it("maps checkbox fields to INTEGER (no native bool)", () => {
+  it("maps checkbox fields to lowercase 'integer' (no native bool)", () => {
     const fields: MinimalField[] = [{ name: "is_pub", type: "checkbox" }];
 
     const table = buildDesiredTableFromFields(
@@ -219,10 +322,10 @@ describe("buildDesiredTableFromFields - sqlite", () => {
       "sqlite"
     );
 
-    expect(table.columns[0].type).toBe("INTEGER");
+    expect(findColumn(table.columns, "is_pub")?.type).toBe("integer");
   });
 
-  it("maps date fields to INTEGER (epoch convention)", () => {
+  it("maps date fields to lowercase 'integer' (epoch convention)", () => {
     const fields: MinimalField[] = [{ name: "ts", type: "date" }];
 
     const table = buildDesiredTableFromFields(
@@ -231,10 +334,10 @@ describe("buildDesiredTableFromFields - sqlite", () => {
       "sqlite"
     );
 
-    expect(table.columns[0].type).toBe("INTEGER");
+    expect(findColumn(table.columns, "ts")?.type).toBe("integer");
   });
 
-  it("maps json/blocks/group fields to TEXT (no native json)", () => {
+  it("maps json/blocks/group fields to lowercase 'text' (no native json)", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(
@@ -243,6 +346,6 @@ describe("buildDesiredTableFromFields - sqlite", () => {
       "sqlite"
     );
 
-    expect(table.columns[0].type).toBe("TEXT");
+    expect(findColumn(table.columns, "meta")?.type).toBe("text");
   });
 });

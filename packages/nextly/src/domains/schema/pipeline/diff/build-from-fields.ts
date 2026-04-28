@@ -12,11 +12,13 @@
 //                   abbreviated forms, not the SQL standard names)
 //   MySQL COLUMN_TYPE - full declared type as written: "varchar(255)", "int(11)",
 //                       "tinyint(1)", "double", "json", "text"
-//   SQLite PRAGMA type - declared type as written: "TEXT", "INTEGER", "REAL", "BLOB"
+//   SQLite PRAGMA type - declared type as written. drizzle-orm/sqlite-core emits
+//                        LOWERCASE types ("text", "integer", "real"), so PRAGMA
+//                        returns lowercase. We emit lowercase tokens to match.
 //
-// For diffing we don't need EXACT introspection match - the F4 type-family
-// comparison gives compatibility checks. But matching the introspection
-// format reduces false-positive change_column_type ops.
+// Reserved columns: runtime-schema-generator.ts always injects id + created_at
+// + updated_at, plus title/slug unless the user defined fields by those names.
+// We mirror that injection here so the diff doesn't see them as drops.
 //
 // See runtime-schema-generator.ts for the runtime Drizzle table builder
 // that produces actual DDL. This helper produces a parallel representation
@@ -41,7 +43,9 @@ interface MinimalFieldDef {
 /**
  * Build a TableSpec for the diff engine from a list of Nextly fields.
  * Field type tokens are translated to introspection-aligned strings so
- * the diff can compare them directly against live-DB output.
+ * the diff can compare them directly against live-DB output. Reserved
+ * system columns (id, title, slug, created_at, updated_at) are injected
+ * to match runtime-schema-generator's behavior.
  */
 export function buildDesiredTableFromFields(
   tableName: string,
@@ -49,12 +53,83 @@ export function buildDesiredTableFromFields(
   dialect: SupportedDialect
 ): TableSpec {
   const columns: ColumnSpec[] = [];
+
+  // Inject reserved system columns first - mirrors runtime-schema-generator's
+  // behavior. title/slug only when not user-defined (user wins).
+  const hasTitleField = fields.some(f => f.name === "title");
+  const hasSlugField = fields.some(f => f.name === "slug");
+  for (const reserved of buildReservedColumns(dialect, {
+    includeTitle: !hasTitleField,
+    includeSlug: !hasSlugField,
+  })) {
+    columns.push(reserved);
+  }
+
+  // User-defined fields.
   for (const field of fields) {
     if (LAYOUT_FIELD_TYPES.has(field.type)) continue;
     const col = mapFieldToColumnSpec(field, dialect);
     if (col) columns.push(col);
   }
   return { name: tableName, columns };
+}
+
+// Reserved columns runtime-schema-generator always (or conditionally) injects.
+// Token alignment with introspection per dialect:
+//   PG: pgText("id").primaryKey()              -> udt_name "text", NOT NULL
+//       pgTimestamp("created_at").defaultNow() -> udt_name "timestamp"
+//   MySQL: mysqlVarchar("id", {length: 36})    -> COLUMN_TYPE "varchar(36)"
+//          mysqlVarchar("title", {length:255}) -> "varchar(255)"
+//          mysqlTimestamp("created_at")        -> "timestamp"
+//   SQLite: sqliteText("id")                   -> PRAGMA "text"
+//           sqliteInteger("created_at",
+//                         {mode: "timestamp"}) -> PRAGMA "integer"
+//
+// notNull / defaultNow / primaryKey on the runtime side are not yet read
+// here; F4 Option E PR 3 (default-value comparator) refines this. For PR 1
+// we set nullable based on what runtime-schema-generator declares (id =
+// NOT NULL primary key; title/slug = NOT NULL when not user-defined;
+// created_at/updated_at left nullable since defaultNow handles inserts).
+function buildReservedColumns(
+  dialect: SupportedDialect,
+  opts: { includeTitle: boolean; includeSlug: boolean }
+): ColumnSpec[] {
+  const out: ColumnSpec[] = [];
+  if (dialect === "postgresql") {
+    out.push({ name: "id", type: "text", nullable: false });
+    if (opts.includeTitle) {
+      out.push({ name: "title", type: "text", nullable: false });
+    }
+    if (opts.includeSlug) {
+      out.push({ name: "slug", type: "text", nullable: false });
+    }
+    out.push({ name: "created_at", type: "timestamp", nullable: true });
+    out.push({ name: "updated_at", type: "timestamp", nullable: true });
+    return out;
+  }
+  if (dialect === "mysql") {
+    out.push({ name: "id", type: "varchar(36)", nullable: false });
+    if (opts.includeTitle) {
+      out.push({ name: "title", type: "varchar(255)", nullable: false });
+    }
+    if (opts.includeSlug) {
+      out.push({ name: "slug", type: "varchar(255)", nullable: false });
+    }
+    out.push({ name: "created_at", type: "timestamp", nullable: true });
+    out.push({ name: "updated_at", type: "timestamp", nullable: true });
+    return out;
+  }
+  // SQLite - lowercase tokens to match drizzle's emitted DDL + PRAGMA output.
+  out.push({ name: "id", type: "text", nullable: false });
+  if (opts.includeTitle) {
+    out.push({ name: "title", type: "text", nullable: false });
+  }
+  if (opts.includeSlug) {
+    out.push({ name: "slug", type: "text", nullable: false });
+  }
+  out.push({ name: "created_at", type: "integer", nullable: true });
+  out.push({ name: "updated_at", type: "integer", nullable: true });
+  return out;
 }
 
 function toSnakeCase(name: string): string {
@@ -162,7 +237,9 @@ function mapToMysqlToken(fieldType: string): string | null {
     case "relationship":
     case "relation":
     case "upload":
-      return "varchar(255)";
+      // runtime-schema-generator uses varchar(36) for FK-to-UUID-id
+      // (mysqlVarchar("rel", { length: 36 })). Match that exactly.
+      return "varchar(36)";
     case "repeater":
     case "group":
     case "blocks":
@@ -177,7 +254,11 @@ function mapToMysqlToken(fieldType: string): string | null {
   }
 }
 
-// SQLite PRAGMA type tokens (declared type, uppercase by convention).
+// SQLite PRAGMA type tokens. drizzle-orm/sqlite-core emits LOWERCASE types
+// in its CREATE TABLE DDL ("text", "integer", "real"). PRAGMA returns the
+// type as-declared, so we must emit lowercase here to match. Earlier
+// uppercase tokens caused false-positive change_column_type ops on every
+// diff cycle (caught by F4 Option E PR 1 code review).
 function mapToSqliteToken(fieldType: string): string | null {
   switch (fieldType) {
     case "text":
@@ -191,29 +272,29 @@ function mapToSqliteToken(fieldType: string): string | null {
     case "code":
     case "select":
     case "radio":
-      return "TEXT";
+      return "text";
     case "number":
     case "decimal":
-      return "REAL";
+      return "real";
     case "checkbox":
     case "boolean":
-      return "INTEGER"; // SQLite stores booleans as integers (0/1)
+      return "integer"; // SQLite stores booleans as integers (0/1)
     case "date":
-      return "INTEGER"; // Stored as epoch ms
+      return "integer"; // Stored as epoch ms
     case "relationship":
     case "relation":
     case "upload":
-      return "TEXT";
+      return "text";
     case "repeater":
     case "group":
     case "blocks":
     case "component":
     case "json":
     case "chips":
-      return "TEXT"; // SQLite stores JSON as text
+      return "text"; // SQLite stores JSON as text
     case "point":
-      return "TEXT";
+      return "text";
     default:
-      return "TEXT";
+      return "text";
   }
 }
