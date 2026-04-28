@@ -316,6 +316,23 @@ export class NextlyError extends Error {
     });
   }
 
+  // Accepts an optional `logMessage` override so callers (e.g. the health
+  // route) can record a specific operator narrative ("Health check failed")
+  // while the public message stays canonical per spec §13.8.5.
+  static serviceUnavailable(opts?: {
+    logMessage?: string;
+    cause?: Error;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "SERVICE_UNAVAILABLE",
+      publicMessage: "Service unavailable. Please try again later.",
+      logMessage: opts?.logMessage,
+      cause: opts?.cause,
+      logContext: opts?.logContext,
+    });
+  }
+
   /**
    * Convert a DbError (or arbitrary unknown thrown by the DB layer) to a
    * NextlyError with a generic public message and rich logContext. Used by
