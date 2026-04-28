@@ -28,6 +28,33 @@ export interface SchemaPreviewChange {
   unchanged: string[];
 }
 
+// F4 Option E PR 5: rename candidates surfaced by the preview endpoint.
+// One candidate per (drop, add) pair the rename detector picks up. The
+// dialog renders these as radio buttons so the user picks "rename"
+// (preserve data) or "drop_and_add" (data lost) for each one.
+//
+// Cartesian: a single dropped column can appear in multiple candidates
+// when the same table has multiple new columns. The dialog handles the
+// shrinking-pool UX (a drop disappears once one of its targets is
+// chosen as a rename).
+export interface SchemaPreviewRenameCandidate {
+  table: string;
+  from: string;
+  to: string;
+  fromType: string;
+  toType: string;
+  typesCompatible: boolean;
+  defaultSuggestion: "rename" | "drop_and_add";
+}
+
+// User's choice for one rename candidate, posted with apply().
+export interface SchemaRenameResolution {
+  tableName: string;
+  fromColumn: string;
+  toColumn: string;
+  choice: "rename" | "drop_and_add";
+}
+
 // A field that requires user input to resolve
 export interface InteractiveField {
   name: string;
@@ -47,6 +74,9 @@ export interface SchemaPreviewResponse {
   interactiveFields: InteractiveField[];
   ddlPreview: string[];
   schemaVersion: number;
+  // F4 Option E PR 5: empty for pure-additive changes; populated when the
+  // preview detects (drop, add) pairs that might be column renames.
+  renamed: SchemaPreviewRenameCandidate[];
 }
 
 // Response from the apply endpoint.
@@ -77,16 +107,26 @@ export const schemaApi = {
     );
   },
 
-  // Apply schema changes (in-place update, no server restart)
+  // Apply schema changes (in-place update, no server restart).
+  // renameResolutions are F4 Option E PR 5: one entry per rename
+  // candidate the user picked in SchemaChangeDialog ("rename" preserves
+  // data; "drop_and_add" lets the column drop and a new one create).
   apply: async (
     slug: string,
     fields: unknown[],
     schemaVersion: number,
-    resolutions?: Record<string, FieldResolution>
+    resolutions?: Record<string, FieldResolution>,
+    renameResolutions?: SchemaRenameResolution[]
   ): Promise<SchemaApplyResponse> => {
     return protectedApi.post<SchemaApplyResponse>(
       `/collections/schema/${slug}/apply`,
-      { fields, confirmed: true, schemaVersion, resolutions }
+      {
+        fields,
+        confirmed: true,
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+      }
     );
   },
 };

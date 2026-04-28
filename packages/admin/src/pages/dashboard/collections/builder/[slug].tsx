@@ -39,12 +39,15 @@ import {
   schemaApi,
   type SchemaPreviewResponse,
   type FieldResolution,
+  type SchemaRenameResolution,
 } from "@admin/services/schemaApi";
-import {
-  type FieldDefinition,
-  type 
-  getCollectionFields,
-} from "@admin/types/collection";
+// Two import statements are intentional. With isolatedModules + esbuild,
+// merging these into a single `import { type FieldDefinition,
+// getCollectionFields }` block has historically been collapsed by
+// prettier into both being type-only, which strips getCollectionFields
+// at runtime (it's a function, not a type). See main's ce29d67.
+import type { FieldDefinition } from "@admin/types/collection";
+import { getCollectionFields } from "@admin/types/collection";
 
 const collectionFormSchema = z.object({
   singularName: z
@@ -179,12 +182,16 @@ export default function CollectionBuilderEditPage({
     return userFields.map(convertToFieldDefinition);
   }, [builder]);
 
-  // Apply schema changes after confirmation (or directly for safe changes)
+  // Apply schema changes after confirmation (or directly for safe changes).
+  // F4 Option E PR 5: renameResolutions are the per-candidate "rename" /
+  // "drop_and_add" picks the dialog collected. Empty array = no renames
+  // detected (or pure-additive change).
   const applySchemaChanges = useCallback(
     async (
       fieldDefinitions: FieldDefinition[],
       schemaVersion: number,
-      resolutions: Record<string, FieldResolution>
+      resolutions: Record<string, FieldResolution>,
+      renameResolutions: SchemaRenameResolution[]
     ) => {
       if (!slug) return;
       setIsApplyingSchema(true);
@@ -197,7 +204,8 @@ export default function CollectionBuilderEditPage({
           slug,
           fieldDefinitions,
           schemaVersion,
-          resolutions
+          resolutions,
+          renameResolutions
         );
         if (result.success) {
           stopRestart(true, "Schema changes applied successfully");
@@ -316,12 +324,7 @@ export default function CollectionBuilderEditPage({
       const errorObj = err as { message?: string };
       toast.error(errorObj?.message || "Failed to preview schema changes");
     }
-  }, [
-    builder,
-    slug,
-    getValidatedFields,
-    saveCollectionSettings,
-  ]);
+  }, [builder, slug, getValidatedFields, saveCollectionSettings]);
 
   // Resolve the header icon from settings
   const headerIconName = collectionSettings.admin?.icon || "Database";
@@ -388,7 +391,9 @@ export default function CollectionBuilderEditPage({
         headerIcon={<HeaderIcon className="h-5 w-5" />}
         headerTitle={builder.form.watch("singularName") || "Edit Collection"}
         headerDescription="Manage your collection schema and settings."
-        onSave={() => { void handleSave(); }}
+        onSave={() => {
+          void handleSave();
+        }}
         onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
         isSaving={isSaving || isApplyingSchema}
         saveLabel="Update"
@@ -423,7 +428,15 @@ export default function CollectionBuilderEditPage({
           onConfirm={() => {
             const fieldDefs = getValidatedFields();
             if (fieldDefs) {
-              void applySchemaChanges(fieldDefs, previewData.schemaVersion, {});
+              // Safe-only path: no interactive resolutions, no rename
+              // candidates expected (the safe dialog only renders for
+              // pure-additive changes).
+              void applySchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                {},
+                []
+              );
             }
           }}
           isApplying={isApplyingSchema}
@@ -439,15 +452,17 @@ export default function CollectionBuilderEditPage({
           hasDestructiveChanges={previewData.hasDestructiveChanges}
           classification={previewData.classification}
           changes={previewData.changes}
+          renamed={previewData.renamed}
           warnings={previewData.warnings}
           interactiveFields={previewData.interactiveFields}
-          onConfirm={resolutions => {
+          onConfirm={(resolutions, renameResolutions) => {
             const fieldDefs = getValidatedFields();
             if (fieldDefs) {
               void applySchemaChanges(
                 fieldDefs,
                 previewData.schemaVersion,
-                resolutions
+                resolutions,
+                renameResolutions
               );
             }
           }}

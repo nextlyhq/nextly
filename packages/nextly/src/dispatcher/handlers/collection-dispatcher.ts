@@ -10,11 +10,17 @@
 
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
+import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields.js";
+import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff.js";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live.js";
+import {
+  BrowserPromptDispatcher,
+  type BrowserRenameResolution,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser.js";
 import {
   noopClassifier,
   noopMigrationJournal,
   noopPreRenameExecutor,
-  noopPromptDispatcher,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
@@ -179,8 +185,20 @@ const COLLECTIONS_METHODS: Record<
         currentFields,
         fields as FieldDefinition[]
       );
+
+      // F4 Option E PR 5: also surface rename candidates so the admin
+      // SchemaChangeDialog can render rename radio buttons. Additive to
+      // the existing F1 preview shape; the F1 added/removed/changed
+      // sections still drive the rest of the dialog. Failure here is
+      // non-fatal — the F1 preview is the load-bearing UX.
+      const renamed = await computeRenameCandidatesForPreview(
+        tableName,
+        fields
+      );
+
       return {
         ...preview,
+        renamed,
         schemaVersion: collection.schemaVersion,
       };
     },
@@ -197,10 +215,12 @@ const COLLECTIONS_METHODS: Record<
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      const schemaChangeService = getSchemaChangeServiceFromDI();
+      // F4 Option E PR 5: schemaChangeService is no longer consulted on
+      // the apply path (the F3-era preview-and-throw block is gone).
+      // Registry alone is sufficient as the DI-readiness probe.
       const registry = getCollectionRegistryFromDI();
-      if (!schemaChangeService || !registry) {
-        throw new Error("Schema change service not initialized");
+      if (!registry) {
+        throw new Error("Collection registry not initialized");
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
@@ -209,11 +229,18 @@ const COLLECTIONS_METHODS: Record<
           "This collection is managed via code and cannot be modified in the UI"
         );
       }
-      const { fields, confirmed, schemaVersion, resolutions } = body as {
+      const {
+        fields,
+        confirmed,
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+      } = body as {
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
         resolutions?: Record<string, FieldResolution>;
+        renameResolutions?: BrowserRenameResolution[];
       };
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
@@ -223,33 +250,10 @@ const COLLECTIONS_METHODS: Record<
       const currentVersion = collection.schemaVersion;
       const tableName = collection.tableName;
 
-      // F3 transition gate: destructive saves require resolutions
-      // (default values, mark-nullable choices, backfills) collected
-      // by the admin SchemaChangeDialog. F2's shim forwarded these to
-      // SchemaChangeService.apply; F3's pipeline does not yet — F8's
-      // PromptDispatcher reintroduces resolution handling.
-      //
-      // Until F8 lands, fail loudly on destructive saves at the
-      // dispatcher rather than silently dropping the user's resolution
-      // input. Same posture as HMR's destructive-skip (reload-config.ts).
-      const currentFieldsForPreview = (collection.fields ??
-        []) as unknown as FieldDefinition[];
-      const preview = await schemaChangeService.preview(
-        tableName,
-        currentFieldsForPreview,
-        fields as FieldDefinition[]
-      );
-      if (preview.hasDestructiveChanges) {
-        throw new Error(
-          `Destructive schema changes for '${p.collectionName}' (classification: ${preview.classification}) ` +
-            `are temporarily unavailable while the apply pipeline migrates to F3. ` +
-            `Track: F8 PromptDispatcher will reintroduce resolution handling. ` +
-            `For now, revert the change or wait for the F8 release.`
-        );
-      }
-      // Resolutions collected from the dialog are intentionally NOT
-      // forwarded — F8 absorbs that flow. We void to silence lint and
-      // make the deferral explicit.
+      // F1 field-level resolutions (provide_default / mark_nullable / cancel)
+      // are collected by the dialog but not yet wired through the pipeline.
+      // F8/F12 will absorb that flow when the Classifier lands. Renames are
+      // handled below via BrowserPromptDispatcher.
       void resolutions;
 
       // F3: route through the PushSchemaPipeline via the F2 contract.
@@ -307,20 +311,22 @@ const COLLECTIONS_METHODS: Record<
       // Per-call factory (not the DI-bound applyDesiredSchema in
       // pipeline/index.ts) so we can thread MySQL databaseName + the
       // resolved adapter into the F3 PushSchemaPipeline at this site.
-      // Today this also drops the `resolutions` forwarding — F8's
-      // PromptDispatcher reintroduces resolution handling. For now
-      // safe deltas pass through, destructive deltas would need to
-      // be confirmed via the (existing) admin SchemaChangeDialog
-      // resolutions UI which still works because the existing code
-      // path didn't re-wire prompts (F8 wires them properly).
-      // Note: see plans/specs/F3-pushschema-pipeline-design.md §11.
+      //
+      // F4 Option E PR 5: BrowserPromptDispatcher takes pre-attached
+      // rename resolutions from the request body (collected by the admin
+      // SchemaChangeDialog before save) and translates them into
+      // confirmedRenames inside the pipeline's Phase B. No SSE, no
+      // mid-apply prompts — the dialog is the prompt UX.
+      const promptDispatcher = new BrowserPromptDispatcher(
+        renameResolutions ?? []
+      );
       const apply = createApplyDesiredSchema({
         applyPipeline: (desiredArg, sourceArg, channelArg) => {
           const pipeline = new PushSchemaPipeline({
             executor: new DrizzleStatementExecutor(dialect, db),
             renameDetector: new RegexRenameDetector(),
             classifier: noopClassifier,
-            promptDispatcher: noopPromptDispatcher,
+            promptDispatcher,
             preRenameExecutor: noopPreRenameExecutor,
             migrationJournal: noopMigrationJournal,
           });
@@ -619,6 +625,58 @@ const COLLECTIONS_METHODS: Record<
     },
   },
 };
+
+// Shape we surface in the preview response. Mirrors RenameCandidate but
+// uses field-style names (`from`/`to`/`table`) to match the existing
+// preview shape on the admin side.
+interface PreviewRenameCandidate {
+  table: string;
+  from: string;
+  to: string;
+  fromType: string;
+  toType: string;
+  typesCompatible: boolean;
+  defaultSuggestion: "rename" | "drop_and_add";
+}
+
+// Runs the Option E pipeline's diff + rename detector for a single
+// collection so the admin SchemaChangeDialog can render rename radio
+// buttons. Failure is non-fatal: the F1 added/removed/changed sections
+// in the dialog still work without it.
+async function computeRenameCandidatesForPreview(
+  tableName: string,
+  fields: unknown[]
+): Promise<PreviewRenameCandidate[]> {
+  const adapter = getAdapterFromDI();
+  if (!adapter) return [];
+
+  try {
+    const dialect = adapter.dialect;
+    const db = adapter.getDrizzle();
+    const live = await introspectLiveSnapshot(db, dialect, [tableName]);
+    const desiredTable = buildDesiredTableFromFields(
+      tableName,
+      fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
+      dialect
+    );
+    const operations = diffSnapshots(live, { tables: [desiredTable] });
+    const detector = new RegexRenameDetector();
+    return detector.detect(operations, dialect).map(c => ({
+      table: c.tableName,
+      from: c.fromColumn,
+      to: c.toColumn,
+      fromType: c.fromType,
+      toType: c.toType,
+      typesCompatible: c.typesCompatible,
+      defaultSuggestion: c.defaultSuggestion,
+    }));
+  } catch (err) {
+    console.warn(
+      `[Schema Preview] Could not compute rename candidates for '${tableName}': ${err instanceof Error ? err.message : String(err)}`
+    );
+    return [];
+  }
+}
 
 /**
  * Dispatch a collections method call. Prefers the DI-registered
