@@ -13,7 +13,7 @@ describe("Health Check Route Handlers", () => {
   });
 
   describe("GET handler", () => {
-    it("should return 200 with JSON body when database is healthy", async () => {
+    it("should return 200 with canonical success body when database is healthy", async () => {
       // Arrange
       const { healthCheck } = await import("../database/health");
       (healthCheck as any).mockResolvedValueOnce({
@@ -37,13 +37,14 @@ describe("Health Check Route Handlers", () => {
         "public, max-age=60, stale-while-revalidate=30"
       );
 
+      // Canonical success shape per spec §10.2: payload is wrapped in `data`.
       const json = await response.json();
-      expect(json.ok).toBe(true);
-      expect(json.database.connected).toBe(true);
-      expect(json.database.latencyMs).toBe(5);
+      expect(json.data.ok).toBe(true);
+      expect(json.data.database.connected).toBe(true);
+      expect(json.data.database.latencyMs).toBe(5);
     });
 
-    it("should return 503 with JSON body when database is unhealthy", async () => {
+    it("should return 503 with problem+json body when database is unhealthy", async () => {
       // Arrange
       const { healthCheck } = await import("../database/health");
       (healthCheck as any).mockResolvedValueOnce({
@@ -61,11 +62,19 @@ describe("Health Check Route Handlers", () => {
       const request = new Request("http://localhost:3000/api/health");
       const response = await GET(request);
 
-      // Assert
+      // Assert — withErrorHandler converts the SERVICE_UNAVAILABLE throw into
+      // the canonical problem+json error shape. Operator detail (latency,
+      // dialect, raw error string) is in server logs, not in this body.
       expect(response.status).toBe(503);
+      expect(response.headers.get("Content-Type")).toBe(
+        "application/problem+json"
+      );
       const json = await response.json();
-      expect(json.ok).toBe(false);
-      expect(json.error).toBe("Connection timeout");
+      expect(json.error.code).toBe("SERVICE_UNAVAILABLE");
+      expect(json.error.message).toBe(
+        "Service unavailable. Please try again later."
+      );
+      expect(json.error.requestId).toMatch(/^req_/);
     });
 
     it("should include cache headers", async () => {
@@ -109,9 +118,9 @@ describe("Health Check Route Handlers", () => {
       const request = new Request("http://localhost:3000/api/health");
       const response = await GET(request);
 
-      // Assert
+      // Assert — full body is the canonical `{ data: ... }` envelope.
       const json = await response.json();
-      expect(json).toEqual(mockHealth);
+      expect(json).toEqual({ data: mockHealth });
     });
   });
 

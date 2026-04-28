@@ -11,17 +11,19 @@
  * dashboard). No specific permission is needed — the dashboard is the
  * landing page for all authenticated admin users.
  *
+ * Wire shape — Task 21 migration: all three handlers replace the legacy
+ * nested envelope `{ data: { status, success, data: <result>, meta? } }`
+ * with the canonical `{ data: <result> }` per spec §10.2. The error path
+ * uses `application/problem+json` from `withErrorHandler`. Admin
+ * consumers update in Task 10 (frontend simplification).
+ *
  * @module api/dashboard
  * @since 1.0.0
  */
 
-import {
-  createJsonErrorResponse,
-  isErrorResponse,
-  requireAuthentication,
-} from "../auth/middleware";
+import { isErrorResponse, requireAuthentication } from "../auth/middleware";
+import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { isServiceError } from "../errors";
 import { getNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
@@ -29,6 +31,14 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../services/lib/permissions";
+
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+
+const PRIVATE_NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-store",
+  Vary: "Cookie",
+} as const;
 
 async function getDashboardService(): Promise<DashboardService> {
   await getNextly();
@@ -40,49 +50,22 @@ async function getActivityLogService(): Promise<ActivityLogService> {
   return container.get<ActivityLogService>("activityLogService");
 }
 
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>,
-  headers?: Record<string, string>
-): Response {
-  return Response.json(
-    {
-      data: { status: statusCode, success: true, data, ...(meta && { meta }) },
-    },
-    {
-      status: statusCode,
-      headers: {
-        "Content-Type": "application/json",
-        ...headers,
-      },
-    }
+/**
+ * Resolve the read-allowed resource set for a non-superadmin caller, or
+ * `undefined` for a superadmin (which the dashboard service treats as
+ * "no resource filter"). Centralized so each handler stays focused on its
+ * own service call.
+ */
+async function resolveReadableResources(
+  userId: string
+): Promise<Set<string> | undefined> {
+  if (await isSuperAdmin(userId)) return undefined;
+  const permissionPairs = await listEffectivePermissions(userId);
+  return new Set(
+    permissionPairs
+      .filter(pair => pair.endsWith(":read"))
+      .map(pair => pair.split(":")[0])
   );
-}
-
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    { error: { message, ...(code && { code }) } },
-    { status: statusCode }
-  );
-}
-
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Dashboard API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof Error) {
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
 }
 
 /**
@@ -91,35 +74,20 @@ function handleError(error: unknown, operation: string): Response {
  * Returns aggregated content statistics, draft/published breakdown,
  * per-collection entry counts, and admin metrics.
  *
- * Cache-Control: private, max-age=60 — client-side caching for 1 minute.
+ * Caching: `private, no-store` so the response never leaks across user
+ * sessions in shared caches. `Vary: Cookie` reinforces this for any
+ * cooperating intermediary.
  */
-export async function getDashboardStats(req: Request): Promise<Response> {
-  try {
-    const authResult = await requireAuthentication(req);
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+export const getDashboardStats = withErrorHandler(async (req: Request) => {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-    const service = await getDashboardService();
-    let readableResources: Set<string> | undefined;
-    const superAdmin = await isSuperAdmin(authResult.userId);
-    if (!superAdmin) {
-      const permissionPairs = await listEffectivePermissions(authResult.userId);
-      readableResources = new Set(
-        permissionPairs
-          .filter(pair => pair.endsWith(":read"))
-          .map(pair => pair.split(":")[0])
-      );
-    }
+  const service = await getDashboardService();
+  const readableResources = await resolveReadableResources(auth.userId);
+  const stats = await service.getStats({ readableResources });
 
-    const stats = await service.getStats({ readableResources });
-
-    return successResponse(stats, 200, undefined, {
-      "Cache-Control": "private, no-store",
-      Vary: "Cookie",
-    });
-  } catch (error) {
-    return handleError(error, "Get dashboard stats");
-  }
-}
+  return createSuccessResponse(stats, { headers: PRIVATE_NO_STORE_HEADERS });
+});
 
 /**
  * GET /api/dashboard/recent-entries?limit=5
@@ -129,12 +97,10 @@ export async function getDashboardStats(req: Request): Promise<Response> {
  * Query params:
  *   - limit: number (default: 5, max: 20)
  */
-export async function getDashboardRecentEntries(
-  req: Request
-): Promise<Response> {
-  try {
-    const authResult = await requireAuthentication(req);
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+export const getDashboardRecentEntries = withErrorHandler(
+  async (req: Request) => {
+    const auth = await requireAuthentication(req);
+    if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
     const { searchParams } = new URL(req.url);
     const limitParam = searchParams.get("limit");
@@ -143,27 +109,14 @@ export async function getDashboardRecentEntries(
       : 5;
 
     const service = await getDashboardService();
-    let readableResources: Set<string> | undefined;
-    const superAdmin = await isSuperAdmin(authResult.userId);
-    if (!superAdmin) {
-      const permissionPairs = await listEffectivePermissions(authResult.userId);
-      readableResources = new Set(
-        permissionPairs
-          .filter(pair => pair.endsWith(":read"))
-          .map(pair => pair.split(":")[0])
-      );
-    }
-
+    const readableResources = await resolveReadableResources(auth.userId);
     const entries = await service.getRecentEntries(limit, readableResources);
 
-    return successResponse(entries, 200, undefined, {
-      "Cache-Control": "private, no-store",
-      Vary: "Cookie",
+    return createSuccessResponse(entries, {
+      headers: PRIVATE_NO_STORE_HEADERS,
     });
-  } catch (error) {
-    return handleError(error, "Get recent entries");
   }
-}
+);
 
 /**
  * GET /api/dashboard/activity?limit=5
@@ -172,34 +125,22 @@ export async function getDashboardRecentEntries(
  *
  * Query params:
  *   - limit: number (default: 5, max: 50)
+ *
+ * Body shape: `{ data: { activities, total, hasMore } }` — see the
+ * file-level docstring for the migration note.
  */
-export async function getDashboardActivity(req: Request): Promise<Response> {
-  try {
-    const authResult = await requireAuthentication(req);
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+export const getDashboardActivity = withErrorHandler(async (req: Request) => {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-    const { searchParams } = new URL(req.url);
-    const limitParam = searchParams.get("limit");
-    const limit = limitParam
-      ? Math.min(Math.max(Number(limitParam) || 5, 1), 50)
-      : 5;
+  const { searchParams } = new URL(req.url);
+  const limitParam = searchParams.get("limit");
+  const limit = limitParam
+    ? Math.min(Math.max(Number(limitParam) || 5, 1), 50)
+    : 5;
 
-    const service = await getActivityLogService();
-    const result = await service.getRecentActivity({ limit });
+  const service = await getActivityLogService();
+  const result = await service.getRecentActivity({ limit });
 
-    return successResponse(
-      result,
-      200,
-      {
-        total: result.total,
-        hasMore: result.hasMore,
-      },
-      {
-        "Cache-Control": "private, no-store",
-        Vary: "Cookie",
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Get dashboard activity");
-  }
-}
+  return createSuccessResponse(result, { headers: PRIVATE_NO_STORE_HEADERS });
+});
