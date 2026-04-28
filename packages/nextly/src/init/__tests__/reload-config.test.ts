@@ -4,9 +4,10 @@
 // F4 Option E PR 4 rewrite: the F1 preview gate is gone. Per-collection
 // safety is decided by introspect+diff+rename-detector (the same code the
 // pipeline runs internally). The mocks below pin introspectLiveSnapshot
-// and let real buildDesiredTableFromFields + diffSnapshots run, so the
-// test asserts the gate behavior against actual diff output. Pipeline is
-// still mocked so we don't hit drizzle-kit.
+// (called once with all desired tables) and let real
+// buildDesiredTableFromFields + diffSnapshots run, so the test asserts
+// the gate behavior against actual diff output. Pipeline is still mocked
+// so we don't hit drizzle-kit.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -20,17 +21,17 @@ import type {
 const {
   loadConfigSpy,
   clearConfigCacheSpy,
+  pipelineCtorSpy,
   pipelineApplySpy,
   introspectSpy,
-  getCollectionBySlugSpy,
   warnSpy,
   errorSpy,
 } = vi.hoisted(() => ({
   loadConfigSpy: vi.fn(),
   clearConfigCacheSpy: vi.fn(),
+  pipelineCtorSpy: vi.fn(),
   pipelineApplySpy: vi.fn(),
   introspectSpy: vi.fn(),
-  getCollectionBySlugSpy: vi.fn(),
   warnSpy: vi.fn(),
   errorSpy: vi.fn(),
 }));
@@ -40,10 +41,14 @@ vi.mock("../../cli/utils/config-loader.js", () => ({
   clearConfigCache: clearConfigCacheSpy,
 }));
 
-// Mock the F3 pipeline construction. Every `new PushSchemaPipeline(...)`
-// returns a stub whose .apply() routes to pipelineApplySpy.
+// Mock PushSchemaPipeline. The constructor records the deps object so
+// tests can assert wiring (e.g., that the injected dispatcher actually
+// arrives). apply() routes to its own spy.
 vi.mock("../../domains/schema/pipeline/pushschema-pipeline.js", () => ({
   PushSchemaPipeline: class {
+    constructor(deps: unknown) {
+      pipelineCtorSpy(deps);
+    }
     apply(args: unknown) {
       return pipelineApplySpy(args);
     }
@@ -70,9 +75,9 @@ describe("reloadNextlyConfig", () => {
   beforeEach(() => {
     loadConfigSpy.mockReset();
     clearConfigCacheSpy.mockReset();
+    pipelineCtorSpy.mockReset();
     pipelineApplySpy.mockReset();
     introspectSpy.mockReset();
-    getCollectionBySlugSpy.mockReset();
     warnSpy.mockReset();
     errorSpy.mockReset();
     pipelineApplySpy.mockResolvedValue({
@@ -84,16 +89,9 @@ describe("reloadNextlyConfig", () => {
 
   // Build a service resolver fake. Returns the service or undefined per
   // service name. Tests pass this into reloadNextlyConfig via opts.resolver.
-  function buildResolver(opts?: {
-    withRegistry?: boolean;
-    withAdapter?: boolean;
-  }) {
-    const withRegistry = opts?.withRegistry ?? true;
+  function buildResolver(opts?: { withAdapter?: boolean }) {
     const withAdapter = opts?.withAdapter ?? true;
     const services: Record<string, unknown> = {
-      collectionRegistryService: withRegistry
-        ? { getCollectionBySlug: getCollectionBySlugSpy }
-        : undefined,
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       databaseAdapter: withAdapter
         ? {
@@ -107,8 +105,20 @@ describe("reloadNextlyConfig", () => {
     return (name: string) => services[name];
   }
 
-  // Snapshot helpers — keep the fixtures small so each test states only
-  // the columns it cares about.
+  // SQLite reserved-column live state (matches buildReservedColumns output
+  // in build-from-fields.ts) so the diff doesn't see id/title/slug/
+  // created_at/updated_at as differences. Note: title/slug are NOT NULL
+  // when not user-defined; created_at/updated_at are nullable in the spec.
+  const SQLITE_RESERVED = [
+    { name: "id", type: "text", nullable: false },
+    { name: "title", type: "text", nullable: false },
+    { name: "slug", type: "text", nullable: false },
+    { name: "created_at", type: "integer", nullable: true },
+    { name: "updated_at", type: "integer", nullable: true },
+  ];
+
+  // Build a single-table NextlySchemaSnapshot for the introspect mock.
+  // Multi-table snapshots use buildSnapshot() below.
   function liveSnapshot(
     table: string,
     columns: Array<{
@@ -118,32 +128,37 @@ describe("reloadNextlyConfig", () => {
       default?: string;
     }>
   ): NextlySchemaSnapshot {
-    return {
-      tables: [
-        {
-          name: table,
-          columns: columns.map(c => ({
-            name: c.name,
-            type: c.type,
-            nullable: c.nullable ?? true,
-            default: c.default,
-          })),
-        },
-      ],
-    };
+    return buildSnapshot([
+      {
+        name: table,
+        columns,
+      },
+    ]);
   }
 
-  // SQLite reserved-column live state (matches buildReservedColumns output
-  // in build-from-fields.ts) so the diff doesn't see id/title/slug/created_at/
-  // updated_at as differences. Note: title/slug are NOT NULL when not
-  // user-defined; created_at/updated_at are nullable in the spec.
-  const SQLITE_RESERVED = [
-    { name: "id", type: "text", nullable: false },
-    { name: "title", type: "text", nullable: false },
-    { name: "slug", type: "text", nullable: false },
-    { name: "created_at", type: "integer", nullable: true },
-    { name: "updated_at", type: "integer", nullable: true },
-  ];
+  function buildSnapshot(
+    tables: Array<{
+      name: string;
+      columns: Array<{
+        name: string;
+        type: string;
+        nullable?: boolean;
+        default?: string;
+      }>;
+    }>
+  ): NextlySchemaSnapshot {
+    return {
+      tables: tables.map(t => ({
+        name: t.name,
+        columns: t.columns.map(c => ({
+          name: c.name,
+          type: c.type,
+          nullable: c.nullable ?? true,
+          default: c.default,
+        })),
+      })),
+    };
+  }
 
   it("re-reads the config from disk on every call (clears the loader cache first)", async () => {
     loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
@@ -151,6 +166,38 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver: buildResolver() });
     expect(clearConfigCacheSpy).toHaveBeenCalledTimes(1);
     expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("introspects all desired tables in ONE batched call", async () => {
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "text" }],
+          },
+          {
+            slug: "users",
+            tableName: "dc_users",
+            fields: [{ name: "email", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_posts", columns: SQLITE_RESERVED },
+        { name: "dc_users", columns: SQLITE_RESERVED },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(introspectSpy).toHaveBeenCalledTimes(1);
+    const args = introspectSpy.mock.calls[0] as [unknown, string, string[]];
+    expect(args[2]).toEqual(["dc_posts", "dc_users"]);
   });
 
   it("batches additive deltas into ONE PushSchemaPipeline.apply call with source 'code'", async () => {
@@ -165,7 +212,6 @@ describe("reloadNextlyConfig", () => {
         ],
       },
     });
-    // Live: only reserved columns. Desired: reserved + body. Diff -> add_column.
     introspectSpy.mockResolvedValue(liveSnapshot("dc_posts", SQLITE_RESERVED));
 
     const { reloadNextlyConfig } = await import("../reload-config");
@@ -195,8 +241,7 @@ describe("reloadNextlyConfig", () => {
       },
     });
     // Live has `body text`; desired has `summary text`. Same type family
-    // -> rename candidate -> gate lets it through so the dispatcher can
-    // ask the user.
+    // -> rename candidate -> gate lets it through.
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_posts", [
         ...SQLITE_RESERVED,
@@ -211,14 +256,14 @@ describe("reloadNextlyConfig", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("skips a standalone drop (no rename target) and logs a warning", async () => {
+  it("skips a standalone drop (no replacement add) and logs a warning", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
           {
             slug: "users",
             tableName: "dc_users",
-            // No new fields - phone gets dropped with no replacement.
+            // No new fields -> phone gets dropped with no replacement.
             fields: [],
           },
         ],
@@ -238,8 +283,9 @@ describe("reloadNextlyConfig", () => {
     expect(warnSpy).toHaveBeenCalled();
     const warningArg = warnSpy.mock.calls[0]?.[0] as string;
     expect(warningArg).toContain("users");
-    expect(warningArg).toContain("phone");
-    expect(warningArg).toContain("no rename target");
+    expect(warningArg).toContain("dc_users");
+    expect(warningArg).toContain("no replacement");
+    expect(warningArg).toContain("data loss");
   });
 
   it("skips a column type change and logs a warning", async () => {
@@ -271,6 +317,40 @@ describe("reloadNextlyConfig", () => {
     const warningArg = warnSpy.mock.calls[0]?.[0] as string;
     expect(warningArg).toContain("active");
     expect(warningArg).toContain("type");
+  });
+
+  it("skips a table where drops > adds (asymmetric, surplus would lose data)", async () => {
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            // 1 add, but 3 drops below -> 2 drops cannot be renamed.
+            fields: [{ name: "summary", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", [
+        ...SQLITE_RESERVED,
+        { name: "body", type: "text", nullable: true },
+        { name: "tagline", type: "text", nullable: true },
+        { name: "byline", type: "text", nullable: true },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    const warningArg = warnSpy.mock.calls[0]?.[0] as string;
+    expect(warningArg).toContain("dc_posts");
+    expect(warningArg).toContain("3 columns");
+    expect(warningArg).toContain("only 1 replacement");
+    expect(warningArg).toContain("2 cannot be renamed");
   });
 
   it("skips collections that have no changes (diff returns empty)", async () => {
@@ -309,45 +389,28 @@ describe("reloadNextlyConfig", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not crash when the registry is unavailable from DI", async () => {
-    loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
-    const { reloadNextlyConfig } = await import("../reload-config");
-    await expect(
-      reloadNextlyConfig({
-        resolver: buildResolver({ withRegistry: false }),
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("continues to next collection if one introspect fails; batches the survivor", async () => {
+  it("aborts (no pipeline call) and logs error when batched introspect fails", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
           {
-            slug: "first",
-            tableName: "dc_first",
-            fields: [{ name: "a", type: "text" }],
-          },
-          {
-            slug: "second",
-            tableName: "dc_second",
-            fields: [{ name: "b", type: "text" }],
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "text" }],
           },
         ],
       },
     });
-    introspectSpy
-      .mockRejectedValueOnce(new Error("introspect failed"))
-      .mockResolvedValueOnce(liveSnapshot("dc_second", SQLITE_RESERVED));
+    introspectSpy.mockRejectedValue(new Error("connection refused"));
 
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
-    const call = pipelineApplySpy.mock.calls[0]?.[0] as {
-      desired: { collections: Record<string, unknown> };
-    };
-    expect(Object.keys(call.desired.collections)).toEqual(["second"]);
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    const errorArg = errorSpy.mock.calls[0]?.[0] as string;
+    expect(errorArg).toContain("introspect");
+    expect(errorArg).toContain("connection refused");
   });
 
   it("logs an error if the batch pipeline call returns a non-TTY-related failure", async () => {
@@ -418,7 +481,7 @@ describe("reloadNextlyConfig", () => {
     expect(warningArg).toContain("CONFIRMATION_REQUIRED_NO_TTY");
   });
 
-  it("passes the injected dispatcher through to the pipeline (test seam)", async () => {
+  it("passes the injected dispatcher straight into the pipeline", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -446,10 +509,10 @@ describe("reloadNextlyConfig", () => {
       dispatcher: fakeDispatcher,
     });
 
-    // Pipeline was called once and didn't throw - confirms the dispatcher
-    // path is wired. (Construction-time dispatcher arrival isn't directly
-    // observable through the mocked PushSchemaPipeline class above; the
-    // proof is that no clack import / TTY prompt fired.)
-    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(pipelineCtorSpy).toHaveBeenCalledTimes(1);
+    const deps = pipelineCtorSpy.mock.calls[0]?.[0] as {
+      promptDispatcher: PromptDispatcher;
+    };
+    expect(deps.promptDispatcher).toBe(fakeDispatcher);
   });
 });
