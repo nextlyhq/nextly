@@ -63,13 +63,6 @@ export interface OptionsEditorProps {
 // ============================================================================
 
 /**
- * Generate a unique ID for an option (for DnD tracking)
- */
-function generateOptionId(): string {
-  return `opt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-}
-
-/**
  * Generate a value from a label (snake_case format)
  */
 function generateValueFromLabel(label: string): string {

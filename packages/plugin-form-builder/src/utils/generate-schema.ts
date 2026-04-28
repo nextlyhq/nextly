@@ -519,7 +519,7 @@ function transformFieldValue(value: unknown, field: FormField): unknown {
 
     case "select":
       // Ensure array for multi-select
-      if ((field as SelectFormField).allowMultiple) {
+      if (field.allowMultiple) {
         if (!Array.isArray(value)) {
           return value ? [value] : [];
         }

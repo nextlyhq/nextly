@@ -158,10 +158,14 @@ registerComponents({
  * above, this callback is effectively a no-op but keeps the plugin
  * compatible with both eager and lazy registration patterns.
  */
-registerKnownPlugin("@revnixhq/plugin-form-builder", async () => {
-  // Components already registered above, but re-register for safety
-  registerComponents({
-    [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
-    [SUBMISSIONS_FILTER_PATH]: SubmissionsFilter,
-  });
-});
+registerKnownPlugin(
+  "@revnixhq/plugin-form-builder",
+  // eslint-disable-next-line @typescript-eslint/require-await -- registerKnownPlugin's second arg is typed `() => Promise<void>` (strict, not a union); body is synchronous
+  async () => {
+    // Components already registered above, but re-register for safety
+    registerComponents({
+      [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
+      [SUBMISSIONS_FILTER_PATH]: SubmissionsFilter,
+    });
+  }
+);

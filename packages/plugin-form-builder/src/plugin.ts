@@ -9,7 +9,7 @@
  */
 
 import type { CollectionConfig, PluginDefinition } from "@revnixhq/nextly";
-import { AdminPlacement, getCollectionsHandler } from "@revnixhq/nextly";
+import { getCollectionsHandler } from "@revnixhq/nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
@@ -20,6 +20,14 @@ import type {
 } from "./types";
 
 export type NextlyPlugin = PluginDefinition;
+
+/** The runtime instance passed to plugin hooks (type extracted from `init`'s parameter). */
+type NextlyInstance = Parameters<NonNullable<NextlyPlugin["init"]>>[0];
+
+/** Internal augmentation: we stash the resolved config on the nextly instance for later retrieval. */
+type NextlyWithFormBuilderConfig = NextlyInstance & {
+  __formBuilderConfig?: ResolvedFormBuilderConfig;
+};
 
 // ---------------------------------------------------------------------------
 // Configuration resolver
@@ -183,7 +191,7 @@ export function formBuilder(
 
     // -- Init ----------------------------------------------------------------
     // Registers an afterCreate hook on submissions to send email notifications.
-    async init(nextly: Parameters<NonNullable<NextlyPlugin["init"]>>[0]) {
+    init(nextly: NextlyInstance) {
       const submissionSlug = resolvedConfig.formSubmissionOverrides.slug;
 
       // Prevent duplicate hook registration in Next.js dev mode
@@ -200,7 +208,8 @@ export function formBuilder(
           .map(([name]) => name),
       });
 
-      (nextly as any).__formBuilderConfig = resolvedConfig;
+      (nextly as NextlyWithFormBuilderConfig).__formBuilderConfig =
+        resolvedConfig;
 
       // Register afterCreate hook for email notifications
       nextly.hooks.on(
@@ -230,7 +239,8 @@ export function formBuilder(
 export function getFormBuilderConfig(
   nextly: unknown
 ): ResolvedFormBuilderConfig | undefined {
-  return (nextly as any)?.__formBuilderConfig;
+  if (!nextly || typeof nextly !== "object") return undefined;
+  return (nextly as Partial<NextlyWithFormBuilderConfig>).__formBuilderConfig;
 }
 
 /**
@@ -296,14 +306,19 @@ export function collectAttachmentInputs(
 async function handleSubmissionCreated(
   context: unknown,
   config: ResolvedFormBuilderConfig,
-  nextly: any
+  nextly: NextlyInstance
 ): Promise<void> {
   const submission = (context as { data?: Record<string, unknown> }).data;
   if (!submission) return;
 
   const rawFormId = submission.form;
-  const formId =
-    typeof rawFormId === "string" ? rawFormId : (rawFormId as any)?.id || null;
+  let formId: string | null = null;
+  if (typeof rawFormId === "string") {
+    formId = rawFormId;
+  } else if (rawFormId && typeof rawFormId === "object") {
+    const maybeId = (rawFormId as { id?: unknown }).id;
+    if (typeof maybeId === "string") formId = maybeId;
+  }
   if (!formId) return;
 
   // Fetch the parent form
@@ -368,8 +383,7 @@ async function handleSubmissionCreated(
           providerId: notification.providerId,
           cc,
           bcc,
-          attachments:
-            fileAttachments.length > 0 ? fileAttachments : undefined,
+          attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         }
       );
 
@@ -394,7 +408,7 @@ async function handleSubmissionCreated(
 async function fetchParentForm(
   config: ResolvedFormBuilderConfig,
   formId: string,
-  nextly: any
+  nextly: NextlyInstance
 ): Promise<Record<string, unknown> | null> {
   try {
     const handler = getCollectionsHandler();
@@ -409,10 +423,13 @@ async function fetchParentForm(
       entryId: formId,
       overrideAccess: true,
     });
-    return (result?.data ?? (result as any)?.doc ?? null) as Record<
-      string,
-      unknown
-    > | null;
+    const fromData = result?.data;
+    if (fromData) return fromData as Record<string, unknown>;
+    const fromDoc = (result as { doc?: unknown } | undefined)?.doc;
+    if (fromDoc && typeof fromDoc === "object") {
+      return fromDoc as Record<string, unknown>;
+    }
+    return null;
   } catch (err) {
     nextly.infra.logger.error?.("Form Builder: failed to fetch form", {
       formId,

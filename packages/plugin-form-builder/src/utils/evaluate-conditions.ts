@@ -94,12 +94,14 @@ function toString(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
   if (Array.isArray(value)) {
     return value.join(", ");
   }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  // Primitive (number, boolean, bigint, symbol) — safe to coerce.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- value narrowed to primitive above; rule doesn't follow control flow on unknown
   return String(value);
 }
 
@@ -206,8 +208,10 @@ function compareValues(
 
     default: {
       // Unknown operator - return false to be safe
+      // `operator` is `never` here because the switch is exhaustive over ComparisonOperator;
+      // cast to string so the diagnostic survives if a new operator is added without a case.
       console.warn(
-        `[evaluateConditions] Unknown comparison operator: ${operator}`
+        `[evaluateConditions] Unknown comparison operator: ${String(operator)}`
       );
       return false;
     }

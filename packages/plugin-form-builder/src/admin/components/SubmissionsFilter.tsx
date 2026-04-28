@@ -85,7 +85,7 @@ export function SubmissionsFilter({
       }
     }
 
-    fetchForms();
+    void fetchForms();
   }, []);
 
   // Handle form selection

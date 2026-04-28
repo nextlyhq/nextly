@@ -254,7 +254,7 @@ export function formsCollection(
     group({
       name: "settings",
       label: "Form Settings",
-      fields: settingsFields as any, // Cast required due to forward reference types
+      fields: settingsFields,
     }),
 
     // ============================================================
@@ -389,7 +389,7 @@ export function formsCollection(
 
       // Add virtual submission count field
       afterRead: [
-        async (context: HookContext) => {
+        (context: HookContext) => {
           const { data } = context;
           if (data) {
             // Placeholder: submission count will be implemented in Phase 4

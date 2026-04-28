@@ -236,7 +236,7 @@ export function SelectFieldEditor({
             /* Single-select: Dropdown for default value */
             <select
               id="field-default-value"
-              value={(field.defaultValue as string) || ""}
+              value={field.defaultValue || ""}
               onChange={e =>
                 onUpdate({
                   defaultValue: e.target.value || undefined,

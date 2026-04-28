@@ -410,7 +410,7 @@ export function FormBuilderProvider({
         ...field,
         name: newFieldName,
         label: `${field.label} (Copy)`,
-      } as FormField;
+      };
 
       const newFields = [...prev];
       newFields.splice(fieldIndex + 1, 0, newField);

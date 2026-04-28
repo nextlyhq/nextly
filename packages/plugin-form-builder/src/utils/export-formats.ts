@@ -97,21 +97,23 @@ export interface ExportedJSON {
 // Constants
 // ============================================================================
 
-/** Metadata column names with underscore prefix */
-const METADATA_COLUMNS = [
-  "_id",
-  "_status",
-  "_submittedAt",
-  "_ipAddress",
-  "_userAgent",
-] as const;
-
 /** UTF-8 BOM character sequence */
 const UTF8_BOM = "\uFEFF";
 
 // ============================================================================
 // Value Formatting Helpers
 // ============================================================================
+
+/**
+ * Stringify a value safely, falling back to JSON for plain objects so we
+ * never emit the default `[object Object]` representation.
+ */
+function safeString(value: unknown): string {
+  if (typeof value === "object" && value !== null) {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
 
 /**
  * Format a field value for export based on field type.
@@ -143,14 +145,14 @@ export function formatExportValue(value: unknown, field?: FormField): string {
         if (Array.isArray(value)) {
           return value.join(", ");
         }
-        return String(value);
+        return safeString(value);
 
       case "file":
         if (Array.isArray(value)) {
           // File URLs or IDs
-          return value.map(v => String(v)).join(", ");
+          return value.map(v => safeString(v)).join(", ");
         }
-        return String(value);
+        return safeString(value);
 
       case "date":
         if (value instanceof Date) {
@@ -163,13 +165,13 @@ export function formatExportValue(value: unknown, field?: FormField): string {
             return parsed.toISOString().split("T")[0];
           }
         }
-        return String(value);
+        return safeString(value);
 
       case "time":
-        return String(value);
+        return safeString(value);
 
       case "hidden":
-        return String(value);
+        return safeString(value);
 
       default:
         // text, email, phone, url, textarea, number, radio
@@ -190,11 +192,7 @@ export function formatExportValue(value: unknown, field?: FormField): string {
     return value.toISOString();
   }
 
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-
-  return String(value);
+  return safeString(value);
 }
 
 /**
@@ -308,7 +306,7 @@ export function exportToCSV(
 
   for (const submission of submissions) {
     const row: string[] = [];
-    const data = submission.data as Record<string, unknown>;
+    const data = submission.data;
 
     // Form field values
     for (const field of exportableFields) {
@@ -409,7 +407,7 @@ export function exportToJSON(
 
   // Build submission data
   const exportedSubmissions = submissions.map(submission => {
-    const data = submission.data as Record<string, unknown>;
+    const data = submission.data;
 
     // Build field data object with labels as keys for readability
     const fieldData: Record<string, unknown> = {};
@@ -562,14 +560,10 @@ export function exportAndDownload(
   const filename = generateExportFilename(form.slug, format);
 
   if (format === "csv") {
-    const content = exportToCSV(submissions, form, options as CSVExportOptions);
+    const content = exportToCSV(submissions, form, options);
     downloadFile(content, filename, "text/csv;charset=utf-8");
   } else {
-    const content = exportToJSON(
-      submissions,
-      form,
-      options as JSONExportOptions
-    );
+    const content = exportToJSON(submissions, form, options);
     downloadFile(content, filename, "application/json");
   }
 }

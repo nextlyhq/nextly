@@ -8,7 +8,7 @@ import {
   TabsTrigger,
   Switch,
 } from "@revnixhq/ui";
-import React from "react";
+import type React from "react";
 
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
@@ -87,7 +87,7 @@ export function FormSettingsTab() {
             >
               <Input
                 type="text"
-                value={settings.submitButtonText as string | undefined}
+                value={settings.submitButtonText}
                 onChange={e =>
                   updateSettings({ submitButtonText: e.target.value })
                 }
@@ -101,7 +101,7 @@ export function FormSettingsTab() {
               description="Lets users clear all fields at once"
             >
               <Switch
-                checked={settings.showResetButton as boolean}
+                checked={settings.showResetButton}
                 onCheckedChange={(checked: boolean) =>
                   updateSettings({ showResetButton: checked })
                 }
@@ -116,7 +116,7 @@ export function FormSettingsTab() {
               >
                 <Input
                   type="text"
-                  value={settings.resetButtonText as string | undefined}
+                  value={settings.resetButtonText}
                   onChange={e =>
                     updateSettings({ resetButtonText: e.target.value })
                   }
@@ -180,7 +180,7 @@ export function FormSettingsTab() {
                 </div>
                 <Textarea
                   id="confirmationMessage"
-                  value={settings.confirmationMessage as string | undefined}
+                  value={settings.confirmationMessage}
                   onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
                     updateSettings({ confirmationMessage: e.target.value })
                   }
@@ -197,7 +197,7 @@ export function FormSettingsTab() {
                 >
                   <Input
                     type="url"
-                    value={(settings.redirectUrl as string) || ""}
+                    value={settings.redirectUrl || ""}
                     onChange={e =>
                       updateSettings({ redirectUrl: e.target.value })
                     }
@@ -227,7 +227,7 @@ export function FormSettingsTab() {
               description="Hidden field that silently catches bots"
             >
               <Switch
-                checked={settings.honeypotEnabled as boolean}
+                checked={settings.honeypotEnabled}
                 onCheckedChange={(checkedValue: boolean) =>
                   updateSettings({ honeypotEnabled: checkedValue })
                 }
@@ -239,7 +239,7 @@ export function FormSettingsTab() {
               description="Human verification before submitting"
             >
               <Switch
-                checked={settings.captchaEnabled as boolean}
+                checked={settings.captchaEnabled}
                 onCheckedChange={(checkedValue: boolean) =>
                   updateSettings({ captchaEnabled: checkedValue })
                 }
@@ -262,7 +262,7 @@ export function FormSettingsTab() {
               description="Save responses to the database"
             >
               <Switch
-                checked={settings.storeSubmissions as boolean}
+                checked={settings.storeSubmissions}
                 onCheckedChange={(checkedValue: boolean) =>
                   updateSettings({ storeSubmissions: checkedValue })
                 }
@@ -276,7 +276,7 @@ export function FormSettingsTab() {
               <div className="flex items-center gap-3">
                 <Input
                   type="number"
-                  value={(settings.submissionLimit as number) || ""}
+                  value={settings.submissionLimit || ""}
                   onChange={e =>
                     updateSettings({
                       submissionLimit: e.target.value

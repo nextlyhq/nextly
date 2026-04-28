@@ -24,16 +24,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@revnixhq/ui";
-import React, { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 import type {
   FormField,
   TextFormField,
-  NumberFormField,
-  TextareaFormField,
-  FileFormField,
-  HiddenFormField,
-  DateFormField,
   SelectFormField,
   RadioFormField,
 } from "../../../types";
@@ -236,7 +231,7 @@ function TypeSpecificOptions({
       return <OptionsEditor field={field} onUpdate={onUpdate} />;
 
     case "textarea": {
-      const textareaField = field as TextareaFormField;
+      const textareaField = field;
       return (
         <div className="space-y-2">
           <FormLabelWithTooltip
@@ -258,7 +253,7 @@ function TypeSpecificOptions({
     }
 
     case "file": {
-      const fileField = field as FileFormField;
+      const fileField = field;
       return (
         <>
           <div className="space-y-2">
@@ -309,7 +304,7 @@ function TypeSpecificOptions({
     }
 
     case "hidden": {
-      const hiddenField = field as HiddenFormField;
+      const hiddenField = field;
       return (
         <div className="space-y-2">
           <FormLabelWithTooltip
@@ -320,7 +315,7 @@ function TypeSpecificOptions({
           <Input
             id="field-default"
             type="text"
-            value={(hiddenField.defaultValue as string) || ""}
+            value={hiddenField.defaultValue || ""}
             onChange={e => onUpdate({ defaultValue: e.target.value })}
             className="bg-transparent"
           />
@@ -329,7 +324,7 @@ function TypeSpecificOptions({
     }
 
     case "date": {
-      const dateField = field as DateFormField;
+      const dateField = field;
       return (
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -365,7 +360,7 @@ function TypeSpecificOptions({
     }
 
     case "number": {
-      const numField = field as NumberFormField;
+      const numField = field;
       return (
         <div className="space-y-2">
           <FormLabelWithTooltip
@@ -408,7 +403,10 @@ function OptionsEditor({
   onUpdate: (updates: Partial<FormField>) => void;
 }) {
   const optionsField = field as SelectFormField | RadioFormField;
-  const options = optionsField.options || [];
+  const options = useMemo(
+    () => optionsField.options || [],
+    [optionsField.options]
+  );
 
   const addOption = useCallback(() => {
     const newOptions = [
@@ -418,7 +416,7 @@ function OptionsEditor({
         value: `option_${options.length + 1}`,
       },
     ];
-    onUpdate({ options: newOptions } as Partial<FormField>);
+    onUpdate({ options: newOptions });
   }, [options, onUpdate]);
 
   const updateOption = useCallback(
@@ -426,7 +424,7 @@ function OptionsEditor({
       const newOptions = options.map((opt, i: number) =>
         i === index ? { ...opt, [key]: value } : opt
       );
-      onUpdate({ options: newOptions } as Partial<FormField>);
+      onUpdate({ options: newOptions });
     },
     [options, onUpdate]
   );
@@ -434,7 +432,7 @@ function OptionsEditor({
   const removeOption = useCallback(
     (index: number) => {
       const newOptions = options.filter((_, i: number) => i !== index);
-      onUpdate({ options: newOptions } as Partial<FormField>);
+      onUpdate({ options: newOptions });
     },
     [options, onUpdate]
   );
@@ -506,7 +504,7 @@ function ValidationTab({
   field: FormField;
   onUpdate: (updates: Partial<FormField>) => void;
 }) {
-  const validation = field.validation || {};
+  const validation = useMemo(() => field.validation || {}, [field.validation]);
 
   const updateValidation = useCallback(
     (key: string, value: string | number | undefined) => {
@@ -594,7 +592,7 @@ function ValidationTab({
             <Input
               id="min-val"
               type="number"
-              value={(field as NumberFormField).validation?.min ?? ""}
+              value={field.validation?.min ?? ""}
               onChange={e =>
                 updateValidation(
                   "min",
@@ -613,7 +611,7 @@ function ValidationTab({
             <Input
               id="max-val"
               type="number"
-              value={(field as NumberFormField).validation?.max ?? ""}
+              value={field.validation?.max ?? ""}
               onChange={e =>
                 updateValidation(
                   "max",
@@ -660,7 +658,7 @@ function ValidationTab({
             id="max-file-size"
             type="number"
             min={0}
-            value={(field as FileFormField).maxFileSize ?? ""}
+            value={field.maxFileSize ?? ""}
             onChange={e =>
               onUpdate({
                 maxFileSize: e.target.value
