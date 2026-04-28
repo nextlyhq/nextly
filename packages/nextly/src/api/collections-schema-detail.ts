@@ -8,6 +8,13 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: <result> }` envelope per spec §10.2. Errors serialize
+ * as `application/problem+json`. The legacy route-layer `FORBIDDEN → LOCKED`
+ * remap is dropped; the registry now throws `NextlyError.forbidden` with the
+ * `collection-locked` reason in `logContext`, and the wire surface stays
+ * canonical FORBIDDEN.
+ *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/collections/schema/[slug]/route.ts
@@ -17,16 +24,22 @@
  * @module api/collections-schema-detail
  */
 
+import type { FieldConfig } from "@nextly/collections";
+
 import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { env } from "../lib/env";
+import { getNextlyLogger } from "../observability/logger";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { simplePluralize } from "../shared/lib/pluralization";
+
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
@@ -46,140 +59,68 @@ async function getComponentRegistry(): Promise<ComponentRegistryService> {
   return getService("componentRegistryService");
 }
 
-function successResponse<T>(data: T, statusCode: number = 200): Response {
-  return Response.json(
-    { data },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
-      },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Collections Schema Detail API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    // Map FORBIDDEN to LOCKED for locked collection errors
-    const code = error.code === "FORBIDDEN" ? "LOCKED" : error.code;
-    return errorResponse(error.message, error.httpStatus, code);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-async function requireAuth(
-  request: Request
-): Promise<import("../auth/session").SessionUser | Response> {
-  // getSession returns GetSessionResult; extract user or null for backward compat
+async function requireUser(request: Request): Promise<{ id: string }> {
+  // getSession returns GetSessionResult; throw the unified auth-required
+  // error so the boundary returns canonical 401.
   const result = await getSession(request, env.NEXTLY_SECRET_RESOLVED || "");
   const user = result.authenticated ? result.user : null;
   if (!user) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
+    throw NextlyError.authRequired();
   }
-  return user;
+  return { id: user.id };
 }
 
-async function requireManageSettings(
-  request: Request
-): Promise<import("../auth/session").SessionUser | Response> {
-  const userOrError = await requireAuth(request);
-  if (userOrError instanceof Response) return userOrError;
-
-  const user = userOrError;
-  const isAdmin = await isSuperAdmin(user.id);
-  if (!isAdmin) {
-    const canManage = await hasPermission(user.id, "manage", "settings");
-    if (!canManage) {
-      return errorResponse(
-        "Forbidden: you do not have permission to manage collections",
-        403,
-        "FORBIDDEN"
-      );
-    }
+/**
+ * Authorize a non-superadmin caller for the management surface (PATCH/DELETE).
+ * Identifiers and required-permission detail are kept out of the public
+ * message per spec §13.8 and surfaced through `logContext`.
+ */
+async function requireManageSettings(userId: string): Promise<void> {
+  if (await isSuperAdmin(userId)) return;
+  const canManage = await hasPermission(userId, "manage", "settings");
+  if (!canManage) {
+    throw NextlyError.forbidden({
+      logContext: {
+        userId,
+        required: "manage-settings",
+        operation: "manage-collection",
+      },
+    });
   }
-  return user;
 }
 
 /**
  * GET handler for retrieving a single collection by slug.
  *
- * Requires authentication and read permission for the collection.
- *
- * Response Codes:
- * - 200 OK: Collection retrieved successfully
- * - 401 Unauthorized: Authentication required
- * - 403 Forbidden: User does not have read permission for this collection
- * - 404 Not Found: Collection with slug does not exist
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to fetch collection
- *
- * @param request - Next.js Request object
- * @param context - Route context with params Promise containing slug
- * @returns Response with JSON collection data
- *
- * @example
- * ```bash
- * curl -H "Authorization: Bearer <token>" \
- *   "http://localhost:3000/api/collections/schema/blog_posts"
- * # => {"data":{"slug":"blog_posts","labels":{...},"fields":[...],...}}
- * ```
+ * Requires authentication and read permission for the collection. The
+ * registry throws `NOT_FOUND` if no collection matches the slug.
  */
-export async function GET(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    const userOrError = await requireAuth(request);
-    if (userOrError instanceof Response) return userOrError;
-
-    const user = userOrError;
+export const GET = withErrorHandler(
+  async (request: Request, context: RouteContext) => {
+    const user = await requireUser(request);
     const { slug } = await context.params;
 
     const isAdmin = await isSuperAdmin(user.id);
     if (!isAdmin) {
       const canRead = await hasPermission(user.id, "read", slug);
       if (!canRead) {
-        return errorResponse(
-          `Forbidden: you do not have read permission for collection '${slug}'`,
-          403,
-          "FORBIDDEN"
-        );
+        throw NextlyError.forbidden({
+          logContext: {
+            userId: user.id,
+            required: `read-${slug}`,
+            operation: "read-collection",
+          },
+        });
       }
     }
 
     const registry = await getCollectionRegistry();
     const collection = await registry.getCollection(slug);
 
-    // Enrich component fields with inline schemas for Admin UI
-    // This allows form rendering without extra API calls per component
-    // Type is Record<string, unknown>[] to allow EnrichedFieldConfig properties
+    // Enrich component fields with inline schemas for Admin UI so form
+    // rendering doesn't need extra API calls per component. If the component
+    // registry is unavailable we fall back to the raw fields rather than
+    // failing the whole request.
     let enrichedFields: Record<string, unknown>[] =
       collection.fields as unknown as Record<string, unknown>[];
     try {
@@ -188,83 +129,55 @@ export async function GET(
         collection.fields as unknown as Record<string, unknown>[]
       );
     } catch (enrichError) {
-      // Log but don't fail — return unenriched fields if component registry unavailable
-      console.warn(
-        "[Collections Schema Detail API] Failed to enrich component fields:",
-        enrichError
-      );
+      // Best-effort enrichment: surface the failure through the unified
+      // observability seam (the boundary won't see it because we swallow
+      // it on purpose to keep the GET responsive with raw fields).
+      getNextlyLogger().warn({
+        kind: "collection-schema-enrichment-failed",
+        slug,
+        err: String(enrichError),
+      });
     }
 
-    // Cast through unknown to allow Record<string, unknown>[] in place of FieldConfig[]
-    return successResponse({
+    return createSuccessResponse({
       ...collection,
       fields: enrichedFields,
     } as unknown as typeof collection);
-  } catch (error) {
-    return handleError(error, "Get collection");
   }
-}
+);
 
 /**
  * PATCH handler for updating a collection.
  *
- * Requires authentication. Returns 403 Forbidden if collection is locked
- * (code-first collections cannot be modified via API).
- *
- * Request Body (all fields optional):
- * - labels: { singular: string, plural?: string } (plural auto-derived if omitted)
- * - description: string
- * - fields: Array of field configurations
- * - timestamps: boolean
- * - admin: Admin UI configuration object
- *
- * Response Codes:
- * - 200 OK: Collection updated successfully
- * - 400 Bad Request: Invalid JSON body
- * - 401 Unauthorized: Authentication required
- * - 403 Forbidden: Collection is locked (code-first)
- * - 404 Not Found: Collection with slug does not exist
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Update failed
- *
- * @param request - Next.js Request object with JSON body
- * @param context - Route context with params Promise containing slug
- * @returns Response with JSON updated collection
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/collections/schema/blog_posts', {
- *   method: 'PATCH',
- *   headers: {
- *     'Content-Type': 'application/json',
- *     'Authorization': 'Bearer <token>',
- *   },
- *   body: JSON.stringify({
- *     labels: { singular: 'Article', plural: 'Articles' },
- *     fields: [...updatedFields],
- *   }),
- * });
- * const { data: updated } = await response.json();
- * ```
+ * Requires `manage-settings` (or super-admin). The registry throws
+ * `NextlyError.forbidden` with `reason: "collection-locked"` if the
+ * collection is locked (code-first collections cannot be modified via API).
  */
-export async function PATCH(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
+export const PATCH = withErrorHandler(
+  async (request: Request, context: RouteContext) => {
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    const userOrError = await requireManageSettings(request);
-    if (userOrError instanceof Response) return userOrError;
+    const user = await requireUser(request);
+    await requireManageSettings(user.id);
 
     const { slug } = await context.params;
 
+    // Body parse failure is a client error — surface as a single-issue
+    // validation rather than letting the SyntaxError become a 500.
     let body: Record<string, unknown>;
     try {
       body = await request.json();
     } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      });
     }
 
     const updateData: Record<string, unknown> = {};
@@ -292,17 +205,21 @@ export async function PATCH(
 
     if (body.fields !== undefined) {
       updateData.fields = body.fields;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      updateData.schemaHash = calculateSchemaHash(body.fields as any);
+      // The registry re-validates the field config; cast through `unknown`
+      // to avoid `any` while keeping the existing trust boundary.
+      updateData.schemaHash = calculateSchemaHash(
+        body.fields as unknown as FieldConfig[]
+      );
     }
 
     if (body.timestamps !== undefined) {
       updateData.timestamps = body.timestamps;
     }
 
-    // Admin fields: support both nested admin object and flat top-level fields.
-    // CollectionRegistryService.updateCollection expects data.admin as a merged object.
-    // We fetch the existing collection to merge admin fields properly.
+    // Admin fields: support both nested admin object and flat top-level
+    // fields. The registry's updateCollection expects data.admin as a merged
+    // object, so when any admin override is present we fetch the existing
+    // collection and merge.
     const ADMIN_KEYS = [
       "icon",
       "group",
@@ -313,7 +230,6 @@ export async function PATCH(
       "defaultColumns",
     ] as const;
 
-    // Collect admin field overrides from both nested admin object and flat top-level fields
     const adminOverrides: Record<string, unknown> = {};
     if (body.admin !== undefined) {
       const admin = body.admin as Record<string, unknown>;
@@ -347,58 +263,29 @@ export async function PATCH(
       source: "ui",
     });
 
-    return successResponse(updated);
-  } catch (error) {
-    return handleError(error, "Update collection");
+    return createSuccessResponse(updated);
   }
-}
+);
 
 /**
  * DELETE handler for removing a collection.
  *
- * Requires authentication. Returns 403 Forbidden if collection is locked
- * (code-first collections cannot be deleted via API).
- *
- * Response Codes:
- * - 204 No Content: Collection deleted successfully
- * - 401 Unauthorized: Authentication required
- * - 403 Forbidden: Collection is locked (code-first)
- * - 404 Not Found: Collection with slug does not exist
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Deletion failed
- *
- * @param request - Next.js Request object
- * @param context - Route context with params Promise containing slug
- * @returns Empty response with 204 status on success
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/collections/schema/blog_posts', {
- *   method: 'DELETE',
- *   headers: {
- *     'Authorization': 'Bearer <token>',
- *   },
- * });
- * // response.status === 204 on success
- * ```
+ * Requires `manage-settings` (or super-admin). The registry throws
+ * `NextlyError.forbidden` with `reason: "collection-locked-delete"` if the
+ * collection is locked (code-first collections cannot be deleted via API).
  */
-export async function DELETE(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
+export const DELETE = withErrorHandler(
+  async (request: Request, context: RouteContext) => {
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    const userOrError = await requireManageSettings(request);
-    if (userOrError instanceof Response) return userOrError;
+    const user = await requireUser(request);
+    await requireManageSettings(user.id);
 
     const { slug } = await context.params;
 
     await registry.deleteCollection(slug);
 
     return new Response(null, { status: 204 });
-  } catch (error) {
-    return handleError(error, "Delete collection");
   }
-}
+);
