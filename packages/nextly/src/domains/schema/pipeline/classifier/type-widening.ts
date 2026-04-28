@@ -8,8 +8,18 @@
 // the per-dialect warning UX (PR 3 type-warnings.ts).
 //
 // Why per-dialect: the type tokens themselves differ. PG udt_name returns
-// "int2"/"int4"/"int8"; PG SQL aliases are "smallint"/"int"/"bigint";
-// MySQL has its own integer hierarchy; SQLite is storage-class only.
+// "int2"/"int4"/"int8" and "bpchar" (for CHAR(N)); PG SQL aliases are
+// "smallint"/"int"/"bigint" and "char"; MySQL has its own integer
+// hierarchy; SQLite is storage-class only.
+//
+// v1 limitations:
+// - MySQL signedness is ignored. `int unsigned -> int signed` is treated
+//   as a widening but could corrupt values > INT_MAX. Surfacing this in
+//   v1 would require a richer type token model; deferred.
+// - Unknown types (e.g. `numeric`, `timestamptz`, custom enums) default
+//   to non-widening so users get the destructive warning. Conservative by
+//   design — false negatives just prompt; false positives skip warnings
+//   users needed.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
@@ -72,8 +82,15 @@ export function isWideningChange(
   const vw = widensVarchar(from, to);
   if (vw !== null) return vw;
 
-  // char(N) -> varchar(M) or varchar widens (escapes fixed-width padding)
-  if (CHAR_RE.test(from) && (to === "varchar" || VARCHAR_RE.test(to))) {
+  // char(N) -> varchar(M) or varchar widens (escapes fixed-width padding).
+  // PG's udt_name returns `bpchar` for CHAR(N) columns from live introspection
+  // (see introspect-live.ts), so we normalize bpchar to char-family here.
+  const fromIsCharFamily = CHAR_RE.test(from) || from === "bpchar";
+  if (fromIsCharFamily && (to === "varchar" || VARCHAR_RE.test(to))) {
+    return true;
+  }
+  // bpchar -> text on PG widens too (text accepts any char content).
+  if (dialect === "postgresql" && from === "bpchar" && to === "text") {
     return true;
   }
 

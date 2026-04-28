@@ -43,6 +43,23 @@ describe("isWideningChange — Postgres", () => {
   it("char(10) -> varchar is widening", () => {
     expect(isWideningChange("char(10)", "varchar", "postgresql")).toBe(true);
   });
+  it("char(10) -> varchar(255) is widening", () => {
+    expect(isWideningChange("char(10)", "varchar(255)", "postgresql")).toBe(
+      true
+    );
+  });
+  it("bpchar (PG udt_name for CHAR) -> varchar is widening", () => {
+    // Critical: PG live introspection returns "bpchar", not "char(N)" —
+    // see introspect-live.ts. Without this case, existing CHAR columns
+    // would spuriously trigger destructive warnings on widening.
+    expect(isWideningChange("bpchar", "varchar", "postgresql")).toBe(true);
+  });
+  it("bpchar -> text is widening", () => {
+    expect(isWideningChange("bpchar", "text", "postgresql")).toBe(true);
+  });
+  it("int8 -> bigint is widening (cross-token-system within family)", () => {
+    expect(isWideningChange("int8", "bigint", "postgresql")).toBe(true);
+  });
   it("same type returns true (degenerate widening)", () => {
     expect(isWideningChange("text", "text", "postgresql")).toBe(true);
   });
@@ -68,6 +85,14 @@ describe("isWideningChange — MySQL", () => {
   });
   it("tinyint -> int widens", () => {
     expect(isWideningChange("tinyint", "int", "mysql")).toBe(true);
+  });
+  it("varchar(50) -> varchar(255) widens", () => {
+    expect(isWideningChange("varchar(50)", "varchar(255)", "mysql")).toBe(true);
+  });
+  it("varchar(255) -> varchar(50) does NOT widen", () => {
+    expect(isWideningChange("varchar(255)", "varchar(50)", "mysql")).toBe(
+      false
+    );
   });
 });
 
