@@ -11,6 +11,13 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
+ * Wire shape — Task 21 migration: the JSON path returns the canonical
+ * `{ data: { code } }` envelope per spec §10.2; the `?download=true` path
+ * returns the raw code as `text/plain` with a `Content-Disposition`
+ * attachment header (the JSON envelope intentionally does not apply to
+ * binary/text-stream responses). Errors flow through `withErrorHandler`
+ * and serialize as `application/problem+json`.
+ *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/collections/schema/[slug]/export/route.ts
@@ -22,12 +29,15 @@
 
 import { getSession } from "../auth/session";
 import { getService } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { env } from "../lib/env";
 import { CollectionExportService } from "../services/collections/collection-export-service";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
+
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
@@ -42,69 +52,22 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
   return getService("collectionRegistryService");
 }
 
-function successResponse<T>(data: T, statusCode: number = 200): Response {
-  return Response.json(
-    { data },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
-      },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Collections Schema Export API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-async function checkAuthentication(
-  request: Request
-): Promise<{ userId: string } | Response> {
-  // getSession returns GetSessionResult; extract user or null for backward compat
+async function requireUser(request: Request): Promise<{ id: string }> {
+  // getSession returns GetSessionResult; throw the unified auth-required
+  // error so the boundary returns canonical 401.
   const result = await getSession(request, env.NEXTLY_SECRET_RESOLVED || "");
   const user = result.authenticated ? result.user : null;
   if (!user) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
+    throw NextlyError.authRequired();
   }
-  return { userId: user.id };
+  return { id: user.id };
 }
 
 /**
  * GET handler for exporting a collection to code-first format.
  *
  * Requires authentication and read permission for the collection.
- * Generates `defineCollection()` code from the collection's field configuration.
+ * Generates `defineCollection()` code from the collection's field config.
  *
  * Query Parameters:
  * - includeAccess: Include access control placeholder comments (default: true)
@@ -115,68 +78,33 @@ async function checkAuthentication(
  * Response Codes:
  * - 200 OK: Code generated successfully (JSON or file download)
  * - 401 Unauthorized: Authentication required
- * - 403 Forbidden: User does not have read permission for this collection
+ * - 403 Forbidden: Caller lacks read permission for this collection
  * - 404 Not Found: Collection with slug does not exist
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Export failed
- *
- * @param request - Next.js Request object
- * @param context - Route context with params Promise containing slug
- * @returns Response with JSON containing generated code, or file download
- *
- * @example
- * ```typescript
- * // Get as JSON (default)
- * const response = await fetch('/api/collections/schema/blog_posts/export', {
- *   headers: { 'Authorization': 'Bearer <token>' },
- * });
- * const { data: { code } } = await response.json();
- *
- * // Get as downloadable TypeScript file
- * const response = await fetch(
- *   '/api/collections/schema/blog_posts/export?download=true',
- *   { headers: { 'Authorization': 'Bearer <token>' } }
- * );
- * // Triggers file download: blog_posts.ts
- *
- * // Get as JavaScript without placeholders
- * const response = await fetch(
- *   '/api/collections/schema/blog_posts/export?format=javascript&includeAccess=false&includeHooks=false',
- *   { headers: { 'Authorization': 'Bearer <token>' } }
- * );
- * ```
  */
-export async function GET(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    const authResult = await checkAuthentication(request);
-    if (authResult instanceof Response) {
-      return authResult;
-    }
-
-    const { userId } = authResult;
+export const GET = withErrorHandler(
+  async (request: Request, context: RouteContext) => {
+    const user = await requireUser(request);
     const { slug } = await context.params;
 
-    const isAdmin = await isSuperAdmin(userId);
+    const isAdmin = await isSuperAdmin(user.id);
     if (!isAdmin) {
-      const canRead = await hasPermission(userId, "read", slug);
+      const canRead = await hasPermission(user.id, "read", slug);
       if (!canRead) {
-        return errorResponse(
-          `Forbidden: you do not have read permission for collection '${slug}'`,
-          403,
-          "FORBIDDEN"
-        );
+        throw NextlyError.forbidden({
+          logContext: {
+            userId: user.id,
+            required: `read-${slug}`,
+            operation: "export-collection",
+          },
+        });
       }
     }
 
     const registry = await getCollectionRegistry();
-
     const collection = await registry.getCollection(slug);
 
     const { searchParams } = new URL(request.url);
-
     const includeAccessPlaceholders =
       searchParams.get("includeAccess") !== "false";
     const includeHooksPlaceholders =
@@ -197,6 +125,9 @@ export async function GET(
       const extension = format === "typescript" ? ".ts" : ".js";
       const filename = `${slug}${extension}`;
 
+      // Binary/text-stream responses bypass `createSuccessResponse` so the
+      // body is the raw code rather than the JSON envelope.
+      // `withErrorHandler` still sets `X-Request-Id` on the way out.
       return new Response(code, {
         status: 200,
         headers: {
@@ -206,8 +137,6 @@ export async function GET(
       });
     }
 
-    return successResponse({ code });
-  } catch (error) {
-    return handleError(error, "Export collection");
+    return createSuccessResponse({ code });
   }
-}
+);
