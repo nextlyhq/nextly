@@ -1,31 +1,14 @@
-import {
-  handleChangePassword,
-  type ChangePasswordHandlerDeps,
-} from "./change-password.js";
-import { handleCsrf, type CsrfHandlerDeps } from "./csrf.js";
-import {
-  handleForgotPassword,
-  type ForgotPasswordHandlerDeps,
-} from "./forgot-password.js";
-import { handleLogin, type LoginHandlerDeps } from "./login.js";
-import { handleLogout, type LogoutHandlerDeps } from "./logout.js";
-import { handleRefresh, type RefreshHandlerDeps } from "./refresh.js";
-import { handleRegister, type RegisterHandlerDeps } from "./register.js";
-import {
-  handleResetPassword,
-  type ResetPasswordHandlerDeps,
-} from "./reset-password.js";
-import { handleSession, type SessionHandlerDeps } from "./session.js";
-import {
-  handleSetupStatus,
-  handleSetup,
-  type SetupHandlerDeps,
-} from "./setup.js";
-import {
-  handleVerifyEmail,
-  handleResendVerification,
-  type VerifyEmailHandlerDeps,
-} from "./verify-email.js";
+import { handleChangePassword } from "./change-password.js";
+import { handleCsrf } from "./csrf.js";
+import { handleForgotPassword } from "./forgot-password.js";
+import { handleLogin } from "./login.js";
+import { handleLogout } from "./logout.js";
+import { handleRefresh } from "./refresh.js";
+import { handleRegister } from "./register.js";
+import { handleResetPassword } from "./reset-password.js";
+import { handleSession } from "./session.js";
+import { handleSetupStatus, handleSetup } from "./setup.js";
+import { handleVerifyEmail, handleResendVerification } from "./verify-email.js";
 
 /**
  * Combined dependency interface for all auth handlers.
@@ -42,6 +25,13 @@ export interface AuthRouterDeps {
   lockoutDurationSeconds: number;
   loginStallTimeMs: number;
   requireEmailVerification: boolean;
+  /**
+   * Spec §13.2 opt-in flag. When false (the spec default), email-conflict
+   * registrations silent-success with a generic message. When true, the
+   * handler returns 409 DUPLICATE so the user knows the email is in use
+   * (trades enumeration risk for UX).
+   */
+  revealRegistrationConflict: boolean;
   allowedOrigins: string[];
 
   // User lookups (widest return type to satisfy all handlers)
@@ -94,24 +84,23 @@ export interface AuthRouterDeps {
   }) => Promise<{ id: string; email: string; name: string }>;
   seedPermissions: () => Promise<void>;
 
+  // PR 5 (unified-error-system): these three throw NextlyError on failure
+  // and return the success-case data directly. Result-shape envelopes are
+  // gone — handlers catch NextlyError and serialise via toResponseJSON.
   registerUser: (data: {
     email: string;
     password: string;
     name: string;
-  }) => Promise<{
-    success: boolean;
-    user?: { id: string; email: string; name: string };
-    error?: string;
-  }>;
+  }) => Promise<{ id: string; email: string; name: string | null }>;
 
   generatePasswordResetToken: (
     email: string,
     redirectPath?: string
-  ) => Promise<{ success: boolean; token?: string }>;
+  ) => Promise<{ token?: string }>;
   resetPasswordWithToken: (
     token: string,
     newPassword: string
-  ) => Promise<{ success: boolean; error?: string; email?: string }>;
+  ) => Promise<{ email: string }>;
   changePassword: (
     userId: string,
     currentPassword: string,
