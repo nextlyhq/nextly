@@ -99,6 +99,10 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
       // F4 Option E PR 4: real terminal-channel PromptDispatcher.
       // Throws TTYRequiredError on non-TTY runtimes; the pipeline's
       // classifyErrorCode maps that to CONFIRMATION_REQUIRED_NO_TTY.
+      // F5 PR 5 wired RealClassifier + RealPreCleanupExecutor at the
+      // code-first HMR site (reload-config.ts). This DI-bound entry point
+      // is used by other internal callers and will be wired in PR 6 alongside
+      // the UI-first dispatcher path.
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),

@@ -25,6 +25,7 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply.js";
+import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier.js";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url.js";
 import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields.js";
 import { diffSnapshots } from "../domains/schema/pipeline/diff/diff.js";
@@ -34,12 +35,11 @@ import type {
   Operation,
   TableSpec,
 } from "../domains/schema/pipeline/diff/types.js";
+import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor.js";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
 import type { PromptDispatcher } from "../domains/schema/pipeline/pushschema-pipeline-interfaces.js";
 import {
-  noopClassifier,
   noopMigrationJournal,
-  noopPreCleanupExecutor,
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline.js";
@@ -263,10 +263,14 @@ export async function reloadNextlyConfig(opts?: {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
-        classifier: noopClassifier,
+        // F5 PR 5: real classifier emits add_not_null_with_nulls,
+        // add_required_field_no_default, and type_change events from the
+        // typed Operation[] stream. ClackTerminalPromptDispatcher renders
+        // them in the terminal; RealPreCleanupExecutor runs UPDATE/DELETE.
+        classifier: new RealClassifier(),
         promptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: noopPreCleanupExecutor,
+        preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
       });
       return pipeline.apply({
