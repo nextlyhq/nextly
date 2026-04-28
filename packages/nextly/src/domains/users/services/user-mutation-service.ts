@@ -36,10 +36,13 @@ import type {
   UserUpdateData,
 } from "@nextly/types/database-operations";
 
+// PR 4 of unified-error-system migration: ServiceError result-shapes →
+// NextlyError throws. Methods now return data directly or throw.
+import { isDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
-import { mapDbErrorToServiceError } from "../../../services/lib/db-error";
 import type { Logger } from "../../../services/shared";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 
@@ -55,6 +58,22 @@ import type { UserExtSchemaService } from "./user-ext-schema-service";
  * so we use `Record<string, unknown>` with an intersection of `Table` for Drizzle API compat.
  */
 type DrizzleRuntimeTable = Table & Record<string, unknown>;
+
+/**
+ * Lint-safe replacement for the unsafe built-in `Function` type used as a
+ * callable property holder. The Drizzle query builder methods we access
+ * (insert/update/delete/...) return chainable thenables whose static types
+ * we deliberately drop. The method type returns the same chainable shape
+ * so dot-chaining keeps typing, and awaits resolve to
+ * `Record<string, unknown>[]` (a row list) since that is the only shape
+ * we ever consume here.
+ */
+interface DrizzleChain {
+  [key: string]: DrizzleChainMethod;
+}
+type DrizzleChainMethod = (
+  ...args: unknown[]
+) => DrizzleChain & PromiseLike<Record<string, unknown>[]>;
 
 /**
  * Minimal interface for the Drizzle transaction object returned by
@@ -104,24 +123,12 @@ export interface UpdateUserData {
 }
 
 /**
- * Response type for user mutation operations
+ * Response type for user mutation operations.
+ *
+ * Post-migration (PR 4): no `success`/`statusCode`/`message` envelope —
+ * methods return the user directly on success or throw NextlyError.
  */
-export interface UserMutationResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  data: MinimalUser | null;
-}
-
-/**
- * Response type for delete operations
- */
-export interface DeleteUserResponse {
-  success: boolean;
-  message: string;
-  statusCode: number;
-  data: null;
-}
+export type UserMutationResponse = MinimalUser;
 
 export class UserMutationService extends BaseService {
   private readonly userConfig?: UserConfig;
@@ -305,7 +312,16 @@ export class UserMutationService extends BaseService {
   private readonly emailService?: EmailService;
 
   /**
-   * Create a new local user with password authentication
+   * Create a new local user with password authentication.
+   *
+   * §13.8 + spec note: "User with this email already exists" is sensitive
+   * (account enumeration) and now surfaces as a generic
+   * NextlyError.duplicate(). Validation errors carry per-field paths but
+   * never echo values; identifiers go to logContext.
+   *
+   * @throws NextlyError(VALIDATION_ERROR) on input validation / invalid role ids.
+   * @throws NextlyError(DUPLICATE) when the email is already registered.
+   * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async createLocalUser(
     userData: CreateLocalUserData
@@ -319,12 +335,15 @@ export class UserMutationService extends BaseService {
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getCreateSchema().safeParse(userData);
       if (!validation.success) {
-        return {
-          success: false,
-          statusCode: 400,
-          message: `Invalid user data: ${validation.error.issues.map(i => i.message).join(", ")}`,
-          data: null,
-        };
+        throw NextlyError.validation({
+          errors: validation.error.issues.map(i => ({
+            path: i.path.join(".") || "input",
+            code: i.code.toUpperCase(),
+            message: i.message,
+          })),
+          // Email goes to logContext only — never echoed in the public message.
+          logContext: { entity: "user", email: userData.email },
+        });
       }
 
       // Derive password hash once (supports pre-hashed inputs while prioritizing plain passwords)
@@ -339,40 +358,48 @@ export class UserMutationService extends BaseService {
 
       const { users } = this.tables;
 
-      // Check existing
+      // Check existing. Account-enumeration sensitive: the public message
+      // stays generic ("Resource already exists.") via NextlyError.duplicate;
+      // the email + entity flow only through logContext.
       const existingUser = await this.db.query.users.findFirst({
         where: eq(users.email, userData.email),
         columns: { id: true, email: true },
       });
       if (existingUser) {
-        return {
-          success: false,
-          statusCode: 409,
-          message: "User with this email already exists",
-          data: null,
-        };
+        throw NextlyError.duplicate({
+          logContext: { entity: "user", email: userData.email },
+        });
       }
 
-      // If roles are provided, validate they all exist before creating the user
+      // If roles are provided, validate they all exist before creating the user.
+      // Post-migration: services.roles.getRoleById throws NextlyError(NOT_FOUND)
+      // when missing rather than returning {success, data} — catch and treat
+      // any thrown error as "role not found" so we batch them into one
+      // VALIDATION_ERROR for the caller.
       if (userData.roles && userData.roles.length > 0) {
         const uniqueRoleIds = Array.from(new Set(userData.roles));
         const services = new ServiceContainer(this.adapter);
         const invalidRoleIds: string[] = [];
         for (const rid of uniqueRoleIds) {
           try {
-            const role = await services.roles.getRoleById(rid);
-            if (!role.success || !role.data) invalidRoleIds.push(rid);
+            await services.roles.getRoleById(rid);
           } catch {
             invalidRoleIds.push(rid);
           }
         }
         if (invalidRoleIds.length > 0) {
-          return {
-            success: false,
-            statusCode: 400,
-            message: `Invalid role IDs: ${invalidRoleIds.join(", ")}`,
-            data: null,
-          };
+          // §13.8: per-error message names the field (`roles`) but not the
+          // bad values; the invalid ids go to logContext.
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "roles",
+                code: "INVALID_ROLE_ID",
+                message: "One or more role ids are invalid.",
+              },
+            ],
+            logContext: { invalidRoleIds },
+          });
         }
       }
 
@@ -397,9 +424,7 @@ export class UserMutationService extends BaseService {
       const userExtTable = hasExt ? this.getUserExtTable() : null;
       let customFieldValues: Record<string, unknown> = {};
       if (hasExt) {
-        customFieldValues = this.extractCustomFieldValues(
-          userData as Record<string, unknown>
-        );
+        customFieldValues = this.extractCustomFieldValues(userData);
       }
 
       // Wrap user + user_ext inserts in a transaction for atomicity.
@@ -459,12 +484,15 @@ export class UserMutationService extends BaseService {
         },
       });
       if (!user) {
-        return {
-          success: false,
-          statusCode: 500,
-          message: "Failed to create user",
-          data: null,
-        };
+        // We just inserted; if we cannot read the row back, something is
+        // genuinely wrong with the connection or the schema. Surface as an
+        // internal error with the email captured in logContext.
+        throw NextlyError.internal({
+          logContext: {
+            reason: "post-insert-readback-missing",
+            email: userData.email,
+          },
+        });
       }
 
       // 🔹 If this is the first user ever, ensure super-admin exists and assign it
@@ -493,7 +521,10 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      // ✅ Send email verification if requested
+      // ✅ Send email verification if requested.
+      // Post-migration: generateEmailVerificationToken returns `{ token? }`
+      // directly (no `.success`) and throws NextlyError on real DB faults.
+      // Email-send failures are isolated so the user creation still succeeds.
       if (userData.sendWelcomeEmail && this.emailService) {
         try {
           // Generate verification token (without sending a separate email)
@@ -503,7 +534,7 @@ export class UserMutationService extends BaseService {
               disableEmail: true,
             });
 
-          if (tokenResult.success && tokenResult.token) {
+          if (tokenResult.token) {
             await this.emailService.sendEmailVerificationEmail(
               user.email,
               { name: user.name ?? null, email: user.email },
@@ -519,34 +550,40 @@ export class UserMutationService extends BaseService {
       }
 
       return {
-        success: true,
-        statusCode: 201,
-        message: "User created successfully",
-        data: {
-          id: user.id,
-          email: user.email,
-          emailVerified: user.emailVerified ?? null,
-          name: user.name ?? null,
-          image: user.image ?? null,
-          roles: userData.roles ?? null,
-          isActive: user.isActive ?? undefined,
-          createdAt: user.createdAt ?? undefined,
-          updatedAt: user.updatedAt ?? undefined,
-          // Merge custom field values as top-level properties
-          ...(hasExt && !this.userExtDisabled ? customFieldValues : {}),
-        },
+        id: user.id,
+        email: user.email,
+        emailVerified: user.emailVerified ?? null,
+        name: user.name ?? null,
+        image: user.image ?? null,
+        roles: userData.roles ?? null,
+        isActive: user.isActive ?? undefined,
+        createdAt: user.createdAt ?? undefined,
+        updatedAt: user.updatedAt ?? undefined,
+        // Merge custom field values as top-level properties
+        ...(hasExt && !this.userExtDisabled ? customFieldValues : {}),
       };
     } catch (err) {
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to create user",
-        "unique-violation": "User with this email already exists",
-        constraint: "User with this email already exists",
-      });
+      // Re-throw NextlyError unchanged (validation, duplicate, internal, ...).
+      // Pattern B: classify DB unique-violations as DUPLICATE so the public
+      // message stays generic; everything else routes through fromDatabaseError.
+      if (NextlyError.is(err)) throw err;
+      if (isDbError(err) && err.kind === "unique-violation") {
+        throw NextlyError.duplicate({
+          logContext: { entity: "user", email: userData.email },
+        });
+      }
+      throw NextlyError.fromDatabaseError(err);
     }
   }
 
   /**
-   * Update an existing user's data
+   * Update an existing user's data.
+   *
+   * @throws NextlyError(VALIDATION_ERROR) on schema-validation failure or
+   *   when no actionable changes are provided.
+   * @throws NextlyError(NOT_FOUND) when the user does not exist.
+   * @throws NextlyError(DUPLICATE) on email conflicts.
+   * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async updateUser(
     userId: number | string,
@@ -556,19 +593,20 @@ export class UserMutationService extends BaseService {
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getUpdateSchema().safeParse(changes);
       if (!validation.success) {
-        return {
-          success: false,
-          statusCode: 400,
-          message: `Invalid update data: ${validation.error.issues
-            .map(i => i.message)
-            .join(", ")}`,
-          data: null,
-        };
+        throw NextlyError.validation({
+          errors: validation.error.issues.map(i => ({
+            path: i.path.join(".") || "input",
+            code: i.code.toUpperCase(),
+            message: i.message,
+          })),
+          logContext: { entity: "user", userId },
+        });
       }
 
       const { users } = this.tables;
 
-      // 1) Load current user
+      // 1) Load current user. §13.8 + spec note: user existence is sensitive
+      // (account enumeration); the public message stays generic.
       const currentUser = await this.db.query.users.findFirst({
         where: eq(users.id, userId),
         columns: {
@@ -582,12 +620,9 @@ export class UserMutationService extends BaseService {
       });
 
       if (!currentUser) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "User not found",
-          data: null,
-        };
+        throw NextlyError.notFound({
+          logContext: { entity: "user", id: userId },
+        });
       }
 
       // 2) Build updateData (only include fields that actually change)
@@ -608,12 +643,15 @@ export class UserMutationService extends BaseService {
           });
 
           if (existing && existing.id !== currentUser.id) {
-            return {
-              success: false,
-              statusCode: 409,
-              message: "Another user with this email already exists",
-              data: null,
-            };
+            // §13.8 + account-enumeration: generic public message; the
+            // conflict reason + the user/target ids go to logContext.
+            throw NextlyError.duplicate({
+              logContext: {
+                entity: "user",
+                reason: "email-conflict",
+                userId: currentUser.id,
+              },
+            });
           }
         }
 
@@ -688,13 +726,14 @@ export class UserMutationService extends BaseService {
           try {
             const now = new Date();
             // Required by Drizzle ORM — runtime-generated tables need untyped db access
-            const db = this.db as unknown as Record<string, Function>;
-            // Check if user_ext row exists
-            const existingExt = (await db
+            const db = this.db as unknown as DrizzleChain;
+            // Check if user_ext row exists. DrizzleChain await resolves
+            // to Record<string, unknown>[] already.
+            const existingExt = await db
               .select({ id: userExtTable.id })
               .from(userExtTable)
               .where(eq(userExtTable.user_id as Column, currentUser.id))
-              .limit(1)) as Record<string, unknown>[];
+              .limit(1);
 
             if (existingExt.length > 0) {
               // UPDATE existing row with changed fields only
@@ -760,19 +799,25 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      // If no valid changes provided, return 400
+      // If no valid changes provided, throw a validation error so callers
+      // can surface a 400. §13.8: per-error message names the (synthetic)
+      // field but never the value.
       if (
         !hasFieldUpdates &&
         !hasRoleUpdates &&
         !hasCustomFieldChanges &&
         !changes.sendWelcomeEmail
       ) {
-        return {
-          success: false,
-          statusCode: 400,
-          message: "No changes provided",
-          data: null,
-        };
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "input",
+              code: "NO_CHANGES",
+              message: "At least one updatable field must be provided.",
+            },
+          ],
+          logContext: { entity: "user", userId: currentUser.id },
+        });
       }
 
       // Fetch updated user
@@ -794,13 +839,14 @@ export class UserMutationService extends BaseService {
         const userExtTable = this.getUserExtTable();
         if (userExtTable) {
           try {
-            // Required by Drizzle ORM — runtime-generated tables need untyped db access
-            const extDb = this.db as unknown as Record<string, Function>;
-            const extRows = (await extDb
+            // Required by Drizzle ORM — runtime-generated tables need
+            // untyped db access. DrizzleChain await resolves to row list.
+            const extDb = this.db as unknown as DrizzleChain;
+            const extRows = await extDb
               .select()
               .from(userExtTable)
               .where(eq(userExtTable.user_id as Column, currentUser.id))
-              .limit(1)) as Record<string, unknown>[];
+              .limit(1);
 
             if (extRows.length > 0) {
               const fieldNames = this.getCustomFieldNames();
@@ -828,49 +874,57 @@ export class UserMutationService extends BaseService {
       }
 
       return {
-        success: true,
-        statusCode: 200,
-        message: "User updated successfully",
-        data: {
-          id: user!.id,
-          email: user!.email,
-          emailVerified: user!.emailVerified ?? null,
-          name: user!.name ?? null,
-          image: user!.image ?? null,
-          roles: changes.roles ?? null,
-          isActive: user!.isActive ?? undefined,
-          // Merge custom field values as top-level properties
-          ...(hasExt ? responseCustomFields : {}),
-        },
+        id: user!.id,
+        email: user!.email,
+        emailVerified: user!.emailVerified ?? null,
+        name: user!.name ?? null,
+        image: user!.image ?? null,
+        roles: changes.roles ?? null,
+        isActive: user!.isActive ?? undefined,
+        // Merge custom field values as top-level properties
+        ...(hasExt ? responseCustomFields : {}),
       };
     } catch (err) {
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to update user",
-        "unique-violation": "Another user with this email already exists",
-        constraint: "Another user with this email already exists",
-      });
+      // Re-throw NextlyError (validation, not-found, duplicate) unchanged.
+      // Pattern B: classify DB unique-violations as DUPLICATE so the public
+      // message stays generic; everything else routes through fromDatabaseError.
+      if (NextlyError.is(err)) throw err;
+      if (isDbError(err) && err.kind === "unique-violation") {
+        throw NextlyError.duplicate({
+          logContext: { entity: "user", reason: "email-conflict", userId },
+        });
+      }
+      throw NextlyError.fromDatabaseError(err);
     }
   }
 
   /**
-   * Delete a user and all related data (roles, accounts)
+   * Delete a user and all related data (roles, accounts).
+   *
+   * §13.8 + spec note: user existence is sensitive (account enumeration);
+   * the public message stays generic. The id flows only through logContext.
+   *
+   * @throws NextlyError(NOT_FOUND) when the user does not exist.
+   * @throws NextlyError on DB errors via fromDatabaseError.
    */
-  async deleteUser(userId: number | string): Promise<DeleteUserResponse> {
+  async deleteUser(userId: number | string): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
 
     // Check if user exists
-    const user = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: { id: true },
-    });
+    let user;
+    try {
+      user = await this.db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { id: true },
+      });
+    } catch (err) {
+      throw NextlyError.fromDatabaseError(err);
+    }
 
     if (!user) {
-      return {
-        success: false,
-        message: "User not found",
-        statusCode: 404,
-        data: null,
-      };
+      throw NextlyError.notFound({
+        logContext: { entity: "user", id: userId },
+      });
     }
 
     // Delete user and related data in a single Drizzle transaction so that
@@ -878,43 +932,41 @@ export class UserMutationService extends BaseService {
     // BaseService.withTransaction yields `unknown` (it can't reference the
     // dialect-specific Drizzle transaction type without binding to all three
     // driver packages); the fluent query API is identical across dialects.
-    await this.withTransaction(async tx => {
-      const txDb = tx as DrizzleTransactionLike;
-      // Delete user_ext row if custom fields are configured
-      if (this.hasCustomFields()) {
-        const userExtTable = this.getUserExtTable();
-        if (userExtTable) {
-          try {
-            await txDb
-              .delete(userExtTable)
-              .where(eq(userExtTable.user_id as Column, userId));
-          } catch (err) {
-            // user_ext table may not exist on this dialect — skip and disable
-            // ext for the rest of this process so subsequent calls don't retry.
-            const cause = err instanceof Error ? err.message : String(err);
-            this.logger.warn(
-              `user_ext delete skipped during deleteUser: ${cause}`
-            );
-            this.userExtDisabled = true;
+    try {
+      await this.withTransaction(async tx => {
+        const txDb = tx as DrizzleTransactionLike;
+        // Delete user_ext row if custom fields are configured
+        if (this.hasCustomFields()) {
+          const userExtTable = this.getUserExtTable();
+          if (userExtTable) {
+            try {
+              await txDb
+                .delete(userExtTable)
+                .where(eq(userExtTable.user_id as Column, userId));
+            } catch (err) {
+              // user_ext table may not exist on this dialect — skip and disable
+              // ext for the rest of this process so subsequent calls don't retry.
+              const cause = err instanceof Error ? err.message : String(err);
+              this.logger.warn(
+                `user_ext delete skipped during deleteUser: ${cause}`
+              );
+              this.userExtDisabled = true;
+            }
           }
         }
-      }
 
-      // Delete user roles
-      await txDb.delete(userRoles).where(eq(userRoles.userId, userId));
+        // Delete user roles
+        await txDb.delete(userRoles).where(eq(userRoles.userId, userId));
 
-      // Delete user accounts
-      await txDb.delete(accounts).where(eq(accounts.userId, userId));
+        // Delete user accounts
+        await txDb.delete(accounts).where(eq(accounts.userId, userId));
 
-      // Delete user
-      await txDb.delete(users).where(eq(users.id, userId));
-    });
-
-    return {
-      success: true,
-      message: "User deleted successfully",
-      statusCode: 200,
-      data: null,
-    };
+        // Delete user
+        await txDb.delete(users).where(eq(users.id, userId));
+      });
+    } catch (err) {
+      if (NextlyError.is(err)) throw err;
+      throw NextlyError.fromDatabaseError(err);
+    }
   }
 }

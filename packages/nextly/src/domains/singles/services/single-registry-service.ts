@@ -28,7 +28,10 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
-import { ServiceError, ServiceErrorCode } from "../../../errors";
+// PR 4 migration: ServiceError throws replaced with NextlyError per spec
+// §13.8 — public messages stay generic ("Resource already exists.", etc.)
+// while identifiers (slug, source, conflicting names) move into logContext.
+import { NextlyError } from "../../../errors";
 import type {
   DynamicSingleInsert,
   DynamicSingleRecord,
@@ -223,7 +226,8 @@ export class SingleRegistryService extends BaseRegistryService<
   /**
    * Register a new Single in the registry.
    *
-   * @throws ServiceError if Single with same slug already exists
+   * @throws NextlyError(DUPLICATE) if a Single with the same slug already exists.
+   * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerSingle(
     data: DynamicSingleInsert
@@ -234,11 +238,11 @@ export class SingleRegistryService extends BaseRegistryService<
 
     const existing = await this.getSingleBySlug(data.slug);
     if (existing) {
-      throw new ServiceError(
-        ServiceErrorCode.DUPLICATE_KEY,
-        `Single with slug "${data.slug}" already exists`,
-        { slug: data.slug }
-      );
+      // §13.8: generic "Resource already exists." — slug stays in logContext
+      // for operator visibility but never on the wire.
+      throw NextlyError.duplicate({
+        logContext: { reason: "single-slug-conflict", slug: data.slug },
+      });
     }
 
     const fieldsJson = JSON.stringify(data.fields);
@@ -261,7 +265,9 @@ export class SingleRegistryService extends BaseRegistryService<
 
       return this.deserializeRecord(result);
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Spec §8.2 — DB errors map to NextlyError via fromDatabaseError; this
+      // produces a generic public message and rich logContext (dbKind/dbCode).
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -282,11 +288,10 @@ export class SingleRegistryService extends BaseRegistryService<
     );
 
     if (existing) {
-      throw new ServiceError(
-        ServiceErrorCode.DUPLICATE_KEY,
-        `Single with slug "${data.slug}" already exists`,
-        { slug: data.slug }
-      );
+      // §13.8: same as registerSingle — slug only in logContext.
+      throw NextlyError.duplicate({
+        logContext: { reason: "single-slug-conflict", slug: data.slug },
+      });
     }
 
     const fieldsJson = JSON.stringify(data.fields);
@@ -312,7 +317,8 @@ export class SingleRegistryService extends BaseRegistryService<
   /**
    * Update a Single's metadata.
    *
-   * @throws ServiceError if Single not found or locked and not from code source
+   * @throws NextlyError(NOT_FOUND) when no Single matches the slug.
+   * @throws NextlyError(FORBIDDEN) when the Single is locked and the source isn't "code".
    */
   async updateSingle(
     slug: string,
@@ -330,10 +336,14 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      throw ServiceError.forbidden(
-        `Single "${slug}" is locked and cannot be modified from ${options?.source ?? "UI"}`,
-        { slug, source: options?.source }
-      );
+      // Generic FORBIDDEN — slug + source go to logContext only.
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "single-locked",
+          slug,
+          source: options?.source ?? "UI",
+        },
+      });
     }
 
     const updateData: Record<string, unknown> = {
@@ -385,17 +395,20 @@ export class SingleRegistryService extends BaseRegistryService<
       );
 
       if (results.length === 0) {
-        throw ServiceError.notFound(`Single "${slug}" not found`, { slug });
+        // §13.8: generic "Not found." — slug in logContext only.
+        throw NextlyError.notFound({ logContext: { slug } });
       }
 
       this.logger.info("Single updated", { slug });
 
       return this.deserializeRecord(results[0]);
     } catch (error) {
-      if (error instanceof ServiceError) {
+      // Preserve already-mapped NextlyErrors (notFound above, forbidden above).
+      // Anything else is treated as a raw DB error.
+      if (NextlyError.is(error)) {
         throw error;
       }
-      throw ServiceError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -418,11 +431,15 @@ export class SingleRegistryService extends BaseRegistryService<
     const existing = await this.getSingle(slug);
 
     if (!options?.force) {
-      throw ServiceError.forbidden(
-        `Single "${slug}" cannot be deleted. Singles represent persistent site-wide configuration. ` +
-          `Use { force: true } for admin/CLI cleanup operations.`,
-        { slug }
-      );
+      // Generic FORBIDDEN per §13.8 — the policy explanation is operator-only.
+      // Public clients see "You don't have permission to perform this action."
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "single-requires-force-delete",
+          slug,
+          hint: "Singles represent persistent site-wide configuration. Pass { force: true } for admin/CLI cleanup.",
+        },
+      });
     }
 
     if (existing.locked) {
@@ -439,7 +456,8 @@ export class SingleRegistryService extends BaseRegistryService<
       );
 
       if (count === 0) {
-        throw ServiceError.notFound(`Single "${slug}" not found`, { slug });
+        // §13.8: generic "Not found." — slug in logContext only.
+        throw NextlyError.notFound({ logContext: { slug } });
       }
 
       this.logger.info("Single deleted", { slug, force: true });
@@ -467,10 +485,12 @@ export class SingleRegistryService extends BaseRegistryService<
         }
       }
     } catch (error) {
-      if (error instanceof ServiceError) {
+      // Preserve already-mapped NextlyErrors (the notFound above, forbidden
+      // above). Raw DB errors map via fromDatabaseError per spec §8.2.
+      if (NextlyError.is(error)) {
         throw error;
       }
-      throw ServiceError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 

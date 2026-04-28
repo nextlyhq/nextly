@@ -152,14 +152,14 @@ export function buildAuthRouterDeps(
         const extTable = userExtSchemaService.generateRuntimeSchema(userFields);
         const { eq } = await import("drizzle-orm");
         const adapter = getService("adapter");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = adapter.getDrizzle() as any;
+
+        const db = adapter.getDrizzle();
 
         const rows = (await db
           .select()
           .from(extTable)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .where(eq((extTable as any).user_id, userId))
+
+          .where(eq(extTable.user_id, userId))
           .limit(1)) as Record<string, unknown>[];
 
         if (!rows[0]) return {};
@@ -286,21 +286,29 @@ export function buildAuthRouterDeps(
     },
 
     registerUser: async data => {
+      // PR 4 (unified-error-system): authService.registerUser now returns
+      // the created user directly and throws NextlyError on failure.
+      // Adapt to the bridge's `{ success, error?, user? }` contract by
+      // catching errors and surfacing the public message.
       const authService = getService("authService");
-      const result = await authService.registerUser(data);
-      if (result.success) {
+      try {
+        const user = await authService.registerUser(data);
         return {
           success: true,
-          user: result.data
+          user: user
             ? {
-                id: result.data.id,
-                email: result.data.email,
-                name: result.data.name,
+                id: user.id,
+                email: user.email,
+                name: user.name,
               }
             : undefined,
         };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : "Failed to register user",
+        };
       }
-      return { success: false, error: result.message || result.error };
     },
 
     generatePasswordResetToken: async (email, redirectPath) => {
@@ -312,36 +320,58 @@ export function buildAuthRouterDeps(
     },
 
     resetPasswordWithToken: async (token, newPassword) => {
+      // PR 4: resetPasswordWithToken returns `{ email }` and throws
+      // NextlyError on invalid/expired tokens. Translate to the bridge
+      // contract by catching the error.
       const authService = getService("authService");
-      const result = await authService.resetPasswordWithToken(
-        token,
-        newPassword
-      );
-      return {
-        success: result.success,
-        error: result.error,
-        email: result.email,
-      };
+      try {
+        const result = await authService.resetPasswordWithToken(
+          token,
+          newPassword
+        );
+        return {
+          success: true,
+          email: result.email,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          error:
+            err instanceof Error ? err.message : "Failed to reset password",
+        };
+      }
     },
 
     changePassword: async (userId, currentPassword, newPassword) => {
+      // PR 4: changePassword returns void and throws NextlyError.
       const authService = getService("authService");
-      const result = await authService.changePassword(
-        userId,
-        currentPassword,
-        newPassword
-      );
-      return { success: result.success, error: result.error };
+      try {
+        await authService.changePassword(userId, currentPassword, newPassword);
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error:
+            err instanceof Error ? err.message : "Failed to change password",
+        };
+      }
     },
 
     verifyEmail: async token => {
+      // PR 4: verifyEmail returns `{ email }` and throws NextlyError.
       const authService = getService("authService");
-      const result = await authService.verifyEmail(token);
-      return {
-        success: result.success,
-        error: result.error,
-        email: result.email,
-      };
+      try {
+        const result = await authService.verifyEmail(token);
+        return {
+          success: true,
+          email: result.email,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : "Failed to verify email",
+        };
+      }
     },
 
     resendVerificationEmail: async email => {

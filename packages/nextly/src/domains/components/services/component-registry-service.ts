@@ -3,7 +3,10 @@ import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
 import type { ComponentAdminOptions } from "../../../components/config/types";
 import { MAX_COMPONENT_NESTING_DEPTH } from "../../../components/config/validate-component";
-import { ServiceError, ServiceErrorCode } from "../../../errors";
+// PR 4 migration: switched the throw layer to NextlyError. Public messages now
+// follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
+// `logContext` so operators retain full diagnostic context.
+import { NextlyError } from "../../../errors";
 import type {
   DynamicComponentInsert,
   DynamicComponentRecord,
@@ -60,8 +63,14 @@ export interface ListComponentsOptions extends BaseListOptions {
   migrationStatus?: ComponentMigrationStatus;
 }
 
-export interface ListComponentsResult
-  extends BaseListResult<DynamicComponentRecord> {}
+/**
+ * Result of listing components with pagination info.
+ *
+ * Declared as a `type` alias rather than an empty `interface` because the latter
+ * triggers @typescript-eslint/no-empty-object-type. The named export is preserved
+ * for clearer call-site semantics even though it adds no members today.
+ */
+export type ListComponentsResult = BaseListResult<DynamicComponentRecord>;
 
 export interface EnrichedComponentSchema {
   label: string;
@@ -140,7 +149,8 @@ export class ComponentRegistryService extends BaseRegistryService<
   /**
    * Register a new Component in the registry.
    *
-   * @throws ServiceError if Component with same slug already exists
+   * @throws NextlyError(DUPLICATE) if a Component with the same slug already exists.
+   * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerComponent(
     data: DynamicComponentInsert
@@ -149,11 +159,11 @@ export class ComponentRegistryService extends BaseRegistryService<
 
     const existing = await this.getComponentBySlug(data.slug);
     if (existing) {
-      throw new ServiceError(
-        ServiceErrorCode.DUPLICATE_KEY,
-        `Component with slug "${data.slug}" already exists`,
-        { slug: data.slug }
-      );
+      // §13.8: generic public message; the conflicting slug stays out of the
+      // wire and lives in logContext for operator visibility.
+      throw NextlyError.duplicate({
+        logContext: { reason: "component-slug-conflict", slug: data.slug },
+      });
     }
 
     const now = this.formatDateForDb();
@@ -192,7 +202,9 @@ export class ComponentRegistryService extends BaseRegistryService<
 
       return this.deserializeRecord(result);
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Spec §8.2 — DB errors map to NextlyError via fromDatabaseError, which
+      // produces generic public messages and rich logContext (dbKind, dbCode).
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -208,11 +220,10 @@ export class ComponentRegistryService extends BaseRegistryService<
     );
 
     if (existing) {
-      throw new ServiceError(
-        ServiceErrorCode.DUPLICATE_KEY,
-        `Component with slug "${data.slug}" already exists`,
-        { slug: data.slug }
-      );
+      // §13.8: same as registerComponent — generic public message; slug in logContext.
+      throw NextlyError.duplicate({
+        logContext: { reason: "component-slug-conflict", slug: data.slug },
+      });
     }
 
     const now = this.formatDateForDb();
@@ -249,7 +260,8 @@ export class ComponentRegistryService extends BaseRegistryService<
   /**
    * Update a Component's metadata.
    *
-   * @throws ServiceError if Component not found or locked
+   * @throws NextlyError(NOT_FOUND) when no Component matches the slug.
+   * @throws NextlyError(FORBIDDEN) when the Component is locked and the source isn't "code".
    */
   async updateComponent(
     slug: string,
@@ -261,10 +273,14 @@ export class ComponentRegistryService extends BaseRegistryService<
     const existing = await this.getComponent(slug);
 
     if (existing.locked && options?.source !== "code") {
-      throw ServiceError.forbidden(
-        `Component "${slug}" is locked and cannot be modified from ${options?.source ?? "UI"}`,
-        { slug, source: options?.source }
-      );
+      // Generic FORBIDDEN per §13.8 — slug and source go to logContext only.
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "component-locked",
+          slug,
+          source: options?.source ?? "UI",
+        },
+      });
     }
 
     const updateData: Record<string, unknown> = {
@@ -310,19 +326,20 @@ export class ComponentRegistryService extends BaseRegistryService<
       );
 
       if (results.length === 0) {
-        throw ServiceError.notFound(`Component "${slug}" not found`, {
-          slug,
-        });
+        // §13.8: generic "Not found." — slug in logContext.
+        throw NextlyError.notFound({ logContext: { slug } });
       }
 
       this.logger.info("Component updated", { slug });
 
       return this.deserializeRecord(results[0]);
     } catch (error) {
-      if (error instanceof ServiceError) {
+      // Preserve already-mapped NextlyErrors (the notFound above, or a
+      // forbidden from the locked-check). Anything else is a raw DB error.
+      if (NextlyError.is(error)) {
         throw error;
       }
-      throw ServiceError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -335,24 +352,22 @@ export class ComponentRegistryService extends BaseRegistryService<
     const existing = await this.getComponent(slug);
 
     if (existing.locked) {
-      throw ServiceError.forbidden(
-        `Component "${slug}" is locked and cannot be deleted`,
-        { slug }
-      );
+      // Generic FORBIDDEN — slug-specific reason stays operator-side.
+      throw NextlyError.forbidden({
+        logContext: { reason: "component-locked-for-delete", slug },
+      });
     }
 
     const references = await this.findComponentReferences(slug);
 
     if (references.length > 0) {
-      const refDescriptions = references.map(
-        (ref: ComponentReference) =>
-          `${ref.entityType} "${ref.entitySlug}" in field "${ref.fieldPath}"`
-      );
-
-      throw ServiceError.conflict(
-        `Cannot delete component "${slug}": referenced by ${refDescriptions.join(", ")}`,
-        { slug, references }
-      );
+      // §13.8: CONFLICT factory carries a stable generic public message.
+      // The structured `references` payload is operator-only — putting it on
+      // logContext keeps it out of the wire while preserving full debug info.
+      throw NextlyError.conflict({
+        reason: "state",
+        logContext: { reason: "component-has-references", slug, references },
+      });
     }
 
     try {
@@ -368,10 +383,12 @@ export class ComponentRegistryService extends BaseRegistryService<
 
       this.logger.info("Component deleted", { slug });
     } catch (error) {
-      if (error instanceof ServiceError) {
+      // Preserve mapped NextlyErrors thrown from the locked / has-references
+      // checks above; raw DB errors map via fromDatabaseError.
+      if (NextlyError.is(error)) {
         throw error;
       }
-      throw ServiceError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -586,7 +603,7 @@ export class ComponentRegistryService extends BaseRegistryService<
     const slugs = this.collectComponentSlugs(fields);
 
     if (slugs.size === 0) {
-      return fields as EnrichedFieldConfig[];
+      return fields;
     }
 
     const componentMap = await this.fetchComponentsBySlugsBatch([...slugs]);
@@ -752,7 +769,7 @@ export class ComponentRegistryService extends BaseRegistryService<
               componentSchemas[slug] = {
                 label: component.label,
                 fields: componentFields,
-                admin: component.admin as ComponentAdminOptions | undefined,
+                admin: component.admin,
               };
             }
           }
@@ -878,7 +895,7 @@ export class ComponentRegistryService extends BaseRegistryService<
       admin: admin
         ? typeof admin === "string"
           ? (JSON.parse(admin) as ComponentAdminOptions)
-          : (admin as ComponentAdminOptions)
+          : admin
         : undefined,
       source: r.source as ComponentSource,
       locked: Boolean(r.locked),

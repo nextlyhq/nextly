@@ -5,7 +5,11 @@ import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
-import { ServiceError } from "../../../errors";
+// PR 4 migration: ServiceError throws replaced with NextlyError. The legacy
+// `ServiceError.fromDatabaseError` boundary maps to `NextlyError.fromDatabaseError`,
+// and the `instanceof ServiceError` rethrow guards become `NextlyError.is(...)`
+// so any error type travelling through the shim is preserved.
+import { NextlyError } from "../../../errors";
 import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
@@ -221,7 +225,7 @@ export class ComponentMutationService extends BaseService {
       const componentMeta =
         await this.registryService.getComponent(componentSlug);
       const tableName = componentMeta.tableName;
-      const componentFields = componentMeta.fields as FieldConfig[];
+      const componentFields = componentMeta.fields;
 
       const existing = await this.getExistingInstances(
         tableName,
@@ -268,8 +272,11 @@ export class ComponentMutationService extends BaseService {
         });
       }
     } catch (error) {
-      if (error instanceof ServiceError) throw error;
-      throw ServiceError.fromDatabaseError(error);
+      // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
+      // share the cross-realm brand) so factory-thrown errors aren't
+      // double-wrapped. Anything else is treated as a raw DB error.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -289,7 +296,7 @@ export class ComponentMutationService extends BaseService {
       const componentMeta =
         await this.registryService.getComponent(componentSlug);
       const tableName = componentMeta.tableName;
-      const componentFields = componentMeta.fields as FieldConfig[];
+      const componentFields = componentMeta.fields;
 
       const existing = await this.getExistingInstancesInTx(
         tx,
@@ -321,8 +328,10 @@ export class ComponentMutationService extends BaseService {
         await tx.insert(tableName, row, { returning: ["id"] });
       }
     } catch (error) {
-      if (error instanceof ServiceError) throw error;
-      throw ServiceError.fromDatabaseError(error);
+      // See saveSingleComponent — preserve already-mapped NextlyErrors and
+      // map raw DB errors via fromDatabaseError.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -349,7 +358,7 @@ export class ComponentMutationService extends BaseService {
       const componentMeta =
         await this.registryService.getComponent(componentSlug);
       const tableName = componentMeta.tableName;
-      const componentFields = componentMeta.fields as FieldConfig[];
+      const componentFields = componentMeta.fields;
 
       const existing = await this.getExistingInstances(
         tableName,
@@ -404,8 +413,10 @@ export class ComponentMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      if (error instanceof ServiceError) throw error;
-      throw ServiceError.fromDatabaseError(error);
+      // See saveSingleComponent — preserve already-mapped NextlyErrors and
+      // map raw DB errors via fromDatabaseError.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -433,7 +444,7 @@ export class ComponentMutationService extends BaseService {
       const componentMeta =
         await this.registryService.getComponent(componentSlug);
       const tableName = componentMeta.tableName;
-      const componentFields = componentMeta.fields as FieldConfig[];
+      const componentFields = componentMeta.fields;
 
       const existing = await this.getExistingInstancesInTx(
         tx,
@@ -487,8 +498,10 @@ export class ComponentMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      if (error instanceof ServiceError) throw error;
-      throw ServiceError.fromDatabaseError(error);
+      // See saveSingleComponent — preserve already-mapped NextlyErrors and
+      // map raw DB errors via fromDatabaseError.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -584,7 +597,7 @@ export class ComponentMutationService extends BaseService {
         if (!meta) continue;
 
         const tableName = meta.tableName;
-        const componentFields = meta.fields as FieldConfig[];
+        const componentFields = meta.fields;
         const instanceId = instance.id;
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -631,8 +644,10 @@ export class ComponentMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      if (error instanceof ServiceError) throw error;
-      throw ServiceError.fromDatabaseError(error);
+      // See saveSingleComponent — preserve already-mapped NextlyErrors and
+      // map raw DB errors via fromDatabaseError.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -710,7 +725,7 @@ export class ComponentMutationService extends BaseService {
         if (!meta) continue;
 
         const tableName = meta.tableName;
-        const componentFields = meta.fields as FieldConfig[];
+        const componentFields = meta.fields;
         const instanceId = instance.id;
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -751,8 +766,10 @@ export class ComponentMutationService extends BaseService {
         }
       }
     } catch (error) {
-      if (error instanceof ServiceError) throw error;
-      throw ServiceError.fromDatabaseError(error);
+      // See saveSingleComponent — preserve already-mapped NextlyErrors and
+      // map raw DB errors via fromDatabaseError.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 

@@ -24,41 +24,29 @@ import type {
   DatabaseInstance,
 } from "@nextly/types/database-operations";
 
+// PR 4 of unified-error-system migration: ServiceError result-shapes →
+// NextlyError throws. Methods now return data directly or throw.
+import { isDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
-import { mapDbErrorToServiceError } from "../../../services/lib/db-error";
 import type { Logger } from "../../../services/shared";
 
 import { UserQueryService } from "./user-query-service";
 
 /**
- * Response type for single user operations
+ * Response type for single user operations.
+ * Post-migration: data is returned directly (callers no longer destructure
+ * `.success`/`.data`); failures throw NextlyError.
  */
-export interface GetUserResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  data: MinimalUser | null;
-}
+export type GetUserResponse = MinimalUser;
 
 /**
- * Response type for account list operations
+ * Response type for account list operations.
+ * Post-migration: an empty array is returned when no accounts are linked,
+ * and DB failures throw NextlyError. The 404-when-empty behavior was an
+ * envelope quirk and not a real precondition violation.
  */
-export interface GetAccountsResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  data: UserAccount[] | null;
-}
-
-/**
- * Response type for password operations
- */
-export interface PasswordOperationResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  data: null;
-}
+export type GetAccountsResponse = UserAccount[];
 
 /**
  * Response type for unlink account operation
@@ -87,14 +75,22 @@ export class UserAccountService extends BaseService {
   // ========================================
 
   /**
-   * Get the current user's profile (delegates to getUserById)
+   * Get the current user's profile (delegates to getUserById).
+   *
+   * @throws NextlyError(NOT_FOUND) when the user does not exist.
    */
   async getCurrentUser(userId: number | string): Promise<GetUserResponse> {
     return this.queryService.getUserById(userId);
   }
 
   /**
-   * Update the current user's profile (name and image only)
+   * Update the current user's profile (name and image only).
+   *
+   * @throws NextlyError(NOT_FOUND) when the user does not exist
+   *   (propagated from queryService.getUserById).
+   * @throws NextlyError(DUPLICATE) on unique-violation collisions (e.g.
+   *   email already belongs to another user).
+   * @throws NextlyError on other DB errors via fromDatabaseError.
    */
   async updateCurrentUser(
     userId: number | string,
@@ -103,44 +99,41 @@ export class UserAccountService extends BaseService {
       image?: string;
     }
   ): Promise<GetUserResponse> {
-    try {
-      const { users } = this.tables;
+    // Validate that user exists first. getUserById throws NOT_FOUND when
+    // missing; we let that propagate unchanged.
+    await this.queryService.getUserById(userId);
 
-      // Validate that user exists first
-      const existingUser = await this.queryService.getUserById(userId);
-      if (!existingUser.success || !existingUser.data) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "User not found",
-          data: null,
-        };
-      }
+    const { users } = this.tables;
 
-      // Only allow updating name and image for current user
-      const updateData: Record<string, unknown> = {
-        updatedAt: new Date(),
-      };
+    // Only allow updating name and image for current user
+    const updateData: Record<string, unknown> = {
+      updatedAt: new Date(),
+    };
 
-      if (changes.name !== undefined) {
-        updateData.name = changes.name;
-      }
-
-      if (changes.image !== undefined) {
-        updateData.image = changes.image;
-      }
-
-      await this.db.update(users).set(updateData).where(eq(users.id, userId));
-
-      // Fetch and return updated user
-      return this.queryService.getUserById(userId);
-    } catch (error) {
-      return mapDbErrorToServiceError(error, {
-        defaultMessage: "Failed to update user profile",
-        "unique-violation": "Another user with this email already exists",
-        constraint: "Another user with this email already exists",
-      });
+    if (changes.name !== undefined) {
+      updateData.name = changes.name;
     }
+
+    if (changes.image !== undefined) {
+      updateData.image = changes.image;
+    }
+
+    try {
+      await this.db.update(users).set(updateData).where(eq(users.id, userId));
+    } catch (error) {
+      // Pattern B: unique-violation on (email) → DUPLICATE; everything else
+      // routes through fromDatabaseError. §13.8: no identifiers in the
+      // public message; the user id + a routing reason go to logContext.
+      if (isDbError(error) && error.kind === "unique-violation") {
+        throw NextlyError.duplicate({
+          logContext: { reason: "email-conflict", userId },
+        });
+      }
+      throw NextlyError.fromDatabaseError(error);
+    }
+
+    // Fetch and return updated user
+    return this.queryService.getUserById(userId);
   }
 
   // ========================================
@@ -148,46 +141,43 @@ export class UserAccountService extends BaseService {
   // ========================================
 
   /**
-   * Update a user's password hash
+   * Update a user's password hash.
+   *
+   * @throws NextlyError(NOT_FOUND) when the user does not exist.
+   * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async updatePasswordHash(
     userId: number | string,
     passwordHash: string
-  ): Promise<PasswordOperationResponse> {
-    try {
-      const { users } = this.tables;
+  ): Promise<void> {
+    const { users } = this.tables;
 
-      // Check if user exists
-      const user = await this.db.query.users.findFirst({
+    // Check if user exists. §13.8 + spec note: user existence is sensitive,
+    // so the public message stays generic; the id flows through logContext.
+    let user;
+    try {
+      user = await this.db.query.users.findFirst({
         where: eq(users.id, userId),
         columns: { id: true },
       });
+    } catch (err) {
+      throw NextlyError.fromDatabaseError(err);
+    }
 
-      if (!user) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "User not found",
-          data: null,
-        };
-      }
+    if (!user) {
+      throw NextlyError.notFound({
+        logContext: { entity: "user", id: userId },
+      });
+    }
 
+    try {
       // Update password
       await (this.db as DatabaseInstance)
         .update(users)
         .set({ passwordHash })
         .where(eq(users.id, userId));
-
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Password updated successfully",
-        data: null,
-      };
     } catch (err) {
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to update password",
-      });
+      throw NextlyError.fromDatabaseError(err);
     }
   }
 
@@ -227,13 +217,21 @@ export class UserAccountService extends BaseService {
   // ========================================
 
   /**
-   * Get all OAuth accounts linked to a user
+   * Get all OAuth accounts linked to a user.
+   *
+   * Returns an empty array when no accounts are linked. The pre-migration
+   * "404 No accounts linked to this user" was an envelope quirk — having
+   * zero linked accounts is a normal state for password-only users, not an
+   * error condition. Callers that need the count should check `.length`.
+   *
+   * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async getAccounts(userId: number | string): Promise<GetAccountsResponse> {
-    try {
-      const { accounts } = this.tables;
+    const { accounts } = this.tables;
 
-      const results = await this.db.query.accounts.findMany({
+    let results;
+    try {
+      results = await this.db.query.accounts.findMany({
         where: eq(accounts.userId, userId),
         columns: {
           id: true,
@@ -243,33 +241,17 @@ export class UserAccountService extends BaseService {
           type: true,
         },
       });
-
-      if (!results || results.length === 0) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "No accounts linked to this user",
-          data: null,
-        };
-      }
-
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Accounts fetched successfully",
-        data: results.map((r: AccountSelectResult) => ({
-          id: r.id,
-          userId: r.userId,
-          provider: String(r.provider),
-          providerAccountId: String(r.providerAccountId),
-          type: String(r.type),
-        })),
-      };
     } catch (err) {
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to fetch accounts",
-      });
+      throw NextlyError.fromDatabaseError(err);
     }
+
+    return (results ?? []).map((r: AccountSelectResult) => ({
+      id: r.id,
+      userId: r.userId,
+      provider: String(r.provider),
+      providerAccountId: String(r.providerAccountId),
+      type: String(r.type),
+    }));
   }
 
   /**
@@ -322,15 +304,22 @@ export class UserAccountService extends BaseService {
   }
 
   /**
-   * Unlink an OAuth account from a user (with safety check for last auth method)
+   * Unlink an OAuth account from a user (with safety check for last auth method).
+   *
+   * Returns an `UnlinkAccountResult` discriminated union rather than throwing
+   * for the safety-check failure / not-found cases. These are caller-facing
+   * decisions (e.g. show a confirmation prompt, render a 400 response) where
+   * a thrown error would force the caller to write try/catch around a
+   * predictable control-flow branch. Real DB faults still throw NextlyError.
    */
   async unlinkAccountForUser(
     userId: number | string,
     provider: string,
     providerAccountId: string
   ): Promise<UnlinkAccountResult> {
-    const accountsResult = await this.getAccounts(userId);
-    const numAccounts = accountsResult.data ? accountsResult.data.length : 0;
+    // getAccounts now returns the array directly (post-migration).
+    const accounts = await this.getAccounts(userId);
+    const numAccounts = accounts.length;
     const hasPwd = await this.hasPassword(userId);
     if (!hasPwd && numAccounts <= 1) {
       return {

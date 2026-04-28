@@ -17,7 +17,12 @@ import crypto from "node:crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { SqlParam, WhereCondition } from "@revnixhq/adapter-drizzle/types";
 
-import { ServiceError } from "../errors";
+// PR 4 of unified-error-system migration: ServiceError → NextlyError.
+// Subclasses (collection/single/component-registry-service) still throw
+// ServiceError directly and check `instanceof ServiceError`; those are out
+// of scope for this PR but inherit the throw-based contract automatically
+// for all `getRecordOrThrow` / `updateRecordMigrationStatus` paths.
+import { NextlyError } from "../errors";
 
 import { BaseService } from "./base-service";
 import type { Logger } from "./types";
@@ -137,19 +142,24 @@ export abstract class BaseRegistryService<
 
       return result ? this.deserializeRecord(result) : null;
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Re-throw NextlyError from nested calls; only DB-layer errors get wrapped.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
   /**
    * Get a record by slug, throwing NOT_FOUND if missing.
+   *
+   * §13.8: public message is generic; identifying details (slug, resource
+   * type) flow through `logContext`, not the wire.
    */
   protected async getRecordOrThrow(slug: string): Promise<TRecord> {
     const record = await this.getRecordBySlug(slug);
 
     if (!record) {
-      throw ServiceError.notFound(`${this.resourceType} "${slug}" not found`, {
-        slug,
+      throw NextlyError.notFound({
+        logContext: { entity: this.resourceType, slug },
       });
     }
 
@@ -175,7 +185,8 @@ export abstract class BaseRegistryService<
 
       return results.map(record => this.deserializeRecord(record));
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -196,7 +207,7 @@ export abstract class BaseRegistryService<
           or: searchColumns.map(column => ({
             column,
             op: "ILIKE" as const,
-            value: searchPattern as SqlParam,
+            value: searchPattern,
           })),
         });
       }
@@ -230,7 +241,8 @@ export abstract class BaseRegistryService<
         total,
       };
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -274,18 +286,17 @@ export abstract class BaseRegistryService<
       );
 
       if (results.length === 0) {
-        throw ServiceError.notFound(
-          `${this.resourceType} "${slug}" not found`,
-          { slug }
-        );
+        // §13.8: generic public message; resource type + slug go to logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: this.resourceType, slug },
+        });
       }
 
       this.logger.info("Migration status updated", { slug, status });
     } catch (error) {
-      if (error instanceof ServiceError) {
-        throw error;
-      }
-      throw ServiceError.fromDatabaseError(error);
+      // Re-throw NextlyError unchanged; wrap raw DB errors via fromDatabaseError.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -330,10 +341,8 @@ export abstract class BaseRegistryService<
         return { verified: false, status: "failed" as TMigrationStatus };
       }
     } catch (error) {
-      if (error instanceof ServiceError) {
-        throw error;
-      }
-      throw ServiceError.fromDatabaseError(error);
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 
@@ -360,7 +369,8 @@ export abstract class BaseRegistryService<
 
       return results.map(record => this.deserializeRecord(record));
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(error);
     }
   }
 

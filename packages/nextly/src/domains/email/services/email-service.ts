@@ -13,7 +13,7 @@
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import { ServiceError } from "../../../errors/service-error";
+import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
@@ -218,11 +218,15 @@ export class EmailService extends BaseService {
       });
     }
 
-    // 3. Neither exists
-    throw ServiceError.businessRule(
-      `Email template "${templateSlug}" not found. Create it in the admin UI or provide a code-first override.`,
-      { slug: templateSlug }
-    );
+    // 3. Neither exists — keep the public sentence free of identifiers per
+    // spec §13.8; the slug goes to logContext for operators.
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "Email template not found. Create it in the admin UI or provide a code-first override.",
+      statusCode: 422,
+      logContext: { slug: templateSlug },
+    });
   }
 
   /**
@@ -451,10 +455,14 @@ export class EmailService extends BaseService {
       };
     }
 
-    // 4. No provider
-    throw ServiceError.businessRule(
-      "No email provider configured. Add a provider in Settings > Email Providers, or configure one in defineConfig({ email: { providerConfig } })."
-    );
+    // 4. No provider — operator-actionable public message; no identifiers
+    // involved here, so logContext stays empty.
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "No email provider configured. Add a provider in Settings > Email Providers, or configure one in defineConfig({ email: { providerConfig } }).",
+      statusCode: 422,
+    });
   }
 
   // ============================================================
@@ -517,9 +525,14 @@ export class EmailService extends BaseService {
       case "sendlayer":
         return createSendLayerProvider(config as { apiKey: string });
       default:
-        throw ServiceError.businessRule(
-          `Unsupported email provider type: ${record.type}`
-        );
+        // Provider type from a stored row — keep the offending value in
+        // logContext, not in the public message.
+        throw new NextlyError({
+          code: "BUSINESS_RULE_VIOLATION",
+          publicMessage: "Unsupported email provider type.",
+          statusCode: 422,
+          logContext: { type: record.type },
+        });
     }
   }
 
@@ -546,9 +559,16 @@ export class EmailService extends BaseService {
           apiKey: providerConfig.apiKey,
         });
       default:
-        throw ServiceError.businessRule(
-          `Unsupported email provider: ${(providerConfig as { provider: string }).provider}`
-        );
+        // Untrusted-ish: provider value from defineConfig(). Identifier still
+        // belongs in logContext; the public message stays generic.
+        throw new NextlyError({
+          code: "BUSINESS_RULE_VIOLATION",
+          publicMessage: "Unsupported email provider.",
+          statusCode: 422,
+          logContext: {
+            provider: (providerConfig as { provider: string }).provider,
+          },
+        });
     }
   }
 

@@ -73,33 +73,22 @@ export async function seedSuperAdmin(
       userId = String(existingUser.id);
       skipped++;
     } else {
-      // Create super admin user using createLocalUser
+      // Create super admin user using createLocalUser.
+      // PR 4 (unified-error-system): createLocalUser returns the
+      // created user directly and throws NextlyError on failure. Any
+      // throw here is caught by the outer try/catch which converts it
+      // into a SeederResult.
       log(`  Creating super admin user: ${email}`);
 
       // Pass plain password - createLocalUser will hash it correctly
-      const userResult = await userService.createLocalUser({
+      const newUser = await userService.createLocalUser({
         email,
         name,
         password: password, // Will be hashed by createLocalUser
         isActive: true,
       });
 
-      if (!userResult.success || !userResult.data) {
-        const errorMsg = `Failed to create super admin user: ${userResult.message}`;
-        errorLog(`  ${errorMsg}`);
-        errorMessages.push(errorMsg);
-        errors++;
-        return {
-          success: false,
-          created,
-          skipped,
-          errors,
-          total: created + skipped + errors,
-          errorMessages,
-        };
-      }
-
-      userId = String(userResult.data.id);
+      userId = String(newUser.id);
       created++;
 
       // Auto-verify the super admin's email so they can log in immediately
@@ -108,26 +97,13 @@ export async function seedSuperAdmin(
         .catch(() => {});
     }
 
-    // Step 2: Get all permissions first (needed for role creation)
+    // Step 2: Get all permissions first (needed for role creation).
+    // PR 4 (unified-error-system): listPermissions returns
+    // `{ data, meta }` directly and throws on failure.
     log("\n Fetching all permissions...");
     const allPermissionsResult = await permissionService.listPermissions({
       pageSize: 1000,
     });
-
-    if (!allPermissionsResult.success || !allPermissionsResult.data) {
-      const errorMsg = "Failed to fetch permissions";
-      errorLog(`  ${errorMsg}`);
-      errorMessages.push(errorMsg);
-      errors++;
-      return {
-        success: false,
-        created,
-        skipped,
-        errors,
-        total: created + skipped + errors,
-        errorMessages,
-      };
-    }
 
     const allPermissions = allPermissionsResult.data;
     log(`  Found ${allPermissions.length} permissions`);
@@ -151,7 +127,10 @@ export async function seedSuperAdmin(
         String(p.id)
       );
 
-      const roleResult = await roleService.createRole({
+      // PR 4 (unified-error-system): createRole returns the role
+      // directly and throws NextlyError on failure. Throws are caught
+      // by the outer try/catch.
+      const newRole = await roleService.createRole({
         name: "Super Admin",
         slug: "super-admin",
         description: "Has all permissions in the system",
@@ -160,22 +139,7 @@ export async function seedSuperAdmin(
         level: 100, // Highest level
       });
 
-      if (!roleResult.success || !roleResult.data) {
-        const errorMsg = `Failed to create Super Admin role: ${roleResult.message}`;
-        errorLog(`  ${errorMsg}`);
-        errorMessages.push(errorMsg);
-        errors++;
-        return {
-          success: false,
-          created,
-          skipped,
-          errors,
-          total: created + skipped + errors,
-          errorMessages,
-        };
-      }
-
-      roleId = String(roleResult.data.id);
+      roleId = String(newRole.id);
       created++;
       created += allPermissionIds.length; // Count permission assignments
     }

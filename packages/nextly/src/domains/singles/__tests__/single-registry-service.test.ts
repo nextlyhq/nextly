@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { ServiceError } from "../../../errors";
+import { NextlyError } from "../../../errors";
 import { SingleRegistryService } from "../services/single-registry-service";
 
 import {
@@ -144,7 +144,7 @@ describe("SingleRegistryService", () => {
           source: "code",
           schemaHash: "hash-1",
         })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("auto-locks code-first singles", async () => {
@@ -297,7 +297,7 @@ describe("SingleRegistryService", () => {
       ctx.adapter.selectOne.mockResolvedValue(null);
 
       await expect(ctx.service.getSingle("missing")).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
   });
@@ -461,7 +461,7 @@ describe("SingleRegistryService", () => {
           { label: "New" },
           { source: "ui" }
         )
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("allows update when locked and source is 'code'", async () => {
@@ -482,7 +482,7 @@ describe("SingleRegistryService", () => {
 
       await expect(
         ctx.service.updateSingle("missing", { label: "X" })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("writes locked as 1/0 integers", async () => {
@@ -508,7 +508,7 @@ describe("SingleRegistryService", () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
 
       await expect(ctx.service.deleteSingle("site-settings")).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
 
@@ -542,7 +542,7 @@ describe("SingleRegistryService", () => {
 
       await expect(
         ctx.service.deleteSingle("site-settings", { force: true })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -594,7 +594,7 @@ describe("SingleRegistryService", () => {
 
       await expect(
         ctx.service.updateMigrationStatus("missing", "applied")
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -796,7 +796,7 @@ describe("SingleRegistryService", () => {
             schemaHash: "hash",
           }
         )
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
       expect(tx.insert).not.toHaveBeenCalled();
     });
   });

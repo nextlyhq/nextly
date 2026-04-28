@@ -23,17 +23,19 @@ export type {
 } from "./services/user-query-service";
 
 // ── UserMutationService Types ───────────────────────────────────────────────
+// DeleteUserResponse removed in PR 4 (unified-error-system migration):
+// deleteUser now returns void and throws NextlyError on failure.
 export type {
   CreateLocalUserData,
   UpdateUserData,
   UserMutationResponse,
-  DeleteUserResponse,
 } from "./services/user-mutation-service";
 
 // ── UserAccountService Types ────────────────────────────────────────────────
+// PasswordOperationResponse removed in PR 4: updatePasswordHash now
+// returns void and throws NextlyError on failure.
 export type {
   GetAccountsResponse,
-  PasswordOperationResponse,
   UnlinkAccountResult,
 } from "./services/user-account-service";
 

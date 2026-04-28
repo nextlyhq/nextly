@@ -17,16 +17,23 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 import { eq, ne, and, like, ilike } from "drizzle-orm";
 
-import type { BeforeOperationArgs, OperationType } from "@nextly/hooks/types";
+// `OperationType` was removed during the PR 4 migration — this module no longer
+// references it, so we import only `BeforeOperationArgs`.
+import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+// PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
+// The public CollectionServiceResult shape is preserved because the legacy
+// CollectionEntryService facade and CollectionBulkService still consume it;
+// only the internal error mapping changed. fromDatabaseError keeps driver
+// text out of the wire and routes identifying detail to logContext (§13.8).
+import { NextlyError } from "../../../errors";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
-import { mapDbErrorToServiceError } from "../../../services/lib/db-error";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -47,6 +54,48 @@ import {
   getTableName,
   generateSlug,
 } from "./collection-utils";
+
+/**
+ * Convert any thrown error into the legacy CollectionServiceResult shape.
+ *
+ * - NextlyError instances pass through (publicMessage / statusCode preserved).
+ * - DbErrors map via NextlyError.fromDatabaseError so driver text never reaches
+ *   the wire; status & generic message come from §8.2 mapping.
+ * - Anything else falls back to the caller-supplied default (status 500 unless
+ *   overridden) without leaking error.message in cases the spec disallows it.
+ *
+ * Identifier-bearing detail in `logContext` is dropped from the result shape
+ * because that shape is publicly surfaced — callers reading `result.message`
+ * must only ever see §13.8-compliant generic strings.
+ */
+function errorToServiceResult<T = unknown>(
+  error: unknown,
+  fallback: { statusCode?: number; defaultMessage: string }
+): CollectionServiceResult<T> {
+  if (NextlyError.is(error)) {
+    return {
+      success: false,
+      statusCode: error.statusCode,
+      message: error.publicMessage,
+      data: null,
+    };
+  }
+  const mapped = NextlyError.fromDatabaseError(error);
+  if (mapped.code === "INTERNAL_ERROR") {
+    return {
+      success: false,
+      statusCode: fallback.statusCode ?? 500,
+      message: error instanceof Error ? error.message : fallback.defaultMessage,
+      data: null,
+    };
+  }
+  return {
+    success: false,
+    statusCode: mapped.statusCode,
+    message: mapped.publicMessage,
+    data: null,
+  };
+}
 
 export class CollectionMutationService extends BaseService {
   constructor(
@@ -115,8 +164,8 @@ export class CollectionMutationService extends BaseService {
       }
 
       // Build the query
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let query = (this.db as any).select().from(schema);
+
+      let query = this.db.select().from(schema);
 
       // Build the WHERE condition
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
@@ -127,9 +176,9 @@ export class CollectionMutationService extends BaseService {
         // Use ILIKE for PostgreSQL, LIKE for others (MySQL/SQLite are case-insensitive by default)
         const dialect = this.adapter?.dialect || "postgresql";
         if (dialect === "postgresql") {
-          conditions.push(ilike(schema[field], value as string));
+          conditions.push(ilike(schema[field], value));
         } else {
-          conditions.push(like(schema[field], value as string));
+          conditions.push(like(schema[field], value));
         }
       } else {
         // Case-sensitive comparison
@@ -237,7 +286,7 @@ export class CollectionMutationService extends BaseService {
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
-          operation: "create" as OperationType,
+          operation: "create",
           args: { data: body },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
@@ -363,7 +412,7 @@ export class CollectionMutationService extends BaseService {
           finalData[field.name] != null &&
           typeof finalData[field.name] === "object"
         ) {
-          const nestedFields = (field.fields || []) as FieldDefinition[];
+          const nestedFields = field.fields || [];
           if (
             nestedFields.some(
               f =>
@@ -472,7 +521,7 @@ export class CollectionMutationService extends BaseService {
         if (typeof nameValue === "string" && nameValue.trim()) {
           finalData.title = nameValue.trim();
         } else {
-          finalData.title = finalData.slug as string;
+          finalData.title = finalData.slug;
         }
       }
 
@@ -628,15 +677,13 @@ export class CollectionMutationService extends BaseService {
         data: responseEntry,
       };
     } catch (error: unknown) {
-      return mapDbErrorToServiceError(error, {
+      // Legacy per-kind override messages ("Duplicate value: ...",
+      // "Missing required field", etc.) are dropped: the new mapping uses
+      // the §13.8-compliant generic strings from fromDatabaseError so the
+      // wire never reveals which constraint or column failed. The original
+      // DbError is preserved on the NextlyError as `cause` for log lines.
+      return errorToServiceResult(error, {
         defaultMessage: "Failed to create entry",
-        "unique-violation":
-          "Duplicate value: A unique field already has this value",
-        "not-null-violation": "Missing required field",
-        "fk-violation":
-          "Invalid reference: The referenced entry does not exist",
-        constraint:
-          "Validation failed: One or more field values do not meet requirements",
       });
     }
   }
@@ -671,8 +718,8 @@ export class CollectionMutationService extends BaseService {
       );
 
       // Fetch the existing entry first (needed for access control and hooks)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const [existingEntry] = await (this.db as any)
+
+      const [existingEntry] = await this.db
         .select()
         .from(schema)
         .where(eq(schema.id, params.entryId))
@@ -724,7 +771,7 @@ export class CollectionMutationService extends BaseService {
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
-          operation: "update" as OperationType,
+          operation: "update",
           args: { id: params.entryId, data: body },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
@@ -841,7 +888,7 @@ export class CollectionMutationService extends BaseService {
           finalData[field.name] != null &&
           typeof finalData[field.name] === "object"
         ) {
-          const nestedFields = (field.fields || []) as FieldDefinition[];
+          const nestedFields = field.fields || [];
           if (
             nestedFields.some(
               f =>
@@ -961,8 +1008,8 @@ export class CollectionMutationService extends BaseService {
       // column without mode:'string' expects Date objects and calls .toISOString()
       // internally during serialization. Passing a string causes
       // "value.toISOString is not a function".
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any)
+
+      await this.db
         .update(schema)
         .set({
           ...finalData,
@@ -972,8 +1019,8 @@ export class CollectionMutationService extends BaseService {
       // .returning();
 
       // Fetch the updated entry to return it and use in hooks
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const [updated] = await (this.db as any)
+
+      const [updated] = await this.db
         .select()
         .from(schema)
         .where(eq(schema.id, params.entryId))
@@ -1092,15 +1139,10 @@ export class CollectionMutationService extends BaseService {
         data: responseEntry,
       };
     } catch (error: unknown) {
-      return mapDbErrorToServiceError(error, {
+      // See createEntry's catch — legacy override messages are dropped in
+      // favour of fromDatabaseError's spec-compliant generic strings.
+      return errorToServiceResult(error, {
         defaultMessage: "Failed to update entry",
-        "unique-violation":
-          "Duplicate value: A unique field already has this value",
-        "not-null-violation": "Missing required field",
-        "fk-violation":
-          "Invalid reference: The referenced entry does not exist",
-        constraint:
-          "Validation failed: One or more field values do not meet requirements",
       });
     }
   }
@@ -1132,8 +1174,8 @@ export class CollectionMutationService extends BaseService {
       );
 
       // Fetch the entry first (needed for access control and hooks)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const [entry] = await (this.db as any)
+
+      const [entry] = await this.db
         .select()
         .from(schema)
         .where(eq(schema.id, params.entryId))
@@ -1176,7 +1218,7 @@ export class CollectionMutationService extends BaseService {
       // Can modify operation arguments (id) or throw to abort
       await this.hookService.hookRegistry.executeBeforeOperation({
         collection: params.collectionName,
-        operation: "delete" as OperationType,
+        operation: "delete",
         args: { id: params.entryId },
         user: params.user
           ? { id: params.user.id, email: params.user.email }
@@ -1228,10 +1270,7 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any)
-        .delete(schema)
-        .where(eq(schema.id, params.entryId));
+      await this.db.delete(schema).where(eq(schema.id, params.entryId));
       // .returning();
 
       const deleted = entry;
@@ -1351,7 +1390,7 @@ export class CollectionMutationService extends BaseService {
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
-          operation: "create" as OperationType,
+          operation: "create",
           args: { data: body },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
@@ -1510,15 +1549,8 @@ export class CollectionMutationService extends BaseService {
         data: entry,
       };
     } catch (error: unknown) {
-      return mapDbErrorToServiceError(error, {
+      return errorToServiceResult(error, {
         defaultMessage: "Failed to create entry in transaction",
-        "unique-violation":
-          "Duplicate value: A unique field already has this value",
-        "not-null-violation": "Missing required field",
-        "fk-violation":
-          "Invalid reference: The referenced entry does not exist",
-        constraint:
-          "Validation failed: One or more field values do not meet requirements",
       });
     }
   }
@@ -1593,7 +1625,7 @@ export class CollectionMutationService extends BaseService {
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
-          operation: "update" as OperationType,
+          operation: "update",
           args: { id: params.entryId, data: body },
           user: params.user
             ? { id: params.user.id, email: params.user.email }
@@ -1771,15 +1803,8 @@ export class CollectionMutationService extends BaseService {
         data: updated,
       };
     } catch (error: unknown) {
-      return mapDbErrorToServiceError(error, {
+      return errorToServiceResult(error, {
         defaultMessage: "Failed to update entry in transaction",
-        "unique-violation":
-          "Duplicate value: A unique field already has this value",
-        "not-null-violation": "Missing required field",
-        "fk-violation":
-          "Invalid reference: The referenced entry does not exist",
-        constraint:
-          "Validation failed: One or more field values do not meet requirements",
       });
     }
   }
@@ -1840,7 +1865,7 @@ export class CollectionMutationService extends BaseService {
       // Can modify operation arguments (id) or throw to abort
       await this.hookService.hookRegistry.executeBeforeOperation({
         collection: params.collectionName,
-        operation: "delete" as OperationType,
+        operation: "delete",
         args: { id: params.entryId },
         user: params.user
           ? { id: params.user.id, email: params.user.email }
@@ -2005,7 +2030,7 @@ export class CollectionMutationService extends BaseService {
         const beforeOpArgs =
           await this.hookService.hookRegistry.executeBeforeOperation({
             collection: params.collectionName,
-            operation: "create" as OperationType,
+            operation: "create",
             args: { data: body },
             user: params.user
               ? { id: params.user.id, email: params.user.email }
@@ -2033,7 +2058,7 @@ export class CollectionMutationService extends BaseService {
           "beforeCreate",
           beforeContext
         );
-        currentData = (modifiedData ?? currentData) as Record<string, unknown>;
+        currentData = modifiedData ?? currentData;
 
         // Execute stored beforeCreate hooks (UI-configured)
         const storedBeforeResult =
@@ -2176,15 +2201,8 @@ export class CollectionMutationService extends BaseService {
         data: entry,
       };
     } catch (error: unknown) {
-      return mapDbErrorToServiceError(error, {
+      return errorToServiceResult(error, {
         defaultMessage: "Failed to create entry",
-        "unique-violation":
-          "Duplicate value: A unique field already has this value",
-        "not-null-violation": "Missing required field",
-        "fk-violation":
-          "Invalid reference: The referenced entry does not exist",
-        constraint:
-          "Validation failed: One or more field values do not meet requirements",
       });
     }
   }
@@ -2278,7 +2296,7 @@ export class CollectionMutationService extends BaseService {
         const beforeOpArgs =
           await this.hookService.hookRegistry.executeBeforeOperation({
             collection: params.collectionName,
-            operation: "update" as OperationType,
+            operation: "update",
             args: { id: entryId, data: body },
             user: params.user
               ? { id: params.user.id, email: params.user.email }
@@ -2307,7 +2325,7 @@ export class CollectionMutationService extends BaseService {
           "beforeUpdate",
           beforeContext
         );
-        currentData = (modifiedData ?? currentData) as Record<string, unknown>;
+        currentData = modifiedData ?? currentData;
 
         // Execute stored beforeUpdate hooks (UI-configured)
         const storedBeforeResult =
@@ -2470,15 +2488,8 @@ export class CollectionMutationService extends BaseService {
         data: updated,
       };
     } catch (error: unknown) {
-      return mapDbErrorToServiceError(error, {
+      return errorToServiceResult(error, {
         defaultMessage: "Failed to update entry",
-        "unique-violation":
-          "Duplicate value: A unique field already has this value",
-        "not-null-violation": "Missing required field",
-        "fk-violation":
-          "Invalid reference: The referenced entry does not exist",
-        constraint:
-          "Validation failed: One or more field values do not meet requirements",
       });
     }
   }
@@ -2554,7 +2565,7 @@ export class CollectionMutationService extends BaseService {
         // Can modify operation arguments (id) or throw to abort
         await this.hookService.hookRegistry.executeBeforeOperation({
           collection: params.collectionName,
-          operation: "delete" as OperationType,
+          operation: "delete",
           args: { id: entryId },
           user: params.user
             ? { id: params.user.id, email: params.user.email }

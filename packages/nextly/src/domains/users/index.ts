@@ -25,17 +25,20 @@ export type {
 } from "./services/user-query-service";
 
 export { UserMutationService } from "./services/user-mutation-service";
+// DeleteUserResponse removed in PR 4: deleteUser now returns void and
+// throws NextlyError on failure. Likewise UserMutationResponse is now an
+// alias for MinimalUser since the result envelope is gone.
 export type {
   CreateLocalUserData,
   UpdateUserData,
   UserMutationResponse,
-  DeleteUserResponse,
 } from "./services/user-mutation-service";
 
 export { UserAccountService } from "./services/user-account-service";
+// PasswordOperationResponse removed in PR 4: updatePasswordHash now
+// returns void and throws on failure.
 export type {
   GetAccountsResponse,
-  PasswordOperationResponse,
   UnlinkAccountResult,
 } from "./services/user-account-service";
 
