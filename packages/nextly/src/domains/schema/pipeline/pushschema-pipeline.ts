@@ -35,6 +35,10 @@ import {
 } from "./managed-tables.js";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions.js";
 import { executePreResolutionOps } from "./pre-resolution/executor.js";
+import {
+  PromptCancelledError,
+  TTYRequiredError,
+} from "./prompt-dispatcher/errors.js";
 import type {
   Classifier,
   DrizzleStatementExecutor,
@@ -401,6 +405,11 @@ export class PushSchemaPipeline {
   private classifyErrorCode(err: unknown): string {
     if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
     if (err instanceof DdlExecutionError) return "DDL_EXECUTION_FAILED";
+    // PromptDispatcher signals - distinguish "user said no" from "no TTY
+    // available" so callers (HMR loop, UI handler) can render the right
+    // user-facing message instead of a generic INTERNAL_ERROR.
+    if (err instanceof TTYRequiredError) return "CONFIRMATION_REQUIRED_NO_TTY";
+    if (err instanceof PromptCancelledError) return "CONFIRMATION_DECLINED";
     return "INTERNAL_ERROR";
   }
 }

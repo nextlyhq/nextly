@@ -1,27 +1,45 @@
-// What: re-reads nextly.config.ts and applies safe code-first schema deltas
-// in the same process. Called from getNextly() when the HMR listener has
+// What: re-reads nextly.config.ts and applies code-first schema deltas in
+// the same process. Called from getNextly() when the HMR listener has
 // flipped the reload flag.
 //
 // Why a helper: keeps init.ts clean. The actual config-loading + DDL apply
-// flows through the F2 applyDesiredSchema pipeline (which currently shims
-// over SchemaChangeService.apply). reloadNextlyConfig just orchestrates them.
+// flows through the F2 applyDesiredSchema pipeline.
 //
-// Safety stance: code-first auto-apply runs only for SAFE deltas (additive
-// changes, type-compatible widenings). Destructive deltas (drops, narrowing
-// type changes, NOT NULL additions on non-empty columns) are logged and
-// skipped because they need user-supplied resolutions to avoid data loss.
-// F8's PromptDispatcher will route those prompts to the terminal in a
-// later task; until then, destructive code-first edits require either
-// (a) reverting the config, (b) using the admin Schema Builder, or
-// (c) waiting for F8.
+// Safety stance (F4 Option E PR 4):
+//   - Pure additive deltas (add table/column, default change) auto-apply.
+//   - Drop+add pairs that the rename detector picks up as candidates flow
+//     through to the pipeline so the clack PromptDispatcher can confirm
+//     them in the terminal.
+//   - Standalone drops (a removed field with no rename target), table
+//     drops, and lossy type / NOT NULL changes are still skipped with a
+//     warning. Until F5 ships a real Classifier, code-first has no
+//     terminal UI for those, and silent auto-apply would lose data.
+//   - Tables where drops > adds also get skipped: the dispatcher can only
+//     match `min(drops, adds)` pairs, so the surplus drops would silently
+//     become data loss even after the user confirms renames.
+//   - Non-TTY runtimes (CI, IDE task runners) still hit the rename
+//     prompt, but ClackTerminalPromptDispatcher throws TTYRequiredError
+//     which the pipeline maps to CONFIRMATION_REQUIRED_NO_TTY. We log
+//     that and keep the dev server alive.
+
+import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply.js";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url.js";
+import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields.js";
+import { diffSnapshots } from "../domains/schema/pipeline/diff/diff.js";
+import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live.js";
+import type {
+  NextlySchemaSnapshot,
+  Operation,
+  TableSpec,
+} from "../domains/schema/pipeline/diff/types.js";
+import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
+import type { PromptDispatcher } from "../domains/schema/pipeline/pushschema-pipeline-interfaces.js";
 import {
   noopClassifier,
   noopMigrationJournal,
   noopPreRenameExecutor,
-  noopPromptDispatcher,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline.js";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector.js";
@@ -38,59 +56,35 @@ import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-sta
 // Promises and the call site awaits the result so both shapes work.
 type ServiceResolver = (name: string) => unknown;
 
-// Minimal contracts for the services we touch. The actual DI layer types
-// are richer; we only need these methods so we constrain the resolver to
-// what we actually use, which keeps the helper testable.
-type SchemaPreviewLite = {
-  hasChanges: boolean;
-  hasDestructiveChanges: boolean;
-  classification: string;
-};
-
-type SchemaApplyLite = {
-  success: boolean;
-  newSchemaVersion?: number;
-  error?: string;
-};
-
-type SchemaChangeServiceLike = {
-  preview: (
-    tableName: string,
-    currentFields: unknown[],
-    newFields: unknown[]
-  ) => Promise<SchemaPreviewLite>;
-  apply: (
-    slug: string,
-    tableName: string,
-    currentFields: unknown[],
-    newFields: unknown[],
-    currentSchemaVersion: number,
-    registry: unknown,
-    resolutions: unknown,
-    options: { source: "code" | "ui" }
-  ) => Promise<SchemaApplyLite>;
-};
-
-type RegistryLike = {
-  getCollectionBySlug: (slug: string) => Promise<{
-    slug: string;
-    tableName?: string;
-    fields?: unknown[];
-    schemaVersion?: number;
-  } | null>;
-};
-
 type LoggerLike = {
   warn: (msg: string) => void;
   info: (msg: string) => void;
   error: (msg: string) => void;
 };
 
+// Minimal duck-typed shape for the database adapter — only the readonly
+// `dialect` property and `getDrizzle()` method we invoke. Matches the
+// public surface of DrizzleAdapter; full type imported from
+// adapter-drizzle would couple this module to the adapter package.
+interface AdapterLike {
+  readonly dialect: "postgresql" | "mysql" | "sqlite";
+  getDrizzle(): unknown;
+}
+
 type CollectionDef = {
   slug?: string;
   tableName?: string;
   fields?: unknown[];
 };
+
+// Minimal field shape passed to buildDesiredTableFromFields. Mirrors the
+// MinimalFieldDef in build-from-fields.ts (kept duck-typed here to avoid
+// importing private types).
+interface MinimalField {
+  name: string;
+  type: string;
+  required?: boolean;
+}
 
 // Default resolver: lazy-imports DI to avoid a circular import with init.ts.
 async function defaultResolver(name: string): Promise<unknown> {
@@ -100,12 +94,13 @@ async function defaultResolver(name: string): Promise<unknown> {
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
+// dispatcher is also test-only: injects a fake PromptDispatcher (e.g., one
+// that records prompts and auto-confirms) so tests don't need a real TTY.
 export async function reloadNextlyConfig(opts?: {
   resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
 }): Promise<void> {
   const resolverArg = opts?.resolver;
-  // Returns whatever the resolver gives us; the call sites `await` so a
-  // Promise<service> or a sync service both resolve correctly.
   const resolve = (name: string): unknown =>
     resolverArg ? resolverArg(name) : defaultResolver(name);
 
@@ -115,9 +110,7 @@ export async function reloadNextlyConfig(opts?: {
   // The whole load is wrapped in try/catch because users routinely save
   // nextly.config.ts mid-edit with syntax errors during dev. Without this
   // guard, the loader rejection bubbles through getNextly() and turns
-  // every subsequent request into a 500. The wrapper used to log+continue
-  // here; we preserve that behavior. Logger isn't yet resolved (services
-  // may not exist), so we use console.warn directly.
+  // every subsequent request into a 500.
   let newConfig: { collections?: CollectionDef[] } | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
@@ -138,108 +131,115 @@ export async function reloadNextlyConfig(opts?: {
   }
   if (!newConfig) return;
 
-  let schemaChangeService: SchemaChangeServiceLike | undefined;
-  let registry: RegistryLike | undefined;
+  // databaseAdapter doubles as our DI-readiness probe. We don't need any
+  // other service from DI in this path — the new gate gets prior-state
+  // straight from the live DB via introspectLiveSnapshot, not from the
+  // collection registry as the F1 preview gate did.
   let logger: LoggerLike | undefined;
-
+  let adapter: AdapterLike | undefined;
   try {
-    schemaChangeService = (await resolve(
-      "schemaChangeService"
-    )) as SchemaChangeServiceLike;
-    registry = (await resolve("collectionRegistryService")) as RegistryLike;
     logger = (await resolve("logger")) as LoggerLike;
+    adapter = (await resolve("databaseAdapter")) as AdapterLike;
   } catch {
     // DI not initialised yet (init-time race). Nothing to do.
     return;
   }
-
-  if (!schemaChangeService || !registry) return;
-
-  // Phase 1: per-collection preview to gate destructive changes.
-  // F3 stubs do no rename detection — destructive deltas (DROP+ADD,
-  // narrowing type changes, NOT NULL on non-empty columns without
-  // defaults) would silently lose data if we let them through. The
-  // preview step is the only protection HMR has until F4-F8 land
-  // real RenameDetector + Classifier + PromptDispatcher.
-  //
-  // Safe collections accumulate into a single DesiredSchema snapshot
-  // for one batch pipeline call (Phase 2 below). Destructive ones get
-  // logged + skipped with the existing user-facing message.
-  const desiredCollections: Record<string, DesiredCollection> = {};
-  const collections = newConfig.collections ?? [];
-
-  for (const collection of collections) {
-    const slug = collection.slug;
-    if (!slug) continue;
-    const tableName = collection.tableName ?? `dc_${slug}`;
-    const newFields = collection.fields ?? [];
-
-    try {
-      const current = await registry.getCollectionBySlug(slug);
-      const currentFields = current?.fields ?? [];
-
-      const preview = await schemaChangeService.preview(
-        tableName,
-        currentFields,
-        newFields
-      );
-
-      if (!preview.hasChanges) continue;
-
-      if (preview.hasDestructiveChanges) {
-        logger?.warn(
-          `[Nextly HMR] Code-first change for '${slug}' needs review ` +
-            `(classification: ${preview.classification}). Auto-apply skipped ` +
-            `to prevent data loss without explicit resolutions. Use the ` +
-            `admin Schema Builder to confirm with resolutions, or revert ` +
-            `the config edit.`
-        );
-        continue;
-      }
-
-      desiredCollections[slug] = {
-        slug,
-        tableName,
-        fields: newFields as DesiredCollection["fields"],
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger?.warn(
-        `[Nextly HMR] Skipping '${slug}' due to error during preview: ${msg}`
-      );
-    }
-  }
-
-  // Nothing safe to apply.
-  if (Object.keys(desiredCollections).length === 0) return;
-
-  // Phase 2: one batch pipeline call with the full safe-snapshot.
-  // Resolves the database adapter so we can construct the F3 pipeline
-  // with the right dialect + drizzle client. MySQL needs databaseName
-  // extracted from DATABASE_URL; PG and SQLite ignore it.
-  const safeCount = Object.keys(desiredCollections).length;
-  let adapter: AdapterLike | undefined;
-  try {
-    adapter = (await resolve("databaseAdapter")) as AdapterLike;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger?.error(
-      `[Nextly HMR] Could not resolve database adapter to apply ${safeCount} safe deltas: ${msg}`
-    );
-    return;
-  }
-  if (!adapter) {
-    logger?.error(
-      `[Nextly HMR] Database adapter unavailable; ${safeCount} safe deltas not applied`
-    );
-    return;
-  }
+  if (!adapter) return;
 
   // dialect is an abstract readonly property on DrizzleAdapter, not a
   // method (a previous iteration mistakenly called .getDialect() which
   // would crash at runtime).
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
+
+  // Normalize collections to (slug, tableName, fields) tuples. Drop
+  // entries without a slug — they can't be addressed.
+  const targets: Array<{
+    slug: string;
+    tableName: string;
+    fields: MinimalField[];
+  }> = [];
+  for (const c of newConfig.collections ?? []) {
+    if (!c.slug) continue;
+    targets.push({
+      slug: c.slug,
+      tableName: c.tableName ?? `dc_${c.slug}`,
+      fields: (c.fields ?? []) as MinimalField[],
+    });
+  }
+  if (targets.length === 0) return;
+
+  // ONE batched introspect for every managed table the config knows about.
+  // Replaces N per-collection round-trips. If the call fails, abort the
+  // reload entirely — it's a connection-level failure, not a per-table
+  // problem we can usefully partial-apply around.
+  let liveSnapshot: NextlySchemaSnapshot;
+  try {
+    liveSnapshot = await introspectLiveSnapshot(
+      db,
+      dialect,
+      targets.map(t => t.tableName)
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not introspect live schema: ${msg}. ` +
+        `No code-first schema changes were applied this cycle.`
+    );
+    return;
+  }
+  const liveByTable = new Map<string, TableSpec>();
+  for (const t of liveSnapshot.tables) liveByTable.set(t.name, t);
+
+  // Per-collection diff + safety classification. Replaces the F1 preview
+  // gate. Pure-additive collections + collections whose drop+add pairs
+  // can be fully covered by rename candidates flow through to the
+  // pipeline. Everything else gets logged + skipped.
+  const desiredCollections: Record<string, DesiredCollection> = {};
+  for (const target of targets) {
+    try {
+      const live = liveByTable.has(target.tableName)
+        ? { tables: [liveByTable.get(target.tableName)!] }
+        : { tables: [] };
+      const desiredTable = buildDesiredTableFromFields(
+        target.tableName,
+        target.fields,
+        dialect
+      );
+      const operations = diffSnapshots(live, { tables: [desiredTable] });
+
+      if (operations.length === 0) continue;
+
+      const classification = classifyForCodeFirst(operations, dialect);
+      if (!classification.safe) {
+        logger?.warn(
+          `[Nextly HMR] Code-first change for '${target.slug}' needs review ` +
+            `(${classification.reason}). Auto-apply skipped to prevent ` +
+            `data loss without explicit resolutions. Use the admin Schema ` +
+            `Builder to confirm with resolutions, or revert the config edit.`
+        );
+        continue;
+      }
+
+      desiredCollections[target.slug] = {
+        slug: target.slug,
+        tableName: target.tableName,
+        fields: target.fields as DesiredCollection["fields"],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger?.warn(
+        `[Nextly HMR] Skipping '${target.slug}' due to error during diff: ${msg}`
+      );
+    }
+  }
+
+  // Nothing to apply.
+  if (Object.keys(desiredCollections).length === 0) return;
+
+  // One batch pipeline call with the full snapshot. The pipeline runs its
+  // own introspect + diff inside (the gate's diff above is for safety
+  // classification only), so it's self-contained.
   const databaseName =
     dialect === "mysql"
       ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
@@ -255,13 +255,15 @@ export async function reloadNextlyConfig(opts?: {
   // pipeline/index.ts) so we can thread MySQL databaseName + the
   // resolved adapter into the F3 PushSchemaPipeline at this site.
   // F8 will collapse both seams into the unified pipeline.
+  const promptDispatcher =
+    opts?.dispatcher ?? new ClackTerminalPromptDispatcher();
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: noopClassifier,
-        promptDispatcher: noopPromptDispatcher,
+        promptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
         migrationJournal: noopMigrationJournal,
       });
@@ -285,17 +287,88 @@ export async function reloadNextlyConfig(opts?: {
   });
 
   if (!applyResult.success) {
-    logger?.error(
-      `[Nextly HMR] Batch apply failed (${applyResult.error.code}): ${applyResult.error.message}`
-    );
+    // CONFIRMATION_REQUIRED_NO_TTY is the expected outcome when a rename
+    // is detected on a non-TTY runtime (CI, IDE task runner). Surface it
+    // as a warn (actionable for the user) rather than an error (which
+    // implies a bug). All other codes still go through error.
+    const code = applyResult.error.code;
+    const msg = `[Nextly HMR] Batch apply failed (${code}): ${applyResult.error.message}`;
+    if (code === "CONFIRMATION_REQUIRED_NO_TTY") {
+      logger?.warn(msg);
+    } else {
+      logger?.error(msg);
+    }
   }
 }
 
-// Minimal duck-typed shape for the database adapter — only the
-// readonly `dialect` property and `getDrizzle()` method we invoke.
-// Matches the public surface of DrizzleAdapter; full type imported
-// from adapter-drizzle would couple this module to the adapter package.
-interface AdapterLike {
-  readonly dialect: "postgresql" | "mysql" | "sqlite";
-  getDrizzle(): unknown;
+// Decides whether a collection's ops are safe to auto-apply in code-first.
+// The gate borrows the pipeline's own RegexRenameDetector dialect rules
+// implicitly through the diff so it sees the same drop+add candidates
+// the pipeline + clack dispatcher will.
+//
+//   - Pure additive (add_*, change_column_default) -> safe.
+//   - drop_column in a table where the same-table drop count <= add count
+//     -> safe (the dispatcher can pair every drop to at least one
+//     potential rename target; the user confirms or declines per drop).
+//   - drop_column in a table where drops > adds -> unsafe. The dispatcher
+//     can only ever confirm `min(drops, adds)` renames, so the surplus
+//     drops fall through as drop_and_add (silent data loss). Standalone
+//     drops with zero same-table adds are the same case (drops > 0,
+//     adds = 0).
+//   - drop_table, change_column_type, NOT NULL adds -> unsafe (lossy
+//     and no Classifier-driven prompt yet; F5 will refine).
+function classifyForCodeFirst(
+  operations: Operation[],
+  _dialect: SupportedDialect
+): { safe: true } | { safe: false; reason: string } {
+  if (operations.length === 0) return { safe: true };
+
+  // Per-table drop / add counts. The asymmetry test below is the
+  // load-bearing rename safety check: if every drop has at least one
+  // potential rename target in the same table (drops <= adds) the
+  // dispatcher can ask the user; otherwise some drops would silently
+  // become data loss even after the user confirms.
+  const dropsPerTable = new Map<string, number>();
+  const addsPerTable = new Map<string, number>();
+  for (const op of operations) {
+    if (op.type === "drop_column") {
+      dropsPerTable.set(
+        op.tableName,
+        (dropsPerTable.get(op.tableName) ?? 0) + 1
+      );
+    } else if (op.type === "add_column") {
+      addsPerTable.set(op.tableName, (addsPerTable.get(op.tableName) ?? 0) + 1);
+    }
+  }
+
+  const reasons: string[] = [];
+  for (const [t, drops] of dropsPerTable) {
+    const adds = addsPerTable.get(t) ?? 0;
+    if (drops > adds) {
+      const surplus = drops - adds;
+      reasons.push(
+        adds === 0
+          ? `drops ${drops} column(s) from '${t}' with no replacement(s); ${surplus} cannot be renamed without data loss`
+          : `drops ${drops} columns from '${t}' but only ${adds} replacement(s); at least ${surplus} cannot be renamed without data loss`
+      );
+    }
+  }
+  for (const op of operations) {
+    if (op.type === "drop_table") {
+      reasons.push(`drops table '${op.tableName}'`);
+    } else if (op.type === "change_column_type") {
+      reasons.push(
+        `changes column '${op.columnName}' type from '${op.fromType}' to '${op.toType}'`
+      );
+    } else if (op.type === "change_column_nullable" && !op.toNullable) {
+      reasons.push(
+        `adds NOT NULL to column '${op.columnName}' (would fail on existing rows without a default)`
+      );
+    }
+  }
+
+  if (reasons.length > 0) {
+    return { safe: false, reason: reasons.join("; ") };
+  }
+  return { safe: true };
 }
