@@ -9,8 +9,13 @@
 //
 // Tests mock drizzle-kit-lazy at module boundary and assert each path
 // dispatches correctly + produces the expected result shape. The
-// statement-rewriting and dialect quirks are integration concerns
-// covered by the real-DB suite at __tests__/integration/.
+// statement-rewriting and dialect quirks (SQLite recreate-INSERT NULL
+// rewrite, MySQL CREATE TABLE IF NOT EXISTS rewrite, real PRAGMA
+// queries) are integration concerns. F8 PR 7 ships the cross-dialect
+// integration matrix (PG/MySQL/SQLite via docker-compose) which
+// exercises these helpers end-to-end. Until then, the regex-rewrite
+// logic is covered indirectly via the legacy DrizzlePushService
+// integration tests (these helpers are verbatim clones).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -241,12 +246,14 @@ describe("freshPushSchema", () => {
   });
 
   describe("dialect dispatch", () => {
-    it("rejects unknown dialects at the type boundary", async () => {
-      // TS rejects this at compile time; the runtime exhaustiveness check
-      // throws if a caller bypasses the type system.
+    it("rejects unknown dialects at the entry-point guard", async () => {
+      // TS rejects this at compile time; the runtime guard at the top of
+      // freshPushSchema throws cleanly with the offending value embedded
+      // in the message, defending against plugin authors who bypass TS
+      // with `as any` somewhere upstream.
       await expect(
         freshPushSchema("oracle" as unknown as "postgresql", {}, {})
-      ).rejects.toThrow();
+      ).rejects.toThrow("Unsupported dialect: oracle");
     });
   });
 });

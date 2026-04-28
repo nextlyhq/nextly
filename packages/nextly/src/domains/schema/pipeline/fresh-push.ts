@@ -28,13 +28,10 @@
 // dependencies; PR 4 deletes them all.
 
 import {
-  getPgDrizzleKit,
   getMySQLDrizzleKit,
+  getPgDrizzleKit,
   getSQLiteDrizzleKit,
-  type PushSchemaResult,
 } from "../../../database/drizzle-kit-lazy.js";
-
-import { extractDatabaseNameFromUrl } from "./database-url.js";
 
 export type FreshPushDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -47,11 +44,11 @@ export interface FreshPushResult {
   applied: true;
 }
 
-// Options for `freshPushSchema`. `databaseName` is MySQL-specific; if
-// the caller doesn't provide it, we extract from `process.env.DATABASE_URL`.
-export interface FreshPushOptions {
-  databaseName?: string;
-}
+// Options reserved for future per-call tweaks. Currently empty (the
+// MySQL `databaseName` extraction is dead in this helper because MySQL
+// flows through applyViaGenerate, which doesn't introspect the live DB
+// — it generates from an empty snapshot, so the DB name is irrelevant).
+export type FreshPushOptions = Record<string, never>;
 
 /**
  * Push a static / fresh schema directly via drizzle-kit, bypassing the
@@ -61,25 +58,37 @@ export interface FreshPushOptions {
  * uses generateDrizzleJson + generateMigration (drizzle-kit 0.31.10's
  * MySQL apply() silently drops non-destructive DDL).
  *
- * Throws on dialect-execution errors (caller is expected to handle them
- * — `migrate:fresh` swallows known drift errors, `ensureCoreTables` has
- * its own SQLite raw-SQL fallback).
+ * Throws on:
+ *   - Unknown dialect (front-of-function guard, defends against callers
+ *     that bypass TS).
+ *   - Dialect-execution errors that aren't `already exists` /
+ *     `Duplicate column` (caller handles them — `migrate:fresh`
+ *     swallows known drift errors, `ensureCoreTables` has its own
+ *     SQLite raw-SQL fallback).
  */
 export async function freshPushSchema(
   dialect: FreshPushDialect,
   db: unknown,
   schema: Record<string, unknown>,
-  options: FreshPushOptions = {}
+  _options: FreshPushOptions = {}
 ): Promise<FreshPushResult> {
+  // Entry-point dialect guard. TS already narrows callers to the union,
+  // but a runtime check makes the failure mode obvious for callers that
+  // bypass the type system (e.g. plugin authors with `as any` somewhere).
+  if (dialect !== "postgresql" && dialect !== "mysql" && dialect !== "sqlite") {
+    throw new Error(`Unsupported dialect: ${String(dialect)}`);
+  }
+
   if (dialect === "mysql") {
-    return applyViaGenerate(dialect, db, schema, options);
+    return applyViaGenerate("mysql", db, schema);
   }
   if (dialect === "sqlite") {
     return applyViaPushSchemaSQLite(db, schema);
   }
 
   // PostgreSQL: pushSchema works correctly — use it directly.
-  const result = await callPushSchema(dialect, db, schema, options);
+  const kit = await getPgDrizzleKit();
+  const result = await kit.pushSchema(schema, db, ["public"]);
   await result.apply();
   return {
     hasDataLoss: result.hasDataLoss,
@@ -87,43 +96,6 @@ export async function freshPushSchema(
     statementsExecuted: result.statementsToExecute,
     applied: true,
   };
-}
-
-// Dispatch to the correct dialect-specific pushSchema function. MySQL
-// is included for symmetry but freshPushSchema routes MySQL through
-// applyViaGenerate above (kept here for the rare caller that wants the
-// PushSchemaResult shape directly — currently none).
-async function callPushSchema(
-  dialect: FreshPushDialect,
-  db: unknown,
-  schema: Record<string, unknown>,
-  options: FreshPushOptions
-): Promise<PushSchemaResult> {
-  switch (dialect) {
-    case "postgresql": {
-      const kit = await getPgDrizzleKit();
-      return kit.pushSchema(schema, db, ["public"]);
-    }
-    case "mysql": {
-      const kit = await getMySQLDrizzleKit();
-      // MySQL pushSchema requires the database name as the 3rd parameter
-      // so drizzle-kit knows which schema to introspect for diff comparison.
-      // Without it, it finds zero existing tables and returns zero DDL.
-      const databaseName =
-        options.databaseName ??
-        extractDatabaseNameFromUrl(process.env.DATABASE_URL);
-      return kit.pushSchema(schema, db, databaseName ?? "");
-    }
-    case "sqlite": {
-      const kit = await getSQLiteDrizzleKit();
-      return kit.pushSchema(schema, db);
-    }
-    default: {
-      // Exhaustiveness check: TS narrows to never if all cases are handled.
-      const exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(exhaustive)}`);
-    }
-  }
 }
 
 // SQLite apply path that uses pushSchema() to get statements diffed
@@ -250,8 +222,7 @@ async function rewriteRecreateInsertForMissingCols(
 async function applyViaGenerate(
   dialect: "mysql" | "sqlite",
   db: unknown,
-  schema: Record<string, unknown>,
-  _options: FreshPushOptions
+  schema: Record<string, unknown>
 ): Promise<FreshPushResult> {
   const kit =
     dialect === "mysql"
