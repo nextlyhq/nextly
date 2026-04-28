@@ -4,7 +4,7 @@
  * This service provides a clean API for user management operations following
  * the new service layer architecture with:
  *
- * - Exception-based error handling using ServiceError
+ * - Exception-based error handling using NextlyError
  * - RequestContext for user/locale context
  * - PaginatedResult for list operations
  *
@@ -13,7 +13,7 @@
  *
  * @example
  * ```typescript
- * import { UserService, ServiceError, isServiceError } from '@revnixhq/nextly';
+ * import { UserService, NextlyError } from '@revnixhq/nextly';
  *
  * const service = new UserService(queryService, mutationService, accountService);
  *
@@ -31,15 +31,18 @@
  * try {
  *   const user = await service.findById('nonexistent', context);
  * } catch (error) {
- *   if (isServiceError(error)) {
+ *   if (NextlyError.isNotFound(error)) {
  *     console.log(error.code); // 'NOT_FOUND'
- *     console.log(error.httpStatus); // 404
+ *     console.log(error.statusCode); // 404
  *   }
  * }
  * ```
  */
 
-import { ServiceError, ServiceErrorCode } from "../../../errors";
+// PR 4 of unified-error-system migration: ServiceError → NextlyError. The
+// inner services now throw NextlyError directly and return data without an
+// envelope, so this façade just propagates errors and shapes the response.
+import { NextlyError } from "../../../errors";
 import type {
   RequestContext,
   PaginatedResult,
@@ -132,7 +135,7 @@ export interface PasswordHasher {
  *
  * Provides user CRUD operations, authentication, and password management with:
  *
- * - Exception-based error handling (throws ServiceError)
+ * - Exception-based error handling (throws NextlyError)
  * - Type-safe RequestContext
  * - PaginatedResult for list operations
  * - Logging support
@@ -156,7 +159,7 @@ export class UserService {
    * @param input - User creation data
    * @param context - Request context with user info
    * @returns Created user (without password hash)
-   * @throws ServiceError if creation fails (e.g., duplicate email)
+   * @throws NextlyError if creation fails (e.g., duplicate email)
    *
    * @example
    * ```typescript
@@ -176,54 +179,50 @@ export class UserService {
     // Extract known fields, pass rest as custom field values
     const { email, name, password, image, roles, isActive, ...customFields } =
       input;
-    const result = await this.mutationService.createLocalUser({
-      email,
-      name,
-      password: password ?? null,
-      image,
-      roles,
-      isActive,
-      ...customFields,
-    });
+    // mutationService.createLocalUser now returns the created user directly
+    // and throws NextlyError on validation/duplicate/DB failures. The façade
+    // just logs around the call and lets the error propagate to callers.
+    try {
+      const created = await this.mutationService.createLocalUser({
+        email,
+        name,
+        password: password ?? null,
+        image,
+        roles,
+        isActive,
+        ...customFields,
+      });
 
-    if (!result.success) {
+      this.logger.info("User created", {
+        email: input.email,
+        userId: created.id,
+      });
+
+      return this.mapToUser(created);
+    } catch (err) {
       this.logger.warn("User creation failed", {
         email: input.email,
-        message: result.message,
-        statusCode: result.statusCode,
+        code: NextlyError.is(err) ? err.code : "UNKNOWN",
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw err;
     }
-
-    this.logger.info("User created", {
-      email: input.email,
-      userId: result.data?.id,
-    });
-
-    return this.mapToUser(result.data!);
   }
 
   /**
-   * Find a user by ID
+   * Find a user by ID.
    *
    * @param userId - User ID
    * @param context - Request context
    * @returns User data
-   * @throws ServiceError with NOT_FOUND if user doesn't exist
+   * @throws NextlyError(NOT_FOUND) if user doesn't exist
    */
   async findById(userId: string, _context: RequestContext): Promise<User> {
     this.logger.debug("Finding user by ID", { userId });
 
-    const result = await this.queryService.getUserById(userId);
-
-    if (!result.success || !result.data) {
-      throw ServiceError.notFound(`User not found: ${userId}`, {
-        entity: "user",
-        userId,
-      });
-    }
-
-    return this.mapToUser(result.data);
+    // queryService.getUserById now throws NextlyError(NOT_FOUND) directly;
+    // the §13.8-compliant logContext is set there. Just propagate.
+    const user = await this.queryService.getUserById(userId);
+    return this.mapToUser(user);
   }
 
   /**
@@ -274,14 +273,13 @@ export class UserService {
       sortOrder: options.sortOrder,
     };
 
+    // queryService.listUsers throws NextlyError on DB failures and returns
+    // `{ data, meta }` directly. We propagate errors and shape the
+    // PaginatedResult below.
     const result = await this.queryService.listUsers(legacyOptions);
 
-    if (!result.success) {
-      throw this.mapLegacyErrorToServiceError(result);
-    }
-
-    const users = (result.data ?? []).map(u => this.mapToUser(u));
-    const total = result.meta?.total ?? users.length;
+    const users = result.data.map(u => this.mapToUser(u));
+    const total = result.meta.total;
     const offset = (page - 1) * pageSize;
 
     return {
@@ -302,7 +300,7 @@ export class UserService {
    * @param input - Update data
    * @param context - Request context
    * @returns Updated user
-   * @throws ServiceError if update fails
+   * @throws NextlyError if update fails
    */
   async update(
     userId: string,
@@ -314,33 +312,25 @@ export class UserService {
     // Extract known fields, pass rest as custom field values
     const { email, name, image, emailVerified, isActive, ...customFields } =
       input;
-    const result = await this.mutationService.updateUser(userId, {
-      email,
-      name,
-      image,
-      emailVerified,
-      isActive,
-      ...customFields,
-    });
+    try {
+      const updated = await this.mutationService.updateUser(userId, {
+        email,
+        name,
+        image,
+        emailVerified,
+        isActive,
+        ...customFields,
+      });
 
-    if (!result.success) {
-      if (result.statusCode === 404) {
-        throw ServiceError.notFound(`User not found: ${userId}`, {
-          entity: "user",
-          userId,
-        });
-      }
+      this.logger.info("User updated", { userId });
+      return this.mapToUser(updated);
+    } catch (err) {
       this.logger.warn("User update failed", {
         userId,
-        message: result.message,
-        statusCode: result.statusCode,
+        code: NextlyError.is(err) ? err.code : "UNKNOWN",
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw err;
     }
-
-    this.logger.info("User updated", { userId });
-
-    return this.mapToUser(result.data!);
   }
 
   /**
@@ -348,23 +338,14 @@ export class UserService {
    *
    * @param userId - User ID to delete
    * @param context - Request context
-   * @throws ServiceError if deletion fails
+   * @throws NextlyError if deletion fails
    */
   async delete(userId: string, _context: RequestContext): Promise<void> {
     this.logger.debug("Deleting user", { userId });
 
-    const result = await this.mutationService.deleteUser(userId);
-
-    if (!result.success) {
-      if (result.statusCode === 404) {
-        throw ServiceError.notFound(`User not found: ${userId}`, {
-          entity: "user",
-          userId,
-        });
-      }
-      throw this.mapLegacyErrorToServiceError(result);
-    }
-
+    // mutationService.deleteUser now returns void and throws NextlyError on
+    // not-found / DB errors. Just propagate.
+    await this.mutationService.deleteUser(userId);
     this.logger.info("User deleted", { userId });
   }
 
@@ -378,10 +359,15 @@ export class UserService {
    * Verifies credentials only - does NOT create a session.
    * Use the returned user to create a session via your auth system.
    *
+   * §13.8: every failure path uses the same generic
+   * `NextlyError.invalidCredentials()` so an attacker cannot distinguish
+   * "no such user" from "wrong password" — the email goes only to logContext.
+   *
    * @param email - User email
    * @param password - User password
    * @returns Authenticated user (without password hash)
-   * @throws ServiceError with INVALID_CREDENTIALS if authentication fails
+   * @throws NextlyError(AUTH_INVALID_CREDENTIALS) if authentication fails.
+   * @throws NextlyError(INTERNAL_ERROR) if password hasher is not configured.
    *
    * @example
    * ```typescript
@@ -390,7 +376,7 @@ export class UserService {
    *   // Create session with your auth system
    *   await createSession(user.id);
    * } catch (error) {
-   *   if (isServiceError(error) && error.code === ServiceErrorCode.INVALID_CREDENTIALS) {
+   *   if (NextlyError.isCode(error, 'AUTH_INVALID_CREDENTIALS')) {
    *     return { error: 'Invalid email or password' };
    *   }
    * }
@@ -409,37 +395,34 @@ export class UserService {
           email,
         }
       );
-      throw new ServiceError(
-        ServiceErrorCode.INVALID_CREDENTIALS,
-        "Invalid email or password"
-      );
+      throw NextlyError.invalidCredentials({
+        logContext: { email, reason: "user-not-found-or-no-password" },
+      });
     }
 
     // Verify password
     if (!this.passwordHasher) {
-      throw ServiceError.internal(
-        "Password hasher not configured for UserService"
-      );
+      throw NextlyError.internal({
+        logContext: { reason: "password-hasher-not-configured" },
+      });
     }
 
     const isValid = await this.passwordHasher.verify(password, passwordHash);
 
     if (!isValid) {
       this.logger.warn("Authentication failed - invalid password", { email });
-      throw new ServiceError(
-        ServiceErrorCode.INVALID_CREDENTIALS,
-        "Invalid email or password"
-      );
+      throw NextlyError.invalidCredentials({
+        logContext: { email, reason: "wrong-password" },
+      });
     }
 
     // Get full user data
     const user = await this.queryService.findByEmail(email);
 
     if (!user) {
-      throw new ServiceError(
-        ServiceErrorCode.INVALID_CREDENTIALS,
-        "Invalid email or password"
-      );
+      throw NextlyError.invalidCredentials({
+        logContext: { email, reason: "user-disappeared-after-verify" },
+      });
     }
 
     this.logger.info("User authenticated", { userId: user.id, email });
@@ -457,7 +440,7 @@ export class UserService {
    * @param userId - User ID
    * @param currentPassword - Current password for verification
    * @param newPassword - New password to set
-   * @throws ServiceError if password change fails
+   * @throws NextlyError if password change fails
    */
   async changePassword(
     userId: string,
@@ -466,20 +449,22 @@ export class UserService {
   ): Promise<void> {
     this.logger.debug("Changing password", { userId });
 
-    // Verify current password
+    // Verify current password. §13.8 + spec note: user existence + the
+    // "has-password" bit are sensitive, so the public message stays generic
+    // ("Not found.") with the user id captured only in logContext.
     const currentHash =
       await this.accountService.getUserPasswordHashById(userId);
 
     if (!currentHash) {
-      throw ServiceError.notFound("User not found or no password set", {
-        userId,
+      throw NextlyError.notFound({
+        logContext: { entity: "user", id: userId, reason: "no-password-set" },
       });
     }
 
     if (!this.passwordHasher) {
-      throw ServiceError.internal(
-        "Password hasher not configured for UserService"
-      );
+      throw NextlyError.internal({
+        logContext: { reason: "password-hasher-not-configured" },
+      });
     }
 
     const isValid = await this.passwordHasher.verify(
@@ -488,22 +473,15 @@ export class UserService {
     );
 
     if (!isValid) {
-      throw new ServiceError(
-        ServiceErrorCode.INVALID_CREDENTIALS,
-        "Current password is incorrect"
-      );
+      throw NextlyError.invalidCredentials({
+        logContext: { userId, reason: "wrong-current-password" },
+      });
     }
 
-    // Hash and update new password
+    // Hash and update new password. updatePasswordHash now returns void and
+    // throws NextlyError on DB failure or missing user; just propagate.
     const newHash = await this.passwordHasher.hash(newPassword);
-    const result = await this.accountService.updatePasswordHash(
-      userId,
-      newHash
-    );
-
-    if (!result.success) {
-      throw this.mapLegacyErrorToServiceError(result);
-    }
+    await this.accountService.updatePasswordHash(userId, newHash);
 
     this.logger.info("Password changed", { userId });
   }
@@ -540,21 +518,14 @@ export class UserService {
   ): Promise<User> {
     this.logger.debug("Updating user profile", { userId, changes });
 
-    const result = await this.accountService.updateCurrentUser(userId, changes);
-
-    if (!result.success) {
-      if (result.statusCode === 404) {
-        throw ServiceError.notFound(`User not found: ${userId}`, {
-          entity: "user",
-          userId,
-        });
-      }
-      throw this.mapLegacyErrorToServiceError(result);
-    }
-
+    // accountService.updateCurrentUser now returns the updated user directly
+    // and throws NextlyError on not-found / duplicate / DB errors.
+    const updated = await this.accountService.updateCurrentUser(
+      userId,
+      changes
+    );
     this.logger.info("User profile updated", { userId });
-
-    return this.mapToUser(result.data!);
+    return this.mapToUser(updated);
   }
 
   // ============================================================
@@ -631,32 +602,7 @@ export class UserService {
     };
   }
 
-  /**
-   * Convert legacy service result format to ServiceError
-   */
-  private mapLegacyErrorToServiceError(result: {
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: unknown;
-  }): ServiceError {
-    const { statusCode, message } = result;
-
-    switch (statusCode) {
-      case 400:
-        return ServiceError.validation(message);
-      case 401:
-        return ServiceError.unauthorized(message);
-      case 403:
-        return ServiceError.forbidden(message);
-      case 404:
-        return ServiceError.notFound(message);
-      case 409:
-        return ServiceError.duplicate(message);
-      case 422:
-        return ServiceError.businessRule(message);
-      default:
-        return ServiceError.internal(message);
-    }
-  }
+  // mapLegacyErrorToServiceError removed in PR 4 — inner services now throw
+  // NextlyError directly so the façade no longer needs to translate
+  // {success, statusCode, message} envelopes.
 }

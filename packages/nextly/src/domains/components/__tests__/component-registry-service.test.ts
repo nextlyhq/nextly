@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import { ServiceError } from "../../../errors";
+// PR 4 migration: assertions previously checked `instanceof ServiceError`,
+// but the service now throws NextlyError. Swap the asserted error class so
+// the `rejects.toThrow(...)` instanceof check lines up with the new throw type.
+import { NextlyError } from "../../../errors";
 import { ComponentRegistryService } from "../../../services/components/component-registry-service";
 
 import {
@@ -59,7 +62,6 @@ describe("ComponentRegistryService", () => {
     ctx = createCtx();
   });
 
-
   describe("registerComponent", () => {
     it("inserts a new component with correct snake_case columns", async () => {
       ctx.adapter.selectOne.mockResolvedValue(null); // no existing
@@ -106,7 +108,7 @@ describe("ComponentRegistryService", () => {
           source: "code",
           schemaHash: "hash-1",
         })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("auto-locks code-first components", async () => {
@@ -161,7 +163,6 @@ describe("ComponentRegistryService", () => {
     });
   });
 
-
   describe("getComponentBySlug", () => {
     it("returns deserialized component when found", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow());
@@ -198,11 +199,10 @@ describe("ComponentRegistryService", () => {
       ctx.adapter.selectOne.mockResolvedValue(null);
 
       await expect(ctx.service.getComponent("missing")).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
   });
-
 
   describe("getAllComponents", () => {
     it("returns all components", async () => {
@@ -267,7 +267,6 @@ describe("ComponentRegistryService", () => {
     });
   });
 
-
   describe("listComponents", () => {
     it("returns paginated data with total count", async () => {
       // First call: count query (columns: ["id"])
@@ -305,7 +304,6 @@ describe("ComponentRegistryService", () => {
     });
   });
 
-
   describe("updateComponent", () => {
     it("updates component and increments schema_version on fields change", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 })); // for getComponent
@@ -334,7 +332,7 @@ describe("ComponentRegistryService", () => {
 
       await expect(
         ctx.service.updateComponent("seo", { label: "New" }, { source: "ui" })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("allows update when locked and source is 'code'", async () => {
@@ -355,17 +353,16 @@ describe("ComponentRegistryService", () => {
 
       await expect(
         ctx.service.updateComponent("missing", { label: "X" })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
-
 
   describe("deleteComponent", () => {
     it("throws FORBIDDEN when component is locked", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 
       await expect(ctx.service.deleteComponent("seo")).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
 
@@ -404,11 +401,10 @@ describe("ComponentRegistryService", () => {
       });
 
       await expect(ctx.service.deleteComponent("seo")).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
   });
-
 
   describe("isLocked", () => {
     it("returns true for locked component", async () => {
@@ -426,7 +422,6 @@ describe("ComponentRegistryService", () => {
       expect(await ctx.service.isLocked("missing")).toBe(false);
     });
   });
-
 
   describe("updateMigrationStatus", () => {
     it("updates migration_status with snake_case column", async () => {
@@ -447,7 +442,7 @@ describe("ComponentRegistryService", () => {
 
       await expect(
         ctx.service.updateMigrationStatus("missing", "applied")
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -500,7 +495,6 @@ describe("ComponentRegistryService", () => {
       });
     });
   });
-
 
   describe("syncCodeFirstComponents", () => {
     it("creates new components that do not exist", async () => {
@@ -576,7 +570,6 @@ describe("ComponentRegistryService", () => {
       expect(result.errors[0].slug).toBe("seo");
     });
   });
-
 
   describe("findComponentReferences", () => {
     it("finds single-component references in collection fields", async () => {
@@ -671,7 +664,6 @@ describe("ComponentRegistryService", () => {
       expect(refs).toEqual([]);
     });
   });
-
 
   describe("enrichFieldsWithComponentSchemas", () => {
     it("adds componentFields for single-component fields", async () => {

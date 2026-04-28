@@ -10,9 +10,13 @@ import type {
   RBACDatabaseInstance,
 } from "@nextly/types/rbac-operations";
 
+// PR 4 migration: replaced legacy result-shape returns and
+// mapDbErrorToServiceError calls with throw-based NextlyError. Methods now
+// return their data directly; failures throw a NextlyError.
+import { toDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors/nextly-error";
 import { isSystemResource } from "../../../schemas/rbac";
 import { BaseService } from "../../../services/base-service";
-import { mapDbErrorToServiceError } from "../../../services/lib/db-error";
 import type { Logger } from "../../../services/shared";
 
 interface PermissionsTableLike {
@@ -58,8 +62,7 @@ export class PermissionService extends BaseService {
 
     try {
       if (this.tables?.dynamicCollections) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await (this.db as any)
+        const result = await this.db
           .select({ slug: this.tables.dynamicCollections.slug })
           .from(this.tables.dynamicCollections)
           .where(eq(this.tables.dynamicCollections.slug, resource))
@@ -75,8 +78,7 @@ export class PermissionService extends BaseService {
 
     try {
       if (this.tables?.dynamicSingles) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await (this.db as any)
+        const result = await this.db
           .select({ slug: this.tables.dynamicSingles.slug })
           .from(this.tables.dynamicSingles)
           .where(eq(this.tables.dynamicSingles.slug, resource))
@@ -115,9 +117,6 @@ export class PermissionService extends BaseService {
     sortBy?: "action" | "resource" | "name";
     sortOrder?: "asc" | "desc";
   }): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
     data: Array<{
       id: string;
       name: string;
@@ -126,8 +125,8 @@ export class PermissionService extends BaseService {
       resource: string;
       description: string | null;
       category?: string;
-    }> | null;
-    meta?: {
+    }>;
+    meta: {
       total: number;
       page: number;
       pageSize: number;
@@ -199,16 +198,14 @@ export class PermissionService extends BaseService {
 
       const offset = (page - 1) * pageSize;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const countResult = await (this.db as any)
+      const countResult = await this.db
         .select({ value: count() })
         .from(permissions)
         .where(whereClause);
 
       const total = Number(countResult[0]?.value ?? 0);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = await (this.db as any)
+      const rows = await this.db
         .select({
           id: permissions.id,
           name: permissions.name,
@@ -233,8 +230,7 @@ export class PermissionService extends BaseService {
       const singlesMap = new Set<string>();
 
       if (this.tables?.dynamicCollections && resourcesInRows.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const collections = await (this.db as any)
+        const collections = await this.db
           .select({ slug: this.tables.dynamicCollections.slug })
           .from(this.tables.dynamicCollections);
         collections.forEach((c: { slug: string }) =>
@@ -243,8 +239,7 @@ export class PermissionService extends BaseService {
       }
 
       if (this.tables?.dynamicSingles && resourcesInRows.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const singles = await (this.db as any)
+        const singles = await this.db
           .select({ slug: this.tables.dynamicSingles.slug })
           .from(this.tables.dynamicSingles);
         singles.forEach((s: { slug: string }) => singlesMap.add(s.slug));
@@ -259,26 +254,23 @@ export class PermissionService extends BaseService {
       });
 
       return {
-        success: true,
-        statusCode: 200,
-        message: "Permissions fetched successfully",
         data: rows.map((row: PermissionSelectResult) => {
           let category = "collection-types";
 
-          if (isSystemResource(row.resource as string)) {
+          if (isSystemResource(row.resource)) {
             category = "settings";
-          } else if (singlesMap.has(row.resource as string)) {
+          } else if (singlesMap.has(row.resource)) {
             category = "single-types";
-          } else if (collectionsMap.has(row.resource as string)) {
+          } else if (collectionsMap.has(row.resource)) {
             category = "collection-types";
           }
 
           this.logger.debug("[PermissionService] Permission categorized", {
             resource: row.resource,
             category,
-            isSystem: isSystemResource(row.resource as string),
-            isInSingles: singlesMap.has(row.resource as string),
-            isInCollections: collectionsMap.has(row.resource as string),
+            isSystem: isSystemResource(row.resource),
+            isInSingles: singlesMap.has(row.resource),
+            isInCollections: collectionsMap.has(row.resource),
           });
 
           return {
@@ -299,9 +291,12 @@ export class PermissionService extends BaseService {
         },
       };
     } catch (err) {
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to fetch permissions",
-      });
+      // Any DB error during the list query -> NextlyError. fromDatabaseError
+      // gives us a generic public message and rich operator logContext.
+      // Normalise raw driver errors via toDbError(dialect) first so the
+      // correct kind is preserved (otherwise everything would collapse to
+      // INTERNAL_ERROR / 500).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -309,21 +304,20 @@ export class PermissionService extends BaseService {
    * Get a permission by ID.
    *
    * @param permissionId - Permission ID
-   * @returns Permission details or null if not found
+   * @returns Permission details
+   * @throws NextlyError(NOT_FOUND) when no permission has this id, or it is
+   *   one of the hidden internal permissions (resource = 'permissions', or
+   *   create/delete on 'settings'). The hidden case maps to NOT_FOUND
+   *   intentionally — exposing it as FORBIDDEN would leak the policy.
    */
   async getPermissionById(permissionId: string): Promise<{
-    success: boolean;
-    message: string;
-    statusCode: number;
-    data: {
-      id: string;
-      name: string;
-      slug: string;
-      action: string;
-      resource: string;
-      description: string | null;
-      category?: string;
-    } | null;
+    id: string;
+    name: string;
+    slug: string;
+    action: string;
+    resource: string;
+    description: string | null;
+    category?: string;
   }> {
     const permission = await (
       this.db as RBACDatabaseInstance
@@ -340,12 +334,8 @@ export class PermissionService extends BaseService {
     });
 
     if (!permission) {
-      return {
-        success: false,
-        message: "Permission not found",
-        statusCode: 404,
-        data: null,
-      };
+      // Identifier moves to logContext per §13.8.
+      throw NextlyError.notFound({ logContext: { permissionId } });
     }
 
     const isHiddenPermission =
@@ -354,22 +344,25 @@ export class PermissionService extends BaseService {
         (permission.action === "create" || permission.action === "delete"));
 
     if (isHiddenPermission) {
-      return {
-        success: false,
-        message: "Permission not found",
-        statusCode: 404,
-        data: null,
-      };
+      // Hidden internal permission — surface as NOT_FOUND to avoid leaking
+      // the existence of the hidden surface area.
+      throw NextlyError.notFound({
+        logContext: {
+          permissionId,
+          reason: "hidden-permission",
+          resource: permission.resource,
+          action: permission.action,
+        },
+      });
     }
 
     let category = "collection-types";
 
-    if (isSystemResource(permission.resource as string)) {
+    if (isSystemResource(permission.resource)) {
       category = "settings";
     } else {
       if (this.tables?.dynamicSingles) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const single = await (this.db as any)
+        const single = await this.db
           .select({ slug: this.tables.dynamicSingles.slug })
           .from(this.tables.dynamicSingles)
           .where(eq(this.tables.dynamicSingles.slug, permission.resource))
@@ -382,20 +375,15 @@ export class PermissionService extends BaseService {
     }
 
     return {
-      success: true,
-      message: "Permission retrieved successfully",
-      statusCode: 200,
-      data: {
-        id: String(permission.id),
-        name: String(permission.name),
-        slug: String(permission.slug),
-        action: String(permission.action),
-        resource: String(permission.resource),
-        description: permission.description
-          ? String(permission.description)
-          : null,
-        category,
-      },
+      id: String(permission.id),
+      name: String(permission.name),
+      slug: String(permission.slug),
+      action: String(permission.action),
+      resource: String(permission.resource),
+      description: permission.description
+        ? String(permission.description)
+        : null,
+      category,
     };
   }
 
@@ -419,17 +407,17 @@ export class PermissionService extends BaseService {
     slug: string,
     description?: string
   ): Promise<{
-    success: boolean;
-    message: string;
-    statusCode: number;
-    data: { id: string } | null;
+    /** ID of the existing or newly created permission row. */
+    id: string;
+    /** True if this call inserted a new row, false if a matching row already existed. */
+    created: boolean;
   }> {
     await this.validateResource(resource);
 
     const { permissions } = this.tables;
     // Case-insensitive matching to align with listPermissions behavior
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const existing = await (this.db as any)
+
+    const existing = await this.db
       .select({ id: permissions.id })
       .from(permissions)
       .where(
@@ -439,14 +427,9 @@ export class PermissionService extends BaseService {
         )
       )
       .limit(1)
-      .then((rows: unknown[]) => (rows[0] as unknown) || null);
+      .then((rows: unknown[]) => rows[0] || null);
     if (existing) {
-      return {
-        success: true,
-        message: "Permission already exists",
-        statusCode: 200,
-        data: { id: String(existing.id) },
-      };
+      return { id: String(existing.id), created: false };
     }
     const id = randomUUID();
     const permissionData: PermissionInsertData = {
@@ -457,20 +440,23 @@ export class PermissionService extends BaseService {
       resource,
       description: description ?? null,
     };
-    const insertPerm = (this.db as RBACDatabaseInstance)
-      .insert(this.tables.permissions)
-      .values(permissionData);
-    if (typeof insertPerm.onConflictDoNothing === "function") {
-      await insertPerm.onConflictDoNothing();
-    } else {
-      await insertPerm;
+    try {
+      const insertPerm = (this.db as RBACDatabaseInstance)
+        .insert(this.tables.permissions)
+        .values(permissionData);
+      if (typeof insertPerm.onConflictDoNothing === "function") {
+        await insertPerm.onConflictDoNothing();
+      } else {
+        await insertPerm;
+      }
+    } catch (err) {
+      // Constraint / dialect error during insert -> NextlyError. The
+      // method's seed-style idempotency means callers don't need a
+      // distinct "duplicate" branch; fromDatabaseError is enough. Normalise
+      // raw driver errors first so the kind is mapped correctly.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
-    return {
-      success: true,
-      message: "Permission created successfully",
-      statusCode: 201,
-      data: { id },
-    };
+    return { id, created: true };
   }
 
   /**
@@ -491,12 +477,7 @@ export class PermissionService extends BaseService {
       resource?: string;
       description?: string;
     }
-  ): Promise<{
-    success: boolean;
-    message: string;
-    statusCode: number;
-    data: null;
-  }> {
+  ): Promise<void> {
     try {
       const permission = await (
         this.db as RBACDatabaseInstance
@@ -513,12 +494,7 @@ export class PermissionService extends BaseService {
       });
 
       if (!permission) {
-        return {
-          success: false,
-          message: "Permission not found",
-          statusCode: 404,
-          data: null,
-        };
+        throw NextlyError.notFound({ logContext: { permissionId } });
       }
 
       if (
@@ -538,12 +514,10 @@ export class PermissionService extends BaseService {
         (changes.description === undefined ||
           changes.description === permission.description)
       ) {
-        return {
-          success: true,
-          message: "Permission already up to date",
-          statusCode: 200,
-          data: null,
-        };
+        // No-op: nothing to update. Returning void is idempotent and
+        // semantically correct here (the resource is already in the
+        // requested state).
+        return;
       }
 
       const updateData: PermissionUpdateData = {
@@ -562,19 +536,16 @@ export class PermissionService extends BaseService {
         .update(this.tables.permissions)
         .set(updateData)
         .where(eq(this.tables.permissions.id, permissionId));
-
-      return {
-        success: true,
-        message: "Permission updated successfully",
-        statusCode: 200,
-        data: null,
-      };
     } catch (err) {
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to update permission",
-        "unique-violation": "Permission with this slug or name already exists",
-        constraint: "Permission with this slug or name already exists",
-      });
+      // Re-throw NextlyError instances unchanged (e.g. our notFound above);
+      // map raw DB errors via fromDatabaseError. The legacy override message
+      // ("Permission with this slug or name already exists") is dropped:
+      // §13.8 favours generic "Resource already exists." which is what the
+      // unique-violation path already produces.
+      if (NextlyError.is(err)) throw err;
+      // Normalise raw driver errors first so unique-violation etc. are
+      // preserved (would collapse to INTERNAL_ERROR otherwise).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -582,14 +553,13 @@ export class PermissionService extends BaseService {
    * Delete a permission by ID if it's not assigned to any roles.
    *
    * @param permissionId - Permission ID
-   * @returns Success/failure status
+   * @throws NextlyError(NOT_FOUND) when no permission has this id.
+   * @throws NextlyError(FORBIDDEN) when the permission belongs to a system
+   *   resource (system permissions are immutable).
+   * @throws NextlyError(BUSINESS_RULE_VIOLATION) when the permission is
+   *   currently assigned to one or more roles.
    */
-  async deletePermissionById(permissionId: string): Promise<{
-    success: boolean;
-    message: string;
-    statusCode: number;
-    data: null;
-  }> {
+  async deletePermissionById(permissionId: string): Promise<void> {
     const permission = await (
       this.db as RBACDatabaseInstance
     ).query.permissions.findFirst({
@@ -601,21 +571,20 @@ export class PermissionService extends BaseService {
     });
 
     if (!permission) {
-      return {
-        success: false,
-        message: "Permission not found",
-        statusCode: 404,
-        data: null,
-      };
+      throw NextlyError.notFound({ logContext: { permissionId } });
     }
 
-    if (isSystemResource(permission.resource as string)) {
-      return {
-        success: false,
-        message: "System permissions cannot be deleted",
-        statusCode: 403,
-        data: null,
-      };
+    if (isSystemResource(permission.resource)) {
+      // §13.8: forbidden messages must not reveal *why* (the policy / which
+      // resource is system). Generic "You don't have permission..." comes
+      // from the factory; the detail moves to logContext.
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "system-permission-undeletable",
+          permissionId,
+          resource: permission.resource,
+        },
+      });
     }
 
     const usage = await (
@@ -628,24 +597,27 @@ export class PermissionService extends BaseService {
     });
 
     if (usage) {
-      return {
-        success: false,
-        message: "Permission is assigned to roles",
-        statusCode: 400,
-        data: null,
-      };
+      // Business rule, not a validation issue: the data was correct, but the
+      // operation can't be completed in the current state. Custom code +
+      // explicit 422 per the migration mapping table.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This permission is currently assigned to one or more roles and cannot be deleted.",
+        statusCode: 422,
+        logContext: { reason: "permission-in-use", permissionId },
+      });
     }
 
-    await (this.db as RBACDatabaseInstance)
-      .delete(this.tables.permissions)
-      .where(eq(this.tables.permissions.id, permissionId));
-
-    return {
-      success: true,
-      message: "Permission deleted successfully",
-      statusCode: 200,
-      data: null,
-    };
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .delete(this.tables.permissions)
+        .where(eq(this.tables.permissions.id, permissionId));
+    } catch (err) {
+      // Normalise raw driver errors so fk-violation / etc. produce the
+      // right NextlyError instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
   }
 
   /**
@@ -653,21 +625,14 @@ export class PermissionService extends BaseService {
    *
    * @param action - Permission action
    * @param resource - Permission resource
-   * @returns Success/failure status
+   * @throws NextlyError(NOT_FOUND) when no permission matches.
+   * @throws NextlyError(BUSINESS_RULE_VIOLATION) when the permission is in use.
    */
-  async deletePermission(
-    action: string,
-    resource: string
-  ): Promise<{
-    success: boolean;
-    message: string;
-    statusCode: number;
-    data: null;
-  }> {
+  async deletePermission(action: string, resource: string): Promise<void> {
     const { permissions } = this.tables;
     // Case-insensitive matching to align with listPermissions behavior
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const permission = await (this.db as any)
+
+    const permission = await this.db
       .select({ id: permissions.id })
       .from(permissions)
       .where(
@@ -677,15 +642,12 @@ export class PermissionService extends BaseService {
         )
       )
       .limit(1)
-      .then((rows: unknown[]) => (rows[0] as unknown) || null);
+      .then((rows: unknown[]) => rows[0] || null);
 
     if (!permission) {
-      return {
-        success: false,
-        message: "Permission not found",
-        statusCode: 404,
-        data: null,
-      };
+      // Action + resource pair is operator context only; never echo into
+      // the public message.
+      throw NextlyError.notFound({ logContext: { action, resource } });
     }
 
     const permissionId = (permission as { id: unknown }).id;
@@ -699,23 +661,26 @@ export class PermissionService extends BaseService {
     });
 
     if (usage) {
-      return {
-        success: false,
-        message: "Permission is assigned to roles",
-        statusCode: 400,
-        data: null,
-      };
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This permission is currently assigned to one or more roles and cannot be deleted.",
+        statusCode: 422,
+        logContext: {
+          reason: "permission-in-use",
+          permissionId: String(permissionId),
+        },
+      });
     }
 
-    await (this.db as RBACDatabaseInstance)
-      .delete(this.tables.permissions)
-      .where(eq(this.tables.permissions.id, permissionId));
-
-    return {
-      success: true,
-      message: "Permission deleted successfully",
-      statusCode: 200,
-      data: null,
-    };
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .delete(this.tables.permissions)
+        .where(eq(this.tables.permissions.id, permissionId));
+    } catch (err) {
+      // Normalise raw driver errors so the kind is mapped correctly
+      // instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
   }
 }

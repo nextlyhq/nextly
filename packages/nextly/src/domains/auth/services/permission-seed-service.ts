@@ -280,24 +280,26 @@ export class PermissionSeedService extends BaseService {
     const result = this.emptySeedResult();
 
     for (const perm of SYSTEM_PERMISSIONS) {
-      const ensureResult = await this.permissionService.ensurePermission(
-        perm.action,
-        perm.resource,
-        perm.name,
-        perm.slug,
-        perm.description
-      );
-
       result.total++;
+      try {
+        // PR 4 migration: ensurePermission now returns `{ id, created }`
+        // and throws NextlyError on failure instead of the legacy
+        // `{success, statusCode, data}` shape.
+        const ensureResult = await this.permissionService.ensurePermission(
+          perm.action,
+          perm.resource,
+          perm.name,
+          perm.slug,
+          perm.description
+        );
 
-      if (ensureResult.success && ensureResult.statusCode === 201) {
-        result.created++;
-        if (ensureResult.data?.id) {
-          result.newPermissionIds.push(ensureResult.data.id);
+        if (ensureResult.created) {
+          result.created++;
+          result.newPermissionIds.push(ensureResult.id);
+        } else {
+          result.skipped++;
         }
-      } else if (ensureResult.success) {
-        result.skipped++;
-      } else {
+      } catch {
         result.errors++;
       }
     }
@@ -323,24 +325,23 @@ export class PermissionSeedService extends BaseService {
       const slug = `${action}-${collectionSlug}`;
       const description = `Permission to ${action} ${label.toLowerCase()}`;
 
-      const ensureResult = await this.permissionService.ensurePermission(
-        action,
-        collectionSlug,
-        name,
-        slug,
-        description
-      );
-
       result.total++;
+      try {
+        const ensureResult = await this.permissionService.ensurePermission(
+          action,
+          collectionSlug,
+          name,
+          slug,
+          description
+        );
 
-      if (ensureResult.success && ensureResult.statusCode === 201) {
-        result.created++;
-        if (ensureResult.data?.id) {
-          result.newPermissionIds.push(ensureResult.data.id);
+        if (ensureResult.created) {
+          result.created++;
+          result.newPermissionIds.push(ensureResult.id);
+        } else {
+          result.skipped++;
         }
-      } else if (ensureResult.success) {
-        result.skipped++;
-      } else {
+      } catch {
         result.errors++;
       }
     }
@@ -367,24 +368,23 @@ export class PermissionSeedService extends BaseService {
       const slug = `${action}-${singleSlug}`;
       const description = `Permission to ${action} ${label.toLowerCase()}`;
 
-      const ensureResult = await this.permissionService.ensurePermission(
-        action,
-        singleSlug,
-        name,
-        slug,
-        description
-      );
-
       result.total++;
+      try {
+        const ensureResult = await this.permissionService.ensurePermission(
+          action,
+          singleSlug,
+          name,
+          slug,
+          description
+        );
 
-      if (ensureResult.success && ensureResult.statusCode === 201) {
-        result.created++;
-        if (ensureResult.data?.id) {
-          result.newPermissionIds.push(ensureResult.data.id);
+        if (ensureResult.created) {
+          result.created++;
+          result.newPermissionIds.push(ensureResult.id);
+        } else {
+          result.skipped++;
         }
-      } else if (ensureResult.success) {
-        result.skipped++;
-      } else {
+      } catch {
         result.errors++;
       }
     }
@@ -465,8 +465,8 @@ export class PermissionSeedService extends BaseService {
 
     try {
       const { roles } = this.tables;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const superAdminRole = await (this.db as any)
+
+      const superAdminRole = await this.db
         .select({ id: roles.id })
         .from(roles)
         .where(eq(roles.slug, "super-admin"))
@@ -501,16 +501,23 @@ export class PermissionSeedService extends BaseService {
         });
 
         if (!existing) {
-          const permResult =
-            await this.permissionService.getPermissionById(permissionId);
+          // PR 4 migration: getPermissionById now returns the data directly
+          // and throws NextlyError(NOT_FOUND) for missing/hidden permissions.
+          // Wrap in try/catch so a missing permission silently skips the
+          // assignment (preserves the legacy "no-op on miss" behavior).
+          try {
+            const perm =
+              await this.permissionService.getPermissionById(permissionId);
 
-          if (permResult.success && permResult.data) {
             await this.rolePermissionService.addPermissionToRole(roleId, {
-              action: permResult.data.action,
-              resource: permResult.data.resource,
-              name: permResult.data.name,
-              slug: permResult.data.slug,
+              action: perm.action,
+              resource: perm.resource,
+              name: perm.name,
+              slug: perm.slug,
             });
+          } catch {
+            // Permission missing or hidden — skip without error, matching
+            // the legacy `if (permResult.success && permResult.data)` guard.
           }
         }
       }
@@ -541,12 +548,12 @@ export class PermissionSeedService extends BaseService {
     const result = this.emptySeedResult();
 
     try {
+      // PR 4 migration: listPermissions now returns `{data, meta}` directly
+      // and throws on DB errors instead of wrapping in `{success, data}`.
       const allPerms = await this.permissionService.listPermissions({
         page: 1,
         pageSize: 10000,
       });
-
-      if (!allPerms.data) return result;
 
       const { rolePermissions, permissions } = this.tables;
 
@@ -555,14 +562,13 @@ export class PermissionSeedService extends BaseService {
           result.total++;
 
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (this.db as any)
+            await this.db
               .delete(rolePermissions)
               .where(eq(rolePermissions.permissionId, perm.id));
 
             // Delete the permission itself directly (bypass the role check)
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (this.db as any)
+
+            await this.db
               .delete(permissions)
               .where(eq(permissions.id, perm.id));
 
@@ -617,12 +623,14 @@ export class PermissionSeedService extends BaseService {
         ...componentSlugs,
       ]);
 
+      // PR 4 migration: listPermissions now returns `{data, meta}` directly
+      // and throws on DB errors. Failures bubble up to the outer catch
+      // below, matching the legacy "if (!allPerms.data) return result"
+      // graceful-degradation behavior.
       const allPerms = await this.permissionService.listPermissions({
         page: 1,
         pageSize: 10000,
       });
-
-      if (!allPerms.data) return result;
 
       const { rolePermissions, permissions } = this.tables;
 
@@ -631,14 +639,13 @@ export class PermissionSeedService extends BaseService {
           result.total++;
 
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (this.db as any)
+            await this.db
               .delete(rolePermissions)
               .where(eq(rolePermissions.permissionId, perm.id));
 
             // Delete the permission itself directly (bypass the role check)
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (this.db as any)
+
+            await this.db
               .delete(permissions)
               .where(eq(permissions.id, perm.id));
 
@@ -673,8 +680,7 @@ export class PermissionSeedService extends BaseService {
   private async getAllCollectionSlugs(): Promise<string[]> {
     if (!this.tables?.dynamicCollections) return [];
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({ slug: this.tables.dynamicCollections.slug })
       .from(this.tables.dynamicCollections);
 
@@ -684,8 +690,7 @@ export class PermissionSeedService extends BaseService {
   private async getAllSingleSlugs(): Promise<string[]> {
     if (!this.tables?.dynamicSingles) return [];
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({ slug: this.tables.dynamicSingles.slug })
       .from(this.tables.dynamicSingles);
 
@@ -695,8 +700,7 @@ export class PermissionSeedService extends BaseService {
   private async getAllComponentSlugs(): Promise<string[]> {
     if (!this.tables?.dynamicComponents) return [];
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({ slug: this.tables.dynamicComponents.slug })
       .from(this.tables.dynamicComponents);
 

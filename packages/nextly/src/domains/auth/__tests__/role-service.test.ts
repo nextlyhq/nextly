@@ -845,48 +845,47 @@ describe("RoleService", () => {
       expectErrorResponse(result, 404, "not found");
     });
 
+    // PR 4 migration: getRoleById now throws NextlyError(VALIDATION_ERROR) for
+    // bad inputs instead of returning a result-shape with statusCode: 400.
+    // These assertions check the error code and the validation publicData
+    // shape rather than the legacy `{success, message, statusCode}` result.
     it("should reject invalid UUID format", async () => {
-      // Act
-      const result = await service.getRoleById("not-a-uuid");
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message.toLowerCase()).toContain("uuid");
+      await expect(service.getRoleById("not-a-uuid")).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject null role ID", async () => {
-      // Act
-      const result = await service.getRoleById(null as any);
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message.toLowerCase()).toContain("required");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect(service.getRoleById(null as any)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject undefined role ID", async () => {
-      // Act
-      const result = await service.getRoleById(undefined as any);
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message.toLowerCase()).toContain("required");
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        service.getRoleById(undefined as any)
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject empty string role ID", async () => {
-      // Act
-      const result = await service.getRoleById("");
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message.toLowerCase()).toContain("required");
+      await expect(service.getRoleById("")).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject whitespace-only role ID", async () => {
-      // Act
-      const result = await service.getRoleById("   ");
-
-      // Assert
-      expectErrorResponse(result, 400);
+      await expect(service.getRoleById("   ")).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should return correct isSystem flag for system role", async () => {
@@ -1231,7 +1230,7 @@ describe("RoleService", () => {
 
     it("should return null for null slug", async () => {
       // Act
-       
+
       const result = await service.findRoleIdBySlug(null as any);
 
       // Assert
@@ -1240,7 +1239,7 @@ describe("RoleService", () => {
 
     it("should return null for undefined slug", async () => {
       // Act
-       
+
       const result = await service.findRoleIdBySlug(undefined as any);
 
       // Assert

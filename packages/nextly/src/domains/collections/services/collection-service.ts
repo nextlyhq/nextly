@@ -5,7 +5,7 @@
  * and entry operations (CRUD on documents within collections). It follows the new
  * service layer architecture with:
  *
- * - Exception-based error handling using ServiceError
+ * - Exception-based error handling using NextlyError
  * - RequestContext for user/locale context
  * - PaginatedResult for list operations
  * - Transaction-aware methods (*InTransaction) using adapter transactions
@@ -16,7 +16,7 @@
  *
  * @example
  * ```typescript
- * import { CollectionService, ServiceError, isServiceError } from '@revnixhq/nextly';
+ * import { CollectionService, NextlyError } from '@revnixhq/nextly';
  *
  * const service = new CollectionService(adapter, logger, metadataService, entryService);
  *
@@ -34,9 +34,9 @@
  * try {
  *   const entry = await service.findEntryById('posts', 'nonexistent', context);
  * } catch (error) {
- *   if (isServiceError(error)) {
+ *   if (NextlyError.is(error)) {
  *     console.log(error.code); // 'NOT_FOUND'
- *     console.log(error.httpStatus); // 404
+ *     console.log(error.statusCode); // 404
  *   }
  * }
  *
@@ -51,7 +51,12 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
-import { ServiceError } from "../../../errors";
+// PR 4 migration: replaced legacy ServiceError throws with the unified
+// NextlyError API. The orchestrator still translates the inner
+// MetadataServiceResult / CollectionServiceResult shapes (returned by
+// metadata/entry services for backward compatibility) into thrown
+// NextlyErrors at this boundary so callers see the new error model.
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type {
@@ -131,7 +136,7 @@ export interface CollectionEntry {
  * Provides both collection metadata CRUD (create/update/delete collections)
  * and entry CRUD (documents within collections) with:
  *
- * - Exception-based error handling (throws ServiceError)
+ * - Exception-based error handling (throws NextlyError)
  * - Type-safe RequestContext
  * - PaginatedResult for list operations
  * - Database adapter abstraction for multi-DB support
@@ -175,7 +180,7 @@ export class CollectionService extends BaseService {
    * @param input - Collection creation data
    * @param context - Request context with user info
    * @returns Created collection
-   * @throws ServiceError if creation fails
+   * @throws NextlyError if creation fails
    *
    * @example
    * ```typescript
@@ -208,7 +213,7 @@ export class CollectionService extends BaseService {
         name: input.name,
         message: result.message,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     const created = result.data as Record<string, unknown>;
@@ -226,18 +231,20 @@ export class CollectionService extends BaseService {
    * @param options - Pagination and filter options
    * @param context - Request context
    * @returns Paginated list of collections
-   * @throws ServiceError if listing fails
+   * @throws NextlyError if listing fails
    */
   async listCollections(
     options: ListCollectionsOptions = {},
-    context: RequestContext
+    // `_context` is intentionally unused today; it stays in the signature so
+    // callers (and future ACL/multitenant logic) can pass request context.
+    _context: RequestContext
   ): Promise<PaginatedResult<Collection>> {
     this.logger.debug("Listing collections", { options });
 
     const result = await this.metadataService.listCollections(options);
 
     if (!result.success) {
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     const pageSize = options.pageSize ?? 10;
@@ -263,20 +270,21 @@ export class CollectionService extends BaseService {
    * @param collectionName - Name of the collection
    * @param context - Request context
    * @returns Collection metadata
-   * @throws ServiceError with NOT_FOUND if collection doesn't exist
+   * @throws NextlyError with NOT_FOUND if collection doesn't exist
    */
   async getCollection(
     collectionName: string,
-    context: RequestContext
+    // `_context` is intentionally unused today; preserved for future ACL hooks.
+    _context: RequestContext
   ): Promise<Collection> {
     this.logger.debug("Getting collection", { collectionName });
 
     const result = await this.metadataService.getCollection({ collectionName });
 
     if (!result.success) {
-      throw ServiceError.notFound(`Collection not found: ${collectionName}`, {
-        entity: "collection",
-        collectionName,
+      // Generic "Not found." per §13.8; collection name moves to logContext.
+      throw NextlyError.notFound({
+        logContext: { entity: "collection", collectionName },
       });
     }
 
@@ -290,12 +298,13 @@ export class CollectionService extends BaseService {
    * @param input - Update data
    * @param context - Request context
    * @returns Updated collection
-   * @throws ServiceError if update fails
+   * @throws NextlyError if update fails
    */
   async updateCollection(
     collectionName: string,
     input: UpdateCollectionInput,
-    context: RequestContext
+    // `_context` is intentionally unused today; preserved for future ACL hooks.
+    _context: RequestContext
   ): Promise<Collection> {
     this.logger.debug("Updating collection", { collectionName, input });
 
@@ -309,7 +318,7 @@ export class CollectionService extends BaseService {
         collectionName,
         message: result.message,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Collection updated", { collectionName });
@@ -322,11 +331,12 @@ export class CollectionService extends BaseService {
    *
    * @param collectionName - Name of the collection to delete
    * @param context - Request context
-   * @throws ServiceError if deletion fails
+   * @throws NextlyError if deletion fails
    */
   async deleteCollection(
     collectionName: string,
-    context: RequestContext
+    // `_context` is intentionally unused today; preserved for future ACL hooks.
+    _context: RequestContext
   ): Promise<void> {
     this.logger.debug("Deleting collection", { collectionName });
 
@@ -335,7 +345,7 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Collection deleted", { collectionName });
@@ -348,7 +358,7 @@ export class CollectionService extends BaseService {
    * @param data - Entry data
    * @param context - Request context with user info
    * @returns Created entry
-   * @throws ServiceError if creation fails
+   * @throws NextlyError if creation fails
    *
    * @example
    * ```typescript
@@ -382,7 +392,7 @@ export class CollectionService extends BaseService {
         message: result.message,
         statusCode: result.statusCode,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Entry created", {
@@ -400,7 +410,7 @@ export class CollectionService extends BaseService {
    * @param options - Query options (pagination, sort, where)
    * @param context - Request context
    * @returns Paginated list of entries
-   * @throws ServiceError if listing fails
+   * @throws NextlyError if listing fails
    */
   async listEntries(
     collectionName: string,
@@ -421,7 +431,7 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success || !result.data) {
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     const paginatedResponse = result.data;
@@ -443,7 +453,7 @@ export class CollectionService extends BaseService {
    * @param entryId - ID of the entry
    * @param context - Request context
    * @returns Entry data
-   * @throws ServiceError with NOT_FOUND if entry doesn't exist
+   * @throws NextlyError with NOT_FOUND if entry doesn't exist
    */
   async findEntryById(
     collectionName: string,
@@ -460,19 +470,24 @@ export class CollectionService extends BaseService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Entry not found: ${entryId}`, {
-          entity: "entry",
-          collectionName,
-          entryId,
+        // Generic "Not found." from the factory; identifiers go to logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "entry", collectionName, entryId },
         });
       }
       if (result.statusCode === 403) {
-        throw ServiceError.forbidden(result.message || "Access denied", {
-          collectionName,
-          entryId,
+        // Generic forbidden message; the inner result.message often echoes
+        // policy reasons that §13.8 keeps off the wire — drop them here and
+        // preserve them in logContext only.
+        throw NextlyError.forbidden({
+          logContext: {
+            collectionName,
+            entryId,
+            innerMessage: result.message,
+          },
         });
       }
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     return result.data as CollectionEntry;
@@ -486,7 +501,7 @@ export class CollectionService extends BaseService {
    * @param data - Update data
    * @param context - Request context
    * @returns Updated entry
-   * @throws ServiceError if update fails
+   * @throws NextlyError if update fails
    */
   async updateEntry(
     collectionName: string,
@@ -507,16 +522,21 @@ export class CollectionService extends BaseService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Entry not found: ${entryId}`, {
-          entity: "entry",
-          collectionName,
-          entryId,
+        // Generic "Not found." from the factory; identifiers go to logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "entry", collectionName, entryId },
         });
       }
       if (result.statusCode === 403) {
-        throw ServiceError.forbidden(result.message || "Access denied", {
-          collectionName,
-          entryId,
+        // Generic forbidden message; the inner result.message often echoes
+        // policy reasons that §13.8 keeps off the wire — drop them here and
+        // preserve them in logContext only.
+        throw NextlyError.forbidden({
+          logContext: {
+            collectionName,
+            entryId,
+            innerMessage: result.message,
+          },
         });
       }
       this.logger.warn("Entry update failed", {
@@ -524,7 +544,7 @@ export class CollectionService extends BaseService {
         entryId,
         message: result.message,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Entry updated", { collectionName, entryId });
@@ -538,7 +558,7 @@ export class CollectionService extends BaseService {
    * @param collectionName - Name of the collection
    * @param entryId - ID of the entry to delete
    * @param context - Request context
-   * @throws ServiceError if deletion fails
+   * @throws NextlyError if deletion fails
    */
   async deleteEntry(
     collectionName: string,
@@ -555,19 +575,24 @@ export class CollectionService extends BaseService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Entry not found: ${entryId}`, {
-          entity: "entry",
-          collectionName,
-          entryId,
+        // Generic "Not found." from the factory; identifiers go to logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "entry", collectionName, entryId },
         });
       }
       if (result.statusCode === 403) {
-        throw ServiceError.forbidden(result.message || "Access denied", {
-          collectionName,
-          entryId,
+        // Generic forbidden message; the inner result.message often echoes
+        // policy reasons that §13.8 keeps off the wire — drop them here and
+        // preserve them in logContext only.
+        throw NextlyError.forbidden({
+          logContext: {
+            collectionName,
+            entryId,
+            innerMessage: result.message,
+          },
         });
       }
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Entry deleted", { collectionName, entryId });
@@ -619,7 +644,7 @@ export class CollectionService extends BaseService {
         message: result.message,
         statusCode: result.statusCode,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Entry created in transaction", {
@@ -665,16 +690,21 @@ export class CollectionService extends BaseService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Entry not found: ${entryId}`, {
-          entity: "entry",
-          collectionName,
-          entryId,
+        // Generic "Not found." from the factory; identifiers go to logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "entry", collectionName, entryId },
         });
       }
       if (result.statusCode === 403) {
-        throw ServiceError.forbidden(result.message || "Access denied", {
-          collectionName,
-          entryId,
+        // Generic forbidden message; the inner result.message often echoes
+        // policy reasons that §13.8 keeps off the wire — drop them here and
+        // preserve them in logContext only.
+        throw NextlyError.forbidden({
+          logContext: {
+            collectionName,
+            entryId,
+            innerMessage: result.message,
+          },
         });
       }
       this.logger.warn("Entry update in transaction failed", {
@@ -682,7 +712,7 @@ export class CollectionService extends BaseService {
         entryId,
         message: result.message,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Entry updated in transaction", {
@@ -721,19 +751,24 @@ export class CollectionService extends BaseService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Entry not found: ${entryId}`, {
-          entity: "entry",
-          collectionName,
-          entryId,
+        // Generic "Not found." from the factory; identifiers go to logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "entry", collectionName, entryId },
         });
       }
       if (result.statusCode === 403) {
-        throw ServiceError.forbidden(result.message || "Access denied", {
-          collectionName,
-          entryId,
+        // Generic forbidden message; the inner result.message often echoes
+        // policy reasons that §13.8 keeps off the wire — drop them here and
+        // preserve them in logContext only.
+        throw NextlyError.forbidden({
+          logContext: {
+            collectionName,
+            entryId,
+            innerMessage: result.message,
+          },
         });
       }
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Entry deleted in transaction", {
@@ -742,29 +777,69 @@ export class CollectionService extends BaseService {
     });
   }
 
-  private mapLegacyErrorToServiceError(result: {
+  /**
+   * Translate a legacy CollectionServiceResult / MetadataServiceResult failure
+   * into a thrown NextlyError. Only used for non-404/403 cases — those have
+   * dedicated factory calls inline at each call site so identifiers can move
+   * cleanly to logContext.
+   *
+   * Per §13.8, the public message is generic for the matched factory; the
+   * inner legacy message moves to logContext for operators only and never
+   * reaches the wire.
+   */
+  private mapLegacyErrorToNextlyError(result: {
     success: boolean;
     statusCode: number;
     message: string;
     data: unknown;
-  }): ServiceError {
+  }): NextlyError {
     const { statusCode, message } = result;
 
     switch (statusCode) {
       case 400:
-        return ServiceError.validation(message);
+        // Validation requires structured `errors`; with no per-field detail
+        // available from the legacy shape, surface a single generic entry
+        // and stash the original message in logContext.
+        return NextlyError.validation({
+          errors: [
+            {
+              path: "",
+              code: "INVALID",
+              message: "The request is invalid.",
+            },
+          ],
+          logContext: { innerMessage: message },
+        });
       case 401:
-        return ServiceError.unauthorized(message);
+        return NextlyError.authRequired({
+          logContext: { innerMessage: message },
+        });
       case 403:
-        return ServiceError.forbidden(message);
+        return NextlyError.forbidden({
+          logContext: { innerMessage: message },
+        });
       case 404:
-        return ServiceError.notFound(message);
+        return NextlyError.notFound({
+          logContext: { innerMessage: message },
+        });
       case 409:
-        return ServiceError.duplicate(message);
+        return NextlyError.duplicate({
+          logContext: { innerMessage: message },
+        });
       case 422:
-        return ServiceError.businessRule(message);
+        // No dedicated factory for business-rule violations — use the
+        // free-form constructor with the canonical code and 422 status
+        // per the migration mapping table.
+        return new NextlyError({
+          code: "BUSINESS_RULE_VIOLATION",
+          publicMessage: "The request could not be completed.",
+          statusCode: 422,
+          logContext: { innerMessage: message },
+        });
       default:
-        return ServiceError.internal(message);
+        return NextlyError.internal({
+          logContext: { innerMessage: message, statusCode },
+        });
     }
   }
 }

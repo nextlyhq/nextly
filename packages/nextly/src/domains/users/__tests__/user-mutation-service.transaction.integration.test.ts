@@ -38,9 +38,9 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createSqliteAdapter } from "@revnixhq/adapter-sqlite";
-import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { ServiceContainer } from "../../../services/index";
 import { UserMutationService } from "../services/user-mutation-service";
 
@@ -101,7 +101,7 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
   // Cast to any because this test only imports the adapter; the full
   // DrizzleAdapter type lives in @revnixhq/adapter-drizzle and importing it
   // here would add a dev dep just for a variable annotation.
-   
+
   let adapter: any;
   let service: UserMutationService;
 
@@ -165,26 +165,18 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
     // This is the EXACT call the onboarding flow makes — see
     // packages/nextly/src/route-handler/auth-handler.ts handleSetup →
     // seedSuperAdmin → container.users.create → mutationService.createLocalUser.
-    const result = await service.createLocalUser({
+    // Post-migration (PR 4): createLocalUser returns the user directly and
+    // throws NextlyError on failure (no `{success, statusCode, ...}` envelope).
+    const created = await service.createLocalUser({
       email: "regression@test.local",
       name: "Regression Test",
       password: "TestPassword123!",
       isActive: true,
     });
 
-    // Surface the full response on failure so we can diagnose which layer
-    // rejected the call if the test ever regresses.
-    if (!result.success) {
-      throw new Error(
-        `createLocalUser failed: statusCode=${result.statusCode} message=${result.message}`
-      );
-    }
-
-    expect(result.success).toBe(true);
-    expect(result.statusCode).toBe(201);
-    expect(result.data).toBeDefined();
-    expect(result.data?.email).toBe("regression@test.local");
-    expect(result.data?.name).toBe("Regression Test");
+    expect(created).toBeDefined();
+    expect(created.email).toBe("regression@test.local");
+    expect(created.name).toBe("Regression Test");
 
     // Verify the row was actually committed by reading it back through the
     // adapter's executeQuery escape hatch. A rollback (or the old crashing
@@ -203,21 +195,24 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
     expect(rows[0].email).toBe("regression@test.local");
   });
 
-  it("returns a conflict response when inserting a duplicate email", async () => {
+  it("throws NextlyError(DUPLICATE) when inserting a duplicate email", async () => {
     // Second insert with the same email hits the existence check before
-    // the transaction opens. This used to succeed spuriously before
-    // createLocalUser fetched the existing row — verify the check still
-    // works and the error response shape is stable.
-    const duplicate = await service.createLocalUser({
-      email: "regression@test.local",
-      name: "Duplicate",
-      password: "TestPassword123!",
-      isActive: true,
-    });
-
-    expect(duplicate.success).toBe(false);
-    expect(duplicate.statusCode).toBe(409);
-    expect(duplicate.message).toContain("already exists");
+    // the transaction opens. Post-migration: thrown as
+    // NextlyError(DUPLICATE) with statusCode 409. §13.8: public message is
+    // generic ("Resource already exists.") with no email echo.
+    await expect(
+      service.createLocalUser({
+        email: "regression@test.local",
+        name: "Duplicate",
+        password: "TestPassword123!",
+        isActive: true,
+      })
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        NextlyError.is(err) &&
+        err.code === "DUPLICATE" &&
+        err.statusCode === 409
+    );
 
     // And the original row should still be the only row with that email.
     const rows = await adapter.executeQuery<{ count: number }>(

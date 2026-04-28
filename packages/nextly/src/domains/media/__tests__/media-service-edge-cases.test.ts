@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { ServiceError } from "../../../errors";
+import { NextlyError } from "../../../errors";
 import { MediaService } from "../services/media-service";
 import type { UploadMediaInput } from "../services/media-service";
 
@@ -91,7 +91,7 @@ describe("MediaService — Edge Cases", () => {
   // ── Upload Edge Cases ─────────────────────────────────────────────
 
   describe("upload — storage not configured", () => {
-    it("should throw ServiceError when no storage is configured", async () => {
+    it("should throw NextlyError when no storage is configured", async () => {
       const noStorageService = new MediaService(
         mockLegacyMedia as never,
         mockLegacyFolder as never,
@@ -108,11 +108,11 @@ describe("MediaService — Edge Cases", () => {
       };
 
       await expect(noStorageService.upload(input, context)).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
 
-    it("should throw ServiceError when getter returns null", async () => {
+    it("should throw NextlyError when getter returns null", async () => {
       const getterService = new MediaService(
         mockLegacyMedia as never,
         mockLegacyFolder as never,
@@ -129,7 +129,7 @@ describe("MediaService — Edge Cases", () => {
       };
 
       await expect(getterService.upload(input, context)).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
   });
@@ -143,9 +143,7 @@ describe("MediaService — Edge Cases", () => {
         size: 0,
       };
 
-      await expect(service.upload(input, context)).rejects.toThrow(
-        ServiceError
-      );
+      await expect(service.upload(input, context)).rejects.toThrow(NextlyError);
     });
 
     it("should reject files exceeding max size", async () => {
@@ -156,14 +154,12 @@ describe("MediaService — Edge Cases", () => {
         size: 11 * 1024 * 1024, // 11MB
       };
 
-      await expect(service.upload(input, context)).rejects.toThrow(
-        ServiceError
-      );
+      await expect(service.upload(input, context)).rejects.toThrow(NextlyError);
     });
   });
 
   describe("upload — legacy service failure", () => {
-    it("should map legacy 500 error to ServiceError", async () => {
+    it("should map legacy 500 error to NextlyError", async () => {
       mockLegacyMedia.uploadMedia.mockResolvedValue(
         errorResult(500, "Internal storage error")
       );
@@ -175,9 +171,7 @@ describe("MediaService — Edge Cases", () => {
         size: 1024,
       };
 
-      await expect(service.upload(input, context)).rejects.toThrow(
-        ServiceError
-      );
+      await expect(service.upload(input, context)).rejects.toThrow(NextlyError);
     });
   });
 
@@ -344,37 +338,37 @@ describe("MediaService — Edge Cases", () => {
   // ── findById / Update / Delete Not Found ──────────────────────────
 
   describe("findById — not found", () => {
-    it("should throw ServiceError NOT_FOUND", async () => {
+    it("should throw NextlyError NOT_FOUND", async () => {
       mockLegacyMedia.getMediaById.mockResolvedValue(
         errorResult(404, "Media not found")
       );
 
       await expect(service.findById("nonexistent", context)).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
   });
 
   describe("update — not found", () => {
-    it("should throw ServiceError NOT_FOUND for non-existent media", async () => {
+    it("should throw NextlyError NOT_FOUND for non-existent media", async () => {
       mockLegacyMedia.updateMedia.mockResolvedValue(
         errorResult(404, "Media not found")
       );
 
       await expect(
         service.update("nonexistent", { altText: "New" }, context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
   describe("delete — not found", () => {
-    it("should throw ServiceError NOT_FOUND for non-existent media", async () => {
+    it("should throw NextlyError NOT_FOUND for non-existent media", async () => {
       mockLegacyMedia.deleteMedia.mockResolvedValue(
         errorResult(404, "Media not found")
       );
 
       await expect(service.delete("nonexistent", context)).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
     });
   });

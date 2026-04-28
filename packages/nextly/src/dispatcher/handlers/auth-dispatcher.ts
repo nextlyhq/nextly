@@ -144,7 +144,7 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
     execute: (c, p, body) => {
       if (!p.roleId || !body)
         throw new Error("RoleId and changes data are required");
-      return c.roles.updateRole(p.roleId, body as Record<string, unknown>);
+      return c.roles.updateRole(p.roleId, body);
     },
   },
   deleteRole: {
@@ -205,10 +205,7 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
     execute: (c, p, body) => {
       if (!p.permissionId || !body)
         throw new Error("PermissionId and changes data are required");
-      return c.permissions.updatePermission(
-        p.permissionId,
-        body as Record<string, unknown>
-      );
+      return c.permissions.updatePermission(p.permissionId, body);
     },
   },
   deletePermission: {
@@ -251,12 +248,14 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       if (p.permissionId) {
         // REST-style: DELETE /api/roles/123/permissions/456
         if (!p.roleId) throw new Error("RoleId parameter is required");
+        // PR 4 (unified-error-system): getPermissionById returns the
+        // permission directly and throws NextlyError(NOT_FOUND) for
+        // missing rows, which propagates to the caller as an error
+        // response.
         const perm = await c.permissions.getPermissionById(p.permissionId);
-        if (!perm?.success || !perm.data)
-          throw new Error("Permission not found");
         return c.rolePermissions.removePermissionFromRole(p.roleId, {
-          action: perm.data.action,
-          resource: perm.data.resource,
+          action: perm.action,
+          resource: perm.resource,
         });
       }
       const b = body as { action?: string; resource?: string } | undefined;

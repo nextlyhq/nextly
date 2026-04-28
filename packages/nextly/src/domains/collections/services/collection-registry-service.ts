@@ -14,7 +14,11 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
-import { ServiceError, ServiceErrorCode } from "../../../errors";
+import { toDbError } from "../../../database/errors";
+// PR 4 migration: replaced legacy ServiceError throws with the unified
+// NextlyError API. Public messages follow §13.8 — generic, no identifiers,
+// no constraint hints — and identifying detail moves to logContext.
+import { NextlyError } from "../../../errors";
 import type {
   DynamicCollectionInsert,
   DynamicCollectionRecord,
@@ -66,9 +70,15 @@ export interface ListCollectionsOptions extends BaseListOptions {
   migrationStatus?: MigrationStatus;
 }
 
-/** Result of listing collections with pagination info. */
-export interface ListCollectionsResult
-  extends BaseListResult<DynamicCollectionRecord> {}
+/**
+ * Result of listing collections with pagination info.
+ *
+ * Declared as a `type` alias rather than an empty `interface` because the latter
+ * triggers @typescript-eslint/no-empty-object-type. We intentionally keep this
+ * named export so callers can import a domain-specific name even though it has
+ * no extra members today.
+ */
+export type ListCollectionsResult = BaseListResult<DynamicCollectionRecord>;
 
 export class CollectionRegistryService extends BaseRegistryService<
   DynamicCollectionRecord,
@@ -147,11 +157,11 @@ export class CollectionRegistryService extends BaseRegistryService<
 
     const existing = await this.getCollectionBySlug(data.slug);
     if (existing) {
-      throw new ServiceError(
-        ServiceErrorCode.DUPLICATE_KEY,
-        `Collection with slug "${data.slug}" already exists`,
-        { slug: data.slug }
-      );
+      // Generic "Resource already exists." from the factory; the slug moves
+      // to logContext (operator only, never wire-bound) per §13.8.
+      throw NextlyError.duplicate({
+        logContext: { reason: "collection-slug-conflict", slug: data.slug },
+      });
     }
 
     const now = this.formatDateForDb();
@@ -221,7 +231,12 @@ export class CollectionRegistryService extends BaseRegistryService<
 
       return deserializedRecord;
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Re-throw NextlyErrors unchanged (e.g. our duplicate throw above).
+      // Map raw DB errors via fromDatabaseError; generic public message,
+      // rich logContext. Normalise raw driver errors via toDbError(dialect)
+      // first so unique/fk/etc. produce the right kind.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -241,10 +256,15 @@ export class CollectionRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      throw ServiceError.forbidden(
-        `Collection "${slug}" is locked and cannot be modified from ${options?.source ?? "UI"}`,
-        { slug, source: options?.source }
-      );
+      // Generic forbidden message per §13.8; lock policy detail and slug
+      // move to logContext only.
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "collection-locked",
+          slug,
+          source: options?.source,
+        },
+      });
     }
 
     const updateData: Record<string, unknown> = {
@@ -290,19 +310,19 @@ export class CollectionRegistryService extends BaseRegistryService<
       );
 
       if (results.length === 0) {
-        throw ServiceError.notFound(`Collection "${slug}" not found`, {
-          slug,
-        });
+        // Generic "Not found." from the factory; slug moves to logContext.
+        throw NextlyError.notFound({ logContext: { slug } });
       }
 
       this.logger.info("Collection updated", { slug });
 
       return this.deserializeRecord(results[0]);
     } catch (error) {
-      if (error instanceof ServiceError) {
+      if (NextlyError.is(error)) {
         throw error;
       }
-      throw ServiceError.fromDatabaseError(error);
+      // Normalise raw driver errors so unique/fk/etc. produce the right kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -312,10 +332,10 @@ export class CollectionRegistryService extends BaseRegistryService<
     const existing = await this.getCollection(slug);
 
     if (existing.locked) {
-      throw ServiceError.forbidden(
-        `Collection "${slug}" is locked and cannot be deleted`,
-        { slug }
-      );
+      // Generic forbidden message; lock policy detail goes to logContext.
+      throw NextlyError.forbidden({
+        logContext: { reason: "collection-locked-delete", slug },
+      });
     }
 
     try {
@@ -325,17 +345,16 @@ export class CollectionRegistryService extends BaseRegistryService<
       );
 
       if (count === 0) {
-        throw ServiceError.notFound(`Collection "${slug}" not found`, {
-          slug,
-        });
+        throw NextlyError.notFound({ logContext: { slug } });
       }
 
       this.logger.info("Collection deleted", { slug });
     } catch (error) {
-      if (error instanceof ServiceError) {
+      if (NextlyError.is(error)) {
         throw error;
       }
-      throw ServiceError.fromDatabaseError(error);
+      // Normalise raw driver errors so fk/etc. produce the right kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -411,7 +430,11 @@ export class CollectionRegistryService extends BaseRegistryService<
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // Prefer the structured NextlyError code over message string matching.
+        // Falls back to legacy substring sniffing for any non-NextlyError that
+        // bubbles up from deeper layers during the migration window.
         const isDuplicate =
+          (NextlyError.is(error) && error.code === "DUPLICATE") ||
           message.toLowerCase().includes("already exists") ||
           message.toLowerCase().includes("duplicate") ||
           message.toLowerCase().includes("unique constraint");
@@ -488,11 +511,13 @@ export class CollectionRegistryService extends BaseRegistryService<
     );
 
     if (existing) {
-      throw new ServiceError(
-        ServiceErrorCode.DUPLICATE_KEY,
-        `Collection with slug "${data.slug}" already exists`,
-        { slug: data.slug }
-      );
+      // Generic duplicate message; slug moves to logContext per §13.8.
+      throw NextlyError.duplicate({
+        logContext: {
+          reason: "collection-slug-conflict-tx",
+          slug: data.slug,
+        },
+      });
     }
 
     const now = this.formatDateForDb();

@@ -18,7 +18,8 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { eq, desc } from "drizzle-orm";
 
-import { ServiceError } from "../../../errors/service-error";
+import { toDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
 import { emailProvidersPg } from "../../../schemas/email-providers/postgres";
@@ -30,6 +31,9 @@ import type {
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
+// Pull adapter type into a normal `import type` declaration so the return
+// signature on createAdapterFromProvider satisfies consistent-type-imports.
+import type { EmailProviderAdapter } from "../types";
 
 import { createResendProvider } from "./providers/resend-provider";
 import { createSendLayerProvider } from "./providers/sendlayer-provider";
@@ -109,7 +113,9 @@ export class EmailProviderService extends BaseService {
         this.emailProviders = emailProvidersSqlite;
         break;
       default:
-        throw new Error(`Unsupported dialect: ${this.dialect}`);
+        // `this.dialect` is narrowed to `never` after the exhaustive switch;
+        // String() coercion satisfies @typescript-eslint/restrict-template-expressions.
+        throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
   }
 
@@ -213,10 +219,7 @@ export class EmailProviderService extends BaseService {
       if (value === undefined) continue;
 
       if (this.isPlainObject(value) && this.isPlainObject(merged[key])) {
-        merged[key] = this.deepMergeConfig(
-          merged[key] as Record<string, unknown>,
-          value
-        );
+        merged[key] = this.deepMergeConfig(merged[key], value);
       } else {
         merged[key] = value;
       }
@@ -233,7 +236,7 @@ export class EmailProviderService extends BaseService {
     return {
       ...row,
       configuration: this.maskConfiguration(config),
-    } as EmailProviderRecord;
+    };
   }
 
   /**
@@ -243,7 +246,7 @@ export class EmailProviderService extends BaseService {
     return {
       ...row,
       configuration: this.decryptConfiguration(row.configuration),
-    } as EmailProviderRecord;
+    };
   }
 
   // ============================================================
@@ -279,19 +282,21 @@ export class EmailProviderService extends BaseService {
     try {
       if (values.isDefault) {
         // Unset any existing default first, then insert the new default provider
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any)
+
+        await this.db
           .update(this.emailProviders)
           .set({ isDefault: false, updatedAt: now })
           .where(eq(this.emailProviders.isDefault, true));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any).insert(this.emailProviders).values(values);
+
+        await this.db.insert(this.emailProviders).values(values);
       } else {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any).insert(this.emailProviders).values(values);
+        await this.db.insert(this.emailProviders).values(values);
       }
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Drizzle surfaces the driver's raw error here, so normalise it through
+      // toDbError(dialect) first; otherwise NextlyError.fromDatabaseError would
+      // see a non-DbError and fall back to the generic INTERNAL_ERROR shape.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getProvider(id);
@@ -301,7 +306,7 @@ export class EmailProviderService extends BaseService {
    * Get a single email provider by ID.
    * Returns masked configuration — use `getProviderDecrypted()` for internal access.
    *
-   * @throws ServiceError NOT_FOUND if provider doesn't exist
+   * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
   async getProvider(id: string): Promise<EmailProviderRecord> {
     const row = await this.getRawProvider(id);
@@ -313,8 +318,7 @@ export class EmailProviderService extends BaseService {
    * Returns masked configuration for all providers.
    */
   async listProviders(): Promise<EmailProviderRecord[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailProviders)
       .orderBy(desc(this.emailProviders.createdAt));
@@ -330,7 +334,7 @@ export class EmailProviderService extends BaseService {
    *
    * Provider `type` cannot be changed after creation.
    *
-   * @throws ServiceError NOT_FOUND if provider doesn't exist
+   * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
   async updateProvider(
     id: string,
@@ -361,25 +365,28 @@ export class EmailProviderService extends BaseService {
     try {
       if (data.isDefault === true) {
         // Unset any existing default first, then apply all updates to this provider
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any)
+
+        await this.db
           .update(this.emailProviders)
           .set({ isDefault: false, updatedAt: now })
           .where(eq(this.emailProviders.isDefault, true));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any)
+
+        await this.db
           .update(this.emailProviders)
           .set(updateData)
           .where(eq(this.emailProviders.id, id));
       } else {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any)
+        await this.db
           .update(this.emailProviders)
           .set(updateData)
           .where(eq(this.emailProviders.id, id));
       }
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // DbError → NextlyError; spec §13.8 keeps the public message generic and
+      // tucks the dialect-specific code into logContext via fromDatabaseError.
+      // Normalise raw driver errors via toDbError(dialect) first so the kind
+      // is preserved (otherwise PG 23505 collapses to INTERNAL_ERROR).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getProvider(id);
@@ -392,15 +399,17 @@ export class EmailProviderService extends BaseService {
    * as default first.
    * Idempotent — returns successfully if provider doesn't exist.
    *
-   * @throws ServiceError BUSINESS_RULE_VIOLATION if provider is the default
+   * @throws NextlyError BUSINESS_RULE_VIOLATION if provider is the default
    */
   async deleteProvider(id: string): Promise<void> {
     let row;
     try {
       row = await this.getRawProvider(id);
     } catch (error) {
-      // If provider doesn't exist, consider it already deleted (idempotent)
-      if (error instanceof ServiceError && error.code === "NOT_FOUND") {
+      // If provider doesn't exist, consider it already deleted (idempotent).
+      // Use the structural NextlyError.isCode guard so this still works when
+      // the thrown error came through `withDbErrors` or any cross-boundary path.
+      if (NextlyError.isCode(error, "NOT_FOUND")) {
         this.logger.info(
           `Provider ${id} not found during delete — already deleted`,
           { id }
@@ -411,14 +420,18 @@ export class EmailProviderService extends BaseService {
     }
 
     if (row.isDefault) {
-      throw ServiceError.businessRule(
-        "Cannot delete the default email provider. Set another provider as default first.",
-        { id }
-      );
+      // Identifier (`id`) belongs in logContext per spec §13.8; the public
+      // sentence stays generic and free of identifiers.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "Cannot delete the default email provider. Set another provider as default first.",
+        statusCode: 422,
+        logContext: { id },
+      });
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (this.db as any)
+    await this.db
       .delete(this.emailProviders)
       .where(eq(this.emailProviders.id, id));
   }
@@ -429,7 +442,7 @@ export class EmailProviderService extends BaseService {
    * Unsets the previous default in a transaction to ensure
    * only one default provider exists at any time.
    *
-   * @throws ServiceError NOT_FOUND if provider doesn't exist
+   * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
   async setDefault(id: string): Promise<EmailProviderRecord> {
     await this.getRawProvider(id);
@@ -437,14 +450,13 @@ export class EmailProviderService extends BaseService {
     const now = new Date();
 
     // Unset any existing default first, then set the new one
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (this.db as any)
+
+    await this.db
       .update(this.emailProviders)
       .set({ isDefault: false, updatedAt: now })
       .where(eq(this.emailProviders.isDefault, true));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (this.db as any)
+    await this.db
       .update(this.emailProviders)
       .set({ isDefault: true, updatedAt: now })
       .where(eq(this.emailProviders.id, id));
@@ -458,8 +470,7 @@ export class EmailProviderService extends BaseService {
    * Returns `null` if no default is configured.
    */
   async getDefaultProvider(): Promise<EmailProviderRecord | null> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailProviders)
       .where(eq(this.emailProviders.isDefault, true))
@@ -522,7 +533,7 @@ export class EmailProviderService extends BaseService {
    */
   private createAdapterFromProvider(
     provider: EmailProviderRecord
-  ): import("../types").EmailProviderAdapter {
+  ): EmailProviderAdapter {
     const config = provider.configuration;
 
     switch (provider.type) {
@@ -540,9 +551,14 @@ export class EmailProviderService extends BaseService {
       case "sendlayer":
         return createSendLayerProvider(config as { apiKey: string });
       default:
-        throw ServiceError.businessRule(
-          `Unsupported email provider type: ${provider.type}`
-        );
+        // Unknown provider type — generic public sentence; the offending type
+        // string goes to logContext to avoid echoing untrusted identifiers.
+        throw new NextlyError({
+          code: "BUSINESS_RULE_VIOLATION",
+          publicMessage: "Unsupported email provider type.",
+          statusCode: 422,
+          logContext: { type: provider.type },
+        });
     }
   }
 
@@ -554,7 +570,7 @@ export class EmailProviderService extends BaseService {
    * Get a single email provider with decrypted configuration.
    * **Internal use only** — for email sending adapters that need real credentials.
    *
-   * @throws ServiceError NOT_FOUND if provider doesn't exist
+   * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
   async getProviderDecrypted(id: string): Promise<EmailProviderRecord> {
     const row = await this.getRawProvider(id);
@@ -568,8 +584,7 @@ export class EmailProviderService extends BaseService {
    * Returns `null` if no default is configured.
    */
   async getDefaultProviderDecrypted(): Promise<EmailProviderRecord | null> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailProviders)
       .where(eq(this.emailProviders.isDefault, true))
@@ -586,18 +601,19 @@ export class EmailProviderService extends BaseService {
   /**
    * Fetch a raw provider row from the database (no decryption or masking).
    *
-   * @throws ServiceError NOT_FOUND if provider doesn't exist
+   * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
   private async getRawProvider(id: string): Promise<RawEmailProviderRow> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailProviders)
       .where(eq(this.emailProviders.id, id))
       .limit(1);
 
     if (results.length === 0) {
-      throw ServiceError.notFound("Email provider not found", { id });
+      // Identifier `id` is for operators only — not echoed to the public message
+      // per spec §13.8. The 404 factory uses the canonical "Not found." sentence.
+      throw NextlyError.notFound({ logContext: { id } });
     }
 
     return results[0];

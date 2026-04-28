@@ -15,7 +15,12 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { SqlParam } from "@revnixhq/adapter-drizzle/types";
 
-import { ServiceError } from "../../errors/service-error";
+import { toDbError } from "../../database/errors";
+// PR 4 migration: switched from ServiceError.fromDatabaseError to
+// NextlyError.fromDatabaseError. Public message stays generic per §13.8;
+// the underlying DbError is preserved as `cause` and rich DB context
+// (kind, dialect, code) flows into logContext automatically.
+import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
@@ -64,6 +69,19 @@ export interface ActivityLogQueryOptions {
 }
 
 const TABLE = "activity_log";
+
+/**
+ * Safely convert an unknown driver-returned value to a nullable string.
+ * Avoids `Object.toString()` fallthrough that triggers no-base-to-string.
+ */
+function toNullableString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value.length > 0 ? value : null;
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
 
 export class ActivityLogService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
@@ -158,7 +176,13 @@ export class ActivityLogService extends BaseService {
       this.logger.error("Failed to query activity log", {
         error: error instanceof Error ? error.message : String(error),
       });
-      throw ServiceError.fromDatabaseError(error);
+      // PR 4 migration: NextlyError.fromDatabaseError yields a generic
+      // public message ("An unexpected error occurred." for non-DbError,
+      // or the §13.8 mapping for DbError) and preserves the original
+      // error as `cause` for operator logs. Normalise raw driver errors
+      // via toDbError(dialect) so the right kind is mapped instead of
+      // collapsing to INTERNAL_ERROR / 500.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -242,8 +266,10 @@ export class ActivityLogService extends BaseService {
       userEmail: String(row.user_email),
       action: String(row.action) as ActivityLogAction,
       collection: String(row.collection),
-      entryId: row.entry_id ? String(row.entry_id) : null,
-      entryTitle: row.entry_title ? String(row.entry_title) : null,
+      // Type-narrow before stringification so we don't fall through to
+      // Object#toString for non-primitive driver values.
+      entryId: toNullableString(row.entry_id),
+      entryTitle: toNullableString(row.entry_title),
       metadata,
       createdAt:
         row.created_at instanceof Date

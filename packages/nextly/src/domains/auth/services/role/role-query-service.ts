@@ -1,9 +1,12 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, asc, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 
-import { mapDbErrorToServiceError } from "@nextly/services/lib/db-error";
 import type { RoleListSelectResult } from "@nextly/types/rbac-operations";
 
+// PR 4 migration: replaced result-shape returns and mapDbErrorToServiceError
+// with throw-based NextlyError.
+import { toDbError } from "../../../../database/errors";
+import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 
@@ -56,17 +59,14 @@ export class RoleQueryService extends BaseService {
     // Include permissions
     includePermissions?: boolean;
   }): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
     data: Array<{
       id: string;
       name: string;
       description: string | null;
       level: number;
       isSystem: boolean;
-    }> | null;
-    meta?: {
+    }>;
+    meta: {
       total: number;
       page: number;
       pageSize: number;
@@ -134,8 +134,8 @@ export class RoleQueryService extends BaseService {
       const offset = (page - 1) * pageSize;
 
       // Get total count of all roles (including those without permissions)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const countResult = await (this.db as any)
+
+      const countResult = await this.db
         .select({ value: count() })
         .from(roles)
         .where(whereClause);
@@ -143,8 +143,8 @@ export class RoleQueryService extends BaseService {
       const total = Number(countResult[0]?.value ?? 0);
 
       // Fetch paginated roles (including those without permissions)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = await (this.db as any)
+
+      const rows = await this.db
         .select({
           id: roles.id,
           name: roles.name,
@@ -167,8 +167,8 @@ export class RoleQueryService extends BaseService {
 
       if (roleIds.length > 0) {
         const roleInherits = this.tables.roleInherits;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const childRolesRows = await (this.db as any)
+
+        const childRolesRows = await this.db
           .select({
             parentRoleId: roleInherits.parentRoleId,
             childRoleId: roleInherits.childRoleId,
@@ -189,8 +189,7 @@ export class RoleQueryService extends BaseService {
       // Fetch permissions for each role if requested
       const permissionsMap = new Map<string, string[]>();
       if (includePermissions && roleIds.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rolePermissionsRows = await (this.db as any)
+        const rolePermissionsRows = await this.db
           .select({
             roleId: rolePermissions.roleId,
             permissionId: rolePermissions.permissionId,
@@ -226,9 +225,6 @@ export class RoleQueryService extends BaseService {
       });
 
       return {
-        success: true,
-        statusCode: 200,
-        message: "Roles retrieved successfully",
         data,
         meta: {
           total,
@@ -238,9 +234,10 @@ export class RoleQueryService extends BaseService {
         },
       };
     } catch (e: unknown) {
-      return mapDbErrorToServiceError(e, {
-        defaultMessage: "Failed to list roles",
-      });
+      // Any DB error during the list query -> NextlyError with generic
+      // public message and the original error preserved as cause. Normalise
+      // raw driver errors via toDbError(dialect) so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -251,38 +248,41 @@ export class RoleQueryService extends BaseService {
    * @returns Role data or null if not found
    */
   async getRoleById(roleId: string): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: {
-      id: string;
-      name: string;
-      slug: string;
-      description: string | null;
-      level: number;
-      isSystem: boolean;
-    } | null;
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    level: number;
+    isSystem: boolean;
   }> {
     try {
-      // Validate input
+      // Validate input. Per §13.8 the public message names the field but
+      // never echoes the bad value; that goes to logContext.
       if (!roleId || typeof roleId !== "string" || roleId.trim() === "") {
-        return {
-          success: false,
-          statusCode: 400,
-          message: "Role ID is required and must be a non-empty string",
-          data: null,
-        };
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "roleId",
+              code: "REQUIRED",
+              message: "roleId is required and must be a non-empty string.",
+            },
+          ],
+        });
       }
 
       const uuidRegex =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(roleId)) {
-        return {
-          success: false,
-          statusCode: 400,
-          message: "Role ID must be a valid UUID format",
-          data: null,
-        };
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "roleId",
+              code: "INVALID_FORMAT",
+              message: "roleId must be a valid UUID.",
+            },
+          ],
+          logContext: { roleId },
+        });
       }
 
       const { roles } = this.tables;
@@ -299,31 +299,22 @@ export class RoleQueryService extends BaseService {
       });
 
       if (!role) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Role not found",
-          data: null,
-        };
+        throw NextlyError.notFound({ logContext: { roleId } });
       }
 
       return {
-        success: true,
-        statusCode: 200,
-        message: "Role retrieved successfully",
-        data: {
-          id: String(role.id),
-          name: role.name,
-          slug: role.slug,
-          description: role.description,
-          level: role.level,
-          isSystem: Boolean(role.isSystem),
-        },
+        id: String(role.id),
+        name: role.name,
+        slug: role.slug,
+        description: role.description,
+        level: role.level,
+        isSystem: Boolean(role.isSystem),
       };
     } catch (e: unknown) {
-      return mapDbErrorToServiceError(e, {
-        defaultMessage: "Failed to get role",
-      });
+      // Re-throw NextlyErrors unchanged. Map raw DB errors via fromDatabaseError.
+      if (NextlyError.is(e)) throw e;
+      // Normalise raw driver errors so unique/fk/etc. produce the right kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -350,8 +341,8 @@ export class RoleQueryService extends BaseService {
    */
   async findRoleIdBySlug(slug: string): Promise<{ id: string } | null> {
     const { roles } = this.tables;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const role = await (this.db as any)
+
+    const role = await this.db
       .selectDistinct({ id: roles.id })
       .from(roles)
       .where(eq(roles.slug, slug))
