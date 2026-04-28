@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@revnixhq/ui";
-import React, { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import type {
   FormField,
@@ -60,6 +60,22 @@ const COMPARISON_OPERATORS: Array<{
 ];
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Coerce a condition's `value` (stored as `unknown`) into a string
+ * suitable for the controlled `<Input>`. Objects are JSON-stringified
+ * so we never render `[object Object]`.
+ */
+function conditionValueToString(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- value narrowed to primitive above; rule doesn't follow control flow on unknown
+  return String(value);
+}
+
+// ============================================================================
 // Component
 // ============================================================================
 
@@ -83,13 +99,18 @@ export function ConditionalLogicEditor({
   allFields,
   onUpdate,
 }: ConditionalLogicEditorProps) {
-  // Get current conditional logic or create default
-  const logic: ConditionalLogic = field.conditionalLogic || {
-    enabled: false,
-    action: "show",
-    operator: "AND",
-    conditions: [],
-  };
+  // Get current conditional logic or create default.
+  // Wrapped in useMemo so dependent useCallbacks don't re-create on every render.
+  const logic: ConditionalLogic = useMemo(
+    () =>
+      field.conditionalLogic || {
+        enabled: false,
+        action: "show",
+        operator: "AND",
+        conditions: [],
+      },
+    [field.conditionalLogic]
+  );
 
   // Get other fields that can be referenced (exclude current field)
   const availableFields = allFields.filter(f => f.name !== field.name);
@@ -108,22 +129,6 @@ export function ConditionalLogicEditor({
   const handleToggleEnabled = useCallback(() => {
     updateLogic({ enabled: !logic.enabled });
   }, [logic.enabled, updateLogic]);
-
-  // Update action (show/hide)
-  const handleActionChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      updateLogic({ action: e.target.value as "show" | "hide" });
-    },
-    [updateLogic]
-  );
-
-  // Update operator (AND/OR)
-  const handleOperatorChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      updateLogic({ operator: e.target.value as "AND" | "OR" });
-    },
-    [updateLogic]
-  );
 
   // Add a new condition
   const handleAddCondition = useCallback(() => {
@@ -279,7 +284,7 @@ export function ConditionalLogicEditor({
                       {needsValue(condition.comparison) && (
                         <Input
                           type="text"
-                          value={String(condition.value ?? "")}
+                          value={conditionValueToString(condition.value)}
                           onChange={e =>
                             handleUpdateCondition(index, {
                               value: e.target.value,

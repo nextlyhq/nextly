@@ -177,10 +177,7 @@ export async function submitForm(
     }
 
     // 3b. Sanitize validated submission data (strip HTML from free-text fields)
-    sanitizeSubmissionData(
-      validationResult.data as Record<string, unknown>,
-      form.fields
-    );
+    sanitizeSubmissionData(validationResult.data, form.fields);
 
     // 4. Spam detection
     const spamResult = await checkSpam({

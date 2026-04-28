@@ -296,7 +296,7 @@ function IntegrationModal({
               placeholder="noreply@example.com"
             />
             <p className="text-xs text-muted-foreground">
-              Leave blank to use the provider's default configured address.
+              Leave blank to use the provider&apos;s default configured address.
             </p>
           </div>
 
@@ -535,8 +535,8 @@ export function FormNotificationsTab() {
   }>({ open: false, editing: null });
 
   useEffect(() => {
-    fetchProviders().then(setProviders);
-    fetchTemplates().then(setTemplates);
+    void fetchProviders().then(setProviders);
+    void fetchTemplates().then(setTemplates);
   }, []);
 
   const fieldList = fields.map(f => ({ name: f.name, label: f.label }));

@@ -10,7 +10,8 @@
 
 "use client";
 
-import React, { useState, useCallback } from "react";
+import type React from "react";
+import { useState, useCallback } from "react";
 
 import type { SubmissionDocument, FormDocument, FormField } from "../../types";
 
@@ -46,6 +47,17 @@ export interface SubmissionDetailProps {
 // ============================================================================
 
 /**
+ * Stringify a value safely, falling back to JSON for plain objects so we
+ * never render the default `[object Object]` representation.
+ */
+function safeString(value: unknown): string {
+  if (typeof value === "object" && value !== null) {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/**
  * Format a value for display based on field type.
  */
 function formatFieldValue(value: unknown, field: FormField): string {
@@ -59,13 +71,13 @@ function formatFieldValue(value: unknown, field: FormField): string {
       if (Array.isArray(value)) {
         return value.join(", ");
       }
-      return String(value);
+      return safeString(value);
 
     case "file":
       if (Array.isArray(value)) {
-        return value.map(v => String(v)).join(", ");
+        return value.map(v => safeString(v)).join(", ");
       }
-      return String(value);
+      return safeString(value);
 
     case "date":
       if (value instanceof Date) {
@@ -74,13 +86,13 @@ function formatFieldValue(value: unknown, field: FormField): string {
       if (typeof value === "string") {
         return new Date(value).toLocaleDateString();
       }
-      return String(value);
+      return safeString(value);
 
     case "time":
-      return String(value);
+      return safeString(value);
 
     default:
-      return String(value);
+      return safeString(value);
   }
 }
 
@@ -208,7 +220,7 @@ export function SubmissionDetail({
   const displayFields = form.fields;
 
   /** Get submission data */
-  const data = submission.data as Record<string, unknown>;
+  const data = submission.data;
 
   // -------------------------------------------------------------------------
   // Render
@@ -239,7 +251,7 @@ export function SubmissionDetail({
               <select
                 id="submission-status"
                 value={submission.status}
-                onChange={handleStatusChange}
+                onChange={e => void handleStatusChange(e)}
                 disabled={isProcessing}
                 className="submission-detail__status-select"
               >
@@ -255,7 +267,7 @@ export function SubmissionDetail({
           {onDelete && (
             <button
               type="button"
-              onClick={handleDelete}
+              onClick={() => void handleDelete()}
               disabled={isProcessing}
               className="submission-detail__delete-btn"
             >
@@ -308,7 +320,7 @@ export function SubmissionDetail({
             {notesModified && (
               <button
                 type="button"
-                onClick={handleNotesSave}
+                onClick={() => void handleNotesSave()}
                 disabled={isProcessing}
                 className="submission-detail__notes-save-btn"
               >

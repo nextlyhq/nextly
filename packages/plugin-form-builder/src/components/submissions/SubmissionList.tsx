@@ -10,7 +10,8 @@
 
 "use client";
 
-import React, { useState, useCallback, useMemo } from "react";
+import type React from "react";
+import { useState, useCallback, useMemo } from "react";
 
 import type { SubmissionDocument, FormDocument, FormField } from "../../types";
 
@@ -73,7 +74,13 @@ function formatValue(value: unknown): string {
   if (Array.isArray(value)) return value.join(", ");
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (value instanceof Date) return value.toLocaleDateString();
-  const str = String(value);
+  let str: string;
+  if (typeof value === "object") {
+    str = JSON.stringify(value);
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- value narrowed to primitive above; rule doesn't follow control flow on unknown
+    str = String(value);
+  }
   return str.length > 50 ? str.slice(0, 50) + "..." : str;
 }
 
@@ -325,14 +332,14 @@ export function SubmissionList({
                 <>
                   <button
                     type="button"
-                    onClick={() => handleBulkStatusChange("read")}
+                    onClick={() => void handleBulkStatusChange("read")}
                     className="submission-list__action-btn"
                   >
                     Mark Read
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleBulkStatusChange("archived")}
+                    onClick={() => void handleBulkStatusChange("archived")}
                     className="submission-list__action-btn"
                   >
                     Archive
@@ -342,7 +349,7 @@ export function SubmissionList({
               {onBulkDelete && (
                 <button
                   type="button"
-                  onClick={handleBulkDelete}
+                  onClick={() => void handleBulkDelete()}
                   className="submission-list__action-btn submission-list__action-btn--danger"
                 >
                   Delete
@@ -457,11 +464,7 @@ export function SubmissionList({
                     </td>
                     {displayFields.map(field => (
                       <td key={field.name} className="submission-list__td">
-                        {formatValue(
-                          (submission.data as Record<string, unknown>)[
-                            field.name
-                          ]
-                        )}
+                        {formatValue(submission.data[field.name])}
                       </td>
                     ))}
                     <td
@@ -472,7 +475,7 @@ export function SubmissionList({
                         <button
                           type="button"
                           onClick={() =>
-                            handleStatusChange(submission.id, "read")
+                            void handleStatusChange(submission.id, "read")
                           }
                           disabled={isProcessing}
                           className="submission-list__row-action"
@@ -485,7 +488,7 @@ export function SubmissionList({
                         <button
                           type="button"
                           onClick={() =>
-                            handleStatusChange(submission.id, "archived")
+                            void handleStatusChange(submission.id, "archived")
                           }
                           disabled={isProcessing}
                           className="submission-list__row-action"
@@ -497,7 +500,7 @@ export function SubmissionList({
                       {onDelete && (
                         <button
                           type="button"
-                          onClick={() => handleDelete(submission.id)}
+                          onClick={() => void handleDelete(submission.id)}
                           disabled={isProcessing}
                           className="submission-list__row-action submission-list__row-action--danger"
                           title="Delete"

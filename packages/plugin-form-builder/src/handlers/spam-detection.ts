@@ -124,6 +124,7 @@ const rateLimitStore = new Map<string, RateLimitEntry>();
  * }
  * ```
  */
+// eslint-disable-next-line @typescript-eslint/require-await -- public API: declared return type is `Promise<SpamCheckResult>` and callers `await` it; removing `async` would force a return-type change
 export async function checkSpam(
   options: SpamCheckOptions
 ): Promise<SpamCheckResult> {
@@ -186,7 +187,14 @@ function checkHoneypot(data: Record<string, unknown>): SpamCheckResult {
 
     // Check if honeypot field has a non-empty value
     if (value !== undefined && value !== null && value !== "") {
-      const stringValue = String(value).trim();
+      let raw: string;
+      if (typeof value === "object") {
+        raw = JSON.stringify(value);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- value narrowed to primitive above; rule doesn't follow control flow on unknown
+        raw = String(value);
+      }
+      const stringValue = raw.trim();
       if (stringValue.length > 0) {
         return {
           isSpam: true,
@@ -356,7 +364,7 @@ export function isRateLimited(
  * @param config - reCAPTCHA configuration
  * @returns Spam check result
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/require-await -- declared return type is `Promise<SpamCheckResult>`; placeholder for unimplemented Google siteverify fetch
 async function verifyRecaptcha(
   _data: Record<string, unknown>,
   _config: { secretKey?: string; scoreThreshold?: number }

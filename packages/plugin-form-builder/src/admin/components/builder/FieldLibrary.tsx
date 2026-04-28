@@ -380,12 +380,10 @@ export function FieldLibrary() {
       {/* Accordion list */}
       <div
         className="flex-1 overflow-y-auto px-3 py-3 space-y-3"
-        style={
-          {
-            scrollbarWidth: "none",
-            msOverflowStyle: "none",
-          } as React.CSSProperties
-        }
+        style={{
+          scrollbarWidth: "none",
+          msOverflowStyle: "none",
+        }}
       >
         {filteredCategories.map(category => (
           <CategorySection

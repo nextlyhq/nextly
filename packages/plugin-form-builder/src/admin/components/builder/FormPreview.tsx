@@ -13,7 +13,7 @@
 "use client";
 
 import { Input, Button } from "@revnixhq/ui";
-import React from "react";
+import type React from "react";
 
 import type { FormField } from "../../../types";
 

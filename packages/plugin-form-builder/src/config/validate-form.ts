@@ -491,9 +491,16 @@ function validateField(
   }
 
   if (typeof fieldType !== "string" || !VALID_FIELD_TYPES_SET.has(fieldType)) {
+    let fieldTypeRepr: string;
+    if (typeof fieldType === "object" && fieldType !== null) {
+      fieldTypeRepr = JSON.stringify(fieldType);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- fieldType narrowed to primitive above; rule doesn't follow control flow on unknown
+      fieldTypeRepr = String(fieldType);
+    }
     errors.push({
       path: `${path}.type`,
-      message: `Invalid field type '${fieldType}'. Valid types: ${VALID_FIELD_TYPES.join(", ")}`,
+      message: `Invalid field type '${fieldTypeRepr}'. Valid types: ${VALID_FIELD_TYPES.join(", ")}`,
       code: "FIELD_TYPE_INVALID",
     });
     return;
