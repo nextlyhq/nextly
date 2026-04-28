@@ -25,12 +25,21 @@ export const noopRenameDetector: RenameDetector = {
   detect: () => [],
 };
 
+// F5 PR 1: signature returns ClassificationResult { level, events } now.
+// F2-style empty noop preserves "every change is safe" behavior.
 export const noopClassifier: Classifier = {
-  classify: () => "safe",
+  classify: () => Promise.resolve({ level: "safe" as const, events: [] }),
 };
 
+// F5 PR 1: dispatch() now returns proceed flag and typed Resolution[].
+// Auto-confirm with proceed=true matches old "auto-resolve" intent.
 export const noopPromptDispatcher: PromptDispatcher = {
-  dispatch: () => Promise.resolve({ confirmedRenames: [], resolutions: {} }),
+  dispatch: () =>
+    Promise.resolve({
+      confirmedRenames: [],
+      resolutions: [],
+      proceed: true,
+    }),
 };
 
 export const noopPreRenameExecutor: PreRenameExecutor = {

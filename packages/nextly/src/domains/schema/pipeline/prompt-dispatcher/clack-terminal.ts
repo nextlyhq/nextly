@@ -21,6 +21,7 @@
 import * as clack from "@clack/prompts";
 
 import type {
+  ClassifierEvent,
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
@@ -39,6 +40,7 @@ function hasTTY(): boolean {
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   async dispatch(args: {
     candidates: RenameCandidate[];
+    events: ClassifierEvent[];
     classification: "safe" | "destructive" | "interactive";
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
@@ -46,7 +48,9 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
     if (candidates.length === 0) {
       // Pure-additive apply (or all renames pre-resolved). No prompt needed.
-      return { confirmedRenames: [], resolutions: {} };
+      // F5 PR 5 will extend this dispatcher to walk args.events here when
+      // candidates is empty but events exist.
+      return { confirmedRenames: [], resolutions: [], proceed: true };
     }
 
     if (!hasTTY()) {
@@ -156,7 +160,8 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
     return {
       confirmedRenames: confirmed,
-      resolutions: {},
+      resolutions: [],
+      proceed: true,
     };
   }
 }

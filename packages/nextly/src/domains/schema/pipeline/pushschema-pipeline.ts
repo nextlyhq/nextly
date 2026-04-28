@@ -190,19 +190,43 @@ export class PushSchemaPipeline {
       // Phase B: rename detection + prompt + resolution application.
       const candidates = this.deps.renameDetector.detect(operations, dialect);
 
-      // F5 Classifier still consumes warnings (currently empty - we don't
-      // route drizzle-kit warnings through here yet). When F5 lands, the
-      // classifier will inspect ops to determine destructive vs interactive.
-      const classification = this.deps.classifier.classify([], false);
+      // F5 Classifier reads typed Operation[] and returns ClassificationResult
+      // { level, events }. PR 1 wires the new shape with empty count
+      // callbacks (noopClassifier ignores them); PR 2 supplies real callbacks
+      // bound to the live DB so countNulls/countRows fire on real changes.
+      const classificationResult = await this.deps.classifier.classify({
+        operations,
+        drizzleWarnings: [],
+        hasDataLoss: false,
+        countNulls: () => Promise.resolve(0),
+        countRows: () => Promise.resolve(0),
+        dialect,
+      });
 
       const dispatchResult =
-        candidates.length > 0 || classification !== "safe"
+        candidates.length > 0 || classificationResult.level !== "safe"
           ? await this.deps.promptDispatcher.dispatch({
               candidates,
-              classification,
+              events: classificationResult.events,
+              classification: classificationResult.level,
               channel: promptChannel,
             })
-          : { confirmedRenames: [], resolutions: {} };
+          : {
+              confirmedRenames: [] as RenameCandidate[],
+              resolutions: [],
+              proceed: true,
+            };
+
+      // Honor abort: short-circuit before any DDL fires.
+      if (!dispatchResult.proceed) {
+        throw new PromptCancelledError();
+      }
+
+      // PR 1 captures resolutions but doesn't consume them; PR 4 wires a
+      // PreCleanupExecutor stage that reads them. Underscore prefix silences
+      // the unused-var lint until then.
+      const _resolutions = dispatchResult.resolutions;
+      void _resolutions;
 
       const resolvedOps = applyResolutionsToOperations(
         operations,

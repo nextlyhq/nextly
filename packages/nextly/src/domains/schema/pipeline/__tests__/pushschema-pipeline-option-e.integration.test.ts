@@ -80,7 +80,11 @@ describe("PushSchemaPipeline Option E end-to-end - PostgreSQL", () => {
     const dispatcher: PromptDispatcher = {
       dispatch: async ({ candidates }) => {
         captured.push([...candidates]);
-        return { confirmedRenames: [...candidates], resolutions: {} };
+        return {
+          confirmedRenames: [...candidates],
+          resolutions: [],
+          proceed: true,
+        };
       },
     };
     return { captured, dispatcher };
@@ -97,7 +101,11 @@ describe("PushSchemaPipeline Option E end-to-end - PostgreSQL", () => {
       dispatch: async ({ candidates }) => {
         captured.push([...candidates]);
         const confirmed = candidates.filter(confirmFilter);
-        return { confirmedRenames: confirmed, resolutions: {} };
+        return {
+          confirmedRenames: confirmed,
+          resolutions: [],
+          proceed: true,
+        };
       },
     };
     return { captured, dispatcher };

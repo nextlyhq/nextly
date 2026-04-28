@@ -13,6 +13,7 @@
 // implementation out without touching the pipeline.
 
 import type {
+  ClassifierEvent,
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
@@ -32,13 +33,21 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
 
   dispatch(args: {
     candidates: RenameCandidate[];
+    events: ClassifierEvent[];
     classification: "safe" | "destructive" | "interactive";
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
     const { candidates } = args;
     if (candidates.length === 0) {
       // Pure additive apply. No prompt would have been needed anyway.
-      return Promise.resolve({ confirmedRenames: [], resolutions: {} });
+      // F5 PR 6 will extend this dispatcher to also consume pre-attached
+      // resolutions for ClassifierEvents from the apply payload; until then
+      // the browser channel passes through events without resolutions.
+      return Promise.resolve({
+        confirmedRenames: [],
+        resolutions: [],
+        proceed: true,
+      });
     }
 
     // Index resolutions by (table, from, to) so we can match them to
@@ -89,7 +98,8 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
 
     return Promise.resolve({
       confirmedRenames,
-      resolutions: {},
+      resolutions: [],
+      proceed: true,
     });
   }
 }
