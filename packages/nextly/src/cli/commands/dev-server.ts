@@ -15,12 +15,22 @@ import type { FieldConfig } from "../../collections/fields/types/index.js";
 import { getDialectTables } from "../../database/index.js";
 import { SchemaRegistry } from "../../database/schema-registry.js";
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables.js";
+import { applyDesiredSchema } from "../../domains/schema/pipeline/index.js";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types.js";
+// F8 PR 1: legacy DrizzlePushService is still used here at boot for the
+// static-tables-only push in ensureCoreTables. PR 2 will replace this
+// with `pushSchemasDirect` and delete the import. The user-collection
+// sync path below now goes through the F2 applyDesiredSchema pipeline.
 import { DrizzlePushService } from "../../domains/schema/services/drizzle-push-service.js";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator.js";
-import {
-  SchemaPushService,
-  type SchemaPushResult,
-} from "../../domains/schema/services/schema-push-service.js";
+// F8 PR 1: SchemaPushService dropped from this module. The env check
+// (was getEnvironment().isProduction) is now an inline NODE_ENV read.
+// The legacy fallback sync path is deleted (dead code post-Option E).
+// addMissingColumnsForFields is extracted to utils/missing-columns.ts.
+import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns.js";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables.js";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
 import type { FieldDefinition } from "../../schemas/dynamic-collections.js";
@@ -165,28 +175,15 @@ export async function performAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
   syncResult: CollectionSyncResultWithValidation,
-  options: ResolvedDevOptions,
+  _options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
 
-  // Create service logger
-  const serviceLogger: ServiceLogger = {
-    info: (msg: string) => logger.debug(msg),
-    warn: (msg: string) => logger.warn(msg),
-    error: (msg: string) => logger.error(msg),
-    debug: (msg: string) => logger.debug(msg),
-  };
-
-  const pushService = new SchemaPushService(
-    adapter as unknown as DrizzleAdapter,
-    serviceLogger
-  );
-
-  // Check environment
-  const env = pushService.getEnvironment();
-
-  if (env.isProduction) {
+  // Production guard: never auto-apply schema in production. Users must
+  // explicitly run `nextly migrate:generate` + `nextly migrate:run`. F8
+  // PR 1 inlined this check (was SchemaPushService.getEnvironment()).
+  if (process.env.NODE_ENV === "production") {
     const pendingCollections = [
       ...syncResult.sync.created,
       ...syncResult.sync.updated,
@@ -203,257 +200,113 @@ export async function performAutoSync(
     return;
   }
 
-  // ── Drizzle Push Path ──────────────────────────────────────────────
-  // Build a SchemaRegistry with all collections (static + dynamic),
-  // generate Drizzle table objects, and call pushSchema() to sync DB.
-  // This replaces the per-table raw SQL approach with a single pushSchema call.
-  // Falls back to legacy sync if pushSchema fails (e.g., no TTY for prompts).
+  const start = Date.now();
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
   const dialect = drizzleAdapter.getCapabilities().dialect;
 
+  // Build a SchemaRegistry with static + dynamic tables. Even though the
+  // pipeline runs its own diff/apply, the SchemaRegistry is still needed
+  // here to wire `setTableResolver` so adapter CRUD on dynamic tables
+  // works for the rest of this CLI invocation (seed scripts, etc.).
+  const schemaRegistry = new SchemaRegistry(dialect);
+  const staticSchemas = getDialectTables(dialect);
+  schemaRegistry.registerStaticSchemas(staticSchemas);
+
+  // F8 PR 1: collections flow through the F2 applyDesiredSchema pipeline
+  // (rename detection + classifier + pre-cleanup + pushSchema, all inside
+  // a transaction on PG/SQLite). Build the desired-collections bucket
+  // alongside the runtime-schema registration for the resolver.
+  const desiredCollections: Record<string, DesiredCollection> = {};
+  for (const collection of config.collections) {
+    const baseTableName =
+      collection.dbName ?? collection.slug.replace(/-/g, "_");
+    const tableName = baseTableName.startsWith("dc_")
+      ? baseTableName
+      : `dc_${baseTableName}`;
+
+    const fields = (collection.fields ?? []) as FieldDefinition[];
+    desiredCollections[collection.slug] = {
+      slug: collection.slug,
+      tableName,
+      fields: fields as DesiredCollection["fields"],
+    };
+
+    // Register in the live SchemaRegistry so subsequent adapter queries in
+    // the same CLI run can resolve the dynamic tables via Drizzle.
+    if (fields.length > 0) {
+      const { table } = generateRuntimeSchema(tableName, fields, dialect);
+      schemaRegistry.registerDynamicSchema(tableName, table);
+    }
+  }
+
+  const desired: DesiredSchema = {
+    collections: desiredCollections,
+    singles: {},
+    components: {},
+  };
+
+  let result: Awaited<ReturnType<typeof applyDesiredSchema>>;
   try {
-    const schemaRegistry = new SchemaRegistry(dialect);
-
-    // Register static system tables (users, accounts, dynamic_collections, etc.)
-    const staticSchemas = getDialectTables(dialect);
-    schemaRegistry.registerStaticSchemas(staticSchemas);
-
-    // Generate Drizzle table objects for ALL collections in config
-    for (const collection of config.collections) {
-      const baseTableName =
-        collection.dbName ?? collection.slug.replace(/-/g, "_");
-      const tableName = baseTableName.startsWith("dc_")
-        ? baseTableName
-        : `dc_${baseTableName}`;
-
-      const fields = (collection.fields ?? []) as FieldDefinition[];
-      if (fields.length > 0) {
-        const { table } = generateRuntimeSchema(tableName, fields, dialect);
-        schemaRegistry.registerDynamicSchema(tableName, table);
-      }
-    }
-
-    // Call pushSchema() to sync all schemas with database
-    // This runs in the terminal (nextly dev) so TTY is available for prompts
-    const db = drizzleAdapter.getDrizzle();
-    const drizzlePush = new DrizzlePushService(dialect, db);
-    const allSchemas = schemaRegistry.getAllSchemas();
-
-    const pushResult = await drizzlePush.apply(allSchemas);
-
-    if (pushResult.statementsToExecute.length > 0) {
-      logger.info(
-        `[schema] Applied ${pushResult.statementsToExecute.length} schema changes via Drizzle push`
-      );
-      for (const stmt of pushResult.statementsToExecute) {
-        logger.debug(`  ${stmt}`);
-      }
-    } else {
-      logger.debug("[schema] Database schema is in sync");
-    }
-
-    if (pushResult.warnings.length > 0) {
-      for (const warning of pushResult.warnings) {
-        logger.warn(`[schema] ${warning}`);
-      }
-    }
-
-    // Set table resolver so adapter CRUD uses Drizzle query API
-    drizzleAdapter.setTableResolver(schemaRegistry);
-
-    // Update migration status for all synced collections
-    for (const collection of config.collections) {
-      try {
-        const tableName = `dc_${collection.slug.replace(/-/g, "_")}`;
-        const tableExists = await drizzleAdapter.tableExists(tableName);
-        if (tableExists) {
-          await drizzleAdapter.update(
-            "dynamic_collections",
-            {
-              migration_status: "applied",
-              updated_at: new Date().toISOString(),
-            },
-            { and: [{ column: "slug", op: "=", value: collection.slug }] }
-          );
-        }
-      } catch {
-        // Ignore errors updating migration status
-      }
-    }
-
-    logger.success("Schema synced via Drizzle push");
-    return;
-  } catch (error) {
-    // pushSchema failed - fall back to legacy per-table sync
-    // Common reason: TTY prompt needed for rename ambiguity
-    logger.warn(
-      `[schema] Drizzle push failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-    logger.info("[schema] Falling back to legacy per-table sync...");
-  }
-
-  // ── Legacy Sync Path (fallback) ────────────────────────────────────
-  // Get collections that need schema sync (created or updated)
-  const collectionsToSync = [
-    ...syncResult.sync.created,
-    ...syncResult.sync.updated,
-  ];
-
-  // Also check for unchanged collections that might be missing their tables
-  // This can happen when the collection registry is synced but the table wasn't created
-  for (const slug of syncResult.sync.unchanged) {
-    const collection = config.collections.find(c => c.slug === slug);
-    if (collection) {
-      // Check if the table exists
-      const tableName = `dc_${slug.replace(/-/g, "_")}`;
-      try {
-        const tableExists = await (
-          adapter as unknown as DrizzleAdapter
-        ).tableExists(tableName);
-        logger.info(`Checking table ${tableName}: exists=${tableExists}`);
-        if (!tableExists) {
-          logger.info(`Table ${tableName} doesn't exist, adding to sync list`);
-          collectionsToSync.push(slug);
-        }
-      } catch (error) {
-        logger.warn(
-          `Failed to check if table ${tableName} exists: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    }
-  }
-
-  if (collectionsToSync.length === 0) {
-    logger.debug("No schema changes to sync");
-    return;
-  }
-
-  logger.newline();
-  logger.info("Auto-syncing schema changes to database...");
-
-  // Warn about data loss only when --force is used (which drops & recreates tables)
-  if (options.force) {
-    logger.warn("⚠️  Auto-sync may cause data loss. Tables will be recreated.");
-    logger.info("Use --no-auto-sync to disable.");
-    logger.newline();
-  }
-
-  // Perform the sync
-  let pushResult: SchemaPushResult;
-  try {
-    pushResult = await pushService.syncSchema(config, collectionsToSync, {
-      force: options.force,
-      cwd: options.cwd ?? process.cwd(),
+    // 'code' is correct for db-sync flows: this is a config-driven apply,
+    // same family as a code-first HMR cycle. The pipeline's terminal
+    // PromptDispatcher is reached only when there's a real ambiguity
+    // (drop+add pairs flagged as rename candidates) — db-sync runs in a
+    // TTY so that's safe.
+    result = await applyDesiredSchema(desired, "code", {
+      promptChannel: "terminal",
     });
   } catch (error) {
-    logger.error(
-      `Auto-sync failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    // Catastrophic failures (DB connection lost, etc.) reach here. The
+    // pipeline's typed errors come back as { success: false } — those are
+    // handled below.
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`Auto-sync failed: ${msg}`);
     throw error;
   }
 
-  // Update migration status for successfully synced collections
-  // CRITICAL: Verify table exists before marking as 'applied' to prevent
-  // the race condition where status is set but table wasn't actually created
-  if (pushResult.synced.length > 0) {
-    const drizzleAdapterInner = adapter as unknown as DrizzleAdapter;
+  if (!result.success) {
+    logger.error(
+      `Auto-sync failed (${result.error.code}): ${result.error.message}`
+    );
+    throw new Error(`Schema apply failed: ${result.error.message}`);
+  }
 
-    for (const syncInfo of pushResult.synced) {
-      try {
-        // Verify table actually exists before marking as 'applied'
-        const tableActuallyExists = await drizzleAdapterInner.tableExists(
-          syncInfo.tableName
-        );
+  if (result.statementsExecuted > 0) {
+    logger.info(
+      `[schema] Applied ${result.statementsExecuted} schema change(s) via pipeline`
+    );
+  } else {
+    logger.debug("[schema] Database schema is in sync");
+  }
 
-        const newStatus = tableActuallyExists ? "applied" : "failed";
+  // Set table resolver so adapter CRUD uses Drizzle query API
+  drizzleAdapter.setTableResolver(schemaRegistry);
 
-        // Use raw update to avoid re-fetch issues with registry service
-        await drizzleAdapterInner.update(
+  // Update dynamic_collections.migration_status for every collection whose
+  // physical table now exists. Mirrors pre-pipeline behavior so admin UI
+  // reads stay consistent.
+  for (const collection of config.collections) {
+    try {
+      const tableName = `dc_${collection.slug.replace(/-/g, "_")}`;
+      const tableExists = await drizzleAdapter.tableExists(tableName);
+      if (tableExists) {
+        await drizzleAdapter.update(
           "dynamic_collections",
           {
-            migration_status: newStatus,
+            migration_status: "applied",
             updated_at: new Date().toISOString(),
           },
-          { and: [{ column: "slug", op: "=", value: syncInfo.slug }] }
-        );
-
-        if (tableActuallyExists) {
-          logger.debug(
-            `Updated migration status for ${syncInfo.slug} to 'applied'`
-          );
-        } else {
-          logger.error(
-            `Schema push reported success for ${syncInfo.slug} but table '${syncInfo.tableName}' does not exist - marked as 'failed'`
-          );
-        }
-      } catch (statusError) {
-        logger.debug(
-          `Could not update migration status for ${syncInfo.slug}: ${
-            statusError instanceof Error
-              ? statusError.message
-              : String(statusError)
-          }`
+          { and: [{ column: "slug", op: "=", value: collection.slug }] }
         );
       }
+    } catch {
+      // Ignore errors updating migration status — non-critical metadata.
     }
   }
 
-  // Display auto-sync results
-  displayAutoSyncResults(pushResult, options, context);
-}
-
-/**
- * Display auto-sync results
- */
-export function displayAutoSyncResults(
-  result: SchemaPushResult,
-  options: ResolvedDevOptions,
-  context: CommandContext
-): void {
-  const { logger } = context;
-
-  if (result.synced.length > 0) {
-    const dataLossCount = result.synced.filter(s => s.dataLoss).length;
-    const syncedNames = result.synced.map(s => s.slug).join(", ");
-
-    if (dataLossCount > 0) {
-      logger.warn(
-        `Synced ${result.synced.length} table(s) with data loss: ${syncedNames}`
-      );
-    } else {
-      logger.success(`Synced ${result.synced.length} table(s): ${syncedNames}`);
-    }
-
-    if (options.verbose) {
-      for (const sync of result.synced) {
-        const status = sync.dataLoss ? "(recreated)" : "(created)";
-        logger.item(`${sync.tableName} ${status}`, 1);
-      }
-    }
-  }
-
-  if (result.skipped.length > 0 && options.verbose) {
-    logger.debug(`Skipped ${result.skipped.length} collection(s):`);
-    for (const skip of result.skipped) {
-      logger.item(`${skip.slug}: ${skip.reason}`, 1);
-    }
-  }
-
-  if (result.errors.length > 0) {
-    logger.newline();
-    logger.error(`${result.errors.length} auto-sync error(s):`);
-    for (const err of result.errors) {
-      logger.item(`${err.slug}: ${err.error}`, 1);
-    }
-  }
-
-  if (result.warnings.length > 0 && options.verbose) {
-    for (const warning of result.warnings) {
-      logger.warn(warning);
-    }
-  }
-
-  logger.debug(`Auto-sync completed in ${formatDuration(result.durationMs)}`);
+  logger.success(
+    `Schema synced via pipeline in ${formatDuration(Date.now() - start)}`
+  );
 }
 
 // ============================================================================
@@ -572,11 +425,10 @@ export async function performSinglesAutoSync(
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);
 
       if (tableAlreadyExists) {
-        // Table exists — add missing columns via ALTER TABLE (non-destructive)
-        const pushService = new SchemaPushService(
-          drizzleAdapter,
-          serviceLogger
-        );
+        // Table exists — add missing columns via the extracted util
+        // (F8 PR 1; was SchemaPushService.addMissingColumnsForFields).
+        // Behavior preserved: NOT NULL is silently stripped on every
+        // added column to avoid violating constraints on existing rows.
 
         // Ensure system columns (title, slug) exist — they may be missing
         // on tables created before the fix that added them to the schema.
@@ -595,7 +447,9 @@ export async function performSinglesAutoSync(
           systemFields.push({ name: "slug", type: "text" });
         }
 
-        const addedColumns = await pushService.addMissingColumnsForFields(
+        const addedColumns = await addMissingColumnsForFields(
+          drizzleAdapter,
+          serviceLogger,
           tableName,
           [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
           { timestamps: true }
@@ -869,12 +723,11 @@ export async function performComponentsAutoSync(
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);
 
       if (tableAlreadyExists) {
-        // Table exists — add missing columns via ALTER TABLE (non-destructive)
-        const pushService = new SchemaPushService(
+        // Table exists — add missing columns via the extracted util
+        // (F8 PR 1; was SchemaPushService.addMissingColumnsForFields).
+        const addedColumns = await addMissingColumnsForFields(
           drizzleAdapter,
-          serviceLogger
-        );
-        const addedColumns = await pushService.addMissingColumnsForFields(
+          serviceLogger,
           tableName,
           componentConfig.fields,
           { timestamps: true }
