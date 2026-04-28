@@ -7,6 +7,8 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
+import type { Operation } from "./diff/types.js";
+
 export interface RenameCandidate {
   tableName: string;
   fromColumn: string;
@@ -17,20 +19,21 @@ export interface RenameCandidate {
   defaultSuggestion: "rename" | "drop_and_add";
 }
 
-// F4: parses drizzle-kit's statementsToExecute, identifies DROP+ADD pairs
-// that might be column renames, returns one candidate per (drop, add) pair.
+// F4 Option E: reads Operation[] (from our diff engine), identifies
+// (drop_column, add_column) pairs that might be column renames, returns
+// one RenameCandidate per pair grouped by table.
 //
-// `liveColumnTypes` is a Map<tableName, Map<columnName, type>> populated by
-// the pipeline via queryLiveColumnTypes() before its first pushSchema call.
-// The detector reads it to populate `RenameCandidate.fromType` and compute
-// `typesCompatible`. A column missing from the map yields fromType: '' and
-// typesCompatible: false (defensive - never silently claims compatibility).
+// The detector reads fromType from drop_column ops (which carry the
+// previous column's type) and toType from add_column ops (which carry
+// the new column's type). Type-family compatibility check decides
+// `typesCompatible` and `defaultSuggestion`.
+//
+// Renamed from F4 PR 1's signature: previously took `statements: string[]`
+// + `liveColumnTypes` because we parsed raw SQL strings from drizzle-kit's
+// pushSchema output. Option E PR 1's diff engine produces structured
+// operations with types embedded, so neither input is needed at this layer.
 export interface RenameDetector {
-  detect(
-    statements: string[],
-    dialect: SupportedDialect,
-    liveColumnTypes: Map<string, Map<string, string>>
-  ): RenameCandidate[];
+  detect(operations: Operation[], dialect: SupportedDialect): RenameCandidate[];
 }
 
 export type ClassificationLevel = "safe" | "destructive" | "interactive";
