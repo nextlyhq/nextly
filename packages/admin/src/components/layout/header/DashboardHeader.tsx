@@ -1,4 +1,3 @@
-import React from "react";
 
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
@@ -27,7 +26,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
       </div>
 
       <div className="flex items-center gap-4">
-        <UserProfileDropdown user={user} onLogout={logout} />
+        <UserProfileDropdown user={user} onLogout={() => { void logout(); }} />
       </div>
     </header>
   );

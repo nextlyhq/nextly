@@ -113,7 +113,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
 
               <div className="pt-2 mt-2 border-t border-border/50">
                 <DropdownMenuItem
-                  onClick={logout}
+                  onClick={() => { void logout(); }}
                   className="group flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row"
                 >
                   <LogOut className="h-4 w-4 transform transition-transform group-hover-subtle-row group-hover:-translate-x-0.5" />

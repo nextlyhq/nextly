@@ -1,5 +1,6 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@revnixhq/ui";
-import React, { useRef, useEffect } from "react";
+import type React from "react";
+import { useRef, useEffect } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";

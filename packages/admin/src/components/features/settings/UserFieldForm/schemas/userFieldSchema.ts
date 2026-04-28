@@ -1,11 +1,10 @@
 import * as z from "zod";
 
-import {
+import type {
   UserFieldType,
   type UserFieldDefinitionRecord,
   type CreateUserFieldPayload,
-  type UpdateUserFieldPayload,
-} from "@admin/services/userFieldsApi";
+  type UpdateUserFieldPayload} from "@admin/services/userFieldsApi";
 
 // ============================================================
 // Form Values Type

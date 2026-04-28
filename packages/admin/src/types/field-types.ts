@@ -34,7 +34,6 @@ export enum FieldType {
   TIME_PICKER = "time_picker",
 
   // Layout
-  ARRAY = "repeater",
   REPEATER = "repeater",
   GROUP = "group",
 }
@@ -254,28 +253,6 @@ export interface TimePickerFieldConfig extends BaseFieldConfig {
 }
 
 /**
- * Array Field Configuration
- */
-export interface ArrayFieldConfig extends BaseFieldConfig {
-  type: FieldType.ARRAY;
-  sub_fields: FieldConfig[];
-  validation?: {
-    required?: boolean;
-    pattern?: string;
-    min_items?: number;
-    max_items?: number;
-  };
-  ui?: {
-    description?: string;
-    placeholder?: string;
-    add_button_label?: string;
-    remove_button_label?: string;
-    allow_reordering?: boolean;
-    collapsed_by_default?: boolean;
-  };
-}
-
-/**
  * Repeater Field Configuration
  */
 export interface RepeaterFieldConfig extends BaseFieldConfig {
@@ -394,7 +371,6 @@ export type FieldConfig =
   | UserFieldConfig
   | DatePickerFieldConfig
   | TimePickerFieldConfig
-  | ArrayFieldConfig
   | RepeaterFieldConfig
   | GroupFieldConfig
   | MediaFieldConfig

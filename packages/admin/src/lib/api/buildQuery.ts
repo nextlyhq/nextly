@@ -91,9 +91,7 @@ export const buildQuery = (
 
   // Forward filters as a JSON string if requested
   if (includeFilters) {
-    const rawFilters = params.filters?.filters as
-      | Record<string, unknown>
-      | undefined;
+    const rawFilters = params.filters?.filters;
     if (rawFilters && Object.keys(rawFilters).length > 0) {
       try {
         query.set("filters", JSON.stringify(rawFilters));

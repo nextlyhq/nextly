@@ -25,8 +25,6 @@ import type {
   DateFieldConfig,
   UploadFieldConfig,
   RelationshipFieldConfig,
-  JoinFieldConfig,
-  ArrayFieldConfig,
   GroupFieldConfig,
   JSONFieldConfig,
   RichTextFieldConfig,
@@ -36,14 +34,8 @@ import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { FieldWrapper } from "./FieldWrapper";
-
-// Text inputs
-
-// Number input
 import { UploadInput } from "./media/UploadInput";
 import { NumberInput } from "./number/NumberInput";
-
-// Selection inputs
 import { JoinField } from "./relational/JoinField";
 import { RelationshipInput } from "./relational/RelationshipInput";
 import { CheckboxInput } from "./selection/CheckboxInput";
@@ -52,12 +44,6 @@ import { DateInput } from "./selection/DateInput";
 import { RadioInput } from "./selection/RadioInput";
 import { SelectInput } from "./selection/SelectInput";
 import { ToggleInput } from "./selection/ToggleInput";
-
-// Media inputs
-
-// Relational inputs
-
-// Structured inputs
 import { ArrayInput } from "./structured/ArrayInput";
 import { ComponentInput } from "./structured/ComponentInput";
 import { GroupInput } from "./structured/GroupInput";
@@ -66,6 +52,7 @@ import { EmailInput } from "./text/EmailInput";
 import { PasswordInput } from "./text/PasswordInput";
 import { TextareaInput } from "./text/TextareaInput";
 import { TextInput } from "./text/TextInput";
+
 // RichTextInput uses Lexical which has PrismJS - must be lazy loaded for SSR
 const RichTextInput = lazy(() =>
   import("./special/RichTextInput").then(mod => ({
@@ -302,7 +289,7 @@ export function FieldRenderer({
   if (field.type === "join") {
     return (
       <FieldWrapper field={field} error={undefined}>
-        <JoinField field={field as JoinFieldConfig} />
+        <JoinField field={field} />
       </FieldWrapper>
     );
   }
@@ -471,7 +458,7 @@ export function FieldRenderer({
           <ArrayInput
             {...commonProps}
             name={fieldPath}
-            field={field as ArrayFieldConfig}
+            field={field}
             // Pass FieldRenderer recursively for nested fields
             renderField={(subField, subBasePath, subControl, options) => (
               <FieldRenderer

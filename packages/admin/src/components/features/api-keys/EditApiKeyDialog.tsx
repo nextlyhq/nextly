@@ -21,7 +21,8 @@ import {
   DialogTitle,
   Input,
 } from "@revnixhq/ui";
-import React, { useEffect } from "react";
+import { useEffect } from "react";
+import type React from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -127,7 +128,7 @@ export const EditApiKeyDialog: React.FC<EditApiKeyDialogProps> = ({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-4">
             {/* Name */}
             <FormField
               control={form.control}

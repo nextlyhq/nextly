@@ -15,7 +15,6 @@ import { getInitials } from "@admin/lib/utils";
 import type {
   Activity,
   ActivityCategory,
-  ActivityType,
   RecentActivityResponse,
 } from "@admin/types/dashboard/activity";
 
@@ -73,7 +72,7 @@ function mapEntry(entry: ActivityLogEntry): Activity {
       email: entry.userEmail,
       initials: getInitials(entry.userName),
     },
-    type: entry.action as ActivityType,
+    type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
     target,
     entryTitle,

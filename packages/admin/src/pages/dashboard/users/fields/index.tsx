@@ -34,7 +34,8 @@ import {
   TableRow,
   TableSkeleton,
 } from "@revnixhq/ui";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
 import {
@@ -43,7 +44,6 @@ import {
   Calendar,
   CheckSquare,
   Circle,
-  Clock,
   Edit,
   Eye,
   GripVertical,
@@ -653,7 +653,7 @@ function UserFieldsTable() {
             <span>
               Restart the server (
               <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                nextly dev
+                next dev
               </code>
               ) for new fields to take effect in the database.
             </span>

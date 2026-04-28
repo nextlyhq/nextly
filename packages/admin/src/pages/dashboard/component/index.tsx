@@ -12,7 +12,7 @@
  */
 
 import { Button } from "@revnixhq/ui";
-import React from "react";
+import type React from "react";
 
 import * as Icons from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";

@@ -3,7 +3,7 @@ import { FormProvider } from "react-hook-form";
 
 import { Loader2, AlertTriangle } from "@admin/components/icons";
 import { useRoleForm } from "@admin/hooks/useRoleForm";
-import { RoleFormProps } from "@admin/types/ui/form";
+import type { RoleFormProps } from "@admin/types/ui/form";
 
 import { RoleBasicInfo } from "./RoleBasicInfo";
 import { RoleInheritance } from "./RoleInheritance";
@@ -72,7 +72,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
         <FormProvider {...form}>
           <form
             ref={formRef}
-            onSubmit={onSubmit}
+            onSubmit={(e) => { void onSubmit(e); }}
             className="space-y-8"
             aria-labelledby="role-form-title"
             noValidate

@@ -188,17 +188,17 @@ export function useCreateEntry<
 
     onSuccess: data => {
       // Invalidate entry list queries for this collection
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
       });
 
       // Invalidate count queries for this collection
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: entryKeys.counts(),
       });
 
       // Invalidate dashboard caches so stats/recent-entries refresh immediately
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
         toast.success("Entry created successfully");

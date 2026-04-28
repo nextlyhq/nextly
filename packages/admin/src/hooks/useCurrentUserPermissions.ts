@@ -42,7 +42,7 @@ function buildCapabilities(
       canViewRoles: true,
       canViewMedia: true,
       canViewSettings: true,
-      collections: new Proxy({} as Record<string, CollectionCapabilities>, {
+      collections: new Proxy({}, {
         get: () => ({
           canRead: true,
           canCreate: true,

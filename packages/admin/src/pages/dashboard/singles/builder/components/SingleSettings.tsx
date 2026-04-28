@@ -34,7 +34,7 @@ import {
   Textarea,
 } from "@revnixhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import React, {
+import {
   useState,
   useMemo,
   useCallback,
@@ -475,7 +475,7 @@ export function SingleSettings({
                   onKeyDown={e => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      handleCreateGroup();
+                      void handleCreateGroup();
                     }
                     if (e.key === "Escape") setIsCreatingGroup(false);
                   }}
@@ -487,7 +487,7 @@ export function SingleSettings({
                   size="sm"
                   variant="outline"
                   className="h-8 px-2"
-                  onClick={handleCreateGroup}
+                  onClick={() => { void handleCreateGroup(); }}
                 >
                   <Icons.Check className="h-3.5 w-3.5" />
                 </Button>

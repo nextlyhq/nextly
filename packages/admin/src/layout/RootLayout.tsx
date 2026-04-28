@@ -1,10 +1,10 @@
 "use client";
 import { PortalProvider } from "@revnixhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import React, { Suspense, lazy, useEffect, useState } from "react";
+import type React from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import { PendingSchemaBanner } from "../components/features/schema-banner/PendingSchemaBanner";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
@@ -41,10 +41,12 @@ function AdminAppContent() {
   useEffect(() => {
     const handler = () => {
       toast.info("Schema updated externally, refreshing...");
-      queryClient.invalidateQueries({ queryKey: ["collections"] });
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["singles"] });
-      queryClient.invalidateQueries({ queryKey: ["components"] });
+      // void: the cache invalidations are fire-and-forget; downstream
+      // queries refetch on their own when they observe the new key state.
+      void queryClient.invalidateQueries({ queryKey: ["collections"] });
+      void queryClient.invalidateQueries({ queryKey: ["entries"] });
+      void queryClient.invalidateQueries({ queryKey: ["singles"] });
+      void queryClient.invalidateQueries({ queryKey: ["components"] });
     };
     window.addEventListener("nextly:schema-updated", handler);
     return () => window.removeEventListener("nextly:schema-updated", handler);
@@ -113,8 +115,6 @@ function AdminAppContent() {
               </div>
             ) : (
               <div className="h-screen overflow-hidden bg-background text-foreground flex flex-col">
-                {/* Task 11: pending schema change banner (wrapper mode only) */}
-                <PendingSchemaBanner />
                 {renderComponent()}
               </div>
             )}

@@ -19,8 +19,11 @@ import { generateRuntimeSchema } from "../../../../domains/schema/services/runti
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { SchemaRegistry } from "../../schema-registry";
 
+// F18 canonical env var: TEST_POSTGRES_URL.
+// Falls back to legacy TEST_DATABASE_URL, then to the dev default.
 const TEST_DB_URL =
-  process.env.TEST_DATABASE_URL ||
+  process.env.TEST_POSTGRES_URL ??
+  process.env.TEST_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5433/nextly_test";
 
 // Check if test database is available

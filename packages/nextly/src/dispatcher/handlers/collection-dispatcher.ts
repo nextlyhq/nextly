@@ -8,6 +8,23 @@
  * collections they can actually read.
  */
 
+import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
+import {
+  noopClassifier,
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+  noopPromptDispatcher,
+  noopRenameDetector,
+} from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types.js";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor.js";
+import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -16,6 +33,7 @@ import {
   listEffectivePermissions,
 } from "../../services/lib/permissions";
 import {
+  getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
   getSchemaChangeServiceFromDI,
@@ -148,35 +166,34 @@ const COLLECTIONS_METHODS: Record<
       }
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
-       
-      const currentFields = (collection.fields ?? []) as any[];
-      const tableName =
-         
-        (collection as any).tableName ?? `dc_${collection.slug}`;
+      // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
+      // which has tableName, fields: FieldConfig[], and schemaVersion: number.
+      // FieldConfig is structurally compatible with FieldDefinition (the schema
+      // service's input type), so we cast through unknown for the type system
+      // even though the runtime values are interchangeable.
+      const currentFields = (collection.fields ??
+        []) as unknown as FieldDefinition[];
+      const tableName = collection.tableName;
       const preview = await schemaChangeService.preview(
         tableName,
         currentFields,
-         
-        fields as any[]
+        fields as FieldDefinition[]
       );
       return {
         ...preview,
-         
-        schemaVersion: (collection as any).schemaVersion ?? 0,
+        schemaVersion: collection.schemaVersion,
       };
     },
   },
-  // Apply confirmed schema changes.
+  // Apply confirmed schema changes via the in-process schema service.
   //
-  // Two code paths:
-  // 1. Wrapper mode (NEXTLY_IPC_PORT set): enqueue the apply on the IPC
-  //    dispatcher so the wrapper can run DDL in its plain-Node context
-  //    (drizzle-kit/api works there) and respawn the child. The handler
-  //    awaits the wrapper's response via /apply-result before returning.
-  // 2. Plain next dev (no wrapper): fall back to the in-process path.
-  //    DDL may silently fail under Turbopack per the known createRequire
-  //    issue; the error surfaces via the Sub-task 1 truth-telling fix
-  //    rather than a green success toast.
+  // F1 PR 3: single-process model. drizzle-kit/api is loaded lazily by the
+  // schema service via drizzle-kit-lazy.ts (PR 1's webpackIgnore +
+  // turbopackIgnore magic comments keep it out of the handler bundle), so
+  // DDL runs cleanly in the same process serving requests. No more
+  // wrapper-mode IPC routing. bumpSchemaVersion fires automatically on
+  // success via SchemaChangeService.setOnApplySuccess (registered in
+  // di/register.ts:355-356).
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
@@ -196,90 +213,172 @@ const COLLECTIONS_METHODS: Record<
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
-         
-        resolutions?: Record<string, any>;
+        resolutions?: Record<string, FieldResolution>;
       };
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
       }
       if (!fields) throw new Error("fields is required in request body");
-      // Optimistic locking: reject if version changed since preview
-       
-      const currentVersion = (collection as any).schemaVersion ?? 0;
-      if (schemaVersion !== undefined && schemaVersion !== currentVersion) {
+
+      const currentVersion = collection.schemaVersion;
+      const tableName = collection.tableName;
+
+      // F3 transition gate: destructive saves require resolutions
+      // (default values, mark-nullable choices, backfills) collected
+      // by the admin SchemaChangeDialog. F2's shim forwarded these to
+      // SchemaChangeService.apply; F3's pipeline does not yet — F8's
+      // PromptDispatcher reintroduces resolution handling.
+      //
+      // Until F8 lands, fail loudly on destructive saves at the
+      // dispatcher rather than silently dropping the user's resolution
+      // input. Same posture as HMR's destructive-skip (reload-config.ts).
+      const currentFieldsForPreview = (collection.fields ??
+        []) as unknown as FieldDefinition[];
+      const preview = await schemaChangeService.preview(
+        tableName,
+        currentFieldsForPreview,
+        fields as FieldDefinition[]
+      );
+      if (preview.hasDestructiveChanges) {
         throw new Error(
-          "Schema was modified by another session. Please refresh."
+          `Destructive schema changes for '${p.collectionName}' (classification: ${preview.classification}) ` +
+            `are temporarily unavailable while the apply pipeline migrates to F3. ` +
+            `Track: F8 PromptDispatcher will reintroduce resolution handling. ` +
+            `For now, revert the change or wait for the F8 release.`
         );
       }
-       
-      const currentFields = (collection.fields ?? []) as any[];
-      const tableName =
-         
-        (collection as any).tableName ?? `dc_${collection.slug}`;
+      // Resolutions collected from the dialog are intentionally NOT
+      // forwarded — F8 absorbs that flow. We void to silence lint and
+      // make the deferral explicit.
+      void resolutions;
 
-      // Wrapper mode: delegate DDL to the wrapper via IPC.
-      const ipcServer = (
-        globalThis as unknown as {
-          __nextly_ipcServer?: {
-            dispatcher: {
-              pushApplyRequest: (input: {
-                slug: string;
-                newFields: unknown[];
-                resolutions: Record<string, unknown>;
-              }) => Promise<{
-                id: string;
-                success: boolean;
-                newSchemaVersion?: number;
-                error?: string;
-              }>;
-            };
-          } | null;
-        }
-      ).__nextly_ipcServer;
+      // F3: route through the PushSchemaPipeline via the F2 contract.
+      // Critical: must build the FULL DesiredSchema snapshot (all
+      // managed collections, not just the one being saved). pushSchema
+      // sees any managed table in the live DB but missing from the
+      // desired snapshot as "to be dropped" — without sibling
+      // collections in the snapshot, drizzle-kit would emit DROP TABLE
+      // for them. The post-pushSchema filter strips DROPs for
+      // non-managed tables, but managed siblings need to be present
+      // explicitly so they aren't even considered for drop.
+      const desired: DesiredSchema = {
+        collections: {},
+        singles: {},
+        components: {},
+      };
 
-      if (ipcServer?.dispatcher) {
-        const result = await ipcServer.dispatcher.pushApplyRequest({
-          slug: p.collectionName,
-          newFields: fields,
-          resolutions: resolutions ?? {},
-        });
-        if (!result.success) {
-          throw new Error(
-            result.error ?? "Schema apply failed in wrapper context"
-          );
-        }
-        return {
-          success: true,
-          restarting: true,
-          message: "Schema changes applied. Dev server restarting.",
-          newSchemaVersion: result.newSchemaVersion ?? currentVersion + 1,
+      // Add all OTHER managed collections from the registry first.
+      // CollectionRegistryService.getAllCollections returns
+      // DynamicCollectionRecord[] — slug + tableName are required
+      // fields, no defensive guards needed.
+      const allCollections = await registry.getAllCollections();
+      for (const c of allCollections) {
+        if (c.slug === p.collectionName) continue;
+        desired.collections[c.slug] = {
+          slug: c.slug,
+          tableName: c.tableName,
+          fields: c.fields ?? [],
         };
       }
 
-      // Plain next dev fallback (no wrapper): in-process apply. Subject to
-      // Turbopack / drizzle-kit/api issues, but the Sub-task 1 rollback
-      // ensures any DDL failure surfaces an honest error rather than a
-      // misleading success.
-      const result = await schemaChangeService.apply(
-        p.collectionName,
+      // Splice in the user's changes for THIS collection (overwrites
+      // any registry entry for the same slug).
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
         tableName,
-        currentFields,
-         
-        fields as any[],
-        currentVersion,
-         
-        registry as any,
-        resolutions
-      );
-      if (!result.success) {
-        const detail = result.error ? `: ${result.error}` : "";
-        throw new Error(`${result.message}${detail}`);
+        fields: fields as DesiredCollection["fields"],
+      };
+
+      // Resolve adapter for the F3 pipeline construction.
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
+        throw new Error("Database adapter not initialized");
       }
+      // dialect is an abstract readonly property on DrizzleAdapter — not
+      // a method (a previous iteration mistakenly called .getDialect()
+      // which would crash at runtime; tsc missed it because of `as any`).
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
+      const databaseName =
+        dialect === "mysql"
+          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+          : undefined;
+
+      // Per-call factory (not the DI-bound applyDesiredSchema in
+      // pipeline/index.ts) so we can thread MySQL databaseName + the
+      // resolved adapter into the F3 PushSchemaPipeline at this site.
+      // Today this also drops the `resolutions` forwarding — F8's
+      // PromptDispatcher reintroduces resolution handling. For now
+      // safe deltas pass through, destructive deltas would need to
+      // be confirmed via the (existing) admin SchemaChangeDialog
+      // resolutions UI which still works because the existing code
+      // path didn't re-wire prompts (F8 wires them properly).
+      // Note: see plans/specs/F3-pushschema-pipeline-design.md §11.
+      const apply = createApplyDesiredSchema({
+        applyPipeline: (desiredArg, sourceArg, channelArg) => {
+          const pipeline = new PushSchemaPipeline({
+            executor: new DrizzleStatementExecutor(dialect, db),
+            renameDetector: noopRenameDetector,
+            classifier: noopClassifier,
+            promptDispatcher: noopPromptDispatcher,
+            preRenameExecutor: noopPreRenameExecutor,
+            migrationJournal: noopMigrationJournal,
+          });
+          return pipeline.apply({
+            desired: desiredArg,
+            db,
+            dialect,
+            source: sourceArg,
+            promptChannel: channelArg,
+            databaseName,
+          });
+        },
+        // Optimistic-lock: only the slug being saved has a known
+        // currentVersion (we pre-fetched it above). For sibling
+        // collections in the snapshot, return null = no version check
+        // needed (caller didn't pass schemaVersions for them either).
+        readSchemaVersionForSlug: (slug: string) =>
+          Promise.resolve(slug === p.collectionName ? currentVersion : null),
+        // Read post-apply versions for the saved slug from the registry.
+        // F8 will provide a richer signal via the migration journal.
+        readNewSchemaVersionsForSlugs: async (slugs: string[]) => {
+          const out: Record<string, number> = {};
+          for (const slug of slugs) {
+            const r = await registry.getCollectionBySlug(slug);
+            const v = r?.schemaVersion;
+            if (typeof v === "number") out[slug] = v;
+          }
+          return out;
+        },
+      });
+
+      const schemaVersionsCtx: Record<string, number> = {};
+      if (schemaVersion !== undefined) {
+        schemaVersionsCtx[p.collectionName] = schemaVersion;
+      }
+
+      const result = await apply(desired, "ui", {
+        schemaVersions: schemaVersionsCtx,
+        promptChannel: "auto",
+      });
+
+      if (!result.success) {
+        if (result.error.code === "SCHEMA_VERSION_CONFLICT") {
+          throw new Error(
+            "Schema was modified by another session. Please refresh."
+          );
+        }
+        throw new Error(result.error.message);
+      }
+
       return {
         success: true,
-        restarting: false,
-        message: result.message,
-        newSchemaVersion: result.newSchemaVersion,
+        message: `Schema applied for '${p.collectionName}'`,
+        // Pipeline result's bumped version; fall back to inferred bump
+        // if the readNewSchemaVersionsForSlugs callback didn't surface
+        // the slug (e.g., registry cache missed).
+        newSchemaVersion:
+          result.newSchemaVersions[p.collectionName] ?? currentVersion + 1,
       };
     },
   },
@@ -290,7 +389,7 @@ const COLLECTIONS_METHODS: Record<
       // Build sort parameter from sortBy and sortOrder.
       // Frontend sends: sortBy=createdAt&sortOrder=desc
       // Backend expects: sort=-createdAt (desc) or sort=createdAt (asc).
-      let sort: string | undefined = p.sort as string | undefined;
+      let sort = p.sort;
       if (!sort && p.sortBy) {
         const sortOrder = p.sortOrder === "desc" ? "desc" : "asc";
         sort = sortOrder === "desc" ? `-${p.sortBy}` : String(p.sortBy);

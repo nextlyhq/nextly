@@ -18,11 +18,6 @@ import {
 } from "@revnixhq/ui";
 import {
   Columns,
-  Filter,
-  ListFilter,
-  MoreHorizontal,
-  Pencil,
-  Trash2,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -83,6 +78,7 @@ function renderCustomFieldCell(
     case "select":
     case "radio": {
       // Try to find the matching option label
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const strValue = String(value);
       const option = fieldDef.options?.find(o => o.value === strValue);
       return <Badge variant="default">{option?.label ?? strValue}</Badge>;
@@ -92,12 +88,14 @@ function renderCustomFieldCell(
       const num = Number(value);
       return (
         <span className="text-sm tabular-nums">
+          {/* eslint-disable-next-line @typescript-eslint/no-base-to-string */}
           {Number.isNaN(num) ? String(value) : num.toLocaleString()}
         </span>
       );
     }
 
     case "date": {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const dateStr = String(value);
       const formatted = formatDateWithAdminTimezone(
         dateStr,
@@ -118,6 +116,7 @@ function renderCustomFieldCell(
     case "email":
     case "textarea":
     default: {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const text = String(value);
       const truncated = text.length > 50 ? `${text.slice(0, 50)}...` : text;
       return <span className="text-sm">{truncated}</span>;
@@ -159,6 +158,8 @@ function renderCustomFieldCell(
  * <UserTable />
  * ```
  */
+const ALWAYS_VISIBLE = new Set(["email", "actions", "name", "id"]);
+
 export default function UserTable() {
   // Pagination state
   const [page, setPage] = useState(0);
@@ -258,7 +259,7 @@ export default function UserTable() {
   };
 
   // Format date helper
-  const formatDate = (dateValue?: string) => {
+  const formatDate = useCallback((dateValue?: string) => {
     return formatDateWithAdminTimezone(
       dateValue,
       {
@@ -271,13 +272,13 @@ export default function UserTable() {
       },
       "N/A"
     );
-  };
+  }, []);
 
   // Bulk operation handlers (NEW)
   const usersOnPage = filteredData || [];
   const pageUserIds = usersOnPage.map(u => u.id);
   const selectedOnPage = getSelectedCountOnPage(pageUserIds);
-  const totalUsers = data?.meta.total || 0;
+  const _totalUsers = data?.meta.total || 0;
 
   // Determine "select all on page" checkbox state
   const selectAllCheckboxState: boolean | "indeterminate" =
@@ -312,7 +313,7 @@ export default function UserTable() {
   const handleConfirmBulkDelete = () => {
     const selectedUserIds = Array.from(selectedIds);
 
-    bulkDeleteUsers(selectedUserIds, undefined, {
+    void bulkDeleteUsers(selectedUserIds, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Users deleted", {
@@ -358,7 +359,7 @@ export default function UserTable() {
       if (!fieldDef) continue;
 
       cols.push({
-        key: fieldName as keyof UserApiResponse,
+        key: fieldName,
         label: fieldDef.label,
         hideOnMobile: true,
         render: (_value: unknown, user: UserApiResponse) =>
@@ -545,8 +546,6 @@ export default function UserTable() {
     [allColumns, hiddenColumns]
   );
 
-  const ALWAYS_VISIBLE = new Set(["email", "actions", "name", "id"]);
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(String(col.key))),
     [allColumns]
@@ -565,7 +564,7 @@ export default function UserTable() {
   }, []);
 
   // Handle filter changes (reset to first page)
-  const handleRoleFilterChange = (value: string) => {
+  const _handleRoleFilterChange = (value: string) => {
     setRoleFilter(value);
     setPage(0);
   };

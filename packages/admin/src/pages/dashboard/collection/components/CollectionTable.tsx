@@ -22,7 +22,7 @@ import {
   Trash2,
   List,
   FileCode,
-  Table as TableIcon,
+  Table as 
   Filter,
 } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
@@ -35,10 +35,11 @@ import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbo
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
+import type {
+  RouteValue} from "@admin/constants/routes";
 import {
   ROUTES,
   withQuery,
-  RouteValue,
   buildRoute,
 } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
@@ -199,7 +200,7 @@ export default function CollectionTable() {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
       return next;
     });
   };
@@ -256,7 +257,7 @@ export default function CollectionTable() {
   }, [data?.data, sourceFilter, migrationFilter]);
 
   // Action handlers
-  const handleEdit = (collection: ApiCollection) => {
+  const handleEdit = useCallback((collection: ApiCollection) => {
     // Use builder for UI collections, old edit for others
     if (collection.source === "ui" && !collection.locked) {
       navigateTo(
@@ -267,9 +268,9 @@ export default function CollectionTable() {
         name: collection.name,
       });
     }
-  };
+  }, []);
 
-  const handleDelete = (collection: ApiCollection) => {
+  const handleDelete = useCallback((collection: ApiCollection) => {
     if (collection.locked) {
       toast.error("Cannot delete locked collection", {
         description: "Code-first collections cannot be deleted from the UI.",
@@ -278,21 +279,21 @@ export default function CollectionTable() {
     }
     setCollectionToDelete({ id: collection.id, name: collection.name });
     setDeleteDialogOpen(true);
-  };
+  }, []);
 
-  const handleViewEntries = (collection: ApiCollection) => {
+  const handleViewEntries = useCallback((collection: ApiCollection) => {
     // Navigate to collection entries page (placeholder for now)
     toast.info(`Viewing entries for ${collection.label}`, {
       description: "Entry view will be implemented in a future update.",
     });
-  };
+  }, []);
 
-  const handleGenerateTypes = (_collection: ApiCollection) => {
+  const handleGenerateTypes = useCallback((_collection: ApiCollection) => {
     toast.info("Coming Soon", {
       description:
         "Type generation will be available when CLI commands are implemented.",
     });
-  };
+  }, []);
 
   const handleConfirmDelete = () => {
     if (!collectionToDelete) return;
@@ -331,7 +332,7 @@ export default function CollectionTable() {
       .filter(c => selectedIds.includes(c.id) && !c.locked)
       .map(c => c.name);
 
-    bulkDeleteCollections(selectedCollectionNames, undefined, {
+    void bulkDeleteCollections(selectedCollectionNames, undefined, {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Collections deleted", {
@@ -370,14 +371,14 @@ export default function CollectionTable() {
         : "indeterminate";
 
   // Handle select all on page toggle
-  const handleToggleSelectAllOnPage = () => {
+  const handleToggleSelectAllOnPage = useCallback(() => {
     const selectedOnPage = getSelectedCountOnPage(pageCollectionIds);
     if (selectedOnPage === pageCollectionIds.length) {
       deselectAllOnPage(pageCollectionIds);
     } else {
       selectAllOnPage(pageCollectionIds);
     }
-  };
+  }, [getSelectedCountOnPage, pageCollectionIds, deselectAllOnPage, selectAllOnPage]);
 
   // Format date helper (using centralized utility)
   const formatDate = (dateValue?: string) => formatDateTime(dateValue);
@@ -397,7 +398,7 @@ export default function CollectionTable() {
   // ResponsiveTable columns
   const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
 
-  const columnDefs: Column<ApiCollection>[] = [
+  const columnDefs: Column<ApiCollection>[] = useMemo(() => [
     // Checkbox column for bulk selection
     {
       key: "select" as keyof ApiCollection,
@@ -467,7 +468,7 @@ export default function CollectionTable() {
       },
     },
     {
-      key: "source" as keyof ApiCollection,
+      key: "source",
       label: "SOURCE",
       render: (_value, collection) => {
         const sourceBadge = getSourceBadge(collection.source);
@@ -483,7 +484,7 @@ export default function CollectionTable() {
       },
     },
     {
-      key: "migrationStatus" as keyof ApiCollection,
+      key: "migrationStatus",
       label: "STATUS",
       render: (_value, collection) => {
         const migrationBadge = getMigrationBadge(collection.migrationStatus);
@@ -493,7 +494,7 @@ export default function CollectionTable() {
       },
     },
     {
-      key: "description" as keyof ApiCollection,
+      key: "description",
       label: "DESCRIPTION",
       hideOnMobile: true,
       render: (_value, collection) => (
@@ -505,7 +506,7 @@ export default function CollectionTable() {
       ),
     },
     {
-      key: "schemaDefinition" as keyof ApiCollection,
+      key: "schemaDefinition",
       label: "FIELDS",
       render: (_value, collection) => (
         <span className="text-sm tabular-nums">
@@ -589,7 +590,16 @@ export default function CollectionTable() {
         );
       },
     },
-  ];
+  ], [
+    selectAllCheckboxState,
+    handleToggleSelectAllOnPage,
+    isSelected,
+    toggleSelection,
+    handleEdit,
+    handleDelete,
+    handleViewEntries,
+    handleGenerateTypes,
+  ]);
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),

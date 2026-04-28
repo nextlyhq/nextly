@@ -52,8 +52,6 @@ import {
   createImageSize,
   updateImageSize,
   deleteImageSize,
-  getRegenerationStatus,
-  regenerateBatch,
 } from "./api/image-sizes";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
@@ -976,27 +974,7 @@ async function handleAdminMetaPluginPlacements(
 // CRUD Handler Wrappers
 // ============================================================================
 
-// Task 11: exposes the wrapper's latest pending schema change to the admin UI
-// so the PendingSchemaBanner can render when a code-first config edit is
-// awaiting confirmation. Returns { pending: null } when no change is waiting
-// or when running outside the wrapper (no IPC server started).
-async function handleAdminMetaSchemaPending(): Promise<Response> {
-  const pending =
-    (
-      globalThis as unknown as {
-        __nextly_pendingSchemaChange?: unknown;
-      }
-    ).__nextly_pendingSchemaChange ?? null;
-  return new Response(JSON.stringify({ pending }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 async function handleGet(req: Request, params: string[]) {
-  if (params[0] === "admin-meta" && params[1] === "schema-pending") {
-    return handleAdminMetaSchemaPending();
-  }
   if (params[0] === "admin-meta") {
     return handleAdminMetaRequest();
   }

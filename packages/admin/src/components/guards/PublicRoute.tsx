@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
+import type React from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
 import { publicApi } from "@admin/lib/api/publicApi";
@@ -69,7 +70,7 @@ export function PublicRoute({ children }: PublicRouteProps) {
       }
     };
 
-    checkAuth();
+    void checkAuth();
 
     return () => {
       mountedRef.current = false;

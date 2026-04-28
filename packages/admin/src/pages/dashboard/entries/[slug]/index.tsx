@@ -8,7 +8,7 @@
  * @since 1.0.0
  */
 
-import React from "react";
+import type React from "react";
 
 import { EntryList } from "@admin/components/features/entries/EntryList";
 import { PageContainer } from "@admin/components/layout/page-container";

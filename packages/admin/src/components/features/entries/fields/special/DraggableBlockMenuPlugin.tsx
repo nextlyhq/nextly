@@ -44,7 +44,7 @@ export function DraggableBlockMenuPlugin({
   // onElementChanged(null), which would clear state before handleAddBlock
   // runs — causing insertions to fall back to root.append() (end of editor).
   const lastHoveredElementRef = useRef<HTMLElement | null>(null);
-  const [hoveredElement, setHoveredElement] = useState<HTMLElement | null>(
+  const [_hoveredElement, setHoveredElement] = useState<HTMLElement | null>(
     null
   );
 

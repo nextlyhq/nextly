@@ -12,7 +12,6 @@ import type { FieldConfig } from "@revnixhq/nextly/config";
 import { Avatar, AvatarFallback, AvatarImage, Badge } from "@revnixhq/ui";
 
 import { Check, File, Image, X } from "@admin/components/icons";
-import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatDateTime } from "@admin/lib/dates/format";
 
 // ============================================================================
@@ -108,6 +107,7 @@ function getRelationshipLabel(value: unknown): string {
     // Try common title fields in order of preference
     const label = obj.title || obj.name || obj.label || obj.email || obj.id;
     if (label) {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       return String(label);
     }
   }
@@ -408,12 +408,14 @@ export function EntryTableCell({
     case "textarea":
     case "email":
     case "password": {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       return renderContent(<TextCell value={String(value)} />);
     }
 
     case "slug":
     case "code": {
       // Monospace for technical fields
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const text = String(value);
       const maxLength = 50;
       const truncated =
@@ -430,7 +432,9 @@ export function EntryTableCell({
 
     // Numeric field
     case "number": {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const num = typeof value === "number" ? value : parseFloat(String(value));
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const formatted = isNaN(num) ? String(value) : num.toLocaleString();
       return renderContent(
         <span className="font-mono tabular-nums">{formatted}</span>
@@ -452,6 +456,7 @@ export function EntryTableCell({
 
     // Date field
     case "date": {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       return renderContent(<DateCell value={String(value)} />);
     }
 
@@ -530,6 +535,7 @@ export function EntryTableCell({
 
     // Fallback for unknown types
     default: {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       return renderContent(<span>{String(value)}</span>);
     }
   }

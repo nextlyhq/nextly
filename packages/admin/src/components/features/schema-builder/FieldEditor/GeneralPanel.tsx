@@ -11,7 +11,6 @@
 
 import { Checkbox, Input, Label, Switch, Textarea } from "@revnixhq/ui";
 
-import type { LucideIcon } from "@admin/components/icons";
 import * as Icons from "@admin/components/icons";
 
 import { ArrayFieldEditor } from "../ArrayFieldEditor";
@@ -61,7 +60,7 @@ export function GeneralPanel({
   onAdminUpdate,
 }: GeneralPanelProps) {
   const iconName = FIELD_TYPE_ICONS[localField.type] || "FileText";
-  const IconComponent = (iconMap[iconName] || Icons.FileText) as LucideIcon;
+  const IconComponent = (iconMap[iconName] || Icons.FileText);
 
   return (
     <>

@@ -1,6 +1,6 @@
-import React from "react";
+import type React from "react";
 
-export const SMTPLogo = (props: React.SVGProps<SVGSVGElement>) => (
+export const SMTPLogo = (_props: React.SVGProps<SVGSVGElement>) => (
   <svg
     width="559"
     height="111"

@@ -1,5 +1,5 @@
 import { Button } from "@revnixhq/ui";
-import React from "react";
+import type React from "react";
 
 import { ArrowLeft } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";

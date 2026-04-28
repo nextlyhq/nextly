@@ -1,4 +1,4 @@
-import { UseFormReturn } from "react-hook-form";
+import type { UseFormReturn } from "react-hook-form";
 
 import {
   FormControl,
@@ -6,8 +6,8 @@ import {
   FormItem,
   FormMessage,
 } from "@admin/components/ui/form";
-import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
-import { Permission } from "@admin/types/ui/form";
+import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import type { Permission } from "@admin/types/ui/form";
 
 import { PermissionMatrix } from "./PermissionMatrix";
 

@@ -1,6 +1,7 @@
 import type { FieldConfig } from "@revnixhq/nextly/config";
 import { ChevronDown } from "lucide-react";
-import React, { useState } from "react";
+import type React from "react";
+import { useState } from "react";
 
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
@@ -34,7 +35,7 @@ export interface SingleFormSidebarProps {
  */
 export function SingleFormSidebar({
   document,
-  schema,
+  _schema,
   seoField,
   actions,
   fields = [],

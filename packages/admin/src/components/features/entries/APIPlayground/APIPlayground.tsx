@@ -593,7 +593,7 @@ export function APIPlayground({
               <Button
                 variant="outline"
                 size="icon"
-                onClick={handleCopyUrl}
+                onClick={() => { void handleCopyUrl(); }}
                 className="shrink-0 h-10 w-10 rounded-none border-border"
               >
                 {copied ? (
@@ -615,7 +615,7 @@ export function APIPlayground({
 
           {/* Execute Button */}
           <Button
-            onClick={executeRequest}
+            onClick={() => { void executeRequest(); }}
             disabled={isLoading || entryIdMissing}
             className="w-full gap-2 h-11 rounded-none text-xs font-bold uppercase tracking-widest active:scale-[0.98] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px]"
           >

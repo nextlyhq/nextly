@@ -9,12 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
 } from "@revnixhq/ui";
-import React from "react";
 
 import { ChevronUp, User, HelpCircle, LogOut } from "@admin/components/icons";
 import { useLogout } from "@admin/hooks/useLogout";
@@ -53,8 +48,8 @@ interface SidebarUserFooterProps {
 export function SidebarUserFooter({
   user,
   collapsed,
-  isUserPanelOpen,
-  onTogglePanel,
+  _isUserPanelOpen,
+  _onTogglePanel,
 }: SidebarUserFooterProps) {
   const logout = useLogout();
 
@@ -108,7 +103,7 @@ export function SidebarUserFooter({
             </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-sidebar-border/30" />
             <DropdownMenuItem
-              onClick={logout}
+              onClick={() => { void logout(); }}
               className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/10 focus:text-primary"
             >
               <LogOut className="mr-2 h-4 w-4" />
@@ -186,7 +181,7 @@ export function SidebarUserFooter({
         </DropdownMenuItem>
         <DropdownMenuSeparator className="bg-sidebar-border/30" />
         <DropdownMenuItem
-          onClick={logout}
+          onClick={() => { void logout(); }}
           className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/10 focus:text-primary"
         >
           <LogOut className="mr-2 h-4 w-4" />
