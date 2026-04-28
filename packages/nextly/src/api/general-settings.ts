@@ -30,6 +30,7 @@ import type { GeneralSettingsService } from "../services/general-settings/genera
 
 import { createSuccessResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getGeneralSettingsService(): Promise<GeneralSettingsService> {
   await getNextly();
@@ -60,22 +61,6 @@ const updateSettingsSchema = z.object({
     .nullable()
     .optional(),
 });
-
-// Convert a ZodError into a NextlyError validation factory call. The path is
-// joined with "." so nested fields surface as "user.email"; the issue code
-// (e.g. `invalid_string`, `too_small`) is forwarded so clients can branch
-// on machine-readable reasons. The raw issues are preserved in `logContext`
-// for operator triage.
-function nextlyValidationFromZod(err: z.ZodError): NextlyError {
-  return NextlyError.validation({
-    errors: err.issues.map(issue => ({
-      path: issue.path.join("."),
-      code: issue.code,
-      message: issue.message,
-    })),
-    logContext: { zodIssues: err.issues },
-  });
-}
 
 /**
  * GET /api/nextly/general-settings
