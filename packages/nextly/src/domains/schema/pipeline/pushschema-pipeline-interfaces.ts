@@ -8,6 +8,11 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 import type { Operation } from "./diff/types.js";
+import type {
+  ClassificationResult,
+  ClassifierEvent,
+  Resolution,
+} from "./resolution/types.js";
 
 export interface RenameCandidate {
   tableName: string;
@@ -38,22 +43,42 @@ export interface RenameDetector {
 
 export type ClassificationLevel = "safe" | "destructive" | "interactive";
 
-// F5: classifies the overall apply by examining drizzle-kit's warnings
-// + hasDataLoss flag. Determines whether we need to prompt the user.
+// F5 + F6: classifies operations + drizzle-kit signals into events.
+// Each event represents a user-visible decision point with applicable
+// resolutions or a per-dialect warning. Reads typed Operation[] from F4
+// Option E's diff stream (no regex parsing of drizzle-kit text output for
+// nullability or type changes).
+//
+// countNulls/countRows are dependency-injected so the executor manages DB
+// access; the classifier itself is pure logic plus per-dialect lookups.
 export interface Classifier {
-  classify(warnings: string[], hasDataLoss: boolean): ClassificationLevel;
+  classify(args: {
+    operations: Operation[];
+    drizzleWarnings: string[];
+    hasDataLoss: boolean;
+    countNulls: (table: string, column: string) => Promise<number>;
+    countRows: (table: string) => Promise<number>;
+    dialect: SupportedDialect;
+  }): Promise<ClassificationResult>;
 }
 
 export interface PromptDispatchResult {
   confirmedRenames: RenameCandidate[];
-  resolutions: Record<string, unknown>;
+  // Typed resolution payloads, one per ClassifierEvent the user resolved.
+  // Empty array when classification is "safe" or no events were emitted.
+  resolutions: Resolution[];
+  // false when the user picks "abort" or closes the prompt; orchestrator
+  // short-circuits the apply with PromptCancelledError in that case.
+  proceed: boolean;
 }
 
-// F7/F8: routes prompts to the user (terminal via clack, browser via SSE)
-// and waits for confirmation. Stub auto-confirms (returns empty).
+// F7/F8: routes prompts to the user (terminal via clack, browser via SSE-
+// or pre-confirmation pattern from F4 PR 5) and waits for confirmation.
+// Stub auto-confirms with proceed=true and empty arrays.
 export interface PromptDispatcher {
   dispatch(args: {
     candidates: RenameCandidate[];
+    events: ClassifierEvent[];
     classification: ClassificationLevel;
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult>;
@@ -85,3 +110,11 @@ export interface MigrationJournal {
 export interface DrizzleStatementExecutor {
   executeStatements(tx: unknown, statements: string[]): Promise<void>;
 }
+
+// Re-export resolution types so consumers can import everything from one place.
+export type {
+  ClassificationResult,
+  ClassifierEvent,
+  Resolution,
+  ResolutionKind,
+} from "./resolution/types.js";
