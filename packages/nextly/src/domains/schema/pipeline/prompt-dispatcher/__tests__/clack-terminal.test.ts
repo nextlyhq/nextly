@@ -10,20 +10,16 @@ import {
 // We mock the module so tests can drive prompt outcomes deterministically
 // without an actual terminal.
 const mockSelect = vi.fn();
-const mockConfirm = vi.fn();
 const mockIntro = vi.fn();
 const mockOutro = vi.fn();
-const mockNote = vi.fn();
 const mockIsCancel = vi.fn(
   (value: unknown) => value === Symbol.for("clack:cancel")
 );
 
 vi.mock("@clack/prompts", () => ({
   select: (...args: unknown[]) => mockSelect(...args),
-  confirm: (...args: unknown[]) => mockConfirm(...args),
   intro: (...args: unknown[]) => mockIntro(...args),
   outro: (...args: unknown[]) => mockOutro(...args),
-  note: (...args: unknown[]) => mockNote(...args),
   isCancel: (value: unknown) => mockIsCancel(value),
 }));
 

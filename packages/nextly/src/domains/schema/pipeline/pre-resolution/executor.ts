@@ -95,14 +95,29 @@ function sqlForOp(op: Operation, dialect: SupportedDialect): string {
       return buildDropColumnSql(op.tableName, op.columnName, dialect);
     case "drop_table":
       return buildDropTableSql(op.tableName, dialect);
-    default:
-      // Should never reach here - filter ensures only pre-resolution ops
-      // pass through. The filter is the single source of truth via
-      // isPreResolutionOp(); throwing here would mean isPreResolutionOp
-      // and orderForExecution drifted.
+    case "add_table":
+    case "add_column":
+    case "change_column_type":
+    case "change_column_nullable":
+    case "change_column_default":
+      // Filter (isPreResolutionOp) ensures we never reach here at runtime.
+      // Listing the additive cases keeps the switch exhaustive for current
+      // Operation variants - the default branch's `never` check below
+      // catches FUTURE variants added to the union.
       throw new Error(
-        `executePreResolutionOps: unexpected op.type ${(op as { type: string }).type}`
+        `executePreResolutionOps: non-pre-resolution op leaked through filter: ${op.type}`
       );
+    default: {
+      // If a new Operation variant is added later, the switch becomes
+      // non-exhaustive and TS narrows op to that new variant here. The
+      // `never` annotation forces a compile error - so adding a variant
+      // requires updating this switch (and the filter alongside it).
+      const _exhaustive: never = op;
+      void _exhaustive;
+      throw new Error(
+        `executePreResolutionOps: unhandled op variant: ${(op as { type: string }).type}`
+      );
+    }
   }
 }
 

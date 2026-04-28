@@ -74,6 +74,26 @@ describe("buildDropTableSql", () => {
   });
 });
 
+describe("identifier quote guard (defense-in-depth)", () => {
+  it("rejects identifiers containing the PG/SQLite quote character", () => {
+    expect(() =>
+      buildDropColumnSql(`dc_evil"; DROP TABLE users; --`, "x", "postgresql")
+    ).toThrow(/quote character/);
+  });
+
+  it("rejects identifiers containing the MySQL backtick", () => {
+    expect(() => buildDropColumnSql("dc_evil`; -- ", "x", "mysql")).toThrow(
+      /quote character/
+    );
+  });
+
+  it("rejects column names with embedded quotes", () => {
+    expect(() =>
+      buildRenameColumnSql("dc_x", `bad"col`, "good", "postgresql")
+    ).toThrow(/quote character/);
+  });
+});
+
 describe("buildRenameTableSql", () => {
   it("emits postgres ALTER TABLE RENAME TO", () => {
     expect(buildRenameTableSql("dc_old", "dc_new", "postgresql")).toBe(

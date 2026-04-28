@@ -26,32 +26,11 @@ import type {
   RenameCandidate,
 } from "../pushschema-pipeline-interfaces.js";
 
-/**
- * Thrown when a prompt is required but the runtime has no TTY.
- * Carries an actionable message directing users to either run from a
- * real terminal or use code-first migration files via `nextly migrate:create`.
- */
-export class TTYRequiredError extends Error {
-  constructor(detail: string) {
-    super(
-      `TTY required for schema confirmation. ${detail} ` +
-        "Run from an interactive terminal, or use code-first migration files " +
-        "via `nextly migrate:create`."
-    );
-    this.name = "TTYRequiredError";
-  }
-}
+import { PromptCancelledError, TTYRequiredError } from "./errors.js";
 
-/**
- * Thrown when the user cancels a prompt mid-flow (Ctrl+C in clack).
- * The pipeline catches this and reports apply as cancelled-by-user.
- */
-export class PromptCancelledError extends Error {
-  constructor() {
-    super("Schema apply cancelled by user");
-    this.name = "PromptCancelledError";
-  }
-}
+// Re-export so callers that want to catch these errors can import from the
+// dispatcher module they already depend on.
+export { PromptCancelledError, TTYRequiredError };
 
 function hasTTY(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);

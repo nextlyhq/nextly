@@ -10,16 +10,23 @@
 //   PG / SQLite: double-quoted ("name")
 //   MySQL: backtick (`name`)
 //
-// Identifier names come from our managed-table prefix space and our own
-// FieldConfig column names, so they're already validated. We don't escape
-// embedded quotes - if a name contained one, it would have failed earlier
-// in the pipeline. (F4 PR 1's filter strips unmanaged tables; managed
-// tables follow the dc_/single_/comp_ prefix and ascii-snake-case naming.)
+// Identifier names come from our managed-table prefix space (dc_/single_/
+// comp_) and FieldConfig column names. Both are validated upstream. As a
+// defense-in-depth check we still throw if an identifier contains the
+// dialect's quote character - that would otherwise be either an injection
+// vector or malformed SQL.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 function quote(name: string, dialect: SupportedDialect): string {
-  return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const q = dialect === "mysql" ? "`" : '"';
+  if (name.includes(q)) {
+    throw new Error(
+      `Invalid identifier ${JSON.stringify(name)}: contains the dialect quote character (${q}). ` +
+        "Managed tables and FieldConfig column names must not contain quote characters."
+    );
+  }
+  return `${q}${name}${q}`;
 }
 
 export function buildRenameColumnSql(
