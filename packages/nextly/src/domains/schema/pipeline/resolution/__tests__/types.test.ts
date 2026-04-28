@@ -25,4 +25,45 @@ describe("eventId helpers", () => {
   it("throws on malformed event id", () => {
     expect(() => parseEventId("garbage")).toThrow(/malformed/i);
   });
+
+  it("throws when kind is not in the whitelisted set (adversarial input safety)", () => {
+    // Critical for PR 6's browser SSE boundary which deserializes ids from
+    // potentially-untrusted client requests.
+    expect(() => parseEventId("not_a_real_kind:dc_users.email")).toThrow(
+      /unknown kind/i
+    );
+  });
+
+  it("parses schema-qualified table names (e.g. public.dc_users)", () => {
+    // Drizzle/Postgres allow schema-qualified table names. Column part is
+    // always a single identifier so we split off the right end.
+    expect(parseEventId("type_change:public.dc_users.email")).toEqual({
+      kind: "type_change",
+      table: "public.dc_users",
+      column: "email",
+    });
+  });
+
+  it("round-trips for all event kinds", () => {
+    const cases: Array<
+      [
+        Parameters<typeof formatEventId>[0],
+        Parameters<typeof formatEventId>[1],
+        Parameters<typeof formatEventId>[2],
+      ]
+    > = [
+      ["add_not_null_with_nulls", "dc_users", "email"],
+      ["add_required_field_no_default", "dc_posts", "summary"],
+      ["type_change", "dc_users", "age"],
+    ];
+    for (const [kind, table, column] of cases) {
+      const id = formatEventId(kind, table, column);
+      expect(parseEventId(id)).toEqual({ kind, table, column });
+    }
+  });
+
+  it("throws when table or column is empty", () => {
+    expect(() => parseEventId("type_change:.email")).toThrow(/malformed/i);
+    expect(() => parseEventId("type_change:dc_users.")).toThrow(/malformed/i);
+  });
 });

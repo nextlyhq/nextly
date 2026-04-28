@@ -222,11 +222,8 @@ export class PushSchemaPipeline {
         throw new PromptCancelledError();
       }
 
-      // PR 1 captures resolutions but doesn't consume them; PR 4 wires a
-      // PreCleanupExecutor stage that reads them. Underscore prefix silences
-      // the unused-var lint until then.
-      const _resolutions = dispatchResult.resolutions;
-      void _resolutions;
+      // dispatchResult.resolutions is unused in PR 1 — PR 4 will wire a
+      // PreCleanupExecutor stage that reads it.
 
       const resolvedOps = applyResolutionsToOperations(
         operations,
