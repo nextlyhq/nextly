@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
+import { toDbError } from "../../../database/errors";
 // PR 4 migration: replaced legacy ServiceError throws with the unified
 // NextlyError API. Public messages follow §13.8 — generic, no identifiers,
 // no constraint hints — and identifying detail moves to logContext.
@@ -232,9 +233,10 @@ export class CollectionRegistryService extends BaseRegistryService<
     } catch (error) {
       // Re-throw NextlyErrors unchanged (e.g. our duplicate throw above).
       // Map raw DB errors via fromDatabaseError; generic public message,
-      // rich logContext.
+      // rich logContext. Normalise raw driver errors via toDbError(dialect)
+      // first so unique/fk/etc. produce the right kind.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -319,7 +321,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so unique/fk/etc. produce the right kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -350,7 +353,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so fk/etc. produce the right kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

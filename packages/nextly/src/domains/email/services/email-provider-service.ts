@@ -384,7 +384,9 @@ export class EmailProviderService extends BaseService {
     } catch (error) {
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
       // tucks the dialect-specific code into logContext via fromDatabaseError.
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors via toDbError(dialect) first so the kind
+      // is preserved (otherwise PG 23505 collapses to INTERNAL_ERROR).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getProvider(id);

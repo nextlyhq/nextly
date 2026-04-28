@@ -3,6 +3,7 @@ import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
 import type { ComponentAdminOptions } from "../../../components/config/types";
 import { MAX_COMPONENT_NESTING_DEPTH } from "../../../components/config/validate-component";
+import { toDbError } from "../../../database/errors";
 // PR 4 migration: switched the throw layer to NextlyError. Public messages now
 // follow §13.8 (no slug echoing); identifiers (slug, source, refs) move into
 // `logContext` so operators retain full diagnostic context.
@@ -204,7 +205,9 @@ export class ComponentRegistryService extends BaseRegistryService<
     } catch (error) {
       // Spec §8.2 — DB errors map to NextlyError via fromDatabaseError, which
       // produces generic public messages and rich logContext (dbKind, dbCode).
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors via toDbError(dialect) first so the kind
+      // is preserved instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -336,10 +339,11 @@ export class ComponentRegistryService extends BaseRegistryService<
     } catch (error) {
       // Preserve already-mapped NextlyErrors (the notFound above, or a
       // forbidden from the locked-check). Anything else is a raw DB error.
+      // Normalise raw driver errors first so unique/fk/etc. produce the right kind.
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -384,11 +388,12 @@ export class ComponentRegistryService extends BaseRegistryService<
       this.logger.info("Component deleted", { slug });
     } catch (error) {
       // Preserve mapped NextlyErrors thrown from the locked / has-references
-      // checks above; raw DB errors map via fromDatabaseError.
+      // checks above; raw DB errors map via fromDatabaseError. Normalise raw
+      // driver errors via toDbError(dialect) first so the kind is preserved.
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

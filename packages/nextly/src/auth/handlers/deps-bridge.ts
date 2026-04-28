@@ -10,6 +10,7 @@
  * we use the database adapter directly.
  */
 import { getDialectTables } from "../../database/index.js";
+import { NextlyError } from "../../errors";
 import { env } from "../../lib/env";
 
 import type { AuthRouterDeps } from "./router.js";
@@ -304,9 +305,15 @@ export function buildAuthRouterDeps(
             : undefined,
         };
       } catch (err) {
+        // Public-surface safety: only NextlyError carries a vetted §13.8
+        // public message. For anything else (assertion bugs, third-party
+        // SDK errors that escaped the service layer) fall back to a generic
+        // string so raw driver / stack text never reaches the wire.
         return {
           success: false,
-          error: err instanceof Error ? err.message : "Failed to register user",
+          error: NextlyError.is(err)
+            ? err.publicMessage
+            : "Failed to register user",
         };
       }
     },
@@ -334,10 +341,13 @@ export function buildAuthRouterDeps(
           email: result.email,
         };
       } catch (err) {
+        // §13.8 public-surface safety — only NextlyError.publicMessage is
+        // vetted; fall back to a generic string for anything else.
         return {
           success: false,
-          error:
-            err instanceof Error ? err.message : "Failed to reset password",
+          error: NextlyError.is(err)
+            ? err.publicMessage
+            : "Failed to reset password",
         };
       }
     },
@@ -349,10 +359,13 @@ export function buildAuthRouterDeps(
         await authService.changePassword(userId, currentPassword, newPassword);
         return { success: true };
       } catch (err) {
+        // §13.8 public-surface safety — only NextlyError.publicMessage is
+        // vetted; fall back to a generic string for anything else.
         return {
           success: false,
-          error:
-            err instanceof Error ? err.message : "Failed to change password",
+          error: NextlyError.is(err)
+            ? err.publicMessage
+            : "Failed to change password",
         };
       }
     },
@@ -367,9 +380,13 @@ export function buildAuthRouterDeps(
           email: result.email,
         };
       } catch (err) {
+        // §13.8 public-surface safety — only NextlyError.publicMessage is
+        // vetted; fall back to a generic string for anything else.
         return {
           success: false,
-          error: err instanceof Error ? err.message : "Failed to verify email",
+          error: NextlyError.is(err)
+            ? err.publicMessage
+            : "Failed to verify email",
         };
       }
     },

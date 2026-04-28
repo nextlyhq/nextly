@@ -19,6 +19,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
 
+import { toDbError } from "../../../database/errors";
 // PR 4 of unified-error-system migration: ServiceError → NextlyError.
 import { NextlyError } from "../../../errors";
 import { userFieldDefinitionsMysql } from "../../../schemas/user-field-definitions/mysql";
@@ -155,7 +156,9 @@ export class UserFieldDefinitionService extends BaseService {
     try {
       await this.db.insert(this.userFieldDefinitions).values(values);
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so unique-violation / fk-violation are
+      // mapped to the right kind instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getField(id);
@@ -253,7 +256,8 @@ export class UserFieldDefinitionService extends BaseService {
         .set(updateData)
         .where(eq(this.userFieldDefinitions.id, id));
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getField(id);

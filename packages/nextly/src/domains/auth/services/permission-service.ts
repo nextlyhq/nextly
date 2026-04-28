@@ -13,6 +13,7 @@ import type {
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError. Methods now
 // return their data directly; failures throw a NextlyError.
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isSystemResource } from "../../../schemas/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -292,7 +293,10 @@ export class PermissionService extends BaseService {
     } catch (err) {
       // Any DB error during the list query -> NextlyError. fromDatabaseError
       // gives us a generic public message and rich operator logContext.
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors via toDbError(dialect) first so the
+      // correct kind is preserved (otherwise everything would collapse to
+      // INTERNAL_ERROR / 500).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -448,8 +452,9 @@ export class PermissionService extends BaseService {
     } catch (err) {
       // Constraint / dialect error during insert -> NextlyError. The
       // method's seed-style idempotency means callers don't need a
-      // distinct "duplicate" branch; fromDatabaseError is enough.
-      throw NextlyError.fromDatabaseError(err);
+      // distinct "duplicate" branch; fromDatabaseError is enough. Normalise
+      // raw driver errors first so the kind is mapped correctly.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
     return { id, created: true };
   }
@@ -538,7 +543,9 @@ export class PermissionService extends BaseService {
       // §13.8 favours generic "Resource already exists." which is what the
       // unique-violation path already produces.
       if (NextlyError.is(err)) throw err;
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors first so unique-violation etc. are
+      // preserved (would collapse to INTERNAL_ERROR otherwise).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -607,7 +614,9 @@ export class PermissionService extends BaseService {
         .delete(this.tables.permissions)
         .where(eq(this.tables.permissions.id, permissionId));
     } catch (err) {
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so fk-violation / etc. produce the
+      // right NextlyError instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -669,7 +678,9 @@ export class PermissionService extends BaseService {
         .delete(this.tables.permissions)
         .where(eq(this.tables.permissions.id, permissionId));
     } catch (err) {
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the kind is mapped correctly
+      // instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 }

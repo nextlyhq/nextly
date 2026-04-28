@@ -15,6 +15,7 @@ import type { MinimalUser } from "@nextly/types/auth";
 // shapes to throw-based NextlyError. Successful methods now return their data
 // directly (or void); failures throw a NextlyError instance the consumer
 // catches via try/catch or lets the unified error handler convert to JSON.
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
@@ -127,7 +128,10 @@ export class AuthService extends BaseService {
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors to DbError before mapping so unique
+      // violation on email registration is preserved as 409 DUPLICATE
+      // instead of collapsing to INTERNAL_ERROR / 500.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     // Trigger the verification email. Swallow errors so a transient
@@ -231,7 +235,8 @@ export class AuthService extends BaseService {
         },
       });
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     if (!user || !user.passwordHash) {
@@ -267,7 +272,8 @@ export class AuthService extends BaseService {
         })
         .where(eq(this.tables.users.id, userId));
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -362,8 +368,9 @@ export class AuthService extends BaseService {
       return { token: rawToken };
     } catch (error) {
       // DB errors are mapped to NextlyError. Generic public messages keep us
-      // from leaking schema or driver text.
-      throw NextlyError.fromDatabaseError(error);
+      // from leaking schema or driver text. Normalise raw driver errors via
+      // toDbError(dialect) so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -397,7 +404,8 @@ export class AuthService extends BaseService {
         },
       });
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     if (!resetToken) {
@@ -485,7 +493,8 @@ export class AuthService extends BaseService {
         })
         .where(eq(this.tables.passwordResetTokens.id, resetToken.id));
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return { email };
@@ -570,7 +579,8 @@ export class AuthService extends BaseService {
       );
       return { token: rawToken };
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -598,7 +608,8 @@ export class AuthService extends BaseService {
         }
       );
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     if (!verificationToken) {
@@ -655,7 +666,8 @@ export class AuthService extends BaseService {
           );
       });
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return { email };

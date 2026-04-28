@@ -11,6 +11,7 @@ import type {
 
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
+import { toDbError } from "../../../../database/errors";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
@@ -372,7 +373,9 @@ export class RoleMutationService extends BaseService {
         // because the factory's generic "Resource already exists." matches
         // §13.8 and the duplicate branches above already cover the common case.
         if (NextlyError.is(e)) throw e;
-        throw NextlyError.fromDatabaseError(e);
+        // Normalise raw driver errors so unique/fk/etc. produce the right
+        // kind instead of collapsing to INTERNAL_ERROR.
+        throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
       }
     } catch (e: unknown) {
       // Same rationale as the inner catch: log the raw error so the
@@ -384,7 +387,8 @@ export class RoleMutationService extends BaseService {
         { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
       );
       if (NextlyError.is(e)) throw e;
-      throw NextlyError.fromDatabaseError(e);
+      // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -612,13 +616,15 @@ export class RoleMutationService extends BaseService {
         // Re-throw NextlyErrors unchanged. Map raw DB errors via
         // fromDatabaseError; the legacy slug/name override message is dropped
         // because the factory's generic "Resource already exists." satisfies
-        // §13.8.
+        // §13.8. Normalise raw driver errors first so the kind is preserved.
         if (NextlyError.is(e)) throw e;
-        throw NextlyError.fromDatabaseError(e);
+        throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
       }
     } catch (e: unknown) {
       if (NextlyError.is(e)) throw e;
-      throw NextlyError.fromDatabaseError(e);
+      // Outer catch covers errors thrown before the transaction begins;
+      // normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -698,9 +704,10 @@ export class RoleMutationService extends BaseService {
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Raw DB errors map via
       // fromDatabaseError, which provides the spec-compliant generic public
-      // message and rich operator logContext.
+      // message and rich operator logContext. Normalise raw driver errors
+      // via toDbError(dialect) first so the kind is preserved.
       if (NextlyError.is(e)) throw e;
-      throw NextlyError.fromDatabaseError(e);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 }

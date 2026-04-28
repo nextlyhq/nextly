@@ -37,6 +37,7 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
+import { toDbError } from "../../../database/errors";
 import {
   apiKeys as apiKeysMysql,
   permissions as permissionsMysql,
@@ -408,8 +409,10 @@ export class ApiKeyService extends BaseService {
       });
     } catch (error) {
       // Map any DB error (unique-violation on keyHash, etc.) to a generic
-      // NextlyError. Driver text never leaks to the wire.
-      throw NextlyError.fromDatabaseError(error);
+      // NextlyError. Driver text never leaks to the wire. Normalise raw
+      // driver errors via toDbError(dialect) so unique/fk/etc. classify
+      // correctly instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     const meta = await this.getApiKeyById(id, userId, { allUsers: true });
@@ -559,7 +562,9 @@ export class ApiKeyService extends BaseService {
           )
         );
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so DB error kind (unique violation, etc.)
+      // is preserved when mapping to NextlyError.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     const updated = await this.getApiKeyById(id, userId);
@@ -608,7 +613,9 @@ export class ApiKeyService extends BaseService {
           )
         );
     } catch (error) {
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping so the right NextlyError
+      // kind is produced (e.g. fk-violation → 400, not INTERNAL_ERROR).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

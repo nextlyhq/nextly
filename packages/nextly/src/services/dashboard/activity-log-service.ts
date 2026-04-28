@@ -15,6 +15,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { SqlParam } from "@revnixhq/adapter-drizzle/types";
 
+import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
 // the underlying DbError is preserved as `cause` and rich DB context
@@ -178,8 +179,10 @@ export class ActivityLogService extends BaseService {
       // PR 4 migration: NextlyError.fromDatabaseError yields a generic
       // public message ("An unexpected error occurred." for non-DbError,
       // or the §13.8 mapping for DbError) and preserves the original
-      // error as `cause` for operator logs.
-      throw NextlyError.fromDatabaseError(error);
+      // error as `cause` for operator logs. Normalise raw driver errors
+      // via toDbError(dialect) so the right kind is mapped instead of
+      // collapsing to INTERNAL_ERROR / 500.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

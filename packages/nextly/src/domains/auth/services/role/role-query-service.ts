@@ -5,6 +5,7 @@ import type { RoleListSelectResult } from "@nextly/types/rbac-operations";
 
 // PR 4 migration: replaced result-shape returns and mapDbErrorToServiceError
 // with throw-based NextlyError.
+import { toDbError } from "../../../../database/errors";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
@@ -234,8 +235,9 @@ export class RoleQueryService extends BaseService {
       };
     } catch (e: unknown) {
       // Any DB error during the list query -> NextlyError with generic
-      // public message and the original error preserved as cause.
-      throw NextlyError.fromDatabaseError(e);
+      // public message and the original error preserved as cause. Normalise
+      // raw driver errors via toDbError(dialect) so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -311,7 +313,8 @@ export class RoleQueryService extends BaseService {
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Map raw DB errors via fromDatabaseError.
       if (NextlyError.is(e)) throw e;
-      throw NextlyError.fromDatabaseError(e);
+      // Normalise raw driver errors so unique/fk/etc. produce the right kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 

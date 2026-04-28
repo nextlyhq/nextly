@@ -5,6 +5,7 @@ import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { ComponentFieldConfig } from "../../../collections/fields/types/component";
+import { toDbError } from "../../../database/errors";
 // PR 4 migration: ServiceError throws replaced with NextlyError. The legacy
 // `ServiceError.fromDatabaseError` boundary maps to `NextlyError.fromDatabaseError`,
 // and the `instanceof ServiceError` rethrow guards become `NextlyError.is(...)`
@@ -274,9 +275,10 @@ export class ComponentMutationService extends BaseService {
     } catch (error) {
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
       // share the cross-realm brand) so factory-thrown errors aren't
-      // double-wrapped. Anything else is treated as a raw DB error.
+      // double-wrapped. Anything else is treated as a raw DB error. Normalise
+      // raw driver errors via toDbError(dialect) first so the kind is preserved.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -329,9 +331,10 @@ export class ComponentMutationService extends BaseService {
       }
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError.
+      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
+      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -414,9 +417,10 @@ export class ComponentMutationService extends BaseService {
       });
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError.
+      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
+      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -499,9 +503,10 @@ export class ComponentMutationService extends BaseService {
       );
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError.
+      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
+      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -645,9 +650,10 @@ export class ComponentMutationService extends BaseService {
       });
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError.
+      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
+      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -767,9 +773,10 @@ export class ComponentMutationService extends BaseService {
       }
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError.
+      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
+      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

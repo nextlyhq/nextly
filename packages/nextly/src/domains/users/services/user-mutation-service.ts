@@ -38,7 +38,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import { isDbError } from "../../../database/errors";
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
@@ -383,8 +383,16 @@ export class UserMutationService extends BaseService {
         for (const rid of uniqueRoleIds) {
           try {
             await services.roles.getRoleById(rid);
-          } catch {
-            invalidRoleIds.push(rid);
+          } catch (err) {
+            // Only treat NOT_FOUND as the expected "invalid role id" case.
+            // Re-throw anything else (transient DB outages, validation
+            // failures, etc.) so they surface as 5xx instead of being
+            // silently classified as bad role ids.
+            if (NextlyError.isNotFound(err)) {
+              invalidRoleIds.push(rid);
+              continue;
+            }
+            throw err;
           }
         }
         if (invalidRoleIds.length > 0) {
@@ -566,13 +574,16 @@ export class UserMutationService extends BaseService {
       // Re-throw NextlyError unchanged (validation, duplicate, internal, ...).
       // Pattern B: classify DB unique-violations as DUPLICATE so the public
       // message stays generic; everything else routes through fromDatabaseError.
+      // Normalise raw driver errors first so the unique-violation branch
+      // sees the right kind (otherwise PG 23505 collapses to INTERNAL_ERROR).
       if (NextlyError.is(err)) throw err;
-      if (isDbError(err) && err.kind === "unique-violation") {
+      const dbErr = toDbError(this.dialect, err);
+      if (dbErr.kind === "unique-violation") {
         throw NextlyError.duplicate({
           logContext: { entity: "user", email: userData.email },
         });
       }
-      throw NextlyError.fromDatabaseError(err);
+      throw NextlyError.fromDatabaseError(dbErr);
     }
   }
 
@@ -773,8 +784,15 @@ export class UserMutationService extends BaseService {
           currentRoleIds = await services.userRoles.listUserRoles(
             String(currentUser.id)
           );
-        } catch {
-          currentRoleIds = [];
+        } catch (err) {
+          // NOT_FOUND means the user has no roles yet — treat as empty.
+          // Re-throw anything else (DB outage, etc.) so it surfaces as 5xx
+          // instead of silently masking the real failure.
+          if (NextlyError.isNotFound(err)) {
+            currentRoleIds = [];
+          } else {
+            throw err;
+          }
         }
         const requestedRoleIds = Array.from(new Set(changes.roles ?? []));
         const currentSet = new Set(currentRoleIds);
@@ -792,9 +810,21 @@ export class UserMutationService extends BaseService {
             .where(eq(this.tables.userRoles.userId, String(currentUser.id)));
 
           for (const rid of requestedRoleIds) {
-            await services.userRoles
-              .assignRoleToUser(String(currentUser.id), rid)
-              .catch(() => undefined);
+            try {
+              await services.userRoles.assignRoleToUser(
+                String(currentUser.id),
+                rid
+              );
+            } catch (err) {
+              // NOT_FOUND means the role id doesn't exist — skip silently
+              // since validation above already filtered invalid roles. Re-throw
+              // anything else (DB outage etc.) so transient failures aren't
+              // hidden behind a "no such role" semantic.
+              if (NextlyError.isNotFound(err)) {
+                continue;
+              }
+              throw err;
+            }
           }
         }
       }
@@ -856,8 +886,16 @@ export class UserMutationService extends BaseService {
                 }
               }
             }
-          } catch {
-            // user_ext table may not exist — skip
+          } catch (err) {
+            // user_ext table may not exist — self-heal by disabling ext for
+            // the rest of this process (matches the established pattern in
+            // createLocalUser). Log the cause so a real outage isn't silent;
+            // the caller still gets a successful user response since the
+            // primary user row already updated.
+            const cause = err instanceof Error ? err.message : String(err);
+            this.logger.warn(
+              `user_ext read failed during updateUser; disabling user_ext for this process: ${cause}`
+            );
             this.userExtDisabled = true;
           }
         }
@@ -888,13 +926,16 @@ export class UserMutationService extends BaseService {
       // Re-throw NextlyError (validation, not-found, duplicate) unchanged.
       // Pattern B: classify DB unique-violations as DUPLICATE so the public
       // message stays generic; everything else routes through fromDatabaseError.
+      // Normalise raw driver errors first so the unique-violation branch
+      // sees the right kind.
       if (NextlyError.is(err)) throw err;
-      if (isDbError(err) && err.kind === "unique-violation") {
+      const dbErr = toDbError(this.dialect, err);
+      if (dbErr.kind === "unique-violation") {
         throw NextlyError.duplicate({
           logContext: { entity: "user", reason: "email-conflict", userId },
         });
       }
-      throw NextlyError.fromDatabaseError(err);
+      throw NextlyError.fromDatabaseError(dbErr);
     }
   }
 
@@ -918,7 +959,8 @@ export class UserMutationService extends BaseService {
         columns: { id: true },
       });
     } catch (err) {
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
 
     if (!user) {
@@ -966,7 +1008,8 @@ export class UserMutationService extends BaseService {
       });
     } catch (err) {
       if (NextlyError.is(err)) throw err;
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 }

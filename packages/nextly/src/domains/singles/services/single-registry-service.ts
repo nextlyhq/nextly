@@ -28,6 +28,7 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
+import { toDbError } from "../../../database/errors";
 // PR 4 migration: ServiceError throws replaced with NextlyError per spec
 // §13.8 — public messages stay generic ("Resource already exists.", etc.)
 // while identifiers (slug, source, conflicting names) move into logContext.
@@ -267,7 +268,8 @@ export class SingleRegistryService extends BaseRegistryService<
     } catch (error) {
       // Spec §8.2 — DB errors map to NextlyError via fromDatabaseError; this
       // produces a generic public message and rich logContext (dbKind/dbCode).
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors first so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -404,11 +406,12 @@ export class SingleRegistryService extends BaseRegistryService<
       return this.deserializeRecord(results[0]);
     } catch (error) {
       // Preserve already-mapped NextlyErrors (notFound above, forbidden above).
-      // Anything else is treated as a raw DB error.
+      // Anything else is treated as a raw DB error. Normalise raw driver
+      // errors first so unique/fk/etc. produce the right kind.
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -487,10 +490,11 @@ export class SingleRegistryService extends BaseRegistryService<
     } catch (error) {
       // Preserve already-mapped NextlyErrors (the notFound above, forbidden
       // above). Raw DB errors map via fromDatabaseError per spec §8.2.
+      // Normalise raw driver errors first so the kind is preserved.
       if (NextlyError.is(error)) {
         throw error;
       }
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

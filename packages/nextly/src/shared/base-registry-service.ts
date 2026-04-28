@@ -22,6 +22,7 @@ import type { SqlParam, WhereCondition } from "@revnixhq/adapter-drizzle/types";
 // ServiceError directly and check `instanceof ServiceError`; those are out
 // of scope for this PR but inherit the throw-based contract automatically
 // for all `getRecordOrThrow` / `updateRecordMigrationStatus` paths.
+import { toDbError } from "../database/errors";
 import { NextlyError } from "../errors";
 
 import { BaseService } from "./base-service";
@@ -144,7 +145,10 @@ export abstract class BaseRegistryService<
     } catch (error) {
       // Re-throw NextlyError from nested calls; only DB-layer errors get wrapped.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors (PG/MySQL/SQLite codes) to DbError so
+      // fromDatabaseError can map them to the right NextlyError kind. Without
+      // this, a real unique-violation collapses to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -186,7 +190,9 @@ export abstract class BaseRegistryService<
       return results.map(record => this.deserializeRecord(record));
     } catch (error) {
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping so unique/fk/etc. are
+      // classified instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -242,7 +248,9 @@ export abstract class BaseRegistryService<
       };
     } catch (error) {
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors so listRecords surfaces the correct
+      // NextlyError kind instead of a generic 500.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -296,7 +304,9 @@ export abstract class BaseRegistryService<
     } catch (error) {
       // Re-throw NextlyError unchanged; wrap raw DB errors via fromDatabaseError.
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors first so fromDatabaseError gets a DbError
+      // and can pick the right kind (unique-violation, deadlock, etc.).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -342,7 +352,8 @@ export abstract class BaseRegistryService<
       }
     } catch (error) {
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping to NextlyError kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -370,7 +381,8 @@ export abstract class BaseRegistryService<
       return results.map(record => this.deserializeRecord(record));
     } catch (error) {
       if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping to NextlyError kind.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

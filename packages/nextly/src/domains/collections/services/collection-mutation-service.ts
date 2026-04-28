@@ -25,6 +25,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import { isComponentField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
+import { toDbError } from "../../../database/errors";
 // The public CollectionServiceResult shape is preserved because the legacy
 // CollectionEntryService facade and CollectionBulkService still consume it;
 // only the internal error mapping changed. fromDatabaseError keeps driver
@@ -36,6 +37,7 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -70,7 +72,8 @@ import {
  */
 function errorToServiceResult<T = unknown>(
   error: unknown,
-  fallback: { statusCode?: number; defaultMessage: string }
+  fallback: { statusCode?: number; defaultMessage: string },
+  dialect: SupportedDialect
 ): CollectionServiceResult<T> {
   if (NextlyError.is(error)) {
     return {
@@ -80,7 +83,10 @@ function errorToServiceResult<T = unknown>(
       data: null,
     };
   }
-  const mapped = NextlyError.fromDatabaseError(error);
+  // Free helper takes dialect explicitly (no `this`) so callers pass
+  // `this.dialect` from BaseService. Normalising raw driver errors first
+  // is what keeps unique/fk violations from collapsing to INTERNAL_ERROR.
+  const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
   if (mapped.code === "INTERNAL_ERROR") {
     return {
       success: false,
@@ -682,9 +688,12 @@ export class CollectionMutationService extends BaseService {
       // the §13.8-compliant generic strings from fromDatabaseError so the
       // wire never reveals which constraint or column failed. The original
       // DbError is preserved on the NextlyError as `cause` for log lines.
-      return errorToServiceResult(error, {
-        defaultMessage: "Failed to create entry",
-      });
+      // Pass dialect explicitly so the helper can normalise raw driver errors.
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to create entry" },
+        this.dialect
+      );
     }
   }
 
@@ -1141,9 +1150,12 @@ export class CollectionMutationService extends BaseService {
     } catch (error: unknown) {
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
-      return errorToServiceResult(error, {
-        defaultMessage: "Failed to update entry",
-      });
+      // Pass dialect explicitly so the helper can normalise raw driver errors.
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
     }
   }
 
@@ -1549,9 +1561,12 @@ export class CollectionMutationService extends BaseService {
         data: entry,
       };
     } catch (error: unknown) {
-      return errorToServiceResult(error, {
-        defaultMessage: "Failed to create entry in transaction",
-      });
+      // Pass dialect explicitly so the helper can normalise raw driver errors.
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to create entry in transaction" },
+        this.dialect
+      );
     }
   }
 
@@ -1803,9 +1818,12 @@ export class CollectionMutationService extends BaseService {
         data: updated,
       };
     } catch (error: unknown) {
-      return errorToServiceResult(error, {
-        defaultMessage: "Failed to update entry in transaction",
-      });
+      // Pass dialect explicitly so the helper can normalise raw driver errors.
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry in transaction" },
+        this.dialect
+      );
     }
   }
 
@@ -2201,9 +2219,12 @@ export class CollectionMutationService extends BaseService {
         data: entry,
       };
     } catch (error: unknown) {
-      return errorToServiceResult(error, {
-        defaultMessage: "Failed to create entry",
-      });
+      // Pass dialect explicitly so the helper can normalise raw driver errors.
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to create entry" },
+        this.dialect
+      );
     }
   }
 
@@ -2488,9 +2509,12 @@ export class CollectionMutationService extends BaseService {
         data: updated,
       };
     } catch (error: unknown) {
-      return errorToServiceResult(error, {
-        defaultMessage: "Failed to update entry",
-      });
+      // Pass dialect explicitly so the helper can normalise raw driver errors.
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
     }
   }
 

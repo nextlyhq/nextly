@@ -26,7 +26,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import { isDbError } from "../../../database/errors";
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -124,12 +124,16 @@ export class UserAccountService extends BaseService {
       // Pattern B: unique-violation on (email) → DUPLICATE; everything else
       // routes through fromDatabaseError. §13.8: no identifiers in the
       // public message; the user id + a routing reason go to logContext.
-      if (isDbError(error) && error.kind === "unique-violation") {
+      // Normalise raw driver errors to DbError so the unique-violation
+      // branch and fromDatabaseError both see the right kind. Without this
+      // a real PG 23505 collapses to INTERNAL_ERROR.
+      const dbErr = toDbError(this.dialect, error);
+      if (dbErr.kind === "unique-violation") {
         throw NextlyError.duplicate({
           logContext: { reason: "email-conflict", userId },
         });
       }
-      throw NextlyError.fromDatabaseError(error);
+      throw NextlyError.fromDatabaseError(dbErr);
     }
 
     // Fetch and return updated user
@@ -161,7 +165,8 @@ export class UserAccountService extends BaseService {
         columns: { id: true },
       });
     } catch (err) {
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
 
     if (!user) {
@@ -177,7 +182,8 @@ export class UserAccountService extends BaseService {
         .set({ passwordHash })
         .where(eq(users.id, userId));
     } catch (err) {
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -242,7 +248,8 @@ export class UserAccountService extends BaseService {
         },
       });
     } catch (err) {
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
 
     return (results ?? []).map((r: AccountSelectResult) => ({

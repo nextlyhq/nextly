@@ -30,6 +30,7 @@ import { GetUserByIdSchema } from "@nextly/schemas/user";
 import { EmailSchema } from "@nextly/schemas/validation";
 import type { MinimalUser } from "@nextly/types/auth";
 
+import { toDbError } from "../../../database/errors";
 import { container } from "../../../di/container";
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Service methods now return the data type directly
@@ -341,11 +342,15 @@ export class UserQueryService extends BaseService {
           return await this._listUsersInternal(options, null);
         } catch (retryErr) {
           if (NextlyError.is(retryErr)) throw retryErr;
-          throw NextlyError.fromDatabaseError(retryErr);
+          // Normalise raw driver errors so the kind is preserved.
+          throw NextlyError.fromDatabaseError(
+            toDbError(this.dialect, retryErr)
+          );
         }
       }
       if (NextlyError.is(err)) throw err;
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -643,13 +648,17 @@ export class UserQueryService extends BaseService {
           return await this._getUserByIdInternal(userId, null);
         } catch (retryErr) {
           // Re-throw NextlyError unchanged (e.g. NOT_FOUND from the not-found
-          // branch); only wrap raw DB errors via fromDatabaseError.
+          // branch); only wrap raw DB errors via fromDatabaseError. Normalise
+          // raw driver errors first so the DB kind is preserved.
           if (NextlyError.is(retryErr)) throw retryErr;
-          throw NextlyError.fromDatabaseError(retryErr);
+          throw NextlyError.fromDatabaseError(
+            toDbError(this.dialect, retryErr)
+          );
         }
       }
       if (NextlyError.is(err)) throw err;
-      throw NextlyError.fromDatabaseError(err);
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
