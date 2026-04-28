@@ -39,6 +39,7 @@ import type { PromptDispatcher } from "../domains/schema/pipeline/pushschema-pip
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopPreCleanupExecutor,
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline.js";
@@ -265,6 +266,7 @@ export async function reloadNextlyConfig(opts?: {
         classifier: noopClassifier,
         promptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: noopPreCleanupExecutor,
         migrationJournal: noopMigrationJournal,
       });
       return pipeline.apply({

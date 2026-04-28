@@ -7,7 +7,7 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { Operation } from "./diff/types.js";
+import type { NextlySchemaSnapshot, Operation } from "./diff/types.js";
 import type {
   ClassificationResult,
   ClassifierEvent,
@@ -89,6 +89,25 @@ export interface PromptDispatcher {
 // (on PG/SQLite — MySQL DDL is auto-commit either way).
 export interface PreRenameExecutor {
   execute(tx: unknown, confirmed: RenameCandidate[]): Promise<void>;
+}
+
+// F5 PR 4: runs UPDATE / DELETE for confirmed F5 resolutions BEFORE pushSchema
+// fires. For make_optional, returns a patched desired snapshot that keeps the
+// affected column nullable (so pushSchema doesn't emit SET NOT NULL). For
+// abort, throws PromptCancelledError so the pipeline short-circuits.
+//
+// The fields argument carries field-type metadata (name + type) so
+// provide_default values can be Zod-validated against the column's type
+// before the UPDATE fires.
+export interface PreCleanupExecutor {
+  execute(args: {
+    tx: unknown;
+    desiredSnapshot: NextlySchemaSnapshot;
+    resolutions: Resolution[];
+    events: ClassifierEvent[];
+    fields: Array<{ name: string; type: string }>;
+    dialect: SupportedDialect;
+  }): Promise<NextlySchemaSnapshot>;
 }
 
 // F8: writes start/end records to the dynamic_migrations table for

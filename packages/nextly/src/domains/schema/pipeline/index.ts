@@ -31,6 +31,7 @@ import { ClackTerminalPromptDispatcher } from "./prompt-dispatcher/clack-termina
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopPreCleanupExecutor,
   noopPreRenameExecutor,
 } from "./pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "./pushschema-pipeline.js";
@@ -104,6 +105,7 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
         classifier: noopClassifier,
         promptDispatcher: new ClackTerminalPromptDispatcher(),
         preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: noopPreCleanupExecutor,
         migrationJournal: noopMigrationJournal,
       });
 

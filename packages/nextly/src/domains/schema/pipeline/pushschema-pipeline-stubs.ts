@@ -13,6 +13,7 @@
 import type {
   Classifier,
   MigrationJournal,
+  PreCleanupExecutor,
   PreRenameExecutor,
   PromptDispatcher,
   RenameDetector,
@@ -44,6 +45,12 @@ export const noopPromptDispatcher: PromptDispatcher = {
 
 export const noopPreRenameExecutor: PreRenameExecutor = {
   execute: () => Promise.resolve(),
+};
+
+// F5 PR 4: passthrough — returns the desired snapshot unchanged and runs no
+// SQL. PR 5/6 wire the real RealPreCleanupExecutor at production call sites.
+export const noopPreCleanupExecutor: PreCleanupExecutor = {
+  execute: ({ desiredSnapshot }) => Promise.resolve(desiredSnapshot),
 };
 
 export const noopMigrationJournal: MigrationJournal = {
