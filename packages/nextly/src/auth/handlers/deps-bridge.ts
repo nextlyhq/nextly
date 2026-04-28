@@ -34,6 +34,11 @@ export function buildAuthRouterDeps(
     lockoutDurationSeconds: 15 * 60, // 15 minutes
     loginStallTimeMs: 500,
     requireEmailVerification: true,
+    // Spec §13.2: read the host-app's auth.revealRegistrationConflict flag
+    // from the registered NextlyConfig. Defaults to false (silent-success on
+    // email conflict) when config is not yet initialised or the flag is
+    // unset. The schema is already populated by sanitizeConfig.
+    revealRegistrationConflict: readRevealRegistrationConflict(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
 
     findUserByEmail: async (email: string) => {
@@ -286,36 +291,15 @@ export function buildAuthRouterDeps(
       await seedPermissions(adapter, { silent: true });
     },
 
+    // PR 5 (unified-error-system): the auth handlers (register,
+    // forgot-password, reset-password) now consume the throw-based service
+    // contract directly. The bridge passes through without translating
+    // back to a Result shape — the handler catches NextlyError and
+    // serialises via toResponseJSON.
     registerUser: async data => {
-      // PR 4 (unified-error-system): authService.registerUser now returns
-      // the created user directly and throws NextlyError on failure.
-      // Adapt to the bridge's `{ success, error?, user? }` contract by
-      // catching errors and surfacing the public message.
       const authService = getService("authService");
-      try {
-        const user = await authService.registerUser(data);
-        return {
-          success: true,
-          user: user
-            ? {
-                id: user.id,
-                email: user.email,
-                name: user.name,
-              }
-            : undefined,
-        };
-      } catch (err) {
-        // Public-surface safety: only NextlyError carries a vetted §13.8
-        // public message. For anything else (assertion bugs, third-party
-        // SDK errors that escaped the service layer) fall back to a generic
-        // string so raw driver / stack text never reaches the wire.
-        return {
-          success: false,
-          error: NextlyError.is(err)
-            ? err.publicMessage
-            : "Failed to register user",
-        };
-      }
+      const user = await authService.registerUser(data);
+      return { id: user.id, email: user.email, name: user.name };
     },
 
     generatePasswordResetToken: async (email, redirectPath) => {
@@ -323,33 +307,16 @@ export function buildAuthRouterDeps(
       const result = await authService.generatePasswordResetToken(email, {
         redirectPath,
       });
-      return { success: true, token: result.token };
+      return { token: result.token };
     },
 
     resetPasswordWithToken: async (token, newPassword) => {
-      // PR 4: resetPasswordWithToken returns `{ email }` and throws
-      // NextlyError on invalid/expired tokens. Translate to the bridge
-      // contract by catching the error.
       const authService = getService("authService");
-      try {
-        const result = await authService.resetPasswordWithToken(
-          token,
-          newPassword
-        );
-        return {
-          success: true,
-          email: result.email,
-        };
-      } catch (err) {
-        // §13.8 public-surface safety — only NextlyError.publicMessage is
-        // vetted; fall back to a generic string for anything else.
-        return {
-          success: false,
-          error: NextlyError.is(err)
-            ? err.publicMessage
-            : "Failed to reset password",
-        };
-      }
+      const result = await authService.resetPasswordWithToken(
+        token,
+        newPassword
+      );
+      return { email: result.email };
     },
 
     changePassword: async (userId, currentPassword, newPassword) => {
@@ -402,4 +369,34 @@ export function buildAuthRouterDeps(
       }
     },
   };
+}
+
+/**
+ * Read `auth.revealRegistrationConflict` from the NextlyConfig registered in
+ * the DI container. Returns the spec default (false) when the container is
+ * not yet initialised or the flag is unset.
+ */
+function readRevealRegistrationConflict(
+  getService: (name: string) => unknown
+): boolean {
+  try {
+    const config = getService("config");
+    if (config && typeof config === "object" && "auth" in config) {
+      const auth = (config as { auth?: unknown }).auth;
+      if (
+        auth &&
+        typeof auth === "object" &&
+        "revealRegistrationConflict" in auth
+      ) {
+        return (
+          (auth as { revealRegistrationConflict?: unknown })
+            .revealRegistrationConflict === true
+        );
+      }
+    }
+    return false;
+  } catch {
+    // DI container not initialised yet — fall back to the safe default.
+    return false;
+  }
 }

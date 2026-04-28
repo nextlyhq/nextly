@@ -3,7 +3,6 @@ import type { NextlyServiceConfig } from "@nextly/di/register";
 import { env } from "@nextly/lib/env";
 import type {
   AccessControlContext,
-  AccessControlFunction,
   CollectionAccessControl,
   SingleAccessControl,
 } from "@nextly/services/auth/access-control-types";
@@ -82,22 +81,14 @@ function getConfig(): NextlyServiceConfig | undefined {
   return undefined;
 }
 
-/**
- * Authentication and Authorization Error Types
- */
-export class AuthenticationError extends Error {
-  constructor(message = "Authentication required") {
-    super(message);
-    this.name = "AuthenticationError";
-  }
-}
-
-export class AuthorizationError extends Error {
-  constructor(message = "Insufficient permissions") {
-    super(message);
-    this.name = "AuthorizationError";
-  }
-}
+// PR 5 (unified-error-system): the AuthenticationError / AuthorizationError
+// classes that used to live here have been deleted. They were dead code (no
+// callers in this package) and their job is now performed by the canonical
+// NextlyError factories: NextlyError.authRequired() and NextlyError.forbidden().
+// Throw those at the call site; the route-handler boundary serialises them
+// via toResponseJSON. The route-level ErrorResponse machinery below is kept
+// for the duration of the migration — it is consumed by routeHandler.ts and
+// many api/*.ts files that will be migrated in a later PR.
 
 /**
  * Standardized error response structure.
@@ -548,9 +539,10 @@ async function evaluateCodeAccess(
   resource: string,
   authResult: AuthContext
 ): Promise<ErrorResponse | null> {
-  const operationAccess = codeAccess[
-    operation as keyof (CollectionAccessControl | SingleAccessControl)
-  ] as AccessControlFunction | boolean | undefined;
+  const operationAccess =
+    codeAccess[
+      operation as keyof (CollectionAccessControl | SingleAccessControl)
+    ];
 
   if (operationAccess === undefined) {
     return null; // No code-defined rule — permission slug check already passed

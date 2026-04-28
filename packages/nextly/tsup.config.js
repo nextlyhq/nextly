@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const serverEntries = [
   "src/index.ts",
   "src/scripts/load-env.ts",
+  "src/api/auth-state.ts",
   "src/api/health.ts",
   "src/api/media.ts",
   "src/api/media-bulk.ts",
