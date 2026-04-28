@@ -323,6 +323,10 @@ const COLLECTIONS_METHODS: Record<
       );
       const apply = createApplyDesiredSchema({
         applyPipeline: (desiredArg, sourceArg, channelArg) => {
+          // F5 PR 5 wired RealClassifier + RealPreCleanupExecutor at the
+          // code-first HMR site (reload-config.ts). This UI-first save path
+          // will be wired in PR 6 along with the admin SchemaChangeDialog
+          // extension and the preview/apply endpoint contract changes.
           const pipeline = new PushSchemaPipeline({
             executor: new DrizzleStatementExecutor(dialect, db),
             renameDetector: new RegexRenameDetector(),

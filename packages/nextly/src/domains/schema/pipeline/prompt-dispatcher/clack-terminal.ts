@@ -76,7 +76,9 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
         parts.push(`${events.length} resolution event(s): ${eventSample}`);
       }
       throw new TTYRequiredError(
-        `Schema change needs confirmation. ${parts.join("; ")}.`
+        // Multi-line so log readers can scan rename vs event sections
+        // separately without an arbitrary semicolon-join.
+        `Schema change needs confirmation.\n${parts.join("\n")}`
       );
     }
 
