@@ -40,11 +40,8 @@ import {
   type SchemaPreviewResponse,
   type FieldResolution,
 } from "@admin/services/schemaApi";
-import {
-  type FieldDefinition,
-  type 
-  getCollectionFields,
-} from "@admin/types/collection";
+import type { FieldDefinition } from "@admin/types/collection";
+import { getCollectionFields } from "@admin/types/collection";
 
 const collectionFormSchema = z.object({
   singularName: z
@@ -316,12 +313,7 @@ export default function CollectionBuilderEditPage({
       const errorObj = err as { message?: string };
       toast.error(errorObj?.message || "Failed to preview schema changes");
     }
-  }, [
-    builder,
-    slug,
-    getValidatedFields,
-    saveCollectionSettings,
-  ]);
+  }, [builder, slug, getValidatedFields, saveCollectionSettings]);
 
   // Resolve the header icon from settings
   const headerIconName = collectionSettings.admin?.icon || "Database";
@@ -388,7 +380,9 @@ export default function CollectionBuilderEditPage({
         headerIcon={<HeaderIcon className="h-5 w-5" />}
         headerTitle={builder.form.watch("singularName") || "Edit Collection"}
         headerDescription="Manage your collection schema and settings."
-        onSave={() => { void handleSave(); }}
+        onSave={() => {
+          void handleSave();
+        }}
         onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
         isSaving={isSaving || isApplyingSchema}
         saveLabel="Update"
