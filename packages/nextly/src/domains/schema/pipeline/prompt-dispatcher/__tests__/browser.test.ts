@@ -188,6 +188,171 @@ describe("BrowserPromptDispatcher", () => {
     expect(result.confirmedRenames).toEqual([c1]);
   });
 
+  it("F5 PR 6: passes through eventResolutions for matching events", async () => {
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        {
+          kind: "provide_default",
+          eventId: "add_not_null_with_nulls:dc_users.email",
+          value: "guest@example.com",
+        },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [
+        {
+          id: "add_not_null_with_nulls:dc_users.email",
+          kind: "add_not_null_with_nulls",
+          tableName: "dc_users",
+          columnName: "email",
+          nullCount: 3,
+          tableRowCount: 47,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+      ],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.resolutions).toHaveLength(1);
+    expect(result.resolutions[0]).toEqual({
+      kind: "provide_default",
+      eventId: "add_not_null_with_nulls:dc_users.email",
+      value: "guest@example.com",
+    });
+    expect(result.proceed).toBe(true);
+  });
+
+  it("F5 PR 6: translates legacy field resolutions to typed Resolution[] using events on the user's table", async () => {
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_users",
+      byFieldName: {
+        email: { action: "provide_default", value: "guest@example.com" },
+        phone: { action: "mark_nullable" },
+        archived: { action: "cancel" },
+      },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [
+        {
+          id: "add_not_null_with_nulls:dc_users.email",
+          kind: "add_not_null_with_nulls",
+          tableName: "dc_users",
+          columnName: "email",
+          nullCount: 3,
+          tableRowCount: 47,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+        {
+          id: "add_required_field_no_default:dc_users.phone",
+          kind: "add_required_field_no_default",
+          tableName: "dc_users",
+          columnName: "phone",
+          tableRowCount: 47,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+        {
+          id: "add_not_null_with_nulls:dc_users.archived",
+          kind: "add_not_null_with_nulls",
+          tableName: "dc_users",
+          columnName: "archived",
+          nullCount: 1,
+          tableRowCount: 47,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+      ],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.resolutions).toHaveLength(3);
+    expect(result.resolutions).toContainEqual({
+      kind: "provide_default",
+      eventId: "add_not_null_with_nulls:dc_users.email",
+      value: "guest@example.com",
+    });
+    expect(result.resolutions).toContainEqual({
+      kind: "make_optional",
+      eventId: "add_required_field_no_default:dc_users.phone",
+    });
+    expect(result.resolutions).toContainEqual({
+      kind: "abort",
+      eventId: "add_not_null_with_nulls:dc_users.archived",
+    });
+  });
+
+  it("F5 PR 6: legacy fields without a matching pipeline event are dropped silently", async () => {
+    const dispatcher = new BrowserPromptDispatcher([], [], {
+      tableName: "dc_users",
+      byFieldName: {
+        unrelated: { action: "provide_default", value: "x" },
+      },
+    });
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [],
+      classification: "safe",
+      channel: "browser",
+    });
+    expect(result.resolutions).toEqual([]);
+  });
+
+  it("F5 PR 6: typed eventResolutions take priority over legacy for same eventId", async () => {
+    const event = {
+      id: "add_not_null_with_nulls:dc_users.email",
+      kind: "add_not_null_with_nulls" as const,
+      tableName: "dc_users",
+      columnName: "email",
+      nullCount: 3,
+      tableRowCount: 47,
+      applicableResolutions: [
+        "provide_default" as const,
+        "make_optional" as const,
+        "abort" as const,
+      ],
+    };
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [{ kind: "make_optional", eventId: event.id }],
+      {
+        tableName: "dc_users",
+        byFieldName: { email: { action: "provide_default", value: "x" } },
+      }
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [event],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.resolutions).toHaveLength(1);
+    expect(result.resolutions[0]).toEqual({
+      kind: "make_optional",
+      eventId: event.id,
+    });
+  });
+
+  it("F5 PR 6: drops eventResolutions whose eventId is not in pipeline events (stale payload safety)", async () => {
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        {
+          kind: "provide_default",
+          eventId: "add_not_null_with_nulls:no.such",
+          value: "x",
+        },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [],
+      classification: "safe",
+      channel: "browser",
+    });
+    expect(result.resolutions).toEqual([]);
+  });
+
   it("handles multi-table renames independently", async () => {
     const cPosts = candidate("dc_posts", "body", "summary");
     const cUsers = candidate("dc_users", "phone", "contact");

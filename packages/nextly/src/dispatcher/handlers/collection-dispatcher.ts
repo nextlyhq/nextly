@@ -9,22 +9,23 @@
  */
 
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
+import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier.js";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
 import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields.js";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff.js";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live.js";
+import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
 } from "../../domains/schema/pipeline/prompt-dispatcher/browser.js";
 import {
-  noopClassifier,
   noopMigrationJournal,
-  noopPreCleanupExecutor,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
+import type { Resolution } from "../../domains/schema/pipeline/resolution/types.js";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -236,12 +237,20 @@ const COLLECTIONS_METHODS: Record<
         schemaVersion,
         resolutions,
         renameResolutions,
+        eventResolutions,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
+        // Legacy F1 admin UI shape (per-field, used by old SchemaChangeService
+        // path). Kept alive until F8 deletes the legacy service entirely.
         resolutions?: Record<string, FieldResolution>;
         renameResolutions?: BrowserRenameResolution[];
+        // F5 PR 6: typed Resolution[] from the new pipeline contract.
+        // Optional — admin UIs that haven't been upgraded send only the
+        // legacy `resolutions` map and the new pipeline emits no events
+        // until the UI is updated to consume ClassifierEvents from preview.
+        eventResolutions?: Resolution[];
       };
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
@@ -251,11 +260,15 @@ const COLLECTIONS_METHODS: Record<
       const currentVersion = collection.schemaVersion;
       const tableName = collection.tableName;
 
-      // F1 field-level resolutions (provide_default / mark_nullable / cancel)
-      // are collected by the dialog but not yet wired through the pipeline.
-      // F8/F12 will absorb that flow when the Classifier lands. Renames are
-      // handled below via BrowserPromptDispatcher.
-      void resolutions;
+      // F5 PR 6: legacy F1 per-field resolutions get translated to typed
+      // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
+      // pipeline emits events. Until admin dialogs ship the new
+      // `eventResolutions` contract, this translator keeps existing UIs
+      // working end-to-end through the new pipeline. F8 will delete the
+      // legacy shape entirely when the dialog ships the new contract.
+      const legacyBundle = resolutions
+        ? { tableName, byFieldName: resolutions }
+        : undefined;
 
       // F3: route through the PushSchemaPipeline via the F2 contract.
       // Critical: must build the FULL DesiredSchema snapshot (all
@@ -319,21 +332,26 @@ const COLLECTIONS_METHODS: Record<
       // confirmedRenames inside the pipeline's Phase B. No SSE, no
       // mid-apply prompts — the dialog is the prompt UX.
       const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? []
+        renameResolutions ?? [],
+        eventResolutions ?? [],
+        legacyBundle
       );
       const apply = createApplyDesiredSchema({
         applyPipeline: (desiredArg, sourceArg, channelArg) => {
-          // F5 PR 5 wired RealClassifier + RealPreCleanupExecutor at the
-          // code-first HMR site (reload-config.ts). This UI-first save path
-          // will be wired in PR 6 along with the admin SchemaChangeDialog
-          // extension and the preview/apply endpoint contract changes.
+          // F5 PR 6: real classifier + real pre-cleanup executor wired at
+          // the UI-first save path. The admin's existing SchemaChangeDialog
+          // continues to send the legacy `resolutions` map for the legacy
+          // `SchemaChangeService` path; the new pipeline below ALSO emits
+          // typed events that admin UIs can opt into via `eventResolutions`
+          // (Resolution[]) once the dialog is updated. F8 will delete the
+          // legacy service and the legacy `resolutions` field.
           const pipeline = new PushSchemaPipeline({
             executor: new DrizzleStatementExecutor(dialect, db),
             renameDetector: new RegexRenameDetector(),
-            classifier: noopClassifier,
+            classifier: new RealClassifier(),
             promptDispatcher,
             preRenameExecutor: noopPreRenameExecutor,
-            preCleanupExecutor: noopPreCleanupExecutor,
+            preCleanupExecutor: new RealPreCleanupExecutor(),
             migrationJournal: noopMigrationJournal,
           });
           return pipeline.apply({

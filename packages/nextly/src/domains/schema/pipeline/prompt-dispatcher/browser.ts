@@ -17,6 +17,7 @@ import type {
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
+  Resolution,
 } from "../pushschema-pipeline-interfaces.js";
 
 // Pre-attached rename choice from the admin UI. Mirrors the shape the
@@ -28,8 +29,32 @@ export interface BrowserRenameResolution {
   choice: "rename" | "drop_and_add";
 }
 
+// Legacy F1 admin-dialog resolution shape. Existing admin UIs send this
+// per-field (`{ fieldName: { action, value? } }`) instead of the typed
+// Resolution[] contract. F5 PR 6 keeps this shape supported via a
+// translator inside dispatch() so admin UIs work end-to-end without
+// having to ship dialog updates first.
+export interface LegacyFieldResolution {
+  action: "provide_default" | "mark_nullable" | "cancel";
+  value?: unknown;
+}
+export interface LegacyResolutionsBundle {
+  // The collection's tableName the user is editing — needed to construct
+  // candidate eventIds for matching against pipeline events.
+  tableName: string;
+  byFieldName: Record<string, LegacyFieldResolution>;
+}
+
 export class BrowserPromptDispatcher implements PromptDispatcher {
-  constructor(private readonly resolutions: BrowserRenameResolution[]) {}
+  // F5 PR 6: takes rename resolutions (F4 PR 5 contract), typed event
+  // resolutions (new F5/F6 contract), and optionally a legacy resolution
+  // bundle from un-upgraded admin UIs. Legacy entries are translated to
+  // typed Resolutions inside dispatch() once the events are visible.
+  constructor(
+    private readonly renameResolutions: BrowserRenameResolution[],
+    private readonly eventResolutions: Resolution[] = [],
+    private readonly legacy?: LegacyResolutionsBundle
+  ) {}
 
   dispatch(args: {
     candidates: RenameCandidate[];
@@ -37,15 +62,37 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
     classification: "safe" | "destructive" | "interactive";
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
-    const { candidates } = args;
+    const { candidates, events } = args;
+
+    // Filter event resolutions to those whose eventId actually appears in
+    // the pipeline-emitted events. Drops stale or fabricated resolutions.
+    const validEventIds = new Set(events.map(e => e.id));
+    const filteredEventResolutions = this.eventResolutions.filter(r =>
+      validEventIds.has(r.eventId)
+    );
+
+    // Translate legacy per-field resolutions to typed Resolution[] by
+    // matching field name to the pipeline event for the same table+column.
+    // Only fields with an emitted event get translated; fields without an
+    // event don't need a resolution.
+    const translated = this.legacy
+      ? translateLegacyResolutions(this.legacy, events)
+      : [];
+    // Merge: typed resolutions take priority over legacy ones when both
+    // target the same eventId (defends against payload duplication).
+    const usedEventIds = new Set(filteredEventResolutions.map(r => r.eventId));
+    const mergedEventResolutions: Resolution[] = [
+      ...filteredEventResolutions,
+      ...translated.filter(r => !usedEventIds.has(r.eventId)),
+    ];
+
     if (candidates.length === 0) {
-      // Pure additive apply. No prompt would have been needed anyway.
-      // F5 PR 6 will extend this dispatcher to also consume pre-attached
-      // resolutions for ClassifierEvents from the apply payload; until then
-      // the browser channel passes through events without resolutions.
+      // No rename ambiguities, but events may still need resolution
+      // (e.g. NOT-NULL on a populated column with the user's pre-confirmed
+      // resolution attached).
       return Promise.resolve({
         confirmedRenames: [],
-        resolutions: [],
+        resolutions: mergedEventResolutions,
         proceed: true,
       });
     }
@@ -55,12 +102,12 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
     // dropped — they're equivalent to "no resolution attached," which
     // means applyResolutionsToOperations leaves the drop+add as-is.
     const confirmedKeys = new Set(
-      this.resolutions
+      this.renameResolutions
         .filter(r => r.choice === "rename")
         .map(r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`)
     );
     const knownKeys = new Set(
-      this.resolutions.map(
+      this.renameResolutions.map(
         r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`
       )
     );
@@ -98,8 +145,45 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
 
     return Promise.resolve({
       confirmedRenames,
-      resolutions: [],
+      resolutions: mergedEventResolutions,
       proceed: true,
     });
   }
+}
+
+// Translates legacy admin-dialog per-field resolutions to typed Resolution[]
+// by matching field names to pipeline events on the user's table.
+// - mark_nullable -> make_optional
+// - cancel        -> abort
+// - provide_default -> provide_default (with value)
+// Fields without a matching emitted event are dropped (no resolution needed).
+function translateLegacyResolutions(
+  bundle: LegacyResolutionsBundle,
+  events: ClassifierEvent[]
+): Resolution[] {
+  const out: Resolution[] = [];
+  // Group events on the user's table by columnName for O(1) lookup.
+  const eventByColumn = new Map<string, ClassifierEvent>();
+  for (const event of events) {
+    if (event.tableName !== bundle.tableName) continue;
+    eventByColumn.set(event.columnName, event);
+  }
+
+  for (const [fieldName, legacy] of Object.entries(bundle.byFieldName)) {
+    const event = eventByColumn.get(fieldName);
+    if (!event) continue;
+
+    if (legacy.action === "provide_default") {
+      out.push({
+        kind: "provide_default",
+        eventId: event.id,
+        value: legacy.value,
+      });
+    } else if (legacy.action === "mark_nullable") {
+      out.push({ kind: "make_optional", eventId: event.id });
+    } else if (legacy.action === "cancel") {
+      out.push({ kind: "abort", eventId: event.id });
+    }
+  }
+  return out;
 }

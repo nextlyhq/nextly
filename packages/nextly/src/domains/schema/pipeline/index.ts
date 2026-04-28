@@ -27,11 +27,11 @@ import {
   type ApplyDesiredSchemaDeps,
   type ApplyDesiredSchemaFn,
 } from "./apply.js";
+import { RealClassifier } from "./classifier/classifier.js";
+import { RealPreCleanupExecutor } from "./pre-cleanup/executor.js";
 import { ClackTerminalPromptDispatcher } from "./prompt-dispatcher/clack-terminal.js";
 import {
-  noopClassifier,
   noopMigrationJournal,
-  noopPreCleanupExecutor,
   noopPreRenameExecutor,
 } from "./pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "./pushschema-pipeline.js";
@@ -99,17 +99,16 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
       // F4 Option E PR 4: real terminal-channel PromptDispatcher.
       // Throws TTYRequiredError on non-TTY runtimes; the pipeline's
       // classifyErrorCode maps that to CONFIRMATION_REQUIRED_NO_TTY.
-      // F5 PR 5 wired RealClassifier + RealPreCleanupExecutor at the
-      // code-first HMR site (reload-config.ts). This DI-bound entry point
-      // is used by other internal callers and will be wired in PR 6 alongside
-      // the UI-first dispatcher path.
+      // F5 PR 6: real classifier + real pre-cleanup executor wired here too.
+      // This is the DI-bound entry point used by callers that don't manage
+      // their own pipeline instance.
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
-        classifier: noopClassifier,
+        classifier: new RealClassifier(),
         promptDispatcher: new ClackTerminalPromptDispatcher(),
         preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: noopPreCleanupExecutor,
+        preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
       });
 
