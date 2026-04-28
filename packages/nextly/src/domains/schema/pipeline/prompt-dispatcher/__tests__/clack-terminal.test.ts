@@ -76,6 +76,7 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
     await expect(
       dispatcher.dispatch({
         candidates: [candidate("title", "name")],
+        events: [],
         classification: "destructive",
         channel: "terminal",
       })
@@ -87,11 +88,16 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
 
     const result = await dispatcher.dispatch({
       candidates: [],
+      events: [],
       classification: "safe",
       channel: "terminal",
     });
 
-    expect(result).toEqual({ confirmedRenames: [], resolutions: {} });
+    expect(result).toEqual({
+      confirmedRenames: [],
+      resolutions: [],
+      proceed: true,
+    });
   });
 });
 
@@ -137,6 +143,7 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
     const c = candidate("title", "name");
     const result = await dispatcher.dispatch({
       candidates: [c],
+      events: [],
       classification: "destructive",
       channel: "terminal",
     });
@@ -151,6 +158,7 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
     const dispatcher = new ClackTerminalPromptDispatcher();
     const result = await dispatcher.dispatch({
       candidates: [candidate("title", "name")],
+      events: [],
       classification: "destructive",
       channel: "terminal",
     });
@@ -166,6 +174,7 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
     await expect(
       dispatcher.dispatch({
         candidates: [candidate("title", "name")],
+        events: [],
         classification: "destructive",
         channel: "terminal",
       })
@@ -187,6 +196,7 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
         candidate("body", "name"), // alternative for body - skipped after name consumed
         candidate("body", "summary"),
       ],
+      events: [],
       classification: "destructive",
       channel: "terminal",
     });

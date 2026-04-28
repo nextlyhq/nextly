@@ -373,9 +373,11 @@ describe("PushSchemaPipeline (Option E flow) - prompt + resolution flow", () => 
       detect: vi.fn<RenameDetector["detect"]>().mockReturnValue([candidate]),
     };
     const promptDispatcher = {
-      dispatch: vi
-        .fn<PromptDispatcher["dispatch"]>()
-        .mockResolvedValue({ confirmedRenames: [candidate], resolutions: {} }),
+      dispatch: vi.fn<PromptDispatcher["dispatch"]>().mockResolvedValue({
+        confirmedRenames: [candidate],
+        resolutions: [],
+        proceed: true,
+      }),
     };
 
     const { pipeline, mocks } = makePipeline({

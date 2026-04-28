@@ -156,7 +156,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
     const recordingDispatcher: PromptDispatcher = {
       dispatch: async ({ candidates }) => {
         captured.push(candidates);
-        return { confirmedRenames: [], resolutions: {} };
+        return { confirmedRenames: [], resolutions: [], proceed: true };
       },
     };
 

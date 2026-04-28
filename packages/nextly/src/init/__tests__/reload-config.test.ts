@@ -12,10 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
-import type {
-  PromptDispatcher,
-  RenameCandidate,
-} from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
+import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 
 // vi.hoisted lets mock factories see these spies.
 const {
@@ -496,11 +493,12 @@ describe("reloadNextlyConfig", () => {
     introspectSpy.mockResolvedValue(liveSnapshot("dc_posts", SQLITE_RESERVED));
 
     const fakeDispatcher: PromptDispatcher = {
-      dispatch: (_args: {
-        candidates: RenameCandidate[];
-        classification: "safe" | "destructive" | "interactive";
-        channel: "browser" | "terminal";
-      }) => Promise.resolve({ confirmedRenames: [], resolutions: {} }),
+      dispatch: () =>
+        Promise.resolve({
+          confirmedRenames: [],
+          resolutions: [],
+          proceed: true,
+        }),
     };
 
     const { reloadNextlyConfig } = await import("../reload-config");

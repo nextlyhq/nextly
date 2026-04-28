@@ -36,11 +36,13 @@ describe("BrowserPromptDispatcher", () => {
     ]);
     const result = await dispatcher.dispatch({
       candidates: [],
+      events: [],
       classification: "safe",
       channel: "browser",
     });
     expect(result.confirmedRenames).toEqual([]);
-    expect(result.resolutions).toEqual({});
+    expect(result.resolutions).toEqual([]);
+    expect(result.proceed).toBe(true);
   });
 
   it("confirms a rename when the resolution matches a candidate", async () => {
@@ -55,6 +57,7 @@ describe("BrowserPromptDispatcher", () => {
     ]);
     const result = await dispatcher.dispatch({
       candidates,
+      events: [],
       classification: "interactive",
       channel: "browser",
     });
@@ -73,6 +76,7 @@ describe("BrowserPromptDispatcher", () => {
     ]);
     const result = await dispatcher.dispatch({
       candidates,
+      events: [],
       classification: "interactive",
       channel: "browser",
     });
@@ -84,6 +88,7 @@ describe("BrowserPromptDispatcher", () => {
     const dispatcher = new BrowserPromptDispatcher([]);
     const result = await dispatcher.dispatch({
       candidates,
+      events: [],
       classification: "interactive",
       channel: "browser",
     });
@@ -102,6 +107,7 @@ describe("BrowserPromptDispatcher", () => {
     ]);
     const result = await dispatcher.dispatch({
       candidates,
+      events: [],
       classification: "interactive",
       channel: "browser",
     });
@@ -117,6 +123,7 @@ describe("BrowserPromptDispatcher", () => {
     try {
       await dispatcher.dispatch({
         candidates,
+        events: [],
         classification: "interactive",
         channel: "browser",
       });
@@ -143,6 +150,7 @@ describe("BrowserPromptDispatcher", () => {
     try {
       await dispatcher.dispatch({
         candidates,
+        events: [],
         classification: "interactive",
         channel: "browser",
       });
@@ -173,6 +181,7 @@ describe("BrowserPromptDispatcher", () => {
     ]);
     const result = await dispatcher.dispatch({
       candidates: [c1, c2],
+      events: [],
       classification: "interactive",
       channel: "browser",
     });
@@ -198,6 +207,7 @@ describe("BrowserPromptDispatcher", () => {
     ]);
     const result = await dispatcher.dispatch({
       candidates: [cPosts, cUsers],
+      events: [],
       classification: "interactive",
       channel: "browser",
     });
