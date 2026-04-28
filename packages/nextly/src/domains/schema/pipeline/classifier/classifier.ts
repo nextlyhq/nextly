@@ -21,6 +21,9 @@ import {
   type ClassifierEvent,
 } from "../resolution/types.js";
 
+import { buildPerDialectWarning } from "./type-warnings.js";
+import { isWideningChange } from "./type-widening.js";
+
 export class RealClassifier implements Classifier {
   async classify(args: {
     operations: Operation[];
@@ -62,6 +65,24 @@ export class RealClassifier implements Classifier {
             ],
           });
         }
+      } else if (op.type === "change_column_type") {
+        // F6 type-change detection. Widenings (varchar(50) -> varchar(255),
+        // smallint -> bigint, etc.) are provably safe and skip the warning.
+        // Everything else surfaces a per-dialect warning so silent coercion
+        // (MySQL/SQLite) and hard-failure (PG without USING) are loud.
+        const widening = isWideningChange(op.fromType, op.toType, args.dialect);
+        if (!widening) {
+          events.push({
+            id: formatEventId("type_change", op.tableName, op.columnName),
+            kind: "type_change",
+            tableName: op.tableName,
+            columnName: op.columnName,
+            fromType: op.fromType,
+            toType: op.toType,
+            isWidening: false,
+            perDialectWarning: buildPerDialectWarning(op.fromType, op.toType),
+          });
+        }
       } else if (
         op.type === "add_column" &&
         op.column.nullable === false &&
@@ -93,8 +114,16 @@ export class RealClassifier implements Classifier {
       }
     }
 
-    const level: ClassificationLevel =
-      events.length > 0 ? "interactive" : "safe";
+    // Level rules:
+    //   - "interactive" if any event has resolution choices (NOT-NULL kinds)
+    //   - "destructive" if only type_change events (warning-only, no resolutions)
+    //   - "safe" if no events at all
+    const hasInteractive = events.some(e => e.kind !== "type_change");
+    const level: ClassificationLevel = hasInteractive
+      ? "interactive"
+      : events.length > 0
+        ? "destructive"
+        : "safe";
     return { level, events };
   }
 }

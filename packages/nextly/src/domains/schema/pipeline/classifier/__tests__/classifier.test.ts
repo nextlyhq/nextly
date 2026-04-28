@@ -244,6 +244,108 @@ describe("RealClassifier — NOT NULL detection (F5)", () => {
     expect(countRows).not.toHaveBeenCalled();
   });
 
+  it("F6: emits type_change event for text -> int", async () => {
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "dc_users",
+      columnName: "age",
+      fromType: "text",
+      toType: "int",
+    };
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [op],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn(),
+      countRows: vi.fn(),
+      dialect: "postgresql",
+    });
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    expect(event.kind).toBe("type_change");
+    if (event.kind === "type_change") {
+      expect(event.fromType).toBe("text");
+      expect(event.toType).toBe("int");
+      expect(event.isWidening).toBe(false);
+      expect(event.perDialectWarning.pg).toMatch(/postgres/i);
+    }
+  });
+
+  it("F6: does NOT emit when type change is a widening (safe)", async () => {
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "dc_users",
+      columnName: "name",
+      fromType: "varchar(50)",
+      toType: "varchar(255)",
+    };
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [op],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn(),
+      countRows: vi.fn(),
+      dialect: "postgresql",
+    });
+    expect(result.events).toHaveLength(0);
+    expect(result.level).toBe("safe");
+  });
+
+  it("F6: classifies as destructive (not interactive) when only type changes are present", async () => {
+    // Type changes have no resolutions in v1 — they surface as
+    // destructive-warning prompts. Only NOT-NULL events bump level to
+    // interactive (since they have resolution kinds).
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "dc_users",
+      columnName: "age",
+      fromType: "text",
+      toType: "int",
+    };
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [op],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn(),
+      countRows: vi.fn(),
+      dialect: "postgresql",
+    });
+    expect(result.level).toBe("destructive");
+  });
+
+  it("F5+F6: NOT-NULL event keeps level=interactive even alongside type changes", async () => {
+    const ops: Operation[] = [
+      {
+        type: "change_column_nullable",
+        tableName: "dc_users",
+        columnName: "email",
+        fromNullable: true,
+        toNullable: false,
+      },
+      {
+        type: "change_column_type",
+        tableName: "dc_users",
+        columnName: "age",
+        fromType: "text",
+        toType: "int",
+      },
+    ];
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: ops,
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockResolvedValue(3),
+      countRows: vi.fn().mockResolvedValue(47),
+      dialect: "postgresql",
+    });
+    expect(result.events).toHaveLength(2);
+    expect(result.level).toBe("interactive");
+  });
+
   it("returns level=safe when no operations need user input", async () => {
     const op: Operation = {
       type: "add_table",
