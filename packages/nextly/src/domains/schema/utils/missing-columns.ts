@@ -205,6 +205,11 @@ async function addMissingColumnsFromMap(
       // violates NOT NULL. The application layer (Zod) enforces required
       // fields on new entries; the DB constraint can be tightened later
       // via an explicit migration once existing rows are backfilled.
+      //
+      // .trimEnd() collapses the trailing space the regex leaves when
+      // the original colDef ended with `... NOT NULL` (one of three
+      // produced shapes). Pure SQL no-op on every dialect; tests assert
+      // the cleaned shape.
       const safeDef = colDef.replace(/\s+NOT\s+NULL\s*/gi, " ").trimEnd();
       const sql = `ALTER TABLE ${quotedTable} ADD COLUMN ${safeDef}`;
       try {

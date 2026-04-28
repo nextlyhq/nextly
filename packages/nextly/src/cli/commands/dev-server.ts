@@ -15,7 +15,22 @@ import type { FieldConfig } from "../../collections/fields/types/index.js";
 import { getDialectTables } from "../../database/index.js";
 import { SchemaRegistry } from "../../database/schema-registry.js";
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables.js";
-import { applyDesiredSchema } from "../../domains/schema/pipeline/index.js";
+// F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
+// MySQL `databaseName` can be threaded through to drizzle-kit.pushSchema.
+// The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
+// MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
+// the two paths, this can collapse back to a single import.
+import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
+import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier.js";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
+import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
+import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
+import {
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+} from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
+import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -25,6 +40,7 @@ import type {
 // with `pushSchemasDirect` and delete the import. The user-collection
 // sync path below now goes through the F2 applyDesiredSchema pipeline.
 import { DrizzlePushService } from "../../domains/schema/services/drizzle-push-service.js";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor.js";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator.js";
 // F8 PR 1: SchemaPushService dropped from this module. The env check
 // (was getEnvironment().isProduction) is now an inline NODE_ENV read.
@@ -175,10 +191,25 @@ export async function performAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
   syncResult: CollectionSyncResultWithValidation,
-  _options: ResolvedDevOptions,
+  options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+
+  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
+  // routed through SchemaPushService.syncSchema and controlled drop+
+  // recreate behavior. The new pipeline owns destructive-op handling
+  // via the Classifier + PromptDispatcher: ambiguous renames trigger
+  // confirmations, real drops require explicit prompts. The flag is
+  // kept on the CLI surface for backward compatibility but emits a
+  // deprecation warning so users know it has no effect today.
+  if (options.force) {
+    logger.warn(
+      "[schema] --force has no effect with the new pipeline. " +
+        "Destructive ops are handled by interactive prompts; non-interactive " +
+        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
+    );
+  }
 
   // Production guard: never auto-apply schema in production. Users must
   // explicitly run `nextly migrate:generate` + `nextly migrate:run`. F8
@@ -245,16 +276,52 @@ export async function performAutoSync(
     components: {},
   };
 
-  let result: Awaited<ReturnType<typeof applyDesiredSchema>>;
+  // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
+  // Mirrors the pattern in init/reload-config.ts. The DI-bound entry point
+  // in pipeline/index.ts can't auto-extract `databaseName` from the
+  // connection URL, so MySQL boots crash there with a "MySQL requires
+  // databaseName" error. This local factory closes the gap until F8 PR 2/3
+  // collapses the two paths.
+  const db = drizzleAdapter.getDrizzle();
+  const databaseName =
+    dialect === "mysql"
+      ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+      : undefined;
+
+  const apply = createApplyDesiredSchema({
+    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+      const pipeline = new PushSchemaPipeline({
+        executor: new DrizzleStatementExecutor(dialect, db),
+        renameDetector: new RegexRenameDetector(),
+        classifier: new RealClassifier(),
+        promptDispatcher: new ClackTerminalPromptDispatcher(),
+        preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: new RealPreCleanupExecutor(),
+        migrationJournal: noopMigrationJournal,
+      });
+      return pipeline.apply({
+        desired: desiredArg,
+        db,
+        dialect,
+        source: sourceArg,
+        promptChannel: channelArg,
+        databaseName,
+      });
+    },
+    // db-sync runs before any UI version-conflict-relevant state — these
+    // can be no-op resolvers (matches reload-config.ts).
+    readSchemaVersionForSlug: () => Promise.resolve(null),
+    readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
+  });
+
+  let result: Awaited<ReturnType<typeof apply>>;
   try {
     // 'code' is correct for db-sync flows: this is a config-driven apply,
     // same family as a code-first HMR cycle. The pipeline's terminal
     // PromptDispatcher is reached only when there's a real ambiguity
     // (drop+add pairs flagged as rename candidates) — db-sync runs in a
     // TTY so that's safe.
-    result = await applyDesiredSchema(desired, "code", {
-      promptChannel: "terminal",
-    });
+    result = await apply(desired, "code", { promptChannel: "terminal" });
   } catch (error) {
     // Catastrophic failures (DB connection lost, etc.) reach here. The
     // pipeline's typed errors come back as { success: false } — those are
@@ -285,9 +352,16 @@ export async function performAutoSync(
   // Update dynamic_collections.migration_status for every collection whose
   // physical table now exists. Mirrors pre-pipeline behavior so admin UI
   // reads stay consistent.
+  //
+  // F8 PR 1: use the already-computed tableName from desiredCollections
+  // so collections with a custom `dbName` resolve correctly. The pre-
+  // pipeline code recomputed `dc_<slug>` here unconditionally, which
+  // ignored `dbName` overrides. Now we honor them.
   for (const collection of config.collections) {
     try {
-      const tableName = `dc_${collection.slug.replace(/-/g, "_")}`;
+      const tableName =
+        desiredCollections[collection.slug]?.tableName ??
+        `dc_${collection.slug.replace(/-/g, "_")}`;
       const tableExists = await drizzleAdapter.tableExists(tableName);
       if (tableExists) {
         await drizzleAdapter.update(
