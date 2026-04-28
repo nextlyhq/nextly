@@ -34,13 +34,12 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index.js";
 import { seedAll, type SeederResult } from "../../database/seeders/index.js";
-import { DrizzlePushService } from "../../services/schema/drizzle-push-service.js";
+// F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
+// helper which has the same dialect-aware behavior but is self-contained
+// (no class state, no preview/apply duality).
+import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push.js";
 import type { SupportedDialect } from "../../services/schema/schema-generator.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import { createContext, type CommandContext } from "../program.js";
 import {
   createAdapter,
   validateDatabaseEnv,
@@ -370,7 +369,7 @@ async function discoverTables(
       break;
 
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
   try {
@@ -407,7 +406,7 @@ async function disableForeignKeyChecks(
       break;
 
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
   await adapter.executeQuery(query);
@@ -436,7 +435,7 @@ async function enableForeignKeyChecks(
       break;
 
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
   await adapter.executeQuery(query);
@@ -469,7 +468,7 @@ async function dropTable(
       break;
 
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
   await adapter.executeQuery(query);
@@ -513,7 +512,7 @@ export function registerMigrateFreshCommand(program: Command): void {
     .option("-f, --force", "Skip confirmation prompt", false)
     .option("--seed", "Run seeders after migrations", false)
     .action(async (cmdOptions: MigrateFreshCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+      const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
       const resolvedOptions: ResolvedMigrateFreshOptions = {
@@ -558,12 +557,11 @@ async function reconcileMysqlSchema(
   try {
     const db = adapter.getDrizzle();
     const staticSchemas = getDialectTables("mysql");
-    const pushService = new DrizzlePushService("mysql", db);
-    const result = await pushService.apply(staticSchemas);
+    const result = await freshPushSchema("mysql", db, staticSchemas);
 
-    if (result.statementsToExecute.length > 0) {
+    if (result.statementsExecuted.length > 0) {
       logger.debug(
-        `[schema] Applied ${result.statementsToExecute.length} reconciliation statement(s)`
+        `[schema] Applied ${result.statementsExecuted.length} reconciliation statement(s)`
       );
     } else {
       logger.debug("[schema] No reconciliation changes needed");

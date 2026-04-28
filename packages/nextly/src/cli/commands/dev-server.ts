@@ -23,6 +23,9 @@ import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-ta
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier.js";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
+// F8 PR 2: ensureCoreTables now uses the freshPushSchema helper for
+// the static-tables push. The legacy DrizzlePushService import is gone.
+import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push.js";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
 import {
@@ -35,11 +38,6 @@ import type {
   DesiredCollection,
   DesiredSchema,
 } from "../../domains/schema/pipeline/types.js";
-// F8 PR 1: legacy DrizzlePushService is still used here at boot for the
-// static-tables-only push in ensureCoreTables. PR 2 will replace this
-// with `pushSchemasDirect` and delete the import. The user-collection
-// sync path below now goes through the F2 applyDesiredSchema pipeline.
-import { DrizzlePushService } from "../../domains/schema/services/drizzle-push-service.js";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor.js";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator.js";
 // F8 PR 1: SchemaPushService dropped from this module. The env check
@@ -106,19 +104,19 @@ export async function ensureCoreTables(
   logger.newline();
   logger.info("Creating core database tables...");
 
-  // Use drizzle-kit pushSchema() to create ALL tables from the Drizzle schema
-  // definitions. This guarantees the physical tables match the schema 100%,
-  // unlike hand-written CREATE TABLE statements which can drift.
-  // This ensures physical tables match the Drizzle schema definitions exactly.
+  // F8 PR 2: use the freshPushSchema helper for the static-tables push.
+  // No diff, no prompts, no journal — this is fresh-DB setup, not a user
+  // schema change. Behavior matches the legacy DrizzlePushService.apply
+  // verbatim (PG: pushSchema().apply; SQLite: manual statement loop;
+  // MySQL: generateMigration path).
   try {
     const db = drizzleAdapter.getDrizzle();
     const staticSchemas = getDialectTables(dialect);
-    const pushService = new DrizzlePushService(dialect, db);
-    const result = await pushService.apply(staticSchemas);
+    const result = await freshPushSchema(dialect, db, staticSchemas);
 
-    if (result.statementsToExecute.length > 0) {
+    if (result.statementsExecuted.length > 0) {
       logger.debug(
-        `[schema] Created ${result.statementsToExecute.length} tables via pushSchema`
+        `[schema] Created ${result.statementsExecuted.length} tables via pushSchema`
       );
     }
     logger.success("Core tables created");
