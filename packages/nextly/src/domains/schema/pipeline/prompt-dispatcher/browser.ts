@@ -50,10 +50,42 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
         .filter(r => r.choice === "rename")
         .map(r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`)
     );
+    const knownKeys = new Set(
+      this.resolutions.map(
+        r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`
+      )
+    );
 
     const confirmedRenames = candidates.filter(c =>
       confirmedKeys.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`)
     );
+
+    // Sibling-table safety: the preview endpoint only computes rename
+    // candidates for the table being saved, but the apply path runs
+    // diff over EVERY managed table in the desired snapshot. A candidate
+    // we never had a resolution for falls through here as drop_and_add,
+    // which means a column on a sibling table can be silently dropped if
+    // it drifted out of band (e.g. partial migration, manual DDL). Log
+    // a warning so the unexpected drop is at least observable. Each
+    // unresolved candidate represents at most one column of data loss
+    // on a table the user did not directly edit.
+    const unresolved = candidates.filter(
+      c => !knownKeys.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`)
+    );
+    if (unresolved.length > 0) {
+      const sample = unresolved
+        .slice(0, 3)
+        .map(c => `${c.fromColumn} -> ${c.toColumn} on ${c.tableName}`)
+        .join(", ");
+      const more =
+        unresolved.length > 3 ? `, +${unresolved.length - 3} more` : "";
+      console.warn(
+        `[BrowserPromptDispatcher] ${unresolved.length} rename candidate(s) ` +
+          `had no resolution and will fall through as drop_and_add: ${sample}${more}. ` +
+          `This usually means a sibling table drifted out of band; consider ` +
+          `re-syncing the registry or applying changes through the affected collection's editor.`
+      );
+    }
 
     return Promise.resolve({
       confirmedRenames,

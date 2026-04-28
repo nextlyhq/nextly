@@ -215,10 +215,12 @@ const COLLECTIONS_METHODS: Record<
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      const schemaChangeService = getSchemaChangeServiceFromDI();
+      // F4 Option E PR 5: schemaChangeService is no longer consulted on
+      // the apply path (the F3-era preview-and-throw block is gone).
+      // Registry alone is sufficient as the DI-readiness probe.
       const registry = getCollectionRegistryFromDI();
-      if (!schemaChangeService || !registry) {
-        throw new Error("Schema change service not initialized");
+      if (!registry) {
+        throw new Error("Collection registry not initialized");
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");

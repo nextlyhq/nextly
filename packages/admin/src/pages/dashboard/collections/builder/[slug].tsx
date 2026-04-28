@@ -41,10 +41,13 @@ import {
   type FieldResolution,
   type SchemaRenameResolution,
 } from "@admin/services/schemaApi";
-import {
-  type FieldDefinition,
-  type getCollectionFields,
-} from "@admin/types/collection";
+// Two import statements are intentional. With isolatedModules + esbuild,
+// merging these into a single `import { type FieldDefinition,
+// getCollectionFields }` block has historically been collapsed by
+// prettier into both being type-only, which strips getCollectionFields
+// at runtime (it's a function, not a type). See main's ce29d67.
+import type { FieldDefinition } from "@admin/types/collection";
+import { getCollectionFields } from "@admin/types/collection";
 
 const collectionFormSchema = z.object({
   singularName: z

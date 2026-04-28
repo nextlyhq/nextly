@@ -214,11 +214,14 @@ export function SchemaChangeDialog({
         )}
 
         {/* Rename candidates - one section per dropped column with a list
-            of "rename to X" radios + a "drop and add new" option. The
-            shrinking-pool behavior (target column disappears once chosen
-            elsewhere) is intentionally NOT enforced client-side: the
-            server's applyResolutionsToOperations is duplicate-safe, and
-            simpler radios match what users expect from the dialog. */}
+            of "rename to X" radios + a "drop and add new" option.
+            We deliberately don't enforce one-target-per-drop in the
+            dialog: server's applyResolutionsToOperations is
+            duplicate-safe (consumes a (drop, add) pair only once), and
+            independent radios match user expectations better than a
+            shrinking-pool UX. If two drops both pick "X" as their target,
+            only the first rename runs; the second drop falls through as
+            drop_and_add. F8 may revisit this once the Classifier ships. */}
         {candidatesByDrop.size > 0 && (
           <div className="space-y-3 rounded border border-border bg-muted/50 p-3">
             <Label className="text-sm font-medium">

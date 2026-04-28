@@ -2,7 +2,7 @@
 // function under the hood — given (candidates, pre-attached resolutions),
 // produce confirmedRenames. No I/O.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { RenameCandidate } from "../../pushschema-pipeline-interfaces.js";
 import { BrowserPromptDispatcher } from "../browser.js";
@@ -106,6 +106,50 @@ describe("BrowserPromptDispatcher", () => {
       channel: "browser",
     });
     expect(result.confirmedRenames).toEqual([]);
+  });
+
+  it("warns when a candidate has no matching resolution at all (sibling-table drift safety)", async () => {
+    const candidates = [
+      candidate("dc_users", "phone", "contact"), // no resolution at all
+    ];
+    const dispatcher = new BrowserPromptDispatcher([]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await dispatcher.dispatch({
+        candidates,
+        classification: "interactive",
+        channel: "browser",
+      });
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain("BrowserPromptDispatcher");
+      expect(msg).toContain("phone -> contact on dc_users");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does NOT warn when every candidate has a known resolution (even drop_and_add)", async () => {
+    const candidates = [candidate("dc_posts", "body", "summary")];
+    const dispatcher = new BrowserPromptDispatcher([
+      {
+        tableName: "dc_posts",
+        fromColumn: "body",
+        toColumn: "summary",
+        choice: "drop_and_add",
+      },
+    ]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await dispatcher.dispatch({
+        candidates,
+        classification: "interactive",
+        channel: "browser",
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("filters Cartesian candidates down to the user's selected rename per drop", async () => {
