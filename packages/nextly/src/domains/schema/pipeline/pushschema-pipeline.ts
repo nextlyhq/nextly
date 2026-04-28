@@ -1,40 +1,47 @@
-// PushSchemaPipeline — the F3 central orchestrator.
+// PushSchemaPipeline - the F4 Option E orchestrator.
 //
-// Receives a DesiredSchema (full snapshot of all managed tables),
-// invokes drizzle-kit's pushSchema to compute the SQL diff, runs
-// the result through 5 plug-in components (RenameDetector, Classifier,
-// PromptDispatcher, PreRenameExecutor, MigrationJournal — all no-op
-// stubs in F3, real impls in F4-F8), and executes the final statements
-// inside db.transaction().
+// Flow:
+//   Phase A: introspect live DB -> build desired snapshot -> diff -> ops
+//   Phase B: rename detection (reads ops) -> prompt dispatcher -> apply resolutions
+//   Phase C: pre-resolution executor (renames, drops via our SQL)
+//   Phase D: pushSchema for purely-additive remainder (drizzle-kit sees no
+//            rename ambiguity, so its TTY columnsResolver never fires)
+//
+// This replaces F3's two-pushSchema flow. drizzle-kit's pushSchema only
+// fires once per apply now, AFTER pre-resolution has executed our renames
+// and drops. drizzle-kit handles the remaining additive ops (add column,
+// add table, type changes, etc.) and we run its emitted SQL inside the
+// transaction.
 //
 // SAFETY: pushSchema can emit DROP TABLE for any table that exists in
-// the live DB but is missing from the desired schema. That includes
-// user app tables (`orders`, `analytics_events`), unregistered Nextly
-// tables, and future plugin tables. We filter the output to strip
+// the live DB but is missing from the desired schema. We filter to strip
 // DROP TABLE statements for non-managed tables before executing.
-// The filter regex (MANAGED_TABLE_PREFIXES_REGEX) is the central
-// integration point for Gap 8 (plugin / user-config table protection).
 //
-// On PG/SQLite: db.transaction() provides true atomicity — partial
-// failure rolls back. On MySQL: DDL is auto-committed regardless of
-// the BEGIN/COMMIT wrapper. F15 will add MySQL pre-flight validation
-// to catch conflicts before any ALTER runs.
+// On PG/SQLite: db.transaction() provides atomicity. On MySQL: DDL is
+// auto-committed; F15 will add pre-flight validation. SQLite uses PRAGMA
+// foreign_keys = OFF/ON wrapping per F3 PR-4.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 import { generateRuntimeSchema } from "../services/runtime-schema-generator.js";
 
-import { queryLiveColumnTypes } from "./live-column-types.js";
+import { buildDesiredTableFromFields } from "./diff/build-from-fields.js";
+import { diffSnapshots } from "./diff/diff.js";
+import { introspectLiveSnapshot } from "./diff/introspect-live.js";
+import type { Operation, NextlySchemaSnapshot } from "./diff/types.js";
 import {
   MANAGED_TABLE_PREFIXES_REGEX,
   isManagedTable,
 } from "./managed-tables.js";
+import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions.js";
+import { executePreResolutionOps } from "./pre-resolution/executor.js";
 import type {
   Classifier,
   DrizzleStatementExecutor,
   MigrationJournal,
   PreRenameExecutor,
   PromptDispatcher,
+  RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces.js";
 import type { DesiredSchema } from "./types.js";
@@ -47,16 +54,13 @@ export interface PipelineResult {
   partiallyApplied?: boolean;
 }
 
-// Shape of the value returned by drizzle-kit's pushSchema (across
-// PG / MySQL / SQLite — they all return this same shape).
+// Shape of drizzle-kit's pushSchema return value.
 interface PushSchemaPassResult {
   statementsToExecute: string[];
   warnings: string[];
   hasDataLoss: boolean;
 }
 
-// The pipeline's unified pushSchema accessor — wraps each dialect's
-// kit so the orchestrator code is dialect-agnostic.
 interface DrizzleKitLike {
   pushSchema: (
     schema: Record<string, unknown>,
@@ -68,10 +72,7 @@ interface DbTransactionRunner {
   <T>(fn: (tx: unknown) => Promise<T>): Promise<T>;
 }
 
-// Internal marker error: thrown when drizzle-kit's pushSchema itself
-// fails (vs a DDL execution failure later in the pipeline). The catch
-// block in apply() classifies based on this constructor identity rather
-// than fragile stack-string matching.
+// Marker error for drizzle-kit pushSchema failures (vs DDL exec failures).
 class PushSchemaError extends Error {
   constructor(
     message: string,
@@ -82,9 +83,7 @@ class PushSchemaError extends Error {
   }
 }
 
-// Same idea for DDL execution failures — distinct error code so
-// callers can tell apart "drizzle-kit couldn't compute the diff" from
-// "the SQL we tried to run blew up."
+// Marker error for DDL exec failures from the executor or pre-resolution.
 class DdlExecutionError extends Error {
   constructor(
     message: string,
@@ -95,21 +94,21 @@ class DdlExecutionError extends Error {
   }
 }
 
-// Production deps. Public surface — F4-F8 implement these and consumers
-// instantiate the pipeline with them.
 export interface PushSchemaPipelineDeps {
   executor: DrizzleStatementExecutor;
   renameDetector: RenameDetector;
   classifier: Classifier;
   promptDispatcher: PromptDispatcher;
+  // F4 Option E: this is now superseded by executePreResolutionOps which
+  // runs SQL for confirmed renames + drops in one pass. We keep the
+  // PreRenameExecutor dep on the surface for backward compat with F3-era
+  // callers that wire a noop, but the rewired pipeline does NOT call
+  // preRenameExecutor.execute() - the pre-resolution executor handles
+  // everything. PR 4/5 callers will remove this dep.
   preRenameExecutor: PreRenameExecutor;
   migrationJournal: MigrationJournal;
 }
 
-// Test-only override hooks. Kept off the public deps interface so
-// IntelliSense for production callers stays clean. Tests pass these
-// as the optional second constructor arg.
-//
 // @internal
 export interface PushSchemaPipelineTestHooks {
   _kitOverride?: DrizzleKitLike;
@@ -118,14 +117,18 @@ export interface PushSchemaPipelineTestHooks {
     dialect: SupportedDialect
   ) => Record<string, unknown>;
   _txOverride?: DbTransactionRunner;
-  // F4 PR-2: lets tests stub the live-column-types introspection without
-  // needing a real database. Production path uses queryLiveColumnTypes
-  // imported below.
-  _liveColumnTypesOverride?: (
+  // F4 Option E: test hook for the introspectLiveSnapshot call. Lets
+  // unit tests stub the previous-state snapshot without a real DB.
+  _introspectSnapshotOverride?: (
     db: unknown,
     dialect: SupportedDialect,
     tableNames: string[]
-  ) => Promise<Map<string, Map<string, string>>>;
+  ) => Promise<NextlySchemaSnapshot>;
+  _executePreResolutionOverride?: (
+    txOrDb: unknown,
+    ops: Operation[],
+    dialect: SupportedDialect
+  ) => Promise<number>;
 }
 
 export class PushSchemaPipeline {
@@ -141,10 +144,7 @@ export class PushSchemaPipeline {
     source: "ui" | "code";
     promptChannel: "browser" | "terminal";
     // MySQL-only: drizzle-kit's MySQL pushSchema requires the database
-    // name (extracted from the connection URL by the caller). Empty/
-    // undefined silently no-ops on MySQL — drizzle-kit returns zero DDL
-    // statements. Caller must thread this through for MySQL to work.
-    // PG and SQLite ignore this. F15 will address MySQL safety further.
+    // name. PG and SQLite ignore it.
     databaseName?: string;
   }): Promise<PipelineResult> {
     const { desired, db, dialect, source, promptChannel, databaseName } = args;
@@ -154,66 +154,44 @@ export class PushSchemaPipeline {
     });
 
     try {
-      // Step 2: build Drizzle schema objects from DesiredSchema.
-      const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
-        ? this.testHooks._buildDrizzleSchemaOverride(desired, dialect)
-        : this.buildDrizzleSchema(desired, dialect);
-
-      // Step 3: lazy-import drizzle-kit/api (F1's helper) per dialect.
-      const kit: DrizzleKitLike = this.testHooks._kitOverride
-        ? this.testHooks._kitOverride
-        : await this.importDrizzleKit(dialect, databaseName);
-
-      // Step 3.5: introspect live column types for the managed tables in
-      // the desired snapshot. Used by Step 5's RenameDetector to populate
-      // `fromType` and compute `typesCompatible` (the DROP COLUMN SQL
-      // doesn't carry type info; pushSchema warnings are template strings;
-      // F5/F6 also benefit from this map). One round-trip per apply().
       const managedTableNames = Object.values(desired.collections).map(
         c => c.tableName
       );
-      const liveColumnTypes = this.testHooks._liveColumnTypesOverride
-        ? await this.testHooks._liveColumnTypesOverride(
+
+      // Phase A: our diff.
+      const liveSnapshot = this.testHooks._introspectSnapshotOverride
+        ? await this.testHooks._introspectSnapshotOverride(
             db,
             dialect,
             managedTableNames
           )
-        : await queryLiveColumnTypes(db, dialect, managedTableNames);
+        : await introspectLiveSnapshot(db, dialect, managedTableNames);
 
-      // Step 4: first pushSchema pass — get the SQL diff.
-      // Wrapped in its own try/catch so we can attribute pushSchema
-      // failures specifically (vs DDL execution failures below).
-      let firstPassRaw;
-      try {
-        firstPassRaw = await kit.pushSchema(drizzleSchema, db);
-      } catch (err) {
-        throw new PushSchemaError(
-          err instanceof Error ? err.message : String(err),
-          err
-        );
-      }
-      const firstPassSafe = this.filterUnsafeStatements(
-        firstPassRaw.statementsToExecute
-      );
+      const desiredSnapshot: NextlySchemaSnapshot = {
+        tables: Object.values(desired.collections).map(c =>
+          buildDesiredTableFromFields(
+            c.tableName,
+            // FieldConfig has the shape buildDesiredTableFromFields expects;
+            // cast through unknown for the structural-vs-nominal type gap.
+            c.fields as unknown as Parameters<
+              typeof buildDesiredTableFromFields
+            >[1],
+            dialect
+          )
+        ),
+      };
 
-      // Step 5: rename detection. liveColumnTypes was populated in Step 3.5
-      // by querying information_schema.columns (PG/MySQL) or PRAGMA
-      // table_info (SQLite); the detector reads it to compute typesCompatible.
-      const candidates = this.deps.renameDetector.detect(
-        firstPassSafe,
-        dialect,
-        liveColumnTypes
-      );
+      const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
 
-      // Step 6: classification (F5 stub: returns "safe").
-      const classification = this.deps.classifier.classify(
-        firstPassRaw.warnings,
-        firstPassRaw.hasDataLoss
-      );
+      // Phase B: rename detection + prompt + resolution application.
+      const candidates = this.deps.renameDetector.detect(operations, dialect);
 
-      // Step 7: dispatch prompts if needed (F7/F8 stub: never reached
-      // when both detector and classifier return defaults).
-      const confirmed =
+      // F5 Classifier still consumes warnings (currently empty - we don't
+      // route drizzle-kit warnings through here yet). When F5 lands, the
+      // classifier will inspect ops to determine destructive vs interactive.
+      const classification = this.deps.classifier.classify([], false);
+
+      const dispatchResult =
         candidates.length > 0 || classification !== "safe"
           ? await this.deps.promptDispatcher.dispatch({
               candidates,
@@ -222,34 +200,29 @@ export class PushSchemaPipeline {
             })
           : { confirmedRenames: [], resolutions: {} };
 
-      // Step 8: execute inside transaction (PG/MySQL) or directly with
-      // PRAGMA wrapping (SQLite — see below).
+      const resolvedOps = applyResolutionsToOperations(
+        operations,
+        toRenameResolutions(dispatchResult.confirmedRenames, candidates)
+      );
+
+      // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
+      const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
+        ? this.testHooks._buildDrizzleSchemaOverride(desired, dialect)
+        : this.buildDrizzleSchema(desired, dialect);
+
+      const kit: DrizzleKitLike = this.testHooks._kitOverride
+        ? this.testHooks._kitOverride
+        : await this.importDrizzleKit(dialect, databaseName);
+
       const isSqlite = dialect === "sqlite";
 
-      const runStep8 = async (tx: unknown): Promise<number> => {
-        // Step 8a: pre-rename ALTER TABLE RENAME COLUMN (F6 stub: no-op).
-        await this.deps.preRenameExecutor.execute(
-          tx,
-          confirmed.confirmedRenames
-        );
-
-        // Step 8b: re-call pushSchema against post-rename DB.
-        let secondPassRaw;
+      const runApply = async (tx: unknown): Promise<number> => {
+        // Phase C: pre-resolution executor runs renames + drops.
+        const preResExecutor =
+          this.testHooks._executePreResolutionOverride ??
+          executePreResolutionOps;
         try {
-          secondPassRaw = await kit.pushSchema(drizzleSchema, db);
-        } catch (err) {
-          throw new PushSchemaError(
-            err instanceof Error ? err.message : String(err),
-            err
-          );
-        }
-        const secondPassSafe = this.filterUnsafeStatements(
-          secondPassRaw.statementsToExecute
-        );
-
-        // Step 8c: execute remaining statements via the executor.
-        try {
-          await this.deps.executor.executeStatements(tx, secondPassSafe);
+          await preResExecutor(tx, resolvedOps, dialect);
         } catch (err) {
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
@@ -257,65 +230,67 @@ export class PushSchemaPipeline {
           );
         }
 
-        return secondPassSafe.length;
+        // Phase D: pushSchema for purely-additive remainder.
+        // After pre-resolution, the live DB has had its renames + drops
+        // applied. drizzle-kit's diff against the desired schema will see
+        // no rename ambiguity (because the columns are already renamed),
+        // so its TTY columnsResolver never fires.
+        let pushResult: PushSchemaPassResult;
+        try {
+          pushResult = await kit.pushSchema(drizzleSchema, db);
+        } catch (err) {
+          throw new PushSchemaError(
+            err instanceof Error ? err.message : String(err),
+            err
+          );
+        }
+        const safe = this.filterUnsafeStatements(
+          pushResult.statementsToExecute
+        );
+
+        try {
+          await this.deps.executor.executeStatements(tx, safe);
+        } catch (err) {
+          throw new DdlExecutionError(
+            err instanceof Error ? err.message : String(err),
+            err
+          );
+        }
+
+        return safe.length;
       };
 
       let statementsExecuted: number;
 
       if (isSqlite) {
-        // SQLite: drizzle-kit's recreate-table pattern (CREATE __new +
-        // INSERT + DROP + RENAME) trips FK violations on intermediate
-        // states unless we disable FK enforcement around the apply.
-        // SQLite silently no-ops PRAGMA foreign_keys = OFF/ON INSIDE a
-        // transaction (per SQLite docs), AND drizzle's better-sqlite3
-        // transaction wrapper interacts with PRAGMA in ways that make
-        // toggling-around-tx unreliable.
-        //
-        // Pragmatic approach: skip db.transaction() entirely for SQLite.
-        // The executor already ignores the tx arg for SQLite (uses
-        // this.db.run directly per the sync better-sqlite3 driver), so
-        // there's no behavioral change in the executor itself. We run
-        // PRAGMA OFF -> statements -> PRAGMA foreign_key_check (in
-        // executor) -> PRAGMA ON. If foreign_key_check throws, FK is
-        // re-enabled in our finally; partial DDL state remains in the
-        // DB (same risk profile as the existing
-        // DrizzlePushService.applyViaPushSchemaSQLite, which also runs
-        // without a transaction).
-        //
-        // F8/F15 can refactor to use better-sqlite3's NATIVE sync
-        // transaction (db.transaction(fn)() with sync fn) if real
-        // atomicity is needed.
+        // SQLite: skip db.transaction() per F3 PR-4 (PRAGMA-vs-tx
+        // compatibility). Wrap in foreign_keys = OFF/ON instead.
         await this.runSqlitePragma(db, "PRAGMA foreign_keys = OFF");
         try {
-          statementsExecuted = await runStep8(db);
+          statementsExecuted = await runApply(db);
         } finally {
           await this.runSqlitePragma(db, "PRAGMA foreign_keys = ON");
         }
       } else {
-        // PG / MySQL: use db.transaction() for atomicity. PG provides
-        // true atomicity; MySQL DDL is auto-committed, so partial-apply
-        // failures leave the DB in a partially-applied state (F15
-        // adds pre-flight validation).
+        // PG / MySQL: db.transaction() for atomicity (PG only; MySQL DDL
+        // is auto-committed regardless. F15 adds MySQL pre-flight).
         const txFn: DbTransactionRunner = this.testHooks._txOverride
           ? this.testHooks._txOverride
           : this.makeTransactionRunner(db);
-        statementsExecuted = await txFn(runStep8);
+        statementsExecuted = await txFn(runApply);
       }
 
-      // Step 9: journal end.
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: true,
         statementsExecuted,
       });
 
-      // Step 10: success result.
       return {
         success: true,
         statementsExecuted,
-        renamesApplied: confirmed.confirmedRenames.length,
+        renamesApplied: dispatchResult.confirmedRenames.length,
       };
     } catch (err) {
-      // Failure path: classify error, journal end, return failure.
       const code = this.classifyErrorCode(err);
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: false,
@@ -335,25 +310,6 @@ export class PushSchemaPipeline {
     }
   }
 
-  // Strips DROP TABLE statements that target non-managed tables.
-  //
-  // Why only DROP TABLE: pushSchema only emits ALTER for tables present
-  // in BOTH desired AND live (we never put unmanaged tables in desired,
-  // so no ALTER risk). CREATE is always safe (creating a managed table).
-  // DROP is the only direction where a non-managed table could be hit.
-  //
-  // Gap 8 integration point: extend MANAGED_TABLE_PREFIXES_REGEX (or
-  // replace this filter with a richer isManagedTable() that consults
-  // a plugin / user-config table list) when plugins land.
-  //
-  // Regex shape:
-  //   - Optional schema prefix (PG): ["`]?(\w+)["`]?\.
-  //   - Table name itself: ["`]?(\w+)["`]?
-  //   The schema prefix is captured but discarded; we want the bare
-  //   table name. Without the explicit (\w+\.)? group, the simpler
-  //   ["`]?[^"`]+["`]? would capture only "public" (stopping at the
-  //   first closing quote) for `"public"."dc_x"` — silently filtering
-  //   out legitimate managed-table DROPs.
   private filterUnsafeStatements(statements: string[]): string[] {
     return statements.filter(stmt => {
       const dropMatch = stmt.match(
@@ -364,14 +320,6 @@ export class PushSchemaPipeline {
     });
   }
 
-  // Issue a SQLite PRAGMA against the underlying connection — outside
-  // any transaction. Used for `foreign_keys = OFF/ON` toggling around
-  // the recreate-table pattern (SQLite silently no-ops PRAGMA changes
-  // inside a BEGIN'd transaction, so we have to call this on the
-  // connection itself before BEGIN / after COMMIT).
-  //
-  // Type-narrowed to the better-sqlite3-via-drizzle shape we expect
-  // (the .run method exists on drizzle's better-sqlite3 wrapper).
   private async runSqlitePragma(db: unknown, pragma: string): Promise<void> {
     interface SqliteRunClient {
       run(query: unknown): unknown;
@@ -381,12 +329,6 @@ export class PushSchemaPipeline {
     dbTyped.run(sqlTag.raw(pragma));
   }
 
-  // Build Drizzle table objects from the DesiredSchema. Uses the existing
-  // generateRuntimeSchema helper (which knows how to translate FieldConfig
-  // into dialect-specific Drizzle tables).
-  //
-  // Singles + components silently skipped per F2's iterateResources
-  // pattern. F8 wires their apply paths.
   private buildDrizzleSchema(
     desired: DesiredSchema,
     dialect: SupportedDialect
@@ -395,9 +337,6 @@ export class PushSchemaPipeline {
     for (const c of Object.values(desired.collections)) {
       const { table } = generateRuntimeSchema(
         c.tableName,
-        // generateRuntimeSchema accepts the same FieldConfig shape we use
-        // throughout F2; cast through unknown for the structural-vs-nominal
-        // gap with FieldDefinition.
         c.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect
       );
@@ -406,15 +345,6 @@ export class PushSchemaPipeline {
     return out;
   }
 
-  // Lazy-import drizzle-kit/api via F1's per-dialect helpers.
-  // Wraps each dialect's kit in a unified DrizzleKitLike so the
-  // orchestrator code stays dialect-agnostic.
-  //
-  // databaseName is required for MySQL — drizzle-kit's MySQL pushSchema
-  // takes the database name as its 3rd arg. Without it, drizzle-kit
-  // compares against no tables and returns zero DDL silently. Caller
-  // (PR-2/PR-3 wiring) must extract this from the connection URL and
-  // thread it through apply()'s args. PG and SQLite ignore it.
   private async importDrizzleKit(
     dialect: SupportedDialect,
     databaseName: string | undefined
@@ -426,8 +356,6 @@ export class PushSchemaPipeline {
       case "postgresql": {
         const kit = await getPgDrizzleKit();
         return {
-          // schemaFilters scopes to PG's "public" schema (matches the
-          // existing DrizzlePushService PG path).
           pushSchema: (schema, db) => kit.pushSchema(schema, db, ["public"]),
         };
       }
@@ -436,8 +364,7 @@ export class PushSchemaPipeline {
           throw new Error(
             "PushSchemaPipeline: MySQL requires databaseName in apply() args. " +
               "Caller (e.g. dev-server.ts, dispatcher) must extract the database " +
-              "name from the connection URL and pass it through. Empty/undefined " +
-              "would silently no-op in drizzle-kit's MySQL pushSchema."
+              "name from the connection URL and pass it through."
           );
         }
         const kit = await getMySQLDrizzleKit();
@@ -458,8 +385,6 @@ export class PushSchemaPipeline {
     }
   }
 
-  // Returns a function that runs callback inside db.transaction.
-  // Production: uses drizzle's tx API. Tests: overridden via _txOverride.
   private makeTransactionRunner(db: unknown): DbTransactionRunner {
     interface DbWithTransaction {
       transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T>;
@@ -468,23 +393,6 @@ export class PushSchemaPipeline {
     return fn => dbTyped.transaction(fn);
   }
 
-  // Classifies an error caught from the apply() flow into one of the
-  // F2 SchemaApplyErrorCode strings. Uses constructor identity (not
-  // stack-string matching, which is brittle across bundlers / source
-  // maps / production builds).
-  //
-  // Contract for the `code` field on the failure result:
-  //   - PUSHSCHEMA_FAILED: drizzle-kit's pushSchema raised (introspection
-  //     failed, snapshot mismatch, etc.). Connection-related root causes
-  //     surface this way.
-  //   - DDL_EXECUTION_FAILED: a SQL statement we generated failed at run
-  //     time (constraint violation, syntax error, etc.).
-  //   - INTERNAL_ERROR: anything else (programmer error in the pipeline,
-  //     unexpected throw from a stub, etc.).
-  //
-  // Callers SHOULD use this code for diagnostics / telemetry / log
-  // filtering. Branching control flow on it is OK but should be wrapped
-  // in a string-literal match (the value space may grow in F4-F8).
   private classifyErrorCode(err: unknown): string {
     if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
     if (err instanceof DdlExecutionError) return "DDL_EXECUTION_FAILED";
@@ -492,5 +400,30 @@ export class PushSchemaPipeline {
   }
 }
 
-// Export so consumers (and tests) can reference the constant directly.
+// Convert RenameCandidate[] from PromptDispatcher into RenameResolution[]
+// for applyResolutionsToOperations. confirmedRenames are the candidates
+// the user said "rename" to; everything else implicitly stays as
+// drop_and_add (the original drop/add ops are preserved).
+function toRenameResolutions(
+  confirmedRenames: RenameCandidate[],
+  allCandidates: RenameCandidate[]
+): Array<{
+  tableName: string;
+  fromColumn: string;
+  toColumn: string;
+  choice: "rename" | "drop_and_add";
+}> {
+  const confirmedSet = new Set(
+    confirmedRenames.map(c => `${c.tableName}::${c.fromColumn}::${c.toColumn}`)
+  );
+  return allCandidates.map(c => ({
+    tableName: c.tableName,
+    fromColumn: c.fromColumn,
+    toColumn: c.toColumn,
+    choice: confirmedSet.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`)
+      ? "rename"
+      : "drop_and_add",
+  }));
+}
+
 export { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable };

@@ -1,81 +1,58 @@
-// F4 RenameDetector - public facade.
+// F4 Option E RegexRenameDetector.
 //
-// Reads drizzle-kit's statementsToExecute and emits one RenameCandidate
+// Reads Operation[] (from our diff engine) and emits one RenameCandidate
 // per (DROP, ADD) Cartesian pair grouped by table. Type-family compatibility
-// is computed using the live-introspected fromType supplied by the pipeline
-// (see live-column-types.ts) and the toType captured from the ADD statement.
+// is computed using the type strings already on the operations (drop_column
+// carries fromType, add_column carries toType).
 //
-// Design decisions are captured in plans/specs/F4-rename-detector-design.md
-// (sections 3.1-3.5 and section 6 Decisions log).
+// Renamed from F4 PR 1's SQL-string-parsing approach. The Cartesian +
+// type-family + sort logic is preserved exactly; only the input format
+// changes from `string[]` to `Operation[]`.
 //
-// This class is wired into the pipeline by F4 PR-2 (replaces noopRenameDetector
-// in pipeline/index.ts and init/reload-config.ts). PR-1 ships it additively
-// without touching any production wiring.
+// Wired into the pipeline by F4 Option E PR 3 (replaces the prior
+// signature). The detector is pure: no I/O, no logging, no thrown errors.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
+import type { AddColumnOp, DropColumnOp, Operation } from "./diff/types.js";
 import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces.js";
-import {
-  parseAddColumn,
-  parseDropColumn,
-  splitMysqlCombinedStatement,
-  type ParsedAddColumn,
-  type ParsedDropColumn,
-} from "./rename-detector-parsing.js";
-import { filterSqliteRecreateBlocks } from "./rename-detector-sqlite-recreate.js";
 import { isTypesCompatible } from "./rename-detector-type-families.js";
 
 export class RegexRenameDetector implements RenameDetector {
   detect(
-    statements: string[],
-    dialect: SupportedDialect,
-    liveColumnTypes: Map<string, Map<string, string>>
+    operations: Operation[],
+    dialect: SupportedDialect
   ): RenameCandidate[] {
-    // Step 2: MySQL combined-statement preprocessing.
-    let normalized: string[] = statements;
-    if (dialect === "mysql") {
-      normalized = statements.flatMap(splitMysqlCombinedStatement);
-    }
+    // Group drop_column / add_column ops by table.
+    const dropsByTable = new Map<string, DropColumnOp[]>();
+    const addsByTable = new Map<string, AddColumnOp[]>();
 
-    // Step 3: SQLite recreate-pattern filtering.
-    if (dialect === "sqlite") {
-      normalized = filterSqliteRecreateBlocks(normalized);
-    }
-
-    // Steps 1+4: classify each statement, group by table.
-    const dropsByTable = new Map<string, ParsedDropColumn[]>();
-    const addsByTable = new Map<string, ParsedAddColumn[]>();
-
-    for (const stmt of normalized) {
-      const drop = parseDropColumn(stmt, dialect);
-      if (drop) {
-        const list = dropsByTable.get(drop.tableName) ?? [];
-        list.push(drop);
-        dropsByTable.set(drop.tableName, list);
-        continue;
+    for (const op of operations) {
+      if (op.type === "drop_column") {
+        const list = dropsByTable.get(op.tableName) ?? [];
+        list.push(op);
+        dropsByTable.set(op.tableName, list);
+      } else if (op.type === "add_column") {
+        const list = addsByTable.get(op.tableName) ?? [];
+        list.push(op);
+        addsByTable.set(op.tableName, list);
       }
-      const add = parseAddColumn(stmt, dialect);
-      if (add) {
-        const list = addsByTable.get(add.tableName) ?? [];
-        list.push(add);
-        addsByTable.set(add.tableName, list);
-      }
-      // Other statements (CREATE TABLE, ALTER TYPE, etc.) silently ignored.
+      // Other op types (rename_column, change_*, drop_table, add_table)
+      // are not rename candidates - silently ignored.
     }
 
-    // Step 5: per-table Cartesian pairing.
+    // Per-table Cartesian pairing.
     const candidates: RenameCandidate[] = [];
     for (const [tableName, drops] of dropsByTable) {
       const adds = addsByTable.get(tableName);
       if (!adds || adds.length === 0) continue;
       for (const drop of drops) {
         for (const add of adds) {
-          const fromType =
-            liveColumnTypes.get(tableName)?.get(drop.columnName) ?? "";
-          const toType = add.columnType;
+          const fromType = drop.columnType;
+          const toType = add.column.type;
           const compatible =
             fromType === ""
               ? false
@@ -83,7 +60,7 @@ export class RegexRenameDetector implements RenameDetector {
           candidates.push({
             tableName,
             fromColumn: drop.columnName,
-            toColumn: add.columnName,
+            toColumn: add.column.name,
             fromType,
             toType,
             typesCompatible: compatible,
@@ -93,7 +70,8 @@ export class RegexRenameDetector implements RenameDetector {
       }
     }
 
-    // Step 6: deterministic sort by (tableName, fromColumn, toColumn).
+    // Deterministic sort by (tableName, fromColumn, toColumn) for
+    // test-stable ordering.
     candidates.sort((a, b) => {
       if (a.tableName !== b.tableName)
         return a.tableName < b.tableName ? -1 : 1;

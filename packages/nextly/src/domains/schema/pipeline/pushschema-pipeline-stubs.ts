@@ -18,6 +18,9 @@ import type {
   RenameDetector,
 } from "./pushschema-pipeline-interfaces.js";
 
+// Updated for F4 Option E: detect() reads Operation[] instead of SQL strings.
+// The noop body is unchanged; the type signature shift comes from the
+// interface change in pushschema-pipeline-interfaces.ts.
 export const noopRenameDetector: RenameDetector = {
   detect: () => [],
 };
