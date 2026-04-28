@@ -206,6 +206,44 @@ describe("RealClassifier — NOT NULL detection (F5)", () => {
     ]);
   });
 
+  it("ignores change_column_nullable no-op ops (fromNullable === toNullable)", async () => {
+    // The diff engine should never emit no-op ops, but the classifier
+    // must defend against them defensively. Locks down the strict
+    // tightening-only check at classifier.ts so a future diff bug
+    // can't trigger spurious prompts.
+    const trueNoop: Operation = {
+      type: "change_column_nullable",
+      tableName: "dc_users",
+      columnName: "email",
+      fromNullable: true,
+      toNullable: true,
+    };
+    const falseNoop: Operation = {
+      type: "change_column_nullable",
+      tableName: "dc_users",
+      columnName: "email",
+      fromNullable: false,
+      toNullable: false,
+    };
+    const countNulls = vi.fn();
+    const countRows = vi.fn();
+    const c = new RealClassifier();
+    for (const op of [trueNoop, falseNoop]) {
+      const result = await c.classify({
+        operations: [op],
+        drizzleWarnings: noopWarnings,
+        hasDataLoss: false,
+        countNulls,
+        countRows,
+        dialect: "postgresql",
+      });
+      expect(result.events).toHaveLength(0);
+      expect(result.level).toBe("safe");
+    }
+    expect(countNulls).not.toHaveBeenCalled();
+    expect(countRows).not.toHaveBeenCalled();
+  });
+
   it("returns level=safe when no operations need user input", async () => {
     const op: Operation = {
       type: "add_table",
