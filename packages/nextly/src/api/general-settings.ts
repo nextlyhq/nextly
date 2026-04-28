@@ -112,7 +112,20 @@ export const updateGeneralSettings = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const text = await req.text();
-  const body = text ? JSON.parse(text) : {};
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "",
+          code: "invalid_json",
+          message: "Request body is not valid JSON.",
+        },
+      ],
+    });
+  }
 
   // Convert zod failures into the unified validation error so the wire shape
   // matches spec §10.2 (`error.publicData.errors[]`) instead of a single

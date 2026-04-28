@@ -32,6 +32,7 @@ import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { env } from "../lib/env";
+import { getNextlyLogger } from "../observability/logger";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
@@ -127,9 +128,15 @@ export const GET = withErrorHandler(
       enrichedFields = await componentRegistry.enrichFieldsWithComponentSchemas(
         collection.fields as unknown as Record<string, unknown>[]
       );
-    } catch {
-      // Enrichment is best-effort; the boundary's logger already captures
-      // any thrown error from `getComponentRegistry()` in failure modes.
+    } catch (enrichError) {
+      // Best-effort enrichment: surface the failure through the unified
+      // observability seam (the boundary won't see it because we swallow
+      // it on purpose to keep the GET responsive with raw fields).
+      getNextlyLogger().warn({
+        kind: "collection-schema-enrichment-failed",
+        slug,
+        err: String(enrichError),
+      });
     }
 
     return createSuccessResponse({

@@ -135,7 +135,20 @@ export const createImageSize = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const text = await req.text();
-  const body = text ? JSON.parse(text) : {};
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "",
+          code: "invalid_json",
+          message: "Request body is not valid JSON.",
+        },
+      ],
+    });
+  }
 
   const parsed = createImageSizeSchema.safeParse(body);
   if (!parsed.success) {
@@ -183,7 +196,20 @@ export const updateImageSize = withErrorHandler(
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const text = await req.text();
-    const body = text ? JSON.parse(text) : {};
+    let body: unknown;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      });
+    }
 
     const parsed = updateImageSizeSchema.safeParse(body);
     if (!parsed.success) {
@@ -241,15 +267,34 @@ export const regenerateBatch = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const text = await req.text();
-  const body = text ? JSON.parse(text) : {};
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "",
+          code: "invalid_json",
+          message: "Request body is not valid JSON.",
+        },
+      ],
+    });
+  }
+
+  // Narrow the parsed JSON to the small option set this endpoint accepts;
+  // anything else on `body` is ignored.
+  const opts =
+    body && typeof body === "object"
+      ? (body as { batchSize?: unknown; cursor?: unknown })
+      : {};
+  const batchSize = typeof opts.batchSize === "number" ? opts.batchSize : 10;
+  const cursor = typeof opts.cursor === "string" ? opts.cursor : undefined;
 
   await getNextly();
   const adapter = container.get<DrizzleAdapter>("adapter");
   const regenService = new MediaRegenerationService(adapter, console);
-  const result = await regenService.regenerateBatch({
-    batchSize: body.batchSize ?? 10,
-    cursor: body.cursor ?? undefined,
-  });
+  const result = await regenService.regenerateBatch({ batchSize, cursor });
 
   return createSuccessResponse(result);
 });
