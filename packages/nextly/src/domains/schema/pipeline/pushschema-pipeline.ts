@@ -232,12 +232,17 @@ export class PushSchemaPipeline {
 
         // Phase D: pushSchema for purely-additive remainder.
         // After pre-resolution, the live DB has had its renames + drops
-        // applied. drizzle-kit's diff against the desired schema will see
-        // no rename ambiguity (because the columns are already renamed),
-        // so its TTY columnsResolver never fires.
+        // applied INSIDE this transaction. We pass `tx` (not the outer
+        // `db`) so drizzle-kit's introspection runs within the same
+        // transaction and SEES the uncommitted pre-resolution changes.
+        // Without this, drizzle-kit's introspection would still see the
+        // old DROP+ADD ambiguity and fire its TTY prompt.
+        //
+        // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
+        // SQLite (it's the same handle).
         let pushResult: PushSchemaPassResult;
         try {
-          pushResult = await kit.pushSchema(drizzleSchema, db);
+          pushResult = await kit.pushSchema(drizzleSchema, tx);
         } catch (err) {
           throw new PushSchemaError(
             err instanceof Error ? err.message : String(err),
