@@ -34,11 +34,11 @@ export function buildAuthRouterDeps(
     lockoutDurationSeconds: 15 * 60, // 15 minutes
     loginStallTimeMs: 500,
     requireEmailVerification: true,
-    // Spec §13.2: default to false (silent-success on email conflict). The
-    // host-app developer can opt in via `auth.revealRegistrationConflict: true`
-    // in their NextlyConfig. TODO: thread the config value here when
-    // defineConfig({ auth }) wiring lands.
-    revealRegistrationConflict: false,
+    // Spec §13.2: read the host-app's auth.revealRegistrationConflict flag
+    // from the registered NextlyConfig. Defaults to false (silent-success on
+    // email conflict) when config is not yet initialised or the flag is
+    // unset. The schema is already populated by sanitizeConfig.
+    revealRegistrationConflict: readRevealRegistrationConflict(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
 
     findUserByEmail: async (email: string) => {
@@ -369,4 +369,34 @@ export function buildAuthRouterDeps(
       }
     },
   };
+}
+
+/**
+ * Read `auth.revealRegistrationConflict` from the NextlyConfig registered in
+ * the DI container. Returns the spec default (false) when the container is
+ * not yet initialised or the flag is unset.
+ */
+function readRevealRegistrationConflict(
+  getService: (name: string) => unknown
+): boolean {
+  try {
+    const config = getService("config");
+    if (config && typeof config === "object" && "auth" in config) {
+      const auth = (config as { auth?: unknown }).auth;
+      if (
+        auth &&
+        typeof auth === "object" &&
+        "revealRegistrationConflict" in auth
+      ) {
+        return (
+          (auth as { revealRegistrationConflict?: unknown })
+            .revealRegistrationConflict === true
+        );
+      }
+    }
+    return false;
+  } catch {
+    // DI container not initialised yet — fall back to the safe default.
+    return false;
+  }
 }

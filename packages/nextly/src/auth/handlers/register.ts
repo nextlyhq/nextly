@@ -15,6 +15,7 @@
 // account creation. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id.js";
 import { NextlyError } from "../../errors/nextly-error.js";
+import { getNextlyLogger } from "../../observability/logger.js";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
 import { validateCsrf } from "../csrf/validate.js";
 
@@ -139,13 +140,18 @@ export async function handleRegister(
     } catch (err) {
       // Spec §13.2: when the email is in use AND revealRegistrationConflict
       // is false (the default), swallow the DUPLICATE and return the same
-      // silent-success message the success path returns. Operators can still
-      // see the conflict in the server log via the original NextlyError
-      // logContext (logged at the boundary by withErrorHandler / similar).
+      // silent-success message the success path returns. The handler builds
+      // its own Response (does not flow through withErrorHandler), so we
+      // log explicitly here so operators still see the conflict event.
       if (
         NextlyError.isCode(err, "DUPLICATE") &&
         !deps.revealRegistrationConflict
       ) {
+        getNextlyLogger().info({
+          kind: "register-duplicate-swallowed",
+          requestId,
+          logContext: err.logContext,
+        });
         // TODO: send the "someone tried to register your account" courtesy
         // email to the existing user once email subsystem template support
         // lands (spec §19 follow-up).
