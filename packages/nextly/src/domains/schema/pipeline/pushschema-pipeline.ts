@@ -359,15 +359,22 @@ export class PushSchemaPipeline {
         // FieldConfig.name is typed string|undefined (some field types like
         // row containers have no name); filter to only named fields, which
         // are the only ones the classifier could have emitted events for.
-        const aggregatedFields: Array<{ name: string; type: string }> =
-          Object.values(desired.collections).flatMap(c =>
-            c.fields
-              .filter(
-                (f): f is typeof f & { name: string } =>
-                  typeof f.name === "string"
-              )
-              .map(f => ({ name: f.name, type: f.type }))
-          );
+        // Aggregate symmetrically with applyMakeOptionalToDesired which
+        // patches collections + singles + components — keeping the two in
+        // sync so a future classifier-on-singles event has field metadata
+        // to validate provide_default values against.
+        const aggregatedFields: Array<{ name: string; type: string }> = [
+          ...Object.values(desired.collections),
+          ...Object.values(desired.singles),
+          ...Object.values(desired.components),
+        ].flatMap(c =>
+          c.fields
+            .filter(
+              (f): f is typeof f & { name: string } =>
+                typeof f.name === "string"
+            )
+            .map(f => ({ name: f.name, type: f.type }))
+        );
         try {
           await this.deps.preCleanupExecutor.execute({
             tx,

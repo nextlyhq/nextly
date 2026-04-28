@@ -153,6 +153,29 @@ describe("RealPreCleanupExecutor", () => {
     expect(out).toBe(baseSnapshot);
   });
 
+  it("throws DUPLICATE_RESOLUTION_FOR_EVENT when same eventId has multiple resolutions", async () => {
+    // Defense in depth: dispatcher contract is one resolution per event;
+    // multiples mean ambiguous intent (e.g. UPDATE then DELETE on same col).
+    const exec = new RealPreCleanupExecutor();
+    await expect(
+      exec.execute({
+        tx: { execute: vi.fn() },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          {
+            kind: "provide_default",
+            eventId: notNullEvent.id,
+            value: "x@y.com",
+          },
+          { kind: "delete_nonconforming", eventId: notNullEvent.id },
+        ],
+        events: [notNullEvent],
+        fields: [{ name: "email", type: "text" }],
+        dialect: "postgresql",
+      })
+    ).rejects.toThrow(/DUPLICATE_RESOLUTION_FOR_EVENT/);
+  });
+
   it("ignores resolutions that don't match any known event id", async () => {
     const execute = vi.fn();
     const exec = new RealPreCleanupExecutor();

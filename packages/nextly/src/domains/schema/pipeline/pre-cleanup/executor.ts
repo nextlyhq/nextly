@@ -30,22 +30,22 @@ interface ExecutableTx {
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+// Threshold for delete_nonconforming. Rows >= this require a typed-confirmation
+// gate (PR 5/6 surface the gate UX in terminal/browser); PR 4's executor
+// hard-fails so an unconfirmed delete can't slip through.
+function readDeleteThreshold(): number {
+  const env = process.env.NEXTLY_DELETE_THRESHOLD;
+  if (!env) return 10000;
+  const n = parseInt(env, 10);
+  return Number.isFinite(n) && n > 0 ? n : 10000;
+}
+
 function assertSafeIdent(name: string): void {
   if (!SAFE_IDENT.test(name)) {
     throw new Error(
       `unsafe identifier: ${name} (only [A-Za-z_][A-Za-z0-9_]* allowed)`
     );
   }
-}
-
-// Configurable threshold — values >= this require a typed-confirmation gate.
-// PR 5/6 surface the gate UX in terminal/browser; PR 4's executor just
-// hard-fails so an unconfirmed delete can't slip through.
-function deleteThreshold(): number {
-  const env = process.env.NEXTLY_DELETE_THRESHOLD;
-  if (!env) return 10000;
-  const n = parseInt(env, 10);
-  return Number.isFinite(n) && n > 0 ? n : 10000;
 }
 
 export class RealPreCleanupExecutor implements PreCleanupExecutor {
@@ -64,10 +64,26 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       }
     }
 
-    // 2. Index events for O(1) lookup by id.
+    // 2. Defense-in-depth: detect duplicate resolutions per eventId. The
+    // dispatcher contract is one resolution per event; multiples would mean
+    // a contract violation with ambiguous intent (e.g. UPDATE then DELETE).
+    // Throw rather than guess.
+    const seenEventIds = new Set<string>();
+    for (const r of args.resolutions) {
+      if (seenEventIds.has(r.eventId)) {
+        throw new Error(
+          `DUPLICATE_RESOLUTION_FOR_EVENT: ${r.eventId} has multiple resolutions attached`
+        );
+      }
+      seenEventIds.add(r.eventId);
+    }
+
+    // 3. Index events for O(1) lookup by id. Cache delete threshold once
+    // so process.env mutations mid-pipeline don't change behavior.
     const eventById = new Map<string, ClassifierEvent>(
       args.events.map(e => [e.id, e])
     );
+    const threshold = readDeleteThreshold();
     const tx = args.tx as ExecutableTx;
 
     // 3. Run side-effect resolutions (provide_default + delete_nonconforming).
@@ -101,10 +117,10 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       } else if (r.kind === "delete_nonconforming") {
         if (
           event.kind === "add_not_null_with_nulls" &&
-          event.nullCount >= deleteThreshold()
+          event.nullCount >= threshold
         ) {
           throw new Error(
-            `DELETE_THRESHOLD_EXCEEDED: ${event.nullCount} rows >= ${deleteThreshold()}; explicit confirmation required`
+            `DELETE_THRESHOLD_EXCEEDED: ${event.nullCount} rows >= ${threshold}; explicit confirmation required`
           );
         }
         assertSafeIdent(event.tableName);
