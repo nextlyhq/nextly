@@ -17,6 +17,7 @@ import type {
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
+  Resolution,
 } from "../pushschema-pipeline-interfaces.js";
 
 // Pre-attached rename choice from the admin UI. Mirrors the shape the
@@ -29,7 +30,14 @@ export interface BrowserRenameResolution {
 }
 
 export class BrowserPromptDispatcher implements PromptDispatcher {
-  constructor(private readonly resolutions: BrowserRenameResolution[]) {}
+  // F5 PR 6: now takes BOTH rename resolutions (existing F4 PR 5 contract)
+  // and F5/F6 typed resolutions (pre-attached to the apply payload by the
+  // admin UI). Both arrive together; we filter each to the events the
+  // pipeline actually emitted so stale payloads don't silently sneak through.
+  constructor(
+    private readonly renameResolutions: BrowserRenameResolution[],
+    private readonly eventResolutions: Resolution[] = []
+  ) {}
 
   dispatch(args: {
     candidates: RenameCandidate[];
@@ -37,15 +45,22 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
     classification: "safe" | "destructive" | "interactive";
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
-    const { candidates } = args;
+    const { candidates, events } = args;
+
+    // Filter event resolutions to those whose eventId actually appears in
+    // the pipeline-emitted events. Drops stale or fabricated resolutions.
+    const validEventIds = new Set(events.map(e => e.id));
+    const filteredEventResolutions = this.eventResolutions.filter(r =>
+      validEventIds.has(r.eventId)
+    );
+
     if (candidates.length === 0) {
-      // Pure additive apply. No prompt would have been needed anyway.
-      // F5 PR 6 will extend this dispatcher to also consume pre-attached
-      // resolutions for ClassifierEvents from the apply payload; until then
-      // the browser channel passes through events without resolutions.
+      // No rename ambiguities, but events may still need resolution
+      // (e.g. NOT-NULL on a populated column with the user's pre-confirmed
+      // resolution attached).
       return Promise.resolve({
         confirmedRenames: [],
-        resolutions: [],
+        resolutions: filteredEventResolutions,
         proceed: true,
       });
     }
@@ -55,12 +70,12 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
     // dropped — they're equivalent to "no resolution attached," which
     // means applyResolutionsToOperations leaves the drop+add as-is.
     const confirmedKeys = new Set(
-      this.resolutions
+      this.renameResolutions
         .filter(r => r.choice === "rename")
         .map(r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`)
     );
     const knownKeys = new Set(
-      this.resolutions.map(
+      this.renameResolutions.map(
         r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`
       )
     );
@@ -98,7 +113,7 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
 
     return Promise.resolve({
       confirmedRenames,
-      resolutions: [],
+      resolutions: filteredEventResolutions,
       proceed: true,
     });
   }

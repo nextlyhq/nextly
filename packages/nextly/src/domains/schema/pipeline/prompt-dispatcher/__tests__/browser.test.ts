@@ -188,6 +188,62 @@ describe("BrowserPromptDispatcher", () => {
     expect(result.confirmedRenames).toEqual([c1]);
   });
 
+  it("F5 PR 6: passes through eventResolutions for matching events", async () => {
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        {
+          kind: "provide_default",
+          eventId: "add_not_null_with_nulls:dc_users.email",
+          value: "guest@example.com",
+        },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [
+        {
+          id: "add_not_null_with_nulls:dc_users.email",
+          kind: "add_not_null_with_nulls",
+          tableName: "dc_users",
+          columnName: "email",
+          nullCount: 3,
+          tableRowCount: 47,
+          applicableResolutions: ["provide_default", "make_optional", "abort"],
+        },
+      ],
+      classification: "interactive",
+      channel: "browser",
+    });
+    expect(result.resolutions).toHaveLength(1);
+    expect(result.resolutions[0]).toEqual({
+      kind: "provide_default",
+      eventId: "add_not_null_with_nulls:dc_users.email",
+      value: "guest@example.com",
+    });
+    expect(result.proceed).toBe(true);
+  });
+
+  it("F5 PR 6: drops eventResolutions whose eventId is not in pipeline events (stale payload safety)", async () => {
+    const dispatcher = new BrowserPromptDispatcher(
+      [],
+      [
+        {
+          kind: "provide_default",
+          eventId: "add_not_null_with_nulls:no.such",
+          value: "x",
+        },
+      ]
+    );
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [],
+      classification: "safe",
+      channel: "browser",
+    });
+    expect(result.resolutions).toEqual([]);
+  });
+
   it("handles multi-table renames independently", async () => {
     const cPosts = candidate("dc_posts", "body", "summary");
     const cUsers = candidate("dc_users", "phone", "contact");
