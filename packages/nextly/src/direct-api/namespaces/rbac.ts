@@ -49,12 +49,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import {
-  convertServiceError,
-  createErrorFromResult,
-  mapPermission,
-  mapRole,
-} from "./helpers";
+import { convertServiceError, mapPermission, mapRole } from "./helpers";
 
 /**
  * `nextly.roles.*` namespace — role CRUD and permission assignment.
@@ -76,20 +71,13 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
   return {
     async find(args: FindRolesArgs = {}): Promise<PaginatedResponse<Role>> {
       try {
+        // PR 4 (unified-error-system): listRoles returns `{ data, meta }`
+        // directly and throws NextlyError on failure.
         const result = await ctx.rbacRoleService.listRoles({
           search: args.search,
           page: args.page ?? 1,
           pageSize: args.limit ?? 10,
         });
-
-        if (!result.success || !result.data) {
-          throw createErrorFromResult({
-            success: result.success,
-            statusCode: result.statusCode,
-            message: result.message,
-            data: result.data,
-          });
-        }
 
         // The query selects `slug` at runtime but the RoleQueryService return
         // type doesn't declare it (type gap in the service layer); widen the
@@ -127,16 +115,9 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
     async findByID(args: FindRoleByIDArgs): Promise<Role> {
       try {
-        const result = await ctx.rbacRoleService.getRoleById(args.id);
-        if (!result.success || !result.data) {
-          throw createErrorFromResult({
-            success: result.success,
-            statusCode: result.statusCode,
-            message: result.message,
-            data: result.data,
-          });
-        }
-        return mapRole(result.data);
+        // PR 4: getRoleById returns the role directly, throws NOT_FOUND.
+        const role = await ctx.rbacRoleService.getRoleById(args.id);
+        return mapRole(role);
       } catch (error) {
         throw convertServiceError(error);
       }
@@ -151,7 +132,9 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         // service accepts empty arrays only when both are empty AND
         // the caller has bypassed validation via a different path;
         // ordinary Direct API callers always need to pass at least one.
-        const result = await ctx.rbacRoleService.createRole({
+        //
+        // PR 4: createRole returns the created role directly.
+        const role = await ctx.rbacRoleService.createRole({
           name: args.data.name,
           slug: args.data.slug,
           description: args.data.description,
@@ -159,15 +142,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
           permissionIds: args.data.permissionIds ?? [],
           childRoleIds: args.data.childRoleIds ?? [],
         });
-        if (!result.success || !result.data) {
-          throw createErrorFromResult({
-            success: result.success,
-            statusCode: result.statusCode,
-            message: result.message,
-            data: result.data,
-          });
-        }
-        return mapRole(result.data);
+        return mapRole(role);
       } catch (error) {
         throw convertServiceError(error);
       }
@@ -175,31 +150,16 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
     async update(args: UpdateRoleArgs): Promise<Role> {
       try {
-        const updateResult = await ctx.rbacRoleService.updateRole(args.id, {
+        // PR 4: updateRole returns void; getRoleById returns the role
+        // directly. Both throw on failure.
+        await ctx.rbacRoleService.updateRole(args.id, {
           name: args.data.name,
           slug: args.data.slug,
           description: args.data.description ?? undefined,
           level: args.data.level,
         });
-        if (!updateResult.success) {
-          throw createErrorFromResult({
-            success: updateResult.success,
-            statusCode: updateResult.statusCode,
-            message: updateResult.message,
-            data: updateResult.data,
-          });
-        }
-        // updateRole returns data: null — fetch the updated role
-        const fetchResult = await ctx.rbacRoleService.getRoleById(args.id);
-        if (!fetchResult.success || !fetchResult.data) {
-          throw createErrorFromResult({
-            success: fetchResult.success,
-            statusCode: fetchResult.statusCode,
-            message: fetchResult.message,
-            data: fetchResult.data,
-          });
-        }
-        return mapRole(fetchResult.data);
+        const updated = await ctx.rbacRoleService.getRoleById(args.id);
+        return mapRole(updated);
       } catch (error) {
         throw convertServiceError(error);
       }
@@ -207,15 +167,8 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
     async delete(args: DeleteRoleArgs): Promise<DeleteResult> {
       try {
-        const result = await ctx.rbacRoleService.deleteRole(args.id);
-        if (!result.success) {
-          throw createErrorFromResult({
-            success: result.success,
-            statusCode: result.statusCode,
-            message: result.message,
-            data: result.data,
-          });
-        }
+        // PR 4: deleteRole returns void; throws on failure.
+        await ctx.rbacRoleService.deleteRole(args.id);
         return { deleted: true, ids: [args.id] };
       } catch (error) {
         throw convertServiceError(error);
@@ -227,15 +180,20 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         const rolePerms =
           await ctx.rbacRolePermissionService.listRolePermissions(args.id);
 
+        // PR 4: getPermissionById returns the permission directly, throws
+        // NOT_FOUND on missing rows. Catch per-iteration so a single
+        // missing perm doesn't fail the whole list (parity with the
+        // previous null-tolerant behavior).
         const fullPerms = await Promise.all(
           rolePerms.map(async rp => {
-            const result = await ctx.rbacPermissionService.getPermissionById(
-              rp.id
-            );
-            if (!result.success || !result.data) {
+            try {
+              const perm = await ctx.rbacPermissionService.getPermissionById(
+                rp.id
+              );
+              return mapPermission(perm);
+            } catch {
               return null;
             }
-            return mapPermission(result.data);
           })
         );
 
@@ -253,15 +211,18 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
             args.permissionIds
           );
 
+        // PR 4: getPermissionById returns the permission directly. Same
+        // null-tolerant pattern as getPermissions above.
         const fullPerms = await Promise.all(
           updatedPerms.map(async rp => {
-            const result = await ctx.rbacPermissionService.getPermissionById(
-              rp.id
-            );
-            if (!result.success || !result.data) {
+            try {
+              const perm = await ctx.rbacPermissionService.getPermissionById(
+                rp.id
+              );
+              return mapPermission(perm);
+            } catch {
               return null;
             }
-            return mapPermission(result.data);
           })
         );
 
@@ -296,60 +257,62 @@ export function createPermissionsNamespace(
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
-      const result = await ctx.rbacPermissionService.listPermissions({
-        page,
-        pageSize: limit,
-        search: args.search,
-        resource: args.resource,
-        action: args.action,
-      });
-
-      if (!result.success || !result.data) {
-        throw convertServiceError({
-          code: "INTERNAL_ERROR",
-          message: result.message,
-          httpStatus: result.statusCode,
+      try {
+        // PR 4 (unified-error-system): listPermissions returns
+        // `{ data, meta }` directly and throws NextlyError on failure.
+        const result = await ctx.rbacPermissionService.listPermissions({
+          page,
+          pageSize: limit,
+          search: args.search,
+          resource: args.resource,
+          action: args.action,
         });
+
+        const total = result.meta?.total ?? result.data.length;
+        const totalPages = Math.ceil(total / limit);
+        const docs: Permission[] = result.data.map(p => mapPermission(p));
+
+        return {
+          docs,
+          totalDocs: total,
+          limit,
+          page,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+          nextPage: page < totalPages ? page + 1 : null,
+          prevPage: page > 1 ? page - 1 : null,
+          pagingCounter: (page - 1) * limit + 1,
+        };
+      } catch (error) {
+        throw convertServiceError(error);
       }
-
-      const total = result.meta?.total ?? result.data.length;
-      const totalPages = Math.ceil(total / limit);
-      const docs: Permission[] = result.data.map(p => mapPermission(p));
-
-      return {
-        docs,
-        totalDocs: total,
-        limit,
-        page,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-        nextPage: page < totalPages ? page + 1 : null,
-        prevPage: page > 1 ? page - 1 : null,
-        pagingCounter: (page - 1) * limit + 1,
-      };
     },
 
     async findByID(args: FindPermissionByIDArgs): Promise<Permission | null> {
-      const result = await ctx.rbacPermissionService.getPermissionById(args.id);
-
-      if (!result.success || !result.data) {
-        if (args.disableErrors) return null;
-        throw new NextlyError(
-          result.message,
-          NextlyErrorCode.NOT_FOUND,
-          result.statusCode
-        );
+      try {
+        // PR 4: getPermissionById returns the permission directly and
+        // throws NextlyError(NOT_FOUND) on missing rows.
+        const perm = await ctx.rbacPermissionService.getPermissionById(args.id);
+        return mapPermission(perm);
+      } catch (error) {
+        // Honor the disableErrors flag: callers who pass disableErrors
+        // expect `null` instead of an exception on missing permissions.
+        if (args.disableErrors && NextlyError.isNotFound(error)) {
+          return null;
+        }
+        throw convertServiceError(error);
       }
-
-      return mapPermission(result.data);
     },
 
     async create(args: CreatePermissionArgs): Promise<Permission> {
       try {
         const { name, slug, action, resource, description } = args.data;
 
-        const result = await ctx.rbacPermissionService.ensurePermission(
+        // PR 4: ensurePermission returns `{ id, created }` directly and
+        // throws on failure; getPermissionById returns the permission
+        // directly.
+        const ensured = await ctx.rbacPermissionService.ensurePermission(
           action,
           resource,
           name,
@@ -357,27 +320,10 @@ export function createPermissionsNamespace(
           description
         );
 
-        if (!result.success || !result.data) {
-          throw convertServiceError({
-            code: "INTERNAL_ERROR",
-            message: result.message,
-            httpStatus: result.statusCode,
-          });
-        }
-
-        const fetchResult = await ctx.rbacPermissionService.getPermissionById(
-          result.data.id
+        const fetched = await ctx.rbacPermissionService.getPermissionById(
+          ensured.id
         );
-
-        if (!fetchResult.success || !fetchResult.data) {
-          throw new NextlyError(
-            "Permission created but could not be retrieved",
-            NextlyErrorCode.INTERNAL_ERROR,
-            500
-          );
-        }
-
-        return mapPermission(fetchResult.data);
+        return mapPermission(fetched);
       } catch (error) {
         throw convertServiceError(error);
       }
@@ -385,17 +331,8 @@ export function createPermissionsNamespace(
 
     async delete(args: DeletePermissionArgs): Promise<void> {
       try {
-        const result = await ctx.rbacPermissionService.deletePermissionById(
-          args.id
-        );
-
-        if (!result.success) {
-          throw convertServiceError({
-            code: "INTERNAL_ERROR",
-            message: result.message,
-            httpStatus: result.statusCode,
-          });
-        }
+        // PR 4: deletePermissionById returns void; throws on failure.
+        await ctx.rbacPermissionService.deletePermissionById(args.id);
       } catch (error) {
         throw convertServiceError(error);
       }

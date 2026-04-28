@@ -47,17 +47,6 @@ vi.mock("../../../database/index", () => ({
   getDialectTables: vi.fn(() => ({})),
 }));
 
-vi.mock("../../../services/lib/db-error", () => ({
-  mapDbErrorToServiceError: vi.fn(
-    (_err: unknown, opts: { defaultMessage: string }) => ({
-      success: false,
-      statusCode: 500,
-      message: opts.defaultMessage,
-      data: null,
-    })
-  ),
-}));
-
 vi.mock("../../../collections/fields/guards", () => ({
   isComponentField: vi.fn().mockReturnValue(false),
 }));

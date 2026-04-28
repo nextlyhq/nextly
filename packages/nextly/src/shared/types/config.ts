@@ -386,6 +386,52 @@ export interface AdminConfig {
 }
 
 // ============================================================
+// Auth Configuration
+// ============================================================
+
+/**
+ * Authentication configuration for Nextly.
+ *
+ * PR 5 (unified-error-system): introduces the `revealRegistrationConflict`
+ * opt-in flag. Default behaviour is silent-success on duplicate-email
+ * registration to prevent account enumeration via the registration form
+ * (spec §13.2). Some products (e.g. internal admin tools where every user
+ * is known) prefer an explicit "email already in use" message — flip this
+ * to `true` to opt into the legacy reveal-on-conflict behaviour.
+ */
+export interface AuthConfig {
+  /**
+   * Whether `/auth/register` should respond with an explicit
+   * `DUPLICATE` / "An account already exists for this email." error when
+   * the submitted email is already registered.
+   *
+   * Default: `false`. The registration endpoint instead returns the same
+   * "If this email is available, we've sent a confirmation link." success
+   * shape it would on a fresh signup, regardless of whether the email
+   * existed. The duplicate is logged for operators.
+   *
+   * Set to `true` only if your threat model genuinely doesn't care about
+   * email enumeration (e.g. a closed admin tool with controlled signup).
+   */
+  revealRegistrationConflict?: boolean;
+}
+
+/**
+ * Sanitized auth configuration with all defaults applied.
+ */
+export interface SanitizedAuthConfig {
+  /** Whether to reveal duplicate-email registrations on the wire. Defaults to false. */
+  revealRegistrationConflict: boolean;
+}
+
+/**
+ * Default auth configuration values.
+ */
+export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
+  revealRegistrationConflict: false,
+};
+
+// ============================================================
 // Nextly Config
 // ============================================================
 
@@ -431,6 +477,15 @@ export interface NextlyConfig {
    * `Authorization: Bearer sk_live_...`. Session-based requests are unaffected.
    */
   apiKeys?: ApiKeysConfig;
+
+  /**
+   * Authentication configuration.
+   *
+   * Currently exposes the `revealRegistrationConflict` opt-in flag (PR 5,
+   * spec §13.2). Future auth-related options (token TTLs, lockout policy,
+   * etc.) will land here so the wire surface has a single canonical home.
+   */
+  auth?: AuthConfig;
 
   /** Storage plugins for cloud storage providers. */
   storage?: StoragePlugin[];
@@ -487,6 +542,13 @@ export interface SanitizedNextlyConfig {
    * Undefined if omitted from defineConfig() (built-in defaults used).
    */
   apiKeys?: SanitizedApiKeysConfig;
+
+  /**
+   * Auth configuration with defaults applied. Always present after
+   * sanitization; the `revealRegistrationConflict` flag falls back to
+   * `false` (silent-success on duplicate email).
+   */
+  auth: SanitizedAuthConfig;
 
   /** Storage plugins for cloud storage providers (empty array if none configured). */
   storage: StoragePlugin[];
@@ -639,6 +701,14 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     },
     rateLimit,
     apiKeys,
+    // PR 5 (unified-error-system): always present after sanitization so
+    // downstream code can read `config.auth.revealRegistrationConflict`
+    // without nil checks. Defaults to silent-success per spec §13.2.
+    auth: {
+      revealRegistrationConflict:
+        config.auth?.revealRegistrationConflict ??
+        DEFAULT_AUTH_CONFIG.revealRegistrationConflict,
+    },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],
     security: config.security,

@@ -67,11 +67,15 @@ export class RoleService extends BaseService {
     return this.mutationService;
   }
 
+  // PR 4 note: facade methods now return data directly and throw NextlyError
+  // on failure, mirroring the underlying service signatures.
+
   /**
    * List all roles with pagination, search, and filtering.
    *
    * @param options - Pagination, search, filter, and sort options
    * @returns Paginated list of roles with metadata
+   * @throws NextlyError on DB errors.
    */
   listRoles(options?: {
     page?: number;
@@ -84,17 +88,14 @@ export class RoleService extends BaseService {
     sortOrder?: "asc" | "desc";
     includePermissions?: boolean;
   }): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
     data: Array<{
       id: string;
       name: string;
       description: string | null;
       level: number;
       isSystem: boolean;
-    }> | null;
-    meta?: {
+    }>;
+    meta: {
       total: number;
       page: number;
       pageSize: number;
@@ -108,20 +109,17 @@ export class RoleService extends BaseService {
    * Get a single role by ID.
    *
    * @param roleId - The role ID to fetch
-   * @returns Role data or null if not found
+   * @returns Role data
+   * @throws NextlyError(NOT_FOUND) when no role has this id.
+   * @throws NextlyError(VALIDATION_ERROR) on a malformed roleId.
    */
   getRoleById(roleId: string): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: {
-      id: string;
-      name: string;
-      slug: string;
-      description: string | null;
-      level: number;
-      isSystem: boolean;
-    } | null;
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    level: number;
+    isSystem: boolean;
   }> {
     return this.queryService.getRoleById(roleId);
   }
@@ -160,6 +158,9 @@ export class RoleService extends BaseService {
    *
    * @param input - Role data including permissions and child roles
    * @returns Created role data
+   * @throws NextlyError(VALIDATION_ERROR) on missing/invalid permission or
+   *   child-role inputs.
+   * @throws NextlyError(DUPLICATE) when name/slug collide with an existing role.
    */
   createRole(input: {
     name: string;
@@ -170,19 +171,14 @@ export class RoleService extends BaseService {
     permissionIds: string[];
     childRoleIds?: string[];
   }): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: {
-      id: string;
-      name: string;
-      slug: string;
-      description: string | null;
-      level: number;
-      isSystem: boolean;
-      permissionIds: string[];
-      childRoleIds: string[];
-    } | null;
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    level: number;
+    isSystem: boolean;
+    permissionIds: string[];
+    childRoleIds: string[];
   }> {
     return this.mutationService.createRole(input);
   }
@@ -192,7 +188,8 @@ export class RoleService extends BaseService {
    *
    * @param roleId - The role ID to update
    * @param changes - Fields to update
-   * @returns Success/failure status
+   * @throws NextlyError(NOT_FOUND) if no role has this id.
+   * @throws NextlyError(FORBIDDEN) if the role is a system role.
    */
   updateRole(
     roleId: string,
@@ -204,12 +201,7 @@ export class RoleService extends BaseService {
       permissionIds?: string[];
       childRoleIds?: string[];
     }
-  ): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: null;
-  }> {
+  ): Promise<void> {
     return this.mutationService.updateRole(roleId, changes);
   }
 
@@ -217,14 +209,10 @@ export class RoleService extends BaseService {
    * Delete a role and cascade delete related data.
    *
    * @param roleId - The role ID to delete
-   * @returns Success/failure status
+   * @throws NextlyError(NOT_FOUND) if no role has this id.
+   * @throws NextlyError(FORBIDDEN) if the role is a system role.
    */
-  deleteRole(roleId: string): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: null;
-  }> {
+  deleteRole(roleId: string): Promise<void> {
     return this.mutationService.deleteRole(roleId);
   }
 }

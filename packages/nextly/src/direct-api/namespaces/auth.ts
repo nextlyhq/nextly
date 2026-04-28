@@ -15,7 +15,6 @@ import {
   NextlyError,
   NextlyErrorCode,
   NotFoundError,
-  UnauthorizedError,
   ValidationError,
 } from "../errors";
 import type {
@@ -34,19 +33,20 @@ import type { NextlyContext } from "./context";
 
 /**
  * Verify user credentials and return a signed JWT session token.
+ *
+ * PR 4 (unified-error-system): verifyCredentials returns the MinimalUser
+ * directly and throws NextlyError on bad credentials. Thrown errors
+ * propagate naturally (NextlyError instances re-throw as-is via the
+ * branded class hierarchy; the caller sees the auth failure).
  */
 export async function login(
   ctx: NextlyContext,
   args: LoginArgs
 ): Promise<LoginResult> {
-  const result = await ctx.authService.verifyCredentials(
+  const user = await ctx.authService.verifyCredentials(
     args.email,
     args.password
   );
-
-  if (!result.success || !result.user) {
-    throw new UnauthorizedError(result.error || "Invalid email or password");
-  }
 
   const secret = env.NEXTLY_SECRET_RESOLVED;
   if (!secret) {
@@ -61,16 +61,16 @@ export async function login(
   const exp = Math.floor(Date.now() / 1000) + maxAge;
 
   const claims = buildClaims({
-    userId: String(result.user.id),
-    email: result.user.email,
-    name: result.user.name || "",
-    image: result.user.image ?? null,
+    userId: String(user.id),
+    email: user.email,
+    name: user.name || "",
+    image: user.image ?? null,
     roleIds: [],
   });
   const token = await signAccessToken(claims, secret, maxAge);
 
   return {
-    user: result.user as Record<string, unknown>,
+    user: user,
     token,
     exp,
   };
@@ -87,6 +87,10 @@ export async function logout(): Promise<void> {
  * Fetch the current user's profile.
  *
  * Requires an explicit `user.id` (Direct API has no implicit session state).
+ *
+ * PR 4 (unified-error-system): getCurrentUser returns the user directly
+ * and throws NextlyError(NOT_FOUND) for missing users. We surface that as
+ * a direct-api NotFoundError to preserve SDK error-class compatibility.
  */
 export async function me(
   ctx: NextlyContext,
@@ -100,26 +104,25 @@ export async function me(
     );
   }
 
-  const result = await ctx.userAccountService.getCurrentUser(args.user.id);
-
-  if (!result.success || !result.data) {
-    if (result.statusCode === 404) {
+  try {
+    const user = await ctx.userAccountService.getCurrentUser(args.user.id);
+    return {
+      user: user,
+    };
+  } catch (err) {
+    if (NextlyError.isNotFound(err)) {
       throw new NotFoundError("User not found", { userId: args.user.id });
     }
-    throw new NextlyError(
-      result.message || "Failed to get user profile",
-      NextlyErrorCode.INTERNAL_ERROR,
-      result.statusCode
-    );
+    throw err;
   }
-
-  return {
-    user: result.data as Record<string, unknown>,
-  };
 }
 
 /**
  * Update the current user's profile (name/image only).
+ *
+ * PR 4 (unified-error-system): updateCurrentUser returns the user directly
+ * and throws NextlyError on failure. NOT_FOUND is rewrapped as the
+ * direct-api NotFoundError for SDK consumer compatibility.
  */
 export async function updateMe(
   ctx: NextlyContext,
@@ -136,29 +139,29 @@ export async function updateMe(
     );
   }
 
-  const result = await ctx.userAccountService.updateCurrentUser(
-    args.user.id,
-    args.data
-  );
-
-  if (!result.success || !result.data) {
-    if (result.statusCode === 404) {
+  try {
+    const user = await ctx.userAccountService.updateCurrentUser(
+      args.user.id,
+      args.data
+    );
+    return {
+      user: user,
+    };
+  } catch (err) {
+    if (NextlyError.isNotFound(err)) {
       throw new NotFoundError("User not found", { userId: args.user.id });
     }
-    throw new NextlyError(
-      result.message || "Failed to update user profile",
-      NextlyErrorCode.INTERNAL_ERROR,
-      result.statusCode
-    );
+    throw err;
   }
-
-  return {
-    user: result.data as Record<string, unknown>,
-  };
 }
 
 /**
  * Register a new user with email + password.
+ *
+ * PR 4 (unified-error-system): registerUser returns the created user
+ * directly and throws NextlyError on failure. VALIDATION_ERROR is
+ * rewrapped as direct-api ValidationError to keep the legacy
+ * `errors`-record shape for SDK consumers.
  */
 export async function register(
   ctx: NextlyContext,
@@ -166,26 +169,22 @@ export async function register(
 ): Promise<{ user: Record<string, unknown> }> {
   const { email, password, collection: _collection, ...rest } = args;
 
-  const result = await ctx.authService.registerUser({
-    email,
-    password,
-    name: (rest as { name?: string }).name,
-  });
-
-  if (!result.success || !result.data) {
-    if (result.statusCode === 400) {
-      throw new ValidationError(result.message, { _root: [result.message] });
+  try {
+    const user = await ctx.authService.registerUser({
+      email,
+      password,
+      name: (rest as { name?: string }).name,
+    });
+    return {
+      user: user,
+    };
+  } catch (err) {
+    if (NextlyError.isValidation(err)) {
+      const msg = (err as Error).message || "Validation failed";
+      throw new ValidationError(msg, { _root: [msg] });
     }
-    throw new NextlyError(
-      result.message || "Failed to register user",
-      NextlyErrorCode.INTERNAL_ERROR,
-      result.statusCode
-    );
+    throw err;
   }
-
-  return {
-    user: result.data as Record<string, unknown>,
-  };
 }
 
 /**
@@ -203,15 +202,15 @@ export async function changePassword(
     );
   }
 
-  const result = await ctx.authService.changePassword(
+  // PR 4 (unified-error-system): changePassword returns void and throws
+  // NextlyError(AUTH_INVALID_CREDENTIALS) when the current password is
+  // wrong. We let the NextlyError propagate; SDK consumers detect it via
+  // NextlyError.is() / instanceof checks on the brand chain.
+  await ctx.authService.changePassword(
     args.user.id,
     args.currentPassword,
     args.newPassword
   );
-
-  if (!result.success) {
-    throw new UnauthorizedError(result.error || "Failed to change password");
-  }
 
   return { success: true };
 }
@@ -240,6 +239,9 @@ export async function forgotPassword(
 
 /**
  * Reset a user's password using a reset token issued via `forgotPassword`.
+ *
+ * PR 4 (unified-error-system): resetPasswordWithToken returns
+ * `{ email }` and throws NextlyError on invalid/expired tokens.
  */
 export async function resetPassword(
   ctx: NextlyContext,
@@ -250,10 +252,6 @@ export async function resetPassword(
     args.password
   );
 
-  if (!result.success) {
-    throw new UnauthorizedError(result.error || "Invalid or expired token");
-  }
-
   return {
     success: true,
     email: result.email,
@@ -262,16 +260,15 @@ export async function resetPassword(
 
 /**
  * Verify a user's email using a verification token.
+ *
+ * PR 4 (unified-error-system): verifyEmail returns `{ email }` and
+ * throws NextlyError on invalid/expired tokens.
  */
 export async function verifyEmail(
   ctx: NextlyContext,
   args: VerifyEmailArgs
 ): Promise<{ success: true; email?: string }> {
   const result = await ctx.authService.verifyEmail(args.token);
-
-  if (!result.success) {
-    throw new UnauthorizedError(result.error || "Invalid or expired token");
-  }
 
   return {
     success: true,

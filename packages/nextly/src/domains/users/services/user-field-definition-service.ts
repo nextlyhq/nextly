@@ -19,7 +19,9 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
 
-import { ServiceError } from "../../../errors/service-error";
+import { toDbError } from "../../../database/errors";
+// PR 4 of unified-error-system migration: ServiceError → NextlyError.
+import { NextlyError } from "../../../errors";
 import { userFieldDefinitionsMysql } from "../../../schemas/user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "../../../schemas/user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "../../../schemas/user-field-definitions/sqlite";
@@ -104,7 +106,9 @@ export class UserFieldDefinitionService extends BaseService {
         this.userFieldDefinitions = userFieldDefinitionsSqlite;
         break;
       default:
-        throw new Error(`Unsupported dialect: ${this.dialect}`);
+        // Wrap `this.dialect` (typed as `never` in default branch) with
+        // String() so it is safe inside a template expression.
+        throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
   }
 
@@ -118,7 +122,7 @@ export class UserFieldDefinitionService extends BaseService {
    * If `sortOrder` is not provided, it defaults to one higher than
    * the current maximum sort order (appending to the end).
    *
-   * @throws ServiceError DATABASE_ERROR on unique constraint violation (duplicate name)
+   * @throws NextlyError(DUPLICATE) on unique constraint violation (duplicate name)
    */
   async createField(
     data: CreateUserFieldDefinitionInput
@@ -152,7 +156,9 @@ export class UserFieldDefinitionService extends BaseService {
     try {
       await this.db.insert(this.userFieldDefinitions).values(values);
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Normalise raw driver errors so unique-violation / fk-violation are
+      // mapped to the right kind instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getField(id);
@@ -161,7 +167,9 @@ export class UserFieldDefinitionService extends BaseService {
   /**
    * Get a single user field definition by ID.
    *
-   * @throws ServiceError NOT_FOUND if field definition doesn't exist
+   * §13.8: public message is generic; entity name + id flow through logContext.
+   *
+   * @throws NextlyError(NOT_FOUND) if field definition doesn't exist
    */
   async getField(id: string): Promise<UserFieldDefinitionRecord> {
     const results = await this.db
@@ -171,7 +179,9 @@ export class UserFieldDefinitionService extends BaseService {
       .limit(1);
 
     if (results.length === 0) {
-      throw ServiceError.notFound("User field definition not found", { id });
+      throw NextlyError.notFound({
+        logContext: { entity: "user_field_definition", id },
+      });
     }
 
     return results[0] as UserFieldDefinitionRecord;
@@ -201,8 +211,8 @@ export class UserFieldDefinitionService extends BaseService {
    *
    * Note: `source` cannot be changed after creation, but `name` can be updated.
    *
-   * @throws ServiceError NOT_FOUND if field definition doesn't exist
-   * @throws ServiceError BUSINESS_RULE_VIOLATION if field is code-sourced
+   * @throws NextlyError(NOT_FOUND) if field definition doesn't exist
+   * @throws NextlyError(BUSINESS_RULE_VIOLATION) if field is code-sourced
    */
   async updateField(
     id: string,
@@ -211,10 +221,15 @@ export class UserFieldDefinitionService extends BaseService {
     const existing = await this.getField(id);
 
     if (existing.source === "code") {
-      throw ServiceError.businessRule(
-        "Cannot update code-sourced field definitions. Modify defineConfig() instead.",
-        { id, name: existing.name }
-      );
+      // §13.8: public message is a complete sentence with no identifiers; the
+      // field id + name go to logContext. Status 422 = business-rule violation.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        statusCode: 422,
+        publicMessage:
+          "Cannot update code-sourced field definitions. Modify defineConfig() instead.",
+        logContext: { id, name: existing.name },
+      });
     }
 
     const updateData: Record<string, unknown> = {
@@ -241,7 +256,8 @@ export class UserFieldDefinitionService extends BaseService {
         .set(updateData)
         .where(eq(this.userFieldDefinitions.id, id));
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getField(id);
@@ -253,17 +269,22 @@ export class UserFieldDefinitionService extends BaseService {
    * Only UI-sourced fields can be deleted. Code-sourced fields
    * must be removed from `defineConfig()`.
    *
-   * @throws ServiceError NOT_FOUND if field definition doesn't exist
-   * @throws ServiceError BUSINESS_RULE_VIOLATION if field is code-sourced
+   * @throws NextlyError(NOT_FOUND) if field definition doesn't exist
+   * @throws NextlyError(BUSINESS_RULE_VIOLATION) if field is code-sourced
    */
   async deleteField(id: string): Promise<void> {
     const existing = await this.getField(id);
 
     if (existing.source === "code") {
-      throw ServiceError.businessRule(
-        "Cannot delete code-sourced field definitions. Remove from defineConfig() instead.",
-        { id, name: existing.name }
-      );
+      // §13.8: public message is a complete sentence with no identifiers; the
+      // field id + name go to logContext. Status 422 = business-rule violation.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        statusCode: 422,
+        publicMessage:
+          "Cannot delete code-sourced field definitions. Remove from defineConfig() instead.",
+        logContext: { id, name: existing.name },
+      });
     }
 
     await this.db
@@ -344,7 +365,7 @@ export class UserFieldDefinitionService extends BaseService {
       // Upsert each code field
       for (let i = 0; i < codeFields.length; i++) {
         const field = codeFields[i];
-        const name = field.name as string;
+        const name = field.name;
         const label = (field.label as string) || name;
         const type = (field.type as string) || "text";
         const required = (field.required as boolean) ?? false;

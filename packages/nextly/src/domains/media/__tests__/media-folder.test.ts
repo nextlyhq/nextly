@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { ServiceError } from "../../../errors";
+import { NextlyError } from "../../../errors";
 import { MediaService } from "../services/media-service";
 import type {
   MediaFolder,
@@ -168,7 +168,7 @@ describe("MediaService — Folder Operations", () => {
           { name: "Orphan", parentId: "nonexistent" },
           context
         )
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("should throw DUPLICATE if folder name already exists", async () => {
@@ -178,7 +178,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.createFolder({ name: "Duplicate" }, context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -209,7 +209,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.updateFolder("nonexistent", { name: "New Name" }, context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -236,7 +236,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.deleteFolder("folder-001", false, context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
 
     it("should delete folder with contents when deleteContents is true", async () => {
@@ -259,7 +259,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.deleteFolder("nonexistent", false, context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -327,7 +327,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.getFolderContents("nonexistent", context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -351,7 +351,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.findFolderById("nonexistent", context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 
@@ -427,7 +427,7 @@ describe("MediaService — Folder Operations", () => {
 
       await expect(
         service.moveToFolder("nonexistent", "folder-001", context)
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
     });
   });
 });

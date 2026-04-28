@@ -30,10 +30,14 @@ import { GetUserByIdSchema } from "@nextly/schemas/user";
 import { EmailSchema } from "@nextly/schemas/validation";
 import type { MinimalUser } from "@nextly/types/auth";
 
+import { toDbError } from "../../../database/errors";
 import { container } from "../../../di/container";
+// PR 4 of unified-error-system migration: ServiceError result-shapes →
+// NextlyError throws. Service methods now return the data type directly
+// or throw a NextlyError on failure (no more `{ success, data, ... }`).
+import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import { ServiceContainer } from "../../../services/index";
-import { mapDbErrorToServiceError } from "../../../services/lib/db-error";
 import type { Logger } from "../../../services/shared";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 
@@ -49,6 +53,22 @@ import type { UserExtSchemaService } from "./user-ext-schema-service";
  * so we use `Record<string, unknown>` with an intersection of `Table` for Drizzle API compat.
  */
 type DrizzleRuntimeTable = Table & Record<string, unknown>;
+
+/**
+ * Lint-safe replacement for the unsafe built-in `Function` type used as a
+ * callable property holder. The Drizzle query builder methods we access
+ * (select/from/leftJoin/where/...) return chainable thenables whose static
+ * types we deliberately drop. The method type returns the same chainable
+ * shape so dot-chaining (e.g., `.select(...).from(...)`) keeps typing,
+ * and awaits resolve to `Record<string, unknown>[]` (a row list) since
+ * that is the only shape we ever consume here.
+ */
+interface DrizzleChain {
+  [key: string]: DrizzleChainMethod;
+}
+type DrizzleChainMethod = (
+  ...args: unknown[]
+) => DrizzleChain & PromiseLike<Record<string, unknown>[]>;
 
 // ============================================================
 // Text-like field types for search matching
@@ -77,14 +97,14 @@ export interface ListUsersOptions {
 }
 
 /**
- * Response type for paginated user lists
+ * Response type for paginated user lists.
+ *
+ * Post-migration (PR 4): no `success`/`statusCode`/`message` envelope —
+ * methods throw NextlyError on failure and return data directly on success.
  */
 export interface ListUsersResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  data: MinimalUser[] | null;
-  meta?: {
+  data: MinimalUser[];
+  meta: {
     total: number;
     page: number;
     pageSize: number;
@@ -93,14 +113,12 @@ export interface ListUsersResponse {
 }
 
 /**
- * Response type for single user operations
+ * Response type for single user operations.
+ *
+ * Post-migration (PR 4): callers receive the user directly; missing users
+ * surface via thrown NextlyError(NOT_FOUND) rather than a null `data`.
  */
-export interface GetUserResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  data: MinimalUser | null;
-}
+export type GetUserResponse = MinimalUser;
 
 export class UserQueryService extends BaseService {
   private readonly userConfig?: UserConfig;
@@ -306,7 +324,9 @@ export class UserQueryService extends BaseService {
   // ============================================================
 
   /**
-   * List users with pagination, filtering, and sorting
+   * List users with pagination, filtering, and sorting.
+   *
+   * @throws NextlyError on database errors (mapped via fromDatabaseError).
    */
   async listUsers(options?: ListUsersOptions): Promise<ListUsersResponse> {
     const extTable = this.getUserExtTable();
@@ -321,14 +341,16 @@ export class UserQueryService extends BaseService {
         try {
           return await this._listUsersInternal(options, null);
         } catch (retryErr) {
-          return mapDbErrorToServiceError(retryErr, {
-            defaultMessage: "Failed to fetch users",
-          });
+          if (NextlyError.is(retryErr)) throw retryErr;
+          // Normalise raw driver errors so the kind is preserved.
+          throw NextlyError.fromDatabaseError(
+            toDbError(this.dialect, retryErr)
+          );
         }
       }
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to fetch users",
-      });
+      if (NextlyError.is(err)) throw err;
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -363,14 +385,14 @@ export class UserQueryService extends BaseService {
         );
         if (customSearchConditions.length > 0) {
           // Safe pattern: FROM users LEFT JOIN user_ext WHERE (custom field conditions)
-          // Required by Drizzle ORM — runtime-generated tables need untyped db access
-          const extMatches = (await (
-            this.db as unknown as Record<string, Function>
-          )
+          // Required by Drizzle ORM — runtime-generated tables need untyped db access.
+          // DrizzleChain await already resolves to Record<string, unknown>[],
+          // so the previous explicit assertion is now redundant.
+          const extMatches = await (this.db as unknown as DrizzleChain)
             .select({ id: users.id })
             .from(users)
             .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
-            .where(or(...customSearchConditions))) as Record<string, unknown>[];
+            .where(or(...customSearchConditions));
           customFieldMatchIds = extMatches
             .map(r => String(r.id))
             .filter(Boolean);
@@ -441,7 +463,7 @@ export class UserQueryService extends BaseService {
     // Total count — join user_ext only when sorting by a custom field
     // (not for filtering, since that is handled via inArray above)
     // Required by Drizzle ORM — runtime-generated tables need untyped db access
-    let countQuery = (this.db as unknown as Record<string, Function>)
+    let countQuery = (this.db as unknown as DrizzleChain)
       .select({ value: count() })
       .from(users);
     if (needsExtJoinForSort && userExtTable) {
@@ -470,7 +492,7 @@ export class UserQueryService extends BaseService {
     };
 
     // Required by Drizzle ORM — runtime-generated tables need untyped db access
-    let query = (this.db as unknown as Record<string, Function>)
+    let query = (this.db as unknown as DrizzleChain)
       .select(selectColumns)
       .from(users);
 
@@ -525,8 +547,15 @@ export class UserQueryService extends BaseService {
       }
       // Add role if it exists (LEFT JOIN may return null for users without roles)
       if (row.roleId && row.roleName) {
+        // Type-narrow row.roleId before stringification — avoids
+        // Object#toString fallthrough on unknown driver values.
+        const rawRoleId = row.roleId;
+        const roleId =
+          typeof rawRoleId === "string" || typeof rawRoleId === "number"
+            ? String(rawRoleId)
+            : "";
         usersMap.get(userId)!.roles.push({
-          id: String(row.roleId),
+          id: roleId,
           name: row.roleName as string,
         });
       }
@@ -541,14 +570,16 @@ export class UserQueryService extends BaseService {
         const userIds = Array.from(usersMap.keys());
         const extSelectColumns: Record<string, unknown> = {
           extUserId: users.id,
-          ...this.buildCustomFieldSelect(userExtTable!),
+          ...this.buildCustomFieldSelect(userExtTable),
         };
-        // Required by Drizzle ORM — runtime-generated tables need untyped db access
-        const extRows = (await (this.db as unknown as Record<string, Function>)
+        // Required by Drizzle ORM — runtime-generated tables need untyped
+        // db access. DrizzleChain await already resolves to
+        // Record<string, unknown>[], so no trailing assertion is needed.
+        const extRows = await (this.db as unknown as DrizzleChain)
           .select(extSelectColumns)
           .from(users)
-          .leftJoin(userExtTable, eq(users.id, userExtTable!.user_id))
-          .where(inArray(users.id, userIds))) as Record<string, unknown>[];
+          .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
+          .where(inArray(users.id, userIds));
 
         for (const extRow of extRows) {
           const uid = String(extRow.extUserId);
@@ -569,9 +600,6 @@ export class UserQueryService extends BaseService {
     const result = Array.from(usersMap.values());
 
     return {
-      success: true,
-      statusCode: 200,
-      message: "Users fetched successfully",
       data: result as unknown as MinimalUser[],
       meta: {
         total,
@@ -583,20 +611,29 @@ export class UserQueryService extends BaseService {
   }
 
   /**
-   * Get a user by ID with their roles
+   * Get a user by ID with their roles.
+   *
+   * §13.8: §"User abc not found" replaced with generic NOT_FOUND because
+   * user-existence info is account-enumeration-sensitive — the id stays in
+   * logContext only.
+   *
+   * @throws NextlyError(VALIDATION_ERROR) when the userId fails Zod schema.
+   * @throws NextlyError(NOT_FOUND) when the user does not exist.
+   * @throws NextlyError on database errors (mapped via fromDatabaseError).
    */
   async getUserById(userId: number | string): Promise<GetUserResponse> {
-    // Validate input using Zod schema
+    // Validate input using Zod schema. §13.8: per-error messages may name the
+    // field but never the value; the bad value goes to logContext.
     const validation = GetUserByIdSchema.safeParse({ userId });
     if (!validation.success) {
-      return {
-        success: false,
-        statusCode: 400,
-        message: `Invalid user ID: ${validation.error.issues
-          .map(i => i.message)
-          .join(", ")}`,
-        data: null,
-      };
+      throw NextlyError.validation({
+        errors: validation.error.issues.map(i => ({
+          path: i.path.join("."),
+          code: i.code.toUpperCase(),
+          message: i.message,
+        })),
+        logContext: { userId },
+      });
     }
 
     const extTable = this.getUserExtTable();
@@ -610,14 +647,18 @@ export class UserQueryService extends BaseService {
         try {
           return await this._getUserByIdInternal(userId, null);
         } catch (retryErr) {
-          return mapDbErrorToServiceError(retryErr, {
-            defaultMessage: "Failed to fetch user",
-          });
+          // Re-throw NextlyError unchanged (e.g. NOT_FOUND from the not-found
+          // branch); only wrap raw DB errors via fromDatabaseError. Normalise
+          // raw driver errors first so the DB kind is preserved.
+          if (NextlyError.is(retryErr)) throw retryErr;
+          throw NextlyError.fromDatabaseError(
+            toDbError(this.dialect, retryErr)
+          );
         }
       }
-      return mapDbErrorToServiceError(err, {
-        defaultMessage: "Failed to fetch user",
-      });
+      if (NextlyError.is(err)) throw err;
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }
 
@@ -642,20 +683,21 @@ export class UserQueryService extends BaseService {
       updatedAt: users.updatedAt,
     };
 
-    // Required by Drizzle ORM — runtime-generated tables need untyped db access
-    const rows = (await (this.db as unknown as Record<string, Function>)
+    // Required by Drizzle ORM — runtime-generated tables need untyped db access.
+    // Await of DrizzleChain resolves to Record<string, unknown>[] already.
+    const rows = await (this.db as unknown as DrizzleChain)
       .select(selectColumns)
       .from(users)
       .where(eq(users.id, userId))
-      .limit(1)) as Record<string, unknown>[];
+      .limit(1);
 
     if (!rows.length) {
-      return {
-        success: false,
-        statusCode: 404,
-        message: "User not found",
-        data: null,
-      };
+      // §13.8 + spec note: user existence is sensitive (account
+      // enumeration), so the public message stays generic and the id flows
+      // only through logContext.
+      throw NextlyError.notFound({
+        logContext: { entity: "user", id: userId },
+      });
     }
 
     const row = rows[0];
@@ -688,16 +730,17 @@ export class UserQueryService extends BaseService {
     // target against the static users table to ensure reliable column resolution.
     if (hasExt) {
       try {
-        // Required by Drizzle ORM — runtime-generated tables need untyped db access
-        const extRows = (await (this.db as unknown as Record<string, Function>)
+        // Required by Drizzle ORM — runtime-generated tables need untyped
+        // db access. Await of DrizzleChain resolves to row list directly.
+        const extRows = await (this.db as unknown as DrizzleChain)
           .select({
             extUserId: users.id,
-            ...this.buildCustomFieldSelect(userExtTable!),
+            ...this.buildCustomFieldSelect(userExtTable),
           })
           .from(users)
-          .leftJoin(userExtTable, eq(users.id, userExtTable!.user_id))
+          .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
           .where(eq(users.id, row.id))
-          .limit(1)) as Record<string, unknown>[];
+          .limit(1);
 
         if (extRows.length > 0) {
           Object.assign(userData, this.extractCustomFields(extRows[0]));
@@ -710,24 +753,31 @@ export class UserQueryService extends BaseService {
       }
     }
 
-    return {
-      success: true,
-      statusCode: 200,
-      message: "User fetched successfully",
-      data: userData as MinimalUser,
-    };
+    return userData as MinimalUser;
   }
 
   /**
-   * Find a user by email address
+   * Find a user by email address.
+   *
+   * Returns null when the email is not registered (callers explicitly need
+   * to distinguish missing vs. found here, e.g. for the silent-success
+   * password-reset flow).
+   *
+   * @throws NextlyError(VALIDATION_ERROR) when the email fails the Zod check.
    */
   async findByEmail(email: string): Promise<MinimalUser | null> {
-    // Validate input using Zod schema
+    // Validate input using Zod schema. §13.8: messages name the field, not
+    // the value; the bad value goes to logContext.
     const validation = EmailSchema.safeParse(email);
     if (!validation.success) {
-      throw new Error(
-        `Invalid email: ${validation.error.issues.map(i => i.message).join(", ")}`
-      );
+      throw NextlyError.validation({
+        errors: validation.error.issues.map(i => ({
+          path: "email",
+          code: i.code.toUpperCase(),
+          message: i.message,
+        })),
+        logContext: { email },
+      });
     }
 
     const { users } = this.tables;
@@ -748,12 +798,13 @@ export class UserQueryService extends BaseService {
       updatedAt: users.updatedAt,
     };
 
-    // Required by Drizzle ORM — runtime-generated tables need untyped db access
-    const rows = (await (this.db as unknown as Record<string, Function>)
+    // Required by Drizzle ORM — runtime-generated tables need untyped db access.
+    // Await of DrizzleChain resolves to Record<string, unknown>[] already.
+    const rows = await (this.db as unknown as DrizzleChain)
       .select(selectColumns)
       .from(users)
       .where(eq(users.email, email))
-      .limit(1)) as Record<string, unknown>[];
+      .limit(1);
 
     if (!rows.length) return null;
 
@@ -773,16 +824,17 @@ export class UserQueryService extends BaseService {
     // issues with runtime-generated tables combined with other JOINs.
     if (hasExt) {
       try {
-        // Required by Drizzle ORM — runtime-generated tables need untyped db access
-        const extRows = (await (this.db as unknown as Record<string, Function>)
+        // Required by Drizzle ORM — runtime-generated tables need untyped
+        // db access. Await of DrizzleChain resolves to row list directly.
+        const extRows = await (this.db as unknown as DrizzleChain)
           .select({
             extUserId: users.id,
-            ...this.buildCustomFieldSelect(userExtTable!),
+            ...this.buildCustomFieldSelect(userExtTable),
           })
           .from(users)
-          .leftJoin(userExtTable, eq(users.id, userExtTable!.user_id))
+          .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
           .where(eq(users.email, email))
-          .limit(1)) as Record<string, unknown>[];
+          .limit(1);
 
         if (extRows.length > 0) {
           Object.assign(userData, this.extractCustomFields(extRows[0]));

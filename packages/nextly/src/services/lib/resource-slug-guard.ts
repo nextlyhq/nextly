@@ -1,6 +1,6 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import { ServiceError, ServiceErrorCode } from "../../errors";
+import { NextlyError } from "../../errors";
 
 type ResourceType = "collection" | "single";
 
@@ -12,10 +12,6 @@ interface SlugOwner {
 interface SlugGuardOptions {
   currentResourceType?: ResourceType;
   currentResourceId?: string;
-}
-
-function createConflictMessage(slug: string, owner: SlugOwner): string {
-  return `Slug "${slug}" is already used by a ${owner.resourceType}. Slugs must be unique across collections and singles.`;
 }
 
 async function findSlugOwner(
@@ -70,13 +66,13 @@ export async function assertGlobalResourceSlugAvailable(
     return;
   }
 
-  throw new ServiceError(
-    ServiceErrorCode.DUPLICATE_KEY,
-    createConflictMessage(slug, owner),
-    {
+  // Public message stays generic (spec §13.8): no slug or resource-type
+  // echoing. The conflict-target details flow into logContext for operators.
+  throw NextlyError.duplicate({
+    logContext: {
       slug,
       conflictResourceType: owner.resourceType,
       conflictResourceId: owner.id,
-    }
-  );
+    },
+  });
 }

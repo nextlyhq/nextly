@@ -18,7 +18,8 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { eq, desc } from "drizzle-orm";
 
-import { ServiceError } from "../../../errors/service-error";
+import { toDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors";
 import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
 import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
@@ -101,7 +102,9 @@ export class EmailTemplateService extends BaseService {
         this.emailTemplates = emailTemplatesSqlite;
         break;
       default:
-        throw new Error(`Unsupported dialect: ${this.dialect}`);
+        // `this.dialect` is narrowed to `never` after the exhaustive switch;
+        // String() coercion satisfies @typescript-eslint/restrict-template-expressions.
+        throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
   }
 
@@ -112,17 +115,22 @@ export class EmailTemplateService extends BaseService {
   /**
    * Create a new email template.
    *
-   * @throws ServiceError BUSINESS_RULE_VIOLATION if slug is reserved
-   * @throws ServiceError DATABASE_ERROR if slug already exists
+   * @throws NextlyError BUSINESS_RULE_VIOLATION if slug is reserved
+   * @throws NextlyError DUPLICATE if slug already exists
    */
   async createTemplate(
     data: CreateEmailTemplateInput
   ): Promise<EmailTemplateRecord> {
     if (RESERVED_SLUGS.has(data.slug)) {
-      throw ServiceError.businessRule(
-        `Slug "${data.slug}" is reserved for layout templates. Use updateLayout() instead.`,
-        { slug: data.slug }
-      );
+      // Spec §13.8: identifiers (the slug value) belong in logContext, not in
+      // the public message. Public sentence stays generic and ends with a period.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "That slug is reserved for layout templates. Use updateLayout() instead.",
+        statusCode: 422,
+        logContext: { slug: data.slug },
+      });
     }
 
     const id = randomUUID();
@@ -145,10 +153,19 @@ export class EmailTemplateService extends BaseService {
     };
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any).insert(this.emailTemplates).values(values);
+      await this.db.insert(this.emailTemplates).values(values);
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Pattern B: surface unique-violation as DUPLICATE (409) so the admin UI
+      // can show a friendly "slug already exists" message; everything else
+      // flows through the default DB → NextlyError mapping. The driver throws
+      // a raw error, so normalise via toDbError(dialect) before classifying.
+      const dbErr = toDbError(this.dialect, error);
+      if (dbErr.kind === "unique-violation") {
+        throw NextlyError.duplicate({
+          logContext: { reason: "template-slug-conflict", slug: data.slug },
+        });
+      }
+      throw NextlyError.fromDatabaseError(dbErr);
     }
 
     return this.getTemplate(id);
@@ -157,18 +174,19 @@ export class EmailTemplateService extends BaseService {
   /**
    * Get a single email template by ID.
    *
-   * @throws ServiceError NOT_FOUND if template doesn't exist
+   * @throws NextlyError NOT_FOUND if template doesn't exist
    */
   async getTemplate(id: string): Promise<EmailTemplateRecord> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailTemplates)
       .where(eq(this.emailTemplates.id, id))
       .limit(1);
 
     if (results.length === 0) {
-      throw ServiceError.notFound("Email template not found", { id });
+      // Identifier (`id`) goes into logContext per spec §13.8. The factory
+      // emits the canonical "Not found." public sentence.
+      throw NextlyError.notFound({ logContext: { id } });
     }
 
     return results[0] as EmailTemplateRecord;
@@ -180,8 +198,7 @@ export class EmailTemplateService extends BaseService {
    * Returns `null` if no template matches the slug.
    */
   async getTemplateBySlug(slug: string): Promise<EmailTemplateRecord | null> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailTemplates)
       .where(eq(this.emailTemplates.slug, slug))
@@ -198,8 +215,7 @@ export class EmailTemplateService extends BaseService {
    * from the listing. Use `getLayout()` to access layout templates.
    */
   async listTemplates(): Promise<EmailTemplateRecord[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await (this.db as any)
+    const results = await this.db
       .select()
       .from(this.emailTemplates)
       .orderBy(desc(this.emailTemplates.createdAt));
@@ -214,7 +230,7 @@ export class EmailTemplateService extends BaseService {
    *
    * Template `slug` cannot be changed after creation.
    *
-   * @throws ServiceError NOT_FOUND if template doesn't exist
+   * @throws NextlyError NOT_FOUND if template doesn't exist
    */
   async updateTemplate(
     id: string,
@@ -240,13 +256,16 @@ export class EmailTemplateService extends BaseService {
       updateData.attachments = data.attachments;
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any)
+      await this.db
         .update(this.emailTemplates)
         .set(updateData)
         .where(eq(this.emailTemplates.id, id));
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Default Pattern A: drizzle hands us the raw driver error, so normalise
+      // through toDbError(dialect) first to get a DbError; fromDatabaseError
+      // then produces a NextlyError with a generic public message and the
+      // dialect-specific code stashed in logContext.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     return this.getTemplate(id);
@@ -258,7 +277,7 @@ export class EmailTemplateService extends BaseService {
    * Cannot delete layout templates — use `updateLayout()` to modify them.
    * Idempotent — returns successfully if template doesn't exist.
    *
-   * @throws ServiceError BUSINESS_RULE_VIOLATION if template is a layout template
+   * @throws NextlyError BUSINESS_RULE_VIOLATION if template is a layout template
    */
   async deleteTemplate(id: string): Promise<void> {
     // Check if template exists and validate it's not a layout template
@@ -266,8 +285,9 @@ export class EmailTemplateService extends BaseService {
     try {
       template = await this.getTemplate(id);
     } catch (error) {
-      // If template doesn't exist, consider it already deleted (idempotent)
-      if (error instanceof ServiceError && error.code === "NOT_FOUND") {
+      // If template doesn't exist, consider it already deleted (idempotent).
+      // Use NextlyError.isCode for cross-realm safe NOT_FOUND detection.
+      if (NextlyError.isCode(error, "NOT_FOUND")) {
         this.logger.info(
           `Template ${id} not found during delete — already deleted`,
           { id }
@@ -278,14 +298,17 @@ export class EmailTemplateService extends BaseService {
     }
 
     if (RESERVED_SLUGS.has(template.slug)) {
-      throw ServiceError.businessRule(
-        "Cannot delete layout templates. Use updateLayout() to modify them.",
-        { id, slug: template.slug }
-      );
+      // Spec §13.8: identifiers are operator-only. Public sentence is generic.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "Cannot delete layout templates. Use updateLayout() to modify them.",
+        statusCode: 422,
+        logContext: { id, slug: template.slug },
+      });
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (this.db as any)
+    await this.db
       .delete(this.emailTemplates)
       .where(eq(this.emailTemplates.id, id));
   }
@@ -302,7 +325,7 @@ export class EmailTemplateService extends BaseService {
    * values by default to prevent XSS, and wraps with shared layout
    * (header/footer) when `useLayout` is enabled.
    *
-   * @throws ServiceError NOT_FOUND if template doesn't exist
+   * @throws NextlyError NOT_FOUND if template doesn't exist
    */
   async previewTemplate(
     id: string,
@@ -359,8 +382,7 @@ export class EmailTemplateService extends BaseService {
       };
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (this.db as any).insert(this.emailTemplates).values(values);
+        await this.db.insert(this.emailTemplates).values(values);
         this.logger.info(`Created built-in email template: ${template.slug}`);
       } catch (error) {
         // Ignore duplicate slug errors (race condition safety)
@@ -441,15 +463,14 @@ export class EmailTemplateService extends BaseService {
     const existing = await this.getTemplateBySlug(slug);
 
     if (existing) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any)
+      await this.db
         .update(this.emailTemplates)
         .set({ htmlContent, updatedAt: now })
         .where(eq(this.emailTemplates.id, existing.id));
     } else {
       const id = randomUUID();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any).insert(this.emailTemplates).values({
+
+      await this.db.insert(this.emailTemplates).values({
         id,
         name,
         slug,

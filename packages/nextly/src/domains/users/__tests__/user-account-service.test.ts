@@ -29,6 +29,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { UserAccountService } from "../services/user-account-service";
 
 // ── Mock Modules ───────────────────────────────────────────────────────
@@ -44,16 +45,10 @@ vi.mock("../../../database/index", () => ({
   getDialectTables: vi.fn(() => mockTables),
 }));
 
-vi.mock("../../../services/lib/db-error", () => ({
-  mapDbErrorToServiceError: vi.fn(
-    (_err: unknown, opts: { defaultMessage: string }) => ({
-      success: false,
-      statusCode: 500,
-      message: opts.defaultMessage,
-      data: null,
-    })
-  ),
-}));
+// Post-migration (PR 4): UserAccountService no longer imports
+// `mapDbErrorToServiceError` — DB errors throw via NextlyError directly. We
+// mock the database/errors module so DB-error isDbError checks behave
+// predictably; raw thrown Errors flow through NextlyError.fromDatabaseError.
 
 vi.mock("../../../services/index", () => ({
   ServiceContainer: vi.fn().mockImplementation(() => ({
@@ -248,7 +243,7 @@ describe("UserAccountService", () => {
   // ── getCurrentUser ───────────────────────────────────────────────────
 
   describe("getCurrentUser", () => {
-    it("should delegate to getUserById and return user", async () => {
+    it("should delegate to getUserById and return user directly", async () => {
       getUserByIdData = [
         {
           id: "user-1",
@@ -262,30 +257,27 @@ describe("UserAccountService", () => {
         },
       ];
 
-      const result = await service.getCurrentUser("user-1");
+      // Post-migration: getCurrentUser returns the user directly (no envelope).
+      const user = await service.getCurrentUser("user-1");
 
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(200);
-      expect(result.data).not.toBeNull();
-      expect(result.data!.id).toBe("user-1");
-      expect(result.data!.email).toBe("current@example.com");
+      expect(user).not.toBeNull();
+      expect(user.id).toBe("user-1");
+      expect(user.email).toBe("current@example.com");
     });
 
-    it("should return 404 when user does not exist", async () => {
+    it("should throw NextlyError(NOT_FOUND) when user does not exist", async () => {
       getUserByIdData = [];
 
-      const result = await service.getCurrentUser("nonexistent");
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(404);
-      expect(result.data).toBeNull();
+      await expect(service.getCurrentUser("nonexistent")).rejects.toSatisfy(
+        (err: unknown) => NextlyError.isNotFound(err)
+      );
     });
   });
 
   // ── updateCurrentUser ────────────────────────────────────────────────
 
   describe("updateCurrentUser", () => {
-    it("should update user name", async () => {
+    it("should update user name and return user directly", async () => {
       getUserByIdData = [
         {
           id: "user-1",
@@ -299,18 +291,16 @@ describe("UserAccountService", () => {
         },
       ];
 
-      const result = await service.updateCurrentUser("user-1", {
+      const user = await service.updateCurrentUser("user-1", {
         name: "Updated Name",
       });
 
-      // The service first checks if user exists (getUserById), then updates,
-      // then fetches again. Our mock always returns the same data.
-      expect(result.success).toBe(true);
-      expect(result.data).not.toBeNull();
+      expect(user).not.toBeNull();
+      expect(user.id).toBe("user-1");
       expect(mockDb.update).toHaveBeenCalled();
     });
 
-    it("should update user image", async () => {
+    it("should update user image and return user directly", async () => {
       getUserByIdData = [
         {
           id: "user-1",
@@ -324,11 +314,11 @@ describe("UserAccountService", () => {
         },
       ];
 
-      const result = await service.updateCurrentUser("user-1", {
+      const user = await service.updateCurrentUser("user-1", {
         image: "https://new-image.com/photo.jpg",
       });
 
-      expect(result.success).toBe(true);
+      expect(user.image).toBe("https://new-image.com/photo.jpg");
       expect(mockDb.update).toHaveBeenCalled();
     });
 
@@ -346,29 +336,24 @@ describe("UserAccountService", () => {
         },
       ];
 
-      const result = await service.updateCurrentUser("user-1", {
+      const user = await service.updateCurrentUser("user-1", {
         name: "Both Updated",
         image: "https://img.com/new.jpg",
       });
 
-      expect(result.success).toBe(true);
+      expect(user.name).toBe("Both Updated");
       expect(mockDb.update).toHaveBeenCalled();
     });
 
-    it("should return 404 when updating non-existent user", async () => {
+    it("should throw NextlyError(NOT_FOUND) when updating non-existent user", async () => {
       getUserByIdData = [];
 
-      const result = await service.updateCurrentUser("nonexistent", {
-        name: "Ghost",
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(404);
-      expect(result.message).toBe("User not found");
-      expect(result.data).toBeNull();
+      await expect(
+        service.updateCurrentUser("nonexistent", { name: "Ghost" })
+      ).rejects.toSatisfy((err: unknown) => NextlyError.isNotFound(err));
     });
 
-    it("should handle database error during update", async () => {
+    it("should throw NextlyError on database error during update", async () => {
       getUserByIdData = [
         {
           id: "user-1",
@@ -382,64 +367,53 @@ describe("UserAccountService", () => {
         },
       ];
 
-      // Make the update throw
+      // Make the update throw a non-DbError; fromDatabaseError wraps as
+      // INTERNAL_ERROR with statusCode 500.
       mockDb.update.mockImplementation(() => {
         throw new Error("Constraint violation");
       });
 
-      const result = await service.updateCurrentUser("user-1", {
-        name: "Fail",
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(500);
+      await expect(
+        service.updateCurrentUser("user-1", { name: "Fail" })
+      ).rejects.toSatisfy(
+        (err: unknown) => NextlyError.is(err) && err.statusCode === 500
+      );
     });
   });
 
   // ── updatePasswordHash ───────────────────────────────────────────────
 
   describe("updatePasswordHash", () => {
-    it("should update password hash successfully", async () => {
+    it("should update password hash and return void", async () => {
       mockDb.query.users.findFirst.mockResolvedValue({ id: "user-1" });
 
-      const result = await service.updatePasswordHash(
-        "user-1",
-        "$2b$10$hashedpassword"
-      );
+      // Post-migration: returns void on success, throws on failure.
+      await expect(
+        service.updatePasswordHash("user-1", "$2b$10$hashedpassword")
+      ).resolves.toBeUndefined();
 
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(200);
-      expect(result.message).toBe("Password updated successfully");
-      expect(result.data).toBeNull();
       expect(mockDb.update).toHaveBeenCalled();
     });
 
-    it("should return 404 when user not found", async () => {
+    it("should throw NextlyError(NOT_FOUND) when user not found", async () => {
       mockDb.query.users.findFirst.mockResolvedValue(null);
 
-      const result = await service.updatePasswordHash(
-        "nonexistent",
-        "$2b$10$hashedpassword"
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(404);
-      expect(result.message).toBe("User not found");
+      await expect(
+        service.updatePasswordHash("nonexistent", "$2b$10$hashedpassword")
+      ).rejects.toSatisfy((err: unknown) => NextlyError.isNotFound(err));
     });
 
-    it("should handle database error during password update", async () => {
+    it("should throw NextlyError on database error during password update", async () => {
       mockDb.query.users.findFirst.mockResolvedValue({ id: "user-1" });
       mockDb.update.mockImplementation(() => {
         throw new Error("DB write error");
       });
 
-      const result = await service.updatePasswordHash(
-        "user-1",
-        "$2b$10$newhash"
+      await expect(
+        service.updatePasswordHash("user-1", "$2b$10$newhash")
+      ).rejects.toSatisfy(
+        (err: unknown) => NextlyError.is(err) && err.statusCode === 500
       );
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(500);
     });
   });
 
@@ -520,7 +494,7 @@ describe("UserAccountService", () => {
   // ── getAccounts ──────────────────────────────────────────────────────
 
   describe("getAccounts", () => {
-    it("should return linked OAuth accounts", async () => {
+    it("should return linked OAuth accounts as an array", async () => {
       mockDb.query.accounts.findMany.mockResolvedValue([
         {
           id: "acc-1",
@@ -538,33 +512,29 @@ describe("UserAccountService", () => {
         },
       ]);
 
-      const result = await service.getAccounts("user-1");
+      const accounts = await service.getAccounts("user-1");
 
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(200);
-      expect(result.data).toHaveLength(2);
-      expect(result.data![0].provider).toBe("google");
-      expect(result.data![1].provider).toBe("github");
+      expect(accounts).toHaveLength(2);
+      expect(accounts[0].provider).toBe("google");
+      expect(accounts[1].provider).toBe("github");
     });
 
-    it("should return 404 when no accounts linked", async () => {
+    it("should return empty array when no accounts linked", async () => {
+      // Post-migration: zero linked accounts is a normal state, not an error.
+      // Pre-migration this returned a 404 envelope; that envelope-quirk is gone.
       mockDb.query.accounts.findMany.mockResolvedValue([]);
 
-      const result = await service.getAccounts("user-1");
+      const accounts = await service.getAccounts("user-1");
 
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(404);
-      expect(result.message).toBe("No accounts linked to this user");
-      expect(result.data).toBeNull();
+      expect(accounts).toEqual([]);
     });
 
-    it("should handle database error when fetching accounts", async () => {
+    it("should throw NextlyError on database error when fetching accounts", async () => {
       mockDb.query.accounts.findMany.mockRejectedValue(new Error("DB error"));
 
-      const result = await service.getAccounts("user-1");
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(500);
+      await expect(service.getAccounts("user-1")).rejects.toSatisfy(
+        (err: unknown) => NextlyError.is(err) && err.statusCode === 500
+      );
     });
   });
 

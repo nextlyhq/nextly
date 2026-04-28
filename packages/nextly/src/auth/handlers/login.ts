@@ -1,3 +1,5 @@
+import { readOrGenerateRequestId } from "../../api/request-id.js";
+import { NextlyError } from "../../errors/nextly-error.js";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie.js";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie.js";
 import { verifyCredentials } from "../credentials/verify-credentials.js";
@@ -54,11 +56,37 @@ export interface LoginHandlerDeps {
   }) => Promise<void>;
 }
 
+/**
+ * Serialize a NextlyError to the canonical login error response.
+ *
+ * PR 5 (unified-error-system): every login failure (CSRF, invalid creds,
+ * locked, unverified, inactive, internal) is now returned as a NextlyError
+ * with the same wire format that withErrorHandler produces — application/
+ * problem+json with code, message, and requestId. Account-state codes have
+ * collapsed into AUTH_INVALID_CREDENTIALS per spec §13.1.
+ */
+function buildLoginErrorResponse(
+  err: NextlyError,
+  requestId: string
+): Response {
+  return new Response(
+    JSON.stringify({ error: err.toResponseJSON(requestId) }),
+    {
+      status: err.statusCode,
+      headers: {
+        "content-type": "application/problem+json",
+        "x-request-id": requestId,
+      },
+    }
+  );
+}
+
 export async function handleLogin(
   request: Request,
   deps: LoginHandlerDeps
 ): Promise<Response> {
   const startTime = Date.now();
+  const requestId = readOrGenerateRequestId(request);
 
   try {
     const body = await request.json();
@@ -73,13 +101,22 @@ export async function handleLogin(
     );
     if (!csrfResult.valid) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(403, {
-        error: { code: "CSRF_FAILED", message: csrfResult.error },
-      });
+      // CSRF stays as a discrete code — it's a configuration / origin issue,
+      // not an account-state leak. Keep the existing wire shape.
+      return jsonResponse(
+        403,
+        {
+          error: { code: "CSRF_FAILED", message: csrfResult.error },
+        },
+        { "x-request-id": requestId }
+      );
     }
 
-    // Verify credentials (includes lockout check, brute-force tracking)
-    const result = await verifyCredentials(
+    // verifyCredentials now throws NextlyError on every failure path.
+    // Account-state checks (locked / unverified / inactive) collapse to
+    // AUTH_INVALID_CREDENTIALS per spec §13.1 — the 429 ternary that used
+    // to bubble lockout state to the wire is gone (always 401 now).
+    const verifiedUser = await verifyCredentials(
       { email: body.email, password: body.password },
       {
         findUserByEmail: deps.findUserByEmail,
@@ -92,24 +129,16 @@ export async function handleLogin(
       }
     );
 
-    if (!result.success) {
-      await stallResponse(startTime, deps.loginStallTimeMs);
-      const statusCode = result.code === "ACCOUNT_LOCKED" ? 429 : 401;
-      return jsonResponse(statusCode, {
-        error: { code: result.code, message: result.message },
-      });
-    }
-
     const [roleIds, customFields] = await Promise.all([
-      deps.fetchRoleIds(result.user.id),
-      deps.fetchCustomFields(result.user.id),
+      deps.fetchRoleIds(verifiedUser.id),
+      deps.fetchCustomFields(verifiedUser.id),
     ]);
 
     const claims = buildClaims({
-      userId: result.user.id,
-      email: result.user.email,
-      name: result.user.name,
-      image: result.user.image,
+      userId: verifiedUser.id,
+      email: verifiedUser.email,
+      name: verifiedUser.name,
+      image: verifiedUser.image,
       roleIds,
       customFields,
     });
@@ -123,7 +152,7 @@ export async function handleLogin(
     const refreshTokenHash = hashRefreshToken(rawRefreshToken);
     await deps.storeRefreshToken({
       id: generateRefreshTokenId(),
-      userId: result.user.id,
+      userId: verifiedUser.id,
       tokenHash: refreshTokenHash,
       userAgent: request.headers.get("user-agent"),
       ipAddress: getClientIp(request),
@@ -131,7 +160,11 @@ export async function handleLogin(
     });
 
     const cookies = [
-      setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
+      setAccessTokenCookie(
+        accessToken,
+        deps.refreshTokenTTL,
+        deps.isProduction
+      ),
       setRefreshTokenCookie(
         rawRefreshToken,
         deps.refreshTokenTTL,
@@ -145,23 +178,31 @@ export async function handleLogin(
       JSON.stringify({
         data: {
           user: {
-            id: result.user.id,
-            email: result.user.email,
-            name: result.user.name,
-            image: result.user.image,
+            id: verifiedUser.id,
+            email: verifiedUser.email,
+            name: verifiedUser.name,
+            image: verifiedUser.image,
             roleIds,
           },
         },
       }),
-      { status: 200, headers: buildCookieHeaders(cookies) }
+      {
+        status: 200,
+        headers: buildCookieHeaders(cookies, { "x-request-id": requestId }),
+      }
     );
-  } catch {
+  } catch (err) {
+    // All login failures stall to the same minimum so timing cannot be used
+    // to distinguish error legs. PR 5 unifies error shape: NextlyError →
+    // toResponseJSON; everything else collapses to a single INTERNAL_ERROR
+    // response so we never leak internals to the wire.
     await stallResponse(startTime, deps.loginStallTimeMs);
-    return jsonResponse(500, {
-      error: {
-        code: "INTERNAL_ERROR",
-        message: "An error occurred during login",
-      },
-    });
+    if (NextlyError.is(err)) {
+      return buildLoginErrorResponse(err, requestId);
+    }
+    return buildLoginErrorResponse(
+      NextlyError.internal({ cause: err as Error }),
+      requestId
+    );
   }
 }

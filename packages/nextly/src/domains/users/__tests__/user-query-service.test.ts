@@ -24,6 +24,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { UserQueryService } from "../services/user-query-service";
 import type { ListUsersOptions } from "../services/user-query-service";
 
@@ -42,17 +43,8 @@ vi.mock("../../../database/index", () => ({
   getDialectTables: vi.fn(() => mockTables),
 }));
 
-// Mock mapDbErrorToServiceError used inside the service
-vi.mock("../../../services/lib/db-error", () => ({
-  mapDbErrorToServiceError: vi.fn(
-    (_err: unknown, opts: { defaultMessage: string }) => ({
-      success: false,
-      statusCode: 500,
-      message: opts.defaultMessage,
-      data: null,
-    })
-  ),
-}));
+// Post-migration (PR 4): UserQueryService no longer imports
+// `mapDbErrorToServiceError`. DB failures now throw NextlyError directly.
 
 // Mock ServiceContainer used by getUserById to resolve user roles
 vi.mock("../../../services/index", () => ({
@@ -236,16 +228,14 @@ describe("UserQueryService", () => {
   // ── listUsers ────────────────────────────────────────────────────────
 
   describe("listUsers", () => {
-    it("should return successful response with default pagination", async () => {
+    it("should return paginated result with default pagination", async () => {
       countResolveData = [{ value: 0 }];
       selectResolveData = [];
       mockDb._resetCallCount();
 
+      // Post-migration (PR 4): no `success`/`statusCode`/`message` envelope.
       const result = await service.listUsers();
 
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(200);
-      expect(result.message).toBe("Users fetched successfully");
       expect(result.data).toEqual([]);
       expect(result.meta).toEqual({
         total: 0,
@@ -299,7 +289,6 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers({ page: 1, pageSize: 10 });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(2);
 
       const alice = result.data![0];
@@ -338,7 +327,6 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers({ page: 100, pageSize: 10 });
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual([]);
       expect(result.meta?.total).toBe(5);
       expect(result.meta?.page).toBe(100);
@@ -364,7 +352,6 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers({ search: "alice" });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
       expect(result.data![0].name).toBe("Alice Smith");
     });
@@ -389,7 +376,6 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers({ emailVerified: true });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
     });
 
@@ -413,7 +399,6 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers({ hasPassword: true });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
     });
 
@@ -452,7 +437,6 @@ describe("UserQueryService", () => {
         sortOrder: "desc",
       });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(2);
       // The data order is determined by what the mock returns, but the service
       // called orderBy which we verify was invoked
@@ -467,9 +451,8 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers({});
 
-      expect(result.success).toBe(true);
-      expect(result.meta?.page).toBe(1);
-      expect(result.meta?.pageSize).toBe(10);
+      expect(result.meta.page).toBe(1);
+      expect(result.meta.pageSize).toBe(10);
     });
 
     it("should sort by createdAt", async () => {
@@ -495,7 +478,6 @@ describe("UserQueryService", () => {
         sortOrder: "asc",
       });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
     });
 
@@ -534,7 +516,6 @@ describe("UserQueryService", () => {
         emailVerified: true,
       });
 
-      expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
     });
 
@@ -558,21 +539,20 @@ describe("UserQueryService", () => {
 
       const result = await service.listUsers();
 
-      expect(result.success).toBe(true);
-      const user = result.data![0];
+      const user = result.data[0];
       expect((user as Record<string, unknown>).isActive).toBeUndefined();
     });
 
-    it("should handle database error gracefully", async () => {
-      // Make the db.select throw an error
+    it("should throw NextlyError on database error", async () => {
+      // Make the db.select throw an error; fromDatabaseError wraps the
+      // non-DbError as INTERNAL_ERROR (statusCode 500).
       mockDb.select.mockImplementation(() => {
         throw new Error("Database connection lost");
       });
 
-      const result = await service.listUsers();
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(500);
+      await expect(service.listUsers()).rejects.toSatisfy(
+        (err: unknown) => NextlyError.is(err) && err.statusCode === 500
+      );
     });
   });
 
@@ -598,35 +578,39 @@ describe("UserQueryService", () => {
       const singleChain = createChainableMock(() => selectResolveData);
       mockDb.select.mockReturnValue(singleChain);
 
-      const result = await service.getUserById("user-1");
+      // Post-migration: returns user directly; envelope is gone.
+      const user = await service.getUserById("user-1");
 
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(200);
-      expect(result.message).toBe("User fetched successfully");
-      expect(result.data).not.toBeNull();
-      expect(result.data!.id).toBe("user-1");
-      expect(result.data!.email).toBe("alice@example.com");
-      expect(result.data!.name).toBe("Alice");
+      expect(user).not.toBeNull();
+      expect(user.id).toBe("user-1");
+      expect(user.email).toBe("alice@example.com");
+      expect(user.name).toBe("Alice");
     });
 
-    it("should return 404 when user is not found", async () => {
+    it("should throw NextlyError(NOT_FOUND) when user is not found", async () => {
       selectResolveData = [];
       const emptyChain = createChainableMock(() => []);
       mockDb.select.mockReturnValue(emptyChain);
 
-      const result = await service.getUserById("nonexistent");
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(404);
-      expect(result.message).toBe("User not found");
-      expect(result.data).toBeNull();
+      // §13.8: public message is generic "Not found." — id only in logContext.
+      await expect(service.getUserById("nonexistent")).rejects.toSatisfy(
+        (err: unknown) =>
+          NextlyError.isNotFound(err) &&
+          (err as NextlyError).publicMessage === "Not found."
+      );
     });
 
     it("should handle empty string user ID without crashing", async () => {
-      const result = await service.getUserById("");
       // Empty string passes Zod validation (z.union([z.string(), z.number()]))
-      // so the service proceeds to query normally
-      expect(result).toBeDefined();
+      // so the service proceeds to query normally — the empty result then
+      // throws NOT_FOUND.
+      selectResolveData = [];
+      const emptyChain = createChainableMock(() => []);
+      mockDb.select.mockReturnValue(emptyChain);
+
+      await expect(service.getUserById("")).rejects.toSatisfy((err: unknown) =>
+        NextlyError.isNotFound(err)
+      );
     });
 
     it("should handle null emailVerified gracefully", async () => {
@@ -645,12 +629,11 @@ describe("UserQueryService", () => {
       const singleChain = createChainableMock(() => selectResolveData);
       mockDb.select.mockReturnValue(singleChain);
 
-      const result = await service.getUserById("user-2");
+      const user = await service.getUserById("user-2");
 
-      expect(result.success).toBe(true);
-      expect(result.data!.emailVerified).toBeNull();
-      expect(result.data!.name).toBeNull();
-      expect(result.data!.image).toBeNull();
+      expect(user.emailVerified).toBeNull();
+      expect(user.name).toBeNull();
+      expect(user.image).toBeNull();
     });
 
     it("should still return user data when role lookup fails", async () => {
@@ -671,11 +654,10 @@ describe("UserQueryService", () => {
 
       // The ServiceContainer mock is set up in vi.mock above — roles default to ["admin"]
       // Even if it failed, the service catches and sets roles to null
-      const result = await service.getUserById("user-3");
+      const user = await service.getUserById("user-3");
 
-      expect(result.success).toBe(true);
-      expect(result.data).not.toBeNull();
-      expect(result.data!.id).toBe("user-3");
+      expect(user).not.toBeNull();
+      expect(user.id).toBe("user-3");
     });
 
     it("should accept numeric user ID", async () => {
@@ -694,10 +676,9 @@ describe("UserQueryService", () => {
       const singleChain = createChainableMock(() => selectResolveData);
       mockDb.select.mockReturnValue(singleChain);
 
-      const result = await service.getUserById(42);
+      const user = await service.getUserById(42);
 
-      expect(result.success).toBe(true);
-      expect(result.data!.id).toBe(42);
+      expect(user.id).toBe(42);
     });
   });
 
@@ -738,14 +719,16 @@ describe("UserQueryService", () => {
       expect(result).toBeNull();
     });
 
-    it("should throw for invalid email format", async () => {
-      await expect(service.findByEmail("not-an-email")).rejects.toThrow(
-        "Invalid email"
+    it("should throw NextlyError(VALIDATION_ERROR) for invalid email format", async () => {
+      await expect(service.findByEmail("not-an-email")).rejects.toSatisfy(
+        (err: unknown) => NextlyError.isValidation(err)
       );
     });
 
-    it("should throw for empty email string", async () => {
-      await expect(service.findByEmail("")).rejects.toThrow("Invalid email");
+    it("should throw NextlyError(VALIDATION_ERROR) for empty email string", async () => {
+      await expect(service.findByEmail("")).rejects.toSatisfy((err: unknown) =>
+        NextlyError.isValidation(err)
+      );
     });
 
     it("should handle user with all nullable fields as null", async () => {

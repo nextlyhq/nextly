@@ -18,6 +18,11 @@ export {
 
 export { healthCheck, type HealthCheckResult } from "./health";
 
+// Pattern A wrapper from the unified error system (spec §8.3): auto-convert
+// DbError thrown inside a DB-touching block to a NextlyError with a generic
+// public message and rich logContext.
+export { withDbErrors } from "./with-db-errors";
+
 // Note: initDatabase, quickInitDatabase, seedAll, seedPermissions are NOT exported here
 // as they contain Node.js-only code (fileURLToPath, fs, path).
 // Use CLI commands (nextly dev --seed, nextly migrate) or import directly from

@@ -2,11 +2,18 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { toDbError } from "../../../database/errors";
+// PR 4 migration: switched DB error mapping from the legacy
+// mapDbErrorToServiceError helper to NextlyError.fromDatabaseError. The
+// public method return shape (MetadataServiceResult) is preserved because
+// out-of-scope callers (CollectionService orchestrator, dynamic-collections)
+// still consume the result tuple; only the internal error mapping changed.
+import { NextlyError } from "../../../errors";
 import type { PermissionSeedService } from "../../../services/auth/permission-seed-service";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
-import { mapDbErrorToServiceError } from "../../../services/lib/db-error";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
 /** Result shape returned by metadata service methods. */
@@ -16,6 +23,55 @@ export interface MetadataServiceResult {
   message: string;
   data: Record<string, unknown> | Record<string, unknown>[] | null;
   meta?: Record<string, unknown>;
+}
+
+/**
+ * Convert any thrown error to a MetadataServiceResult failure shape.
+ *
+ * Maps DbErrors via NextlyError.fromDatabaseError; non-DbError throwables
+ * route through the requested fallback path so caller-supplied status codes
+ * (e.g. 400 for validation, 404 for not-found) still apply when the cause
+ * is not a database failure. Identifying detail (slug, table name, etc.)
+ * stays in logContext per §13.8 and never reaches the wire.
+ */
+function errorToMetadataResult(
+  error: unknown,
+  fallback: { statusCode: number; defaultMessage: string },
+  dialect: SupportedDialect
+): MetadataServiceResult {
+  // NextlyError instances already carry public/log payloads in the right
+  // shape; surface the publicMessage and statusCode and drop logContext.
+  if (NextlyError.is(error)) {
+    return {
+      success: false,
+      statusCode: error.statusCode,
+      message: error.publicMessage,
+      data: null,
+    };
+  }
+  // Best-effort DbError detection — fromDatabaseError handles both DbError
+  // and arbitrary throwables and never leaks driver text. Free helper takes
+  // dialect explicitly (no `this`); without normalising via toDbError(dialect)
+  // first, real unique/fk violations would collapse to INTERNAL_ERROR and the
+  // caller's fallback statusCode would always win.
+  const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
+  // If the input was a true DbError, fromDatabaseError returns a non-internal
+  // code. For anything else we honour the caller's fallback so e.g.
+  // "Failed to create collection" stays a 400 not a 500.
+  if (mapped.code === "INTERNAL_ERROR") {
+    return {
+      success: false,
+      statusCode: fallback.statusCode,
+      message: error instanceof Error ? error.message : fallback.defaultMessage,
+      data: null,
+    };
+  }
+  return {
+    success: false,
+    statusCode: mapped.statusCode,
+    message: mapped.publicMessage,
+    data: null,
+  };
 }
 
 /**
@@ -257,18 +313,25 @@ export class CollectionMetadataService extends BaseService {
         }
       }
 
-      // Database operation - wrap with DB error handler
+      // Database operation — convert DB errors via NextlyError.fromDatabaseError.
+      // The factory's generic "Resource already exists." replaces the legacy
+      // override "Collection with this name already exists" because §13.8
+      // forbids identifier echoing on the wire; the slug remains in logContext
+      // through fromDatabaseError's `cause` chain.
       let collection;
       try {
         collection = await this.collectionService.registerCollection(
           artifacts.metadata
         );
       } catch (dbError: unknown) {
-        return mapDbErrorToServiceError(dbError, {
-          defaultMessage: "Failed to save collection to database",
-          "unique-violation": "Collection with this name already exists",
-          constraint: "Collection with this name already exists",
-        });
+        return errorToMetadataResult(
+          dbError,
+          {
+            statusCode: 500,
+            defaultMessage: "Failed to save collection to database",
+          },
+          this.dialect
+        );
       }
 
       // Auto-seed CRUD permissions for the new collection
@@ -283,16 +346,17 @@ export class CollectionMetadataService extends BaseService {
         data: collection,
       };
     } catch (error: unknown) {
-      // Validation or file system errors - return as-is with 400
-      return {
-        success: false,
-        statusCode: 400,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to create collection",
-        data: null,
-      };
+      // Validation or file-system errors keep the legacy 400 status. DB errors
+      // bubbling up here (rare — most are caught at the inner try/catch) are
+      // routed through fromDatabaseError so we never echo driver text.
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 400,
+          defaultMessage: "Failed to create collection",
+        },
+        this.dialect
+      );
     }
   }
 
@@ -366,14 +430,24 @@ export class CollectionMetadataService extends BaseService {
         };
       });
 
-      // Debug: log admin fields to verify sidebarGroup in API response
+      // Debug: log admin fields to verify sidebarGroup in API response.
+      // `c.slug` and `c.admin.sidebarGroup` are typed `unknown`; narrow each to a
+      // string before interpolation to satisfy restrict-template-expressions and
+      // no-base-to-string (which forbid stringifying objects via template literals).
       console.log(
         "[listCollections] Collections admin summary:",
         transformedCollections
-          .map(
-            (c: Record<string, unknown>) =>
-              `${c.slug}: sidebarGroup=${(c.admin as Record<string, unknown>)?.sidebarGroup || "none"}`
-          )
+          .map((c: Record<string, unknown>) => {
+            const slug = typeof c.slug === "string" ? c.slug : String(c.slug);
+            const sidebarGroupRaw = (
+              c.admin as Record<string, unknown> | undefined
+            )?.sidebarGroup;
+            const sidebarGroup =
+              typeof sidebarGroupRaw === "string" && sidebarGroupRaw.length > 0
+                ? sidebarGroupRaw
+                : "none";
+            return `${slug}: sidebarGroup=${sidebarGroup}`;
+          })
           .join(", ")
       );
 
@@ -390,15 +464,16 @@ export class CollectionMetadataService extends BaseService {
         },
       };
     } catch (error: unknown) {
-      return {
-        success: false,
-        statusCode: 500,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to fetch collections",
-        data: null,
-      };
+      // List failures default to 500. fromDatabaseError handles real DB
+      // errors with the §13.8-compliant generic public message.
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 500,
+          defaultMessage: "Failed to fetch collections",
+        },
+        this.dialect
+      );
     }
   }
 
@@ -497,13 +572,17 @@ export class CollectionMetadataService extends BaseService {
         data: transformedCollection,
       };
     } catch (error: unknown) {
-      return {
-        success: false,
-        statusCode: 404,
-        message:
-          error instanceof Error ? error.message : "Collection not found",
-        data: null,
-      };
+      // The underlying registry now throws NextlyError.notFound which carries
+      // its own publicMessage and 404 status — pass it through. Anything else
+      // falls back to the legacy 404 default the original code used.
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 404,
+          defaultMessage: "Collection not found",
+        },
+        this.dialect
+      );
     }
   }
 
@@ -594,6 +673,11 @@ export class CollectionMetadataService extends BaseService {
         }
       }
 
+      // Database operation — DB errors map via NextlyError.fromDatabaseError.
+      // The legacy override "Collection with this name already exists" is
+      // dropped: the factory's generic "Resource already exists." satisfies
+      // §13.8 and the slug stays in logContext via the underlying DbError
+      // cause chain.
       let updated;
       try {
         updated = await this.collectionService.updateCollectionMetadata(
@@ -601,11 +685,14 @@ export class CollectionMetadataService extends BaseService {
           updateArtifacts.metadataUpdates
         );
       } catch (dbError: unknown) {
-        return mapDbErrorToServiceError(dbError, {
-          defaultMessage: "Failed to update collection in database",
-          "unique-violation": "Collection with this name already exists",
-          constraint: "Collection with this name already exists",
-        });
+        return errorToMetadataResult(
+          dbError,
+          {
+            statusCode: 500,
+            defaultMessage: "Failed to update collection in database",
+          },
+          this.dialect
+        );
       }
 
       // Ensure CRUD permissions exist for the collection (idempotent)
@@ -622,15 +709,16 @@ export class CollectionMetadataService extends BaseService {
         data: updated,
       };
     } catch (error: unknown) {
-      return {
-        success: false,
-        statusCode: 400,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to update collection",
-        data: null,
-      };
+      // Validation/file-system errors keep the legacy 400. NextlyError or
+      // DbError instances pass through with their own status/message.
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 400,
+          defaultMessage: "Failed to update collection",
+        },
+        this.dialect
+      );
     }
   }
 
@@ -711,15 +799,17 @@ export class CollectionMetadataService extends BaseService {
         data: { deleted: true },
       };
     } catch (error: unknown) {
-      return {
-        success: false,
-        statusCode: 404,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to delete collection",
-        data: null,
-      };
+      // Default 404 mirrors the original behaviour for "collection not found";
+      // NextlyError instances flowing up from the registry already carry the
+      // right status (404, 403 for locked collections, etc.).
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 404,
+          defaultMessage: "Failed to delete collection",
+        },
+        this.dialect
+      );
     }
   }
 }

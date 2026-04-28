@@ -18,7 +18,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { ServiceError } from "../../../errors/service-error";
+import { NextlyError } from "../../../errors";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import type { Logger } from "../../../shared/types";
 import { EmailTemplateService } from "../services/email-template-service";
@@ -167,7 +167,7 @@ describe("EmailTemplateService", () => {
 
     it("throws NOT_FOUND for a nonexistent ID", async () => {
       await expect(service.getTemplate("nonexistent-id")).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
 
       await expect(service.getTemplate("nonexistent-id")).rejects.toMatchObject(
@@ -273,7 +273,7 @@ describe("EmailTemplateService", () => {
       expect(headerTemplate).not.toBeNull();
 
       await expect(service.deleteTemplate(headerTemplate!.id)).rejects.toThrow(
-        ServiceError
+        NextlyError
       );
 
       await expect(
@@ -365,6 +365,9 @@ describe("EmailTemplateService", () => {
         htmlContent: "<p>body</p>",
       });
 
+      // Pattern B in createTemplate(): unique-violation surfaces as DUPLICATE
+      // (409) instead of the generic DATABASE_ERROR — friendlier for the admin
+      // UI to render a "slug already exists" hint.
       await expect(
         service.createTemplate({
           name: "Duplicate",
@@ -372,7 +375,7 @@ describe("EmailTemplateService", () => {
           subject: "S2",
           htmlContent: "<p>body2</p>",
         })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
     });
   });
 
@@ -387,7 +390,7 @@ describe("EmailTemplateService", () => {
           subject: "S",
           htmlContent: "<p>not allowed</p>",
         })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
 
       await expect(
         service.createTemplate({
@@ -407,7 +410,7 @@ describe("EmailTemplateService", () => {
           subject: "S",
           htmlContent: "<p>not allowed</p>",
         })
-      ).rejects.toThrow(ServiceError);
+      ).rejects.toThrow(NextlyError);
 
       await expect(
         service.createTemplate({

@@ -37,6 +37,7 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
+import { toDbError } from "../../../database/errors";
 import {
   apiKeys as apiKeysMysql,
   permissions as permissionsMysql,
@@ -58,7 +59,11 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../database/schema/sqlite";
-import { ServiceError } from "../../../errors/service-error";
+// PR 4 migration: switch from legacy ServiceError to NextlyError unified system.
+// ServiceError throw sites are replaced with NextlyError factory calls; identifying
+// info (key id, role id, exceeded permission) moves from public message to logContext
+// per spec §13.8 (no identifiers/values in publicMessage).
+import { NextlyError } from "../../../errors/nextly-error";
 import { BaseService } from "../../../services/base-service";
 import { listRoleSlugsForUser } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
@@ -320,7 +325,9 @@ export class ApiKeyService extends BaseService {
         this.permissionsTable = permissionsSqlite;
         break;
       default:
-        throw new Error(`Unsupported dialect: ${this.dialect}`);
+        // `this.dialect` is narrowed to `never` here after the exhaustive switch;
+        // wrap in String() to satisfy @typescript-eslint/restrict-template-expressions.
+        throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
   }
 
@@ -337,25 +344,40 @@ export class ApiKeyService extends BaseService {
    * @param input - Key creation parameters
    * @returns Object containing the key metadata and the raw key string
    *
-   * @throws ServiceError.VALIDATION_ERROR if roleId is missing for role-based keys
-   * @throws ServiceError.FORBIDDEN if the role's permissions exceed the creator's
-   * @throws ServiceError.fromDatabaseError on DB constraint violations
+   * @throws NextlyError(VALIDATION_ERROR) if roleId is missing/extraneous for the token type
+   * @throws NextlyError(FORBIDDEN) if the role's permissions exceed the creator's
+   * @throws NextlyError via fromDatabaseError on DB constraint violations
    */
   async createApiKey(
     userId: string,
     input: CreateApiKeyInput
   ): Promise<{ meta: ApiKeyMeta; key: string }> {
     if (input.tokenType === "role-based" && !input.roleId) {
-      throw ServiceError.validation(
-        "roleId is required when tokenType is 'role-based'",
-        { tokenType: input.tokenType }
-      );
+      // §13.8: validation messages name the field, never the value. The bad
+      // tokenType context goes to logContext for operators to debug.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "roleId",
+            code: "REQUIRED",
+            message: "roleId is required when tokenType is 'role-based'.",
+          },
+        ],
+        logContext: { tokenType: input.tokenType },
+      });
     }
     if (input.tokenType !== "role-based" && input.roleId) {
-      throw ServiceError.validation(
-        "roleId must not be set when tokenType is not 'role-based'",
-        { tokenType: input.tokenType }
-      );
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "roleId",
+            code: "INVALID",
+            message:
+              "roleId must not be set when tokenType is not 'role-based'.",
+          },
+        ],
+        logContext: { tokenType: input.tokenType },
+      });
     }
 
     await this.checkPermissionCeiling(
@@ -370,8 +392,7 @@ export class ApiKeyService extends BaseService {
     const expiresAt = this.resolveExpiresAt(input.expiresIn);
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any).insert(this.apiKeysTable).values({
+      await this.db.insert(this.apiKeysTable).values({
         id,
         name: input.name,
         description: input.description ?? null,
@@ -387,12 +408,24 @@ export class ApiKeyService extends BaseService {
         updatedAt: now,
       });
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Map any DB error (unique-violation on keyHash, etc.) to a generic
+      // NextlyError. Driver text never leaks to the wire. Normalise raw
+      // driver errors via toDbError(dialect) so unique/fk/etc. classify
+      // correctly instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     const meta = await this.getApiKeyById(id, userId, { allUsers: true });
     if (!meta) {
-      throw ServiceError.internal("Failed to retrieve created API key");
+      // This is an internal invariant violation: we just inserted the row
+      // but cannot read it back. Identifier (id, userId) goes to logContext.
+      throw NextlyError.internal({
+        logContext: {
+          message: "Failed to retrieve created API key",
+          keyId: id,
+          userId,
+        },
+      });
     }
 
     return { meta, key: fullKey };
@@ -409,8 +442,7 @@ export class ApiKeyService extends BaseService {
     userId: string,
     opts?: { allUsers?: boolean }
   ): Promise<ApiKeyMeta[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let query = (this.db as any)
+    let query = this.db
       .select({
         id: this.apiKeysTable.id,
         name: this.apiKeysTable.name,
@@ -457,8 +489,7 @@ export class ApiKeyService extends BaseService {
       ? eq(this.apiKeysTable.id, id)
       : and(eq(this.apiKeysTable.id, id), eq(this.apiKeysTable.userId, userId));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({
         id: this.apiKeysTable.id,
         name: this.apiKeysTable.name,
@@ -499,7 +530,7 @@ export class ApiKeyService extends BaseService {
    * @param input - Fields to update (name, description)
    * @returns Updated key metadata
    *
-   * @throws ServiceError.NOT_FOUND if key doesn't exist or is not owned by userId
+   * @throws NextlyError(NOT_FOUND) if key doesn't exist or is not owned by userId
    */
   async updateApiKey(
     id: string,
@@ -508,7 +539,9 @@ export class ApiKeyService extends BaseService {
   ): Promise<ApiKeyMeta> {
     const existing = await this.getApiKeyById(id, userId);
     if (!existing) {
-      throw ServiceError.notFound("API key not found", { id });
+      // §13.8: never leak entity identifiers in publicMessage. Generic "Not found."
+      // is provided by the factory; the id moves to logContext for operators.
+      throw NextlyError.notFound({ logContext: { keyId: id, userId } });
     }
 
     const now = new Date();
@@ -519,8 +552,7 @@ export class ApiKeyService extends BaseService {
       updateData.description = input.description;
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any)
+      await this.db
         .update(this.apiKeysTable)
         .set(updateData)
         .where(
@@ -530,12 +562,21 @@ export class ApiKeyService extends BaseService {
           )
         );
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Normalise raw driver errors so DB error kind (unique violation, etc.)
+      // is preserved when mapping to NextlyError.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
     const updated = await this.getApiKeyById(id, userId);
     if (!updated) {
-      throw ServiceError.internal("Failed to retrieve updated API key");
+      // Internal invariant: row existed before update but reads back as null.
+      throw NextlyError.internal({
+        logContext: {
+          message: "Failed to retrieve updated API key",
+          keyId: id,
+          userId,
+        },
+      });
     }
     return updated;
   }
@@ -551,18 +592,18 @@ export class ApiKeyService extends BaseService {
    * @param id - The API key ID
    * @param userId - The requesting user's ID (must be the key owner)
    *
-   * @throws ServiceError.NOT_FOUND if key doesn't exist or is not owned by userId
+   * @throws NextlyError(NOT_FOUND) if key doesn't exist or is not owned by userId
    */
   async revokeApiKey(id: string, userId: string): Promise<void> {
     const existing = await this.getApiKeyById(id, userId);
     if (!existing) {
-      throw ServiceError.notFound("API key not found", { id });
+      // Identifier moves to logContext — generic "Not found." in publicMessage.
+      throw NextlyError.notFound({ logContext: { keyId: id, userId } });
     }
 
     const now = new Date();
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.db as any)
+      await this.db
         .update(this.apiKeysTable)
         .set({ isActive: false, updatedAt: now })
         .where(
@@ -572,7 +613,9 @@ export class ApiKeyService extends BaseService {
           )
         );
     } catch (error) {
-      throw ServiceError.fromDatabaseError(error);
+      // Normalise raw driver errors before mapping so the right NextlyError
+      // kind is produced (e.g. fk-violation → 400, not INTERNAL_ERROR).
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 
@@ -682,8 +725,8 @@ export class ApiKeyService extends BaseService {
   ): Promise<string[]> {
     if (tokenType === "role-based") {
       if (!roleId) return [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = await (this.db as any)
+
+      const rows = await this.db
         .select({ slug: this.rolesTable.slug })
         .from(this.rolesTable)
         .where(eq(this.rolesTable.id, roleId))
@@ -697,8 +740,7 @@ export class ApiKeyService extends BaseService {
   }
 
   private async resolveRolePermissionSlugs(roleId: string): Promise<string[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({ slug: this.permissionsTable.slug })
       .from(this.rolePermissionsTable)
       .innerJoin(
@@ -715,8 +757,7 @@ export class ApiKeyService extends BaseService {
   }
 
   private async resolveUserPermissionSlugs(userId: string): Promise<string[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({ slug: this.permissionsTable.slug })
       .from(this.userRolesTable)
       .innerJoin(
@@ -768,8 +809,7 @@ export class ApiKeyService extends BaseService {
   } | null> {
     const keyHash = hashApiKey(rawKey);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (this.db as any)
+    const rows = await this.db
       .select({
         id: this.apiKeysTable.id,
         userId: this.apiKeysTable.userId,
@@ -809,32 +849,32 @@ export class ApiKeyService extends BaseService {
 
     // Fire-and-forget lastUsedAt update — not awaited; latency on every auth
     // request is unacceptable, and a missed update is non-critical.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    void (this.db as any)
+
+    void this.db
       .update(this.apiKeysTable)
       .set({ lastUsedAt: new Date() })
-      .where(eq(this.apiKeysTable.id, row.id as string));
+      .where(eq(this.apiKeysTable.id, row.id));
 
     return {
-      id: row.id as string,
-      userId: row.userId as string,
+      id: row.id,
+      userId: row.userId,
       tokenType: row.tokenType as ApiKeyTokenType,
-      roleId: (row.roleId as string | null) ?? null,
+      roleId: row.roleId ?? null,
     };
   }
 
   private toMeta(row: ApiKeyRow): ApiKeyMeta {
     return {
-      id: row.id as string,
-      name: row.name as string,
-      description: (row.description as string | null) ?? null,
-      keyPrefix: row.keyPrefix as string,
+      id: row.id,
+      name: row.name,
+      description: row.description ?? null,
+      keyPrefix: row.keyPrefix,
       tokenType: row.tokenType as ApiKeyTokenType,
       role:
         row.roleId != null && row.roleName != null
           ? {
-              id: row.roleId as string,
-              name: row.roleName as string,
+              id: row.roleId,
+              name: row.roleName,
               slug: row.roleSlug as string,
             }
           : null,
@@ -884,8 +924,8 @@ export class ApiKeyService extends BaseService {
     if (!roleId) return;
 
     // Super-admin bypass: a super-admin can assign any role
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const superAdminCheck = await (this.db as any)
+
+    const superAdminCheck = await this.db
       .select({ id: this.rolesTable.id })
       .from(this.userRolesTable)
       .innerJoin(
@@ -902,8 +942,7 @@ export class ApiKeyService extends BaseService {
 
     if ((superAdminCheck as unknown[]).length > 0) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const creatorRoleRows = await (this.db as any)
+    const creatorRoleRows = await this.db
       .select({ roleId: this.userRolesTable.roleId })
       .from(this.userRolesTable)
       .where(eq(this.userRolesTable.userId, creatorId));
@@ -914,8 +953,7 @@ export class ApiKeyService extends BaseService {
 
     const creatorPerms = new Set<string>();
     if (creatorRoleIds.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const creatorPermRows = await (this.db as any)
+      const creatorPermRows = await this.db
         .select({
           action: this.permissionsTable.action,
           resource: this.permissionsTable.resource,
@@ -935,8 +973,7 @@ export class ApiKeyService extends BaseService {
       }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rolePermRows = await (this.db as any)
+    const rolePermRows = await this.db
       .select({
         action: this.permissionsTable.action,
         resource: this.permissionsTable.resource,
@@ -954,10 +991,18 @@ export class ApiKeyService extends BaseService {
     }>) {
       const slug = `${row.resource}:${row.action}`;
       if (!creatorPerms.has(slug)) {
-        throw ServiceError.forbidden(
-          "Role-based key cannot grant permissions that exceed the creator's own permissions",
-          { exceededPermission: slug, roleId }
-        );
+        // §13.8: forbidden messages must not reveal *which* permission was
+        // missing — that would leak the policy. Generic "You don't have
+        // permission..." comes from the factory; the offending slug and
+        // creator/role context move to logContext for operators.
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "permission-ceiling-exceeded",
+            exceededPermission: slug,
+            roleId,
+            creatorId,
+          },
+        });
       }
     }
   }

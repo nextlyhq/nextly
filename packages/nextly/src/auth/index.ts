@@ -35,12 +35,15 @@ export type {
 } from "./session/session-types.js";
 export { generateRefreshToken, hashRefreshToken } from "./session/refresh.js";
 
-export { requireAuth, AuthenticationError } from "./guards/require-auth.js";
+// PR 5 (unified-error-system): AuthenticationError and AuthorizationError
+// classes were deleted. Throw `NextlyError.authRequired()` /
+// `NextlyError.forbidden()` instead — they carry the same semantics with
+// generic public messages and rich logContext for operators.
+export { requireAuth } from "./guards/require-auth.js";
 export {
   requireRole,
   requireAnyRole,
   requireAllRoles,
-  AuthorizationError,
 } from "./guards/require-role.js";
 export {
   checkPermission,

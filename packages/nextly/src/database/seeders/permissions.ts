@@ -112,6 +112,10 @@ export async function seedPermissions(
           continue;
         }
 
+        // PR 4 (unified-error-system): ensurePermission returns
+        // `{ id, created }` directly and throws NextlyError on failure.
+        // We branch on the `created` flag for success messaging; any
+        // throw is caught below as an unexpected error.
         const result = await permissionService.ensurePermission(
           action,
           resource,
@@ -120,22 +124,12 @@ export async function seedPermissions(
           description
         );
 
-        if (result.success && result.statusCode === 201) {
+        if (result.created) {
           log(`  ✅ Created: ${resource}:${action}`);
           created++;
-        } else if (result.statusCode === 200 || result.statusCode === 409) {
-          // 200 = already exists (from ensurePermission), 409 = conflict
-          log(`  ⏭️  Skipped (exists): ${resource}:${action}`);
-          skipped++;
-        } else if (!result.success) {
-          // Only treat as error if the operation actually failed
-          const warnMsg = `Warning for ${resource}:${action}: ${result.message}`;
-          log(`  ⚠️  ${warnMsg}`);
-          errorMessages.push(warnMsg);
-          errors++;
         } else {
-          // Success but unexpected status code - just skip it
-          log(`  ⏭️  Skipped (${result.statusCode}): ${resource}:${action}`);
+          // Existing row matched (idempotent ensurePermission semantics)
+          log(`  ⏭️  Skipped (exists): ${resource}:${action}`);
           skipped++;
         }
       } catch (error) {

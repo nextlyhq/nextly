@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const serverEntries = [
   "src/index.ts",
   "src/scripts/load-env.ts",
+  "src/api/auth-state.ts",
   "src/api/health.ts",
   "src/api/media.ts",
   "src/api/media-bulk.ts",
@@ -42,6 +43,8 @@ const serverEntries = [
   // Unified error system entry points (Task 21)
   "src/errors/index.ts",
   "src/observability/index.ts",
+  "src/database/index.ts",
+  "src/api/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims

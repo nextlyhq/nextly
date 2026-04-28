@@ -3,13 +3,16 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { eq, inArray } from "drizzle-orm";
 
-import { mapDbErrorToServiceError } from "@nextly/services/lib/db-error";
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
 import type {
   RBACDatabaseInstance,
   RoleInsertData,
 } from "@nextly/types/rbac-operations";
 
+// PR 4 migration: replaced legacy result-shape returns and
+// mapDbErrorToServiceError calls with throw-based NextlyError.
+import { toDbError } from "../../../../database/errors";
+import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 
@@ -49,8 +52,8 @@ export class RoleMutationService extends BaseService {
    */
   private async findRoleIdBySlug(slug: string): Promise<{ id: string } | null> {
     const { roles } = this.tables;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const role = await (this.db as any)
+
+    const role = await this.db
       .selectDistinct({ id: roles.id })
       .from(roles)
       .where(eq(roles.slug, slug))
@@ -117,19 +120,14 @@ export class RoleMutationService extends BaseService {
     permissionIds: string[];
     childRoleIds?: string[];
   }): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: {
-      id: string;
-      name: string;
-      slug: string;
-      description: string | null;
-      level: number;
-      isSystem: boolean;
-      permissionIds: string[];
-      childRoleIds: string[];
-    } | null;
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    level: number;
+    isSystem: boolean;
+    permissionIds: string[];
+    childRoleIds: string[];
   }> {
     // NOTE: This method temporarily includes logic from other services
     // Will be refactored to use RolePermissionService and RoleInheritanceService
@@ -152,22 +150,30 @@ export class RoleMutationService extends BaseService {
       const permissionCount = uniqueIds.length;
 
       if (childRoleCount === 0 && permissionCount === 0) {
-        return {
-          success: false,
-          statusCode: 400,
-          message: "At least one permission is required to create a role",
-          data: null,
-        };
+        // Validation: empty role definition. Per §13.8, the per-error message
+        // names the field but never the value.
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "permissionIds",
+              code: "REQUIRED",
+              message: "At least one permission is required to create a role.",
+            },
+          ],
+        });
       }
 
       if (childRoleCount === 1 && permissionCount === 0) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            "When a role has only one child role, at least one permission is required",
-          data: null,
-        };
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "permissionIds",
+              code: "REQUIRED",
+              message:
+                "When a role has only one child role, at least one permission is required.",
+            },
+          ],
+        });
       }
 
       const { roles } = this.tables;
@@ -178,12 +184,11 @@ export class RoleMutationService extends BaseService {
       });
 
       if (existing) {
-        return {
-          success: false,
-          statusCode: 409, // Conflict
-          message: "A role with this name already exists",
-          data: null,
-        };
+        // Generic "Resource already exists." from the factory; the
+        // attempted name moves to logContext (operator only).
+        throw NextlyError.duplicate({
+          logContext: { reason: "role-name-conflict", name: input.name },
+        });
       }
 
       // Check if role with same slug already exists
@@ -193,12 +198,9 @@ export class RoleMutationService extends BaseService {
       });
 
       if (existingSlug) {
-        return {
-          success: false,
-          statusCode: 409, // Conflict
-          message: "A role with this slug already exists",
-          data: null,
-        };
+        throw NextlyError.duplicate({
+          logContext: { reason: "role-slug-conflict", slug: input.slug },
+        });
       }
 
       const id = randomUUID();
@@ -229,12 +231,19 @@ export class RoleMutationService extends BaseService {
       );
 
       if (invalidPermissionIds.length > 0) {
-        return {
-          success: false,
-          statusCode: 400,
-          message: `Invalid permission IDs: ${invalidPermissionIds.join(", ")}`,
-          data: null,
-        };
+        // Per §13.8 the public message names the field but never the
+        // rejected values. Identifiers move to logContext.
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "permissionIds",
+              code: "INVALID",
+              message:
+                "One or more permission IDs do not reference an existing permission.",
+            },
+          ],
+          logContext: { invalidPermissionIds },
+        });
       }
 
       // Verify all child roles exist before creating the role
@@ -255,12 +264,17 @@ export class RoleMutationService extends BaseService {
         );
 
         if (invalidChildRoleIds.length > 0) {
-          return {
-            success: false,
-            statusCode: 400,
-            message: `Invalid child role IDs: ${invalidChildRoleIds.join(", ")}`,
-            data: null,
-          };
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "childRoleIds",
+                code: "INVALID",
+                message:
+                  "One or more child role IDs do not reference an existing role.",
+              },
+            ],
+            logContext: { invalidChildRoleIds },
+          });
         }
       }
 
@@ -333,23 +347,18 @@ export class RoleMutationService extends BaseService {
         void invalidatePermissionCache({ roleId: id });
 
         return {
-          success: true,
-          statusCode: 201,
-          message: "Role created successfully",
-          data: {
-            id,
-            name: input.name,
-            slug: input.slug,
-            description: input.description ?? null,
-            level: input.level ?? 0,
-            isSystem: Boolean(input.isSystem ?? false),
-            permissionIds: result.assignedPermIds,
-            childRoleIds: result.assignedChildRoleIds,
-          },
+          id,
+          name: input.name,
+          slug: input.slug,
+          description: input.description ?? null,
+          level: input.level ?? 0,
+          isSystem: Boolean(input.isSystem ?? false),
+          permissionIds: result.assignedPermIds,
+          childRoleIds: result.assignedChildRoleIds,
         };
       } catch (e: unknown) {
         // Log the raw error so developers can see the true cause. The mapped
-        // message returned to callers is intentionally generic for safety,
+        // message thrown at the boundary is intentionally generic for safety,
         // but silently swallowing the original error made "Failed to create
         // role" undebuggable (no stack, no DB code, no SQL). Surface the
         // full error at WARN so it appears in dev terminals without needing
@@ -358,11 +367,15 @@ export class RoleMutationService extends BaseService {
           `createRole transaction failed: ${e instanceof Error ? e.message : String(e)}`,
           { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
         );
-        return mapDbErrorToServiceError(e, {
-          defaultMessage: "Failed to create role",
-          "unique-violation": "A role with this slug or name already exists",
-          constraint: "A role with this slug or name already exists",
-        });
+        // Re-throw NextlyErrors unchanged (e.g. our validation/duplicate
+        // throws above). Map raw DB errors via fromDatabaseError; the legacy
+        // override "A role with this slug or name already exists" is dropped
+        // because the factory's generic "Resource already exists." matches
+        // §13.8 and the duplicate branches above already cover the common case.
+        if (NextlyError.is(e)) throw e;
+        // Normalise raw driver errors so unique/fk/etc. produce the right
+        // kind instead of collapsing to INTERNAL_ERROR.
+        throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
       }
     } catch (e: unknown) {
       // Same rationale as the inner catch: log the raw error so the
@@ -373,11 +386,9 @@ export class RoleMutationService extends BaseService {
         `createRole failed before transaction: ${e instanceof Error ? e.message : String(e)}`,
         { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
       );
-      return mapDbErrorToServiceError(e, {
-        defaultMessage: "Failed to create role",
-        "unique-violation": "A role with this slug or name already exists",
-        constraint: "A role with this slug or name already exists",
-      });
+      if (NextlyError.is(e)) throw e;
+      // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -405,12 +416,7 @@ export class RoleMutationService extends BaseService {
       permissionIds?: string[];
       childRoleIds?: string[];
     }
-  ): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: null;
-  }> {
+  ): Promise<void> {
     // NOTE: This method temporarily includes logic from other services
     // Will be refactored to use RolePermissionService and RoleInheritanceService
     try {
@@ -420,8 +426,7 @@ export class RoleMutationService extends BaseService {
       // Fetch the current role
       const { roles } = this.tables;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const roleResult = await (this.db as any)
+      const roleResult = await this.db
         .select({
           id: roles.id,
           isSystem: roles.isSystem,
@@ -431,25 +436,21 @@ export class RoleMutationService extends BaseService {
         .limit(1);
 
       if (!roleResult || roleResult.length === 0) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Role not found",
-          data: null,
-        };
+        throw NextlyError.notFound({ logContext: { roleId } });
       }
 
       const currentRole = roleResult[0];
       const isSystemRole = Boolean(currentRole.isSystem);
 
-      // Prevent modifying system roles
+      // Prevent modifying system roles. Per §13.8 the public message stays
+      // generic; the policy reason ("system-role-protected") goes to logContext.
       if (isSystemRole) {
-        return {
-          success: false,
-          statusCode: 403,
-          message: "Cannot modify system roles",
-          data: null,
-        };
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "system-role-immutable",
+            roleId,
+          },
+        });
       }
 
       // Build update data
@@ -485,12 +486,17 @@ export class RoleMutationService extends BaseService {
           );
 
           if (invalidPermissionIds.length > 0) {
-            return {
-              success: false,
-              statusCode: 400,
-              message: `Invalid permission IDs: ${invalidPermissionIds.join(", ")}`,
-              data: null,
-            };
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: "permissionIds",
+                  code: "INVALID",
+                  message:
+                    "One or more permission IDs do not reference an existing permission.",
+                },
+              ],
+              logContext: { invalidPermissionIds },
+            });
           }
         }
       }
@@ -520,12 +526,17 @@ export class RoleMutationService extends BaseService {
           );
 
           if (invalidChildRoleIds.length > 0) {
-            return {
-              success: false,
-              statusCode: 400,
-              message: `Invalid child role IDs: ${invalidChildRoleIds.join(", ")}`,
-              data: null,
-            };
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: "childRoleIds",
+                  code: "INVALID",
+                  message:
+                    "One or more child role IDs do not reference an existing role.",
+                },
+              ],
+              logContext: { invalidChildRoleIds },
+            });
           }
         }
       }
@@ -600,25 +611,20 @@ export class RoleMutationService extends BaseService {
           void invalidatePermissionCache({ roleId });
         }
 
-        return {
-          success: true,
-          statusCode: 200,
-          message: "Role updated successfully",
-          data: null,
-        };
+        return;
       } catch (e: unknown) {
-        return mapDbErrorToServiceError(e, {
-          defaultMessage: "Failed to update role",
-          "unique-violation": "A role with this slug or name already exists",
-          constraint: "A role with this slug or name already exists",
-        });
+        // Re-throw NextlyErrors unchanged. Map raw DB errors via
+        // fromDatabaseError; the legacy slug/name override message is dropped
+        // because the factory's generic "Resource already exists." satisfies
+        // §13.8. Normalise raw driver errors first so the kind is preserved.
+        if (NextlyError.is(e)) throw e;
+        throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
       }
     } catch (e: unknown) {
-      return mapDbErrorToServiceError(e, {
-        defaultMessage: "Failed to update role",
-        "unique-violation": "A role with this slug or name already exists",
-        constraint: "A role with this slug or name already exists",
-      });
+      if (NextlyError.is(e)) throw e;
+      // Outer catch covers errors thrown before the transaction begins;
+      // normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 
@@ -633,12 +639,7 @@ export class RoleMutationService extends BaseService {
    * @param roleId - The role ID to delete
    * @returns Success/failure status
    */
-  async deleteRole(roleId: string): Promise<{
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: null;
-  }> {
+  async deleteRole(roleId: string): Promise<void> {
     try {
       // Validate input
       validateRoleId(roleId);
@@ -646,8 +647,8 @@ export class RoleMutationService extends BaseService {
       const { roles } = this.tables;
 
       // Fetch the role
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const roleResult = await (this.db as any)
+
+      const roleResult = await this.db
         .select({
           id: roles.id,
           isSystem: roles.isSystem,
@@ -657,25 +658,18 @@ export class RoleMutationService extends BaseService {
         .limit(1);
 
       if (!roleResult || roleResult.length === 0) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Role not found",
-          data: null,
-        };
+        throw NextlyError.notFound({ logContext: { roleId } });
       }
 
       const role = roleResult[0];
       const isSystemRole = Boolean(role.isSystem);
 
-      // Prevent deleting system roles
+      // Prevent deleting system roles. Generic forbidden message; reason in
+      // logContext only.
       if (isSystemRole) {
-        return {
-          success: false,
-          statusCode: 403,
-          message: "Cannot delete system roles",
-          data: null,
-        };
+        throw NextlyError.forbidden({
+          logContext: { reason: "system-role-undeletable", roleId },
+        });
       }
 
       // Wrap all database mutations in a transaction for atomicity
@@ -707,17 +701,13 @@ export class RoleMutationService extends BaseService {
 
       // Invalidate cache after successful transaction (fire-and-forget).
       void invalidatePermissionCache({ roleId });
-
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Role deleted successfully",
-        data: null,
-      };
     } catch (e: unknown) {
-      return mapDbErrorToServiceError(e, {
-        defaultMessage: "Failed to delete role",
-      });
+      // Re-throw NextlyErrors unchanged. Raw DB errors map via
+      // fromDatabaseError, which provides the spec-compliant generic public
+      // message and rich operator logContext. Normalise raw driver errors
+      // via toDbError(dialect) first so the kind is preserved.
+      if (NextlyError.is(e)) throw e;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
     }
   }
 }

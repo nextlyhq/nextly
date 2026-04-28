@@ -1,5 +1,72 @@
+import { isDbError, type DbErrorKind } from "../database/errors";
+
 import { NEXTLY_ERROR_STATUS, type NextlyErrorCode } from "./error-codes";
 import type { PublicData, ValidationPublicData } from "./public-data";
+
+/**
+ * Default mapping from DbErrorKind to NextlyError contract. Used by
+ * `NextlyError.fromDatabaseError`. Public messages are intentionally generic
+ * per spec §13.8 — no DB driver text, no constraint names, no field hints.
+ *
+ * `satisfies Record<DbErrorKind, ...>` makes the mapping exhaustive at
+ * compile time: adding a new DbErrorKind without updating this table is a
+ * type error.
+ */
+const DB_ERROR_MAPPING = {
+  "unique-violation": {
+    code: "DUPLICATE",
+    statusCode: 409,
+    publicMessage: "Resource already exists.",
+  },
+  "fk-violation": {
+    code: "VALIDATION_ERROR",
+    statusCode: 400,
+    publicMessage: "Referenced record does not exist.",
+  },
+  "not-null-violation": {
+    code: "VALIDATION_ERROR",
+    statusCode: 400,
+    publicMessage: "A required field is missing.",
+  },
+  constraint: {
+    code: "VALIDATION_ERROR",
+    statusCode: 400,
+    publicMessage: "The provided data violates a constraint.",
+  },
+  deadlock: {
+    code: "CONFLICT",
+    statusCode: 409,
+    publicMessage: "The operation could not be completed. Please retry.",
+  },
+  "serialization-failure": {
+    code: "CONFLICT",
+    statusCode: 409,
+    publicMessage: "The operation could not be completed. Please retry.",
+  },
+  timeout: {
+    code: "DATABASE_ERROR",
+    statusCode: 500,
+    publicMessage: "The operation timed out. Please try again.",
+  },
+  "connection-lost": {
+    code: "DATABASE_ERROR",
+    statusCode: 500,
+    publicMessage: "A temporary database error occurred. Please try again.",
+  },
+  syntax: {
+    code: "INTERNAL_ERROR",
+    statusCode: 500,
+    publicMessage: "An unexpected error occurred.",
+  },
+  internal: {
+    code: "INTERNAL_ERROR",
+    statusCode: 500,
+    publicMessage: "An unexpected error occurred.",
+  },
+} satisfies Record<
+  DbErrorKind,
+  { code: string; statusCode: number; publicMessage: string }
+>;
 
 /**
  * Code accepted by NextlyError: canonical codes get autocomplete, but plugin
@@ -246,6 +313,57 @@ export class NextlyError extends Error {
       publicMessage: "An unexpected error occurred.",
       cause: opts?.cause,
       logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * Convert a DbError (or arbitrary unknown thrown by the DB layer) to a
+   * NextlyError with a generic public message and rich logContext. Used by
+   * `withDbErrors` for auto-conversion (Pattern A) and by services that
+   * catch DB errors at boundaries (Pattern B). Spec §8.2 mapping table.
+   *
+   * Never leaks DB driver text, constraint names, or table names into
+   * `publicMessage`. All DB context goes into `logContext`. The original
+   * DbError is preserved as `cause`.
+   */
+  static fromDatabaseError(error: unknown): NextlyError {
+    if (isDbError(error)) {
+      // DB_ERROR_MAPPING is exhaustive over DbErrorKind via `satisfies` so
+      // this lookup always succeeds at compile time.
+      const mapping = DB_ERROR_MAPPING[error.kind];
+      // Build logContext conditionally so log lines aren't cluttered with
+      // `undefined` keys for absent fields.
+      const logContext: Record<string, unknown> = {
+        dbKind: error.kind,
+        dialect: error.dialect,
+      };
+      // DbError.code is the dialect-specific code (SQLSTATE, errno, etc.) —
+      // not an actual constraint name. Surface it as `dbCode` so operators
+      // know what they're reading. Constraint-name-to-field mapping is
+      // per-call-site (§8.6).
+      if (error.code !== undefined) logContext.dbCode = error.code;
+      if (error.meta !== undefined) logContext.meta = error.meta;
+
+      return new NextlyError({
+        code: mapping.code,
+        statusCode: mapping.statusCode,
+        publicMessage: mapping.publicMessage,
+        logMessage: "Database error",
+        logContext,
+        cause: error,
+      });
+    }
+
+    // Non-DbError fallback: wrap as INTERNAL_ERROR and preserve cause when
+    // it is an Error. Non-Error values (strings, numbers) flow through
+    // without a cause but still get the generic public message.
+    return new NextlyError({
+      code: "INTERNAL_ERROR",
+      statusCode: 500,
+      publicMessage: "An unexpected error occurred.",
+      logMessage: "Non-DbError passed to fromDatabaseError",
+      cause: error instanceof Error ? error : undefined,
+      logContext: error instanceof Error ? undefined : { value: String(error) },
     });
   }
 

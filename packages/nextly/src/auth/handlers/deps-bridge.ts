@@ -10,6 +10,7 @@
  * we use the database adapter directly.
  */
 import { getDialectTables } from "../../database/index.js";
+import { NextlyError } from "../../errors";
 import { env } from "../../lib/env";
 
 import type { AuthRouterDeps } from "./router.js";
@@ -33,6 +34,11 @@ export function buildAuthRouterDeps(
     lockoutDurationSeconds: 15 * 60, // 15 minutes
     loginStallTimeMs: 500,
     requireEmailVerification: true,
+    // Spec §13.2: read the host-app's auth.revealRegistrationConflict flag
+    // from the registered NextlyConfig. Defaults to false (silent-success on
+    // email conflict) when config is not yet initialised or the flag is
+    // unset. The schema is already populated by sanitizeConfig.
+    revealRegistrationConflict: readRevealRegistrationConflict(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
 
     findUserByEmail: async (email: string) => {
@@ -152,14 +158,14 @@ export function buildAuthRouterDeps(
         const extTable = userExtSchemaService.generateRuntimeSchema(userFields);
         const { eq } = await import("drizzle-orm");
         const adapter = getService("adapter");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = adapter.getDrizzle() as any;
+
+        const db = adapter.getDrizzle();
 
         const rows = (await db
           .select()
           .from(extTable)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .where(eq((extTable as any).user_id, userId))
+
+          .where(eq(extTable.user_id, userId))
           .limit(1)) as Record<string, unknown>[];
 
         if (!rows[0]) return {};
@@ -285,22 +291,15 @@ export function buildAuthRouterDeps(
       await seedPermissions(adapter, { silent: true });
     },
 
+    // PR 5 (unified-error-system): the auth handlers (register,
+    // forgot-password, reset-password) now consume the throw-based service
+    // contract directly. The bridge passes through without translating
+    // back to a Result shape — the handler catches NextlyError and
+    // serialises via toResponseJSON.
     registerUser: async data => {
       const authService = getService("authService");
-      const result = await authService.registerUser(data);
-      if (result.success) {
-        return {
-          success: true,
-          user: result.data
-            ? {
-                id: result.data.id,
-                email: result.data.email,
-                name: result.data.name,
-              }
-            : undefined,
-        };
-      }
-      return { success: false, error: result.message || result.error };
+      const user = await authService.registerUser(data);
+      return { id: user.id, email: user.email, name: user.name };
     },
 
     generatePasswordResetToken: async (email, redirectPath) => {
@@ -308,7 +307,7 @@ export function buildAuthRouterDeps(
       const result = await authService.generatePasswordResetToken(email, {
         redirectPath,
       });
-      return { success: true, token: result.token };
+      return { token: result.token };
     },
 
     resetPasswordWithToken: async (token, newPassword) => {
@@ -317,31 +316,46 @@ export function buildAuthRouterDeps(
         token,
         newPassword
       );
-      return {
-        success: result.success,
-        error: result.error,
-        email: result.email,
-      };
+      return { email: result.email };
     },
 
     changePassword: async (userId, currentPassword, newPassword) => {
+      // PR 4: changePassword returns void and throws NextlyError.
       const authService = getService("authService");
-      const result = await authService.changePassword(
-        userId,
-        currentPassword,
-        newPassword
-      );
-      return { success: result.success, error: result.error };
+      try {
+        await authService.changePassword(userId, currentPassword, newPassword);
+        return { success: true };
+      } catch (err) {
+        // §13.8 public-surface safety — only NextlyError.publicMessage is
+        // vetted; fall back to a generic string for anything else.
+        return {
+          success: false,
+          error: NextlyError.is(err)
+            ? err.publicMessage
+            : "Failed to change password",
+        };
+      }
     },
 
     verifyEmail: async token => {
+      // PR 4: verifyEmail returns `{ email }` and throws NextlyError.
       const authService = getService("authService");
-      const result = await authService.verifyEmail(token);
-      return {
-        success: result.success,
-        error: result.error,
-        email: result.email,
-      };
+      try {
+        const result = await authService.verifyEmail(token);
+        return {
+          success: true,
+          email: result.email,
+        };
+      } catch (err) {
+        // §13.8 public-surface safety — only NextlyError.publicMessage is
+        // vetted; fall back to a generic string for anything else.
+        return {
+          success: false,
+          error: NextlyError.is(err)
+            ? err.publicMessage
+            : "Failed to verify email",
+        };
+      }
     },
 
     resendVerificationEmail: async email => {
@@ -355,4 +369,34 @@ export function buildAuthRouterDeps(
       }
     },
   };
+}
+
+/**
+ * Read `auth.revealRegistrationConflict` from the NextlyConfig registered in
+ * the DI container. Returns the spec default (false) when the container is
+ * not yet initialised or the flag is unset.
+ */
+function readRevealRegistrationConflict(
+  getService: (name: string) => unknown
+): boolean {
+  try {
+    const config = getService("config");
+    if (config && typeof config === "object" && "auth" in config) {
+      const auth = (config as { auth?: unknown }).auth;
+      if (
+        auth &&
+        typeof auth === "object" &&
+        "revealRegistrationConflict" in auth
+      ) {
+        return (
+          (auth as { revealRegistrationConflict?: unknown })
+            .revealRegistrationConflict === true
+        );
+      }
+    }
+    return false;
+  } catch {
+    // DI container not initialised yet — fall back to the safe default.
+    return false;
+  }
 }

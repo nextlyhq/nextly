@@ -5,17 +5,17 @@
  * and folder management (create, organize, move files). It follows the new service layer
  * architecture with:
  *
- * - Exception-based error handling using ServiceError
+ * - Exception-based error handling using NextlyError
  * - RequestContext for user/locale context
  * - PaginatedResult for list operations
  * - Constructor injection for storage and image processor
  *
  * Internally delegates to the legacy MediaService and MediaFolderService for the actual
- * implementation, converting their return format to the new exception-based pattern.
+ * implementation, converting their result-shape return format to throw-based NextlyError.
  *
  * @example
  * ```typescript
- * import { MediaService, ServiceError, isServiceError } from '@revnixhq/nextly';
+ * import { MediaService, NextlyError } from '@revnixhq/nextly';
  *
  * const service = new MediaService(legacyMediaService, legacyFolderService, storage, imageProcessor);
  *
@@ -37,15 +37,18 @@
  * try {
  *   const media = await service.findById('nonexistent', context);
  * } catch (error) {
- *   if (isServiceError(error)) {
+ *   if (NextlyError.isNotFound(error)) {
  *     console.log(error.code); // 'NOT_FOUND'
- *     console.log(error.httpStatus); // 404
+ *     console.log(error.statusCode); // 404
  *   }
  * }
  * ```
  */
 
-import { ServiceError } from "../../../errors";
+// PR 4 migration: replaced ServiceError throws + mapLegacy/mapSimple helpers
+// with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
+// logContext per §13.8; public messages remain generic and end with a period.
+import { NextlyError } from "../../../errors";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
 import type { MediaService as LegacyMediaService } from "../../../services/media";
 import type {
@@ -157,7 +160,7 @@ export function toMediaDate(value: unknown): Date {
  *
  * Provides complete media management with:
  *
- * - Exception-based error handling (throws ServiceError)
+ * - Exception-based error handling (throws NextlyError)
  * - Type-safe RequestContext
  * - PaginatedResult for list operations
  * - Storage provider injection for testability
@@ -188,15 +191,26 @@ export class MediaService {
 
   /**
    * Ensure storage is configured before media operations
-   * @throws ServiceError if storage is not configured
+   * @throws NextlyError(VALIDATION_ERROR) if storage is not configured.
    */
   private ensureStorageConfigured(): IStorageAdapter {
     const storage = this.getStorage();
     if (!storage) {
-      throw ServiceError.validation(
-        "No storage plugin configured. Please configure a storage plugin (S3 or Vercel Blob) in your nextly.config.ts",
-        { hint: "Add storage: getStorageFromEnv() to your config" }
-      );
+      // Per §13.8 the per-error message names the field but never the value.
+      // Operator hint stays in logContext.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "storage",
+            code: "MISSING",
+            message: "Storage is not configured.",
+          },
+        ],
+        logContext: {
+          reason: "missing-storage-plugin",
+          hint: "Add storage: getStorageFromEnv() to your nextly.config.ts",
+        },
+      });
     }
     return storage;
   }
@@ -211,7 +225,7 @@ export class MediaService {
    * @param input - Upload data (buffer, filename, mimeType, size)
    * @param context - Request context with user info
    * @returns Uploaded media file
-   * @throws ServiceError if upload fails (e.g., invalid file, size limit)
+   * @throws NextlyError if upload fails (e.g., invalid file, size limit).
    *
    * @example
    * ```typescript
@@ -237,13 +251,24 @@ export class MediaService {
       userId: context.user?.id,
     });
 
-    // Validate file size
+    // Validate file size. Field-level message names the path ("size") but
+    // never the value; the actual byte count + driver-supplied reason live
+    // in logContext for operators.
     const sizeValidation = validateFileSize(input.size);
     if (!sizeValidation.valid) {
-      throw ServiceError.validation(
-        sizeValidation.error || "Invalid file size",
-        { actualSize: input.size }
-      );
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "size",
+            code: "INVALID",
+            message: "File size is invalid.",
+          },
+        ],
+        logContext: {
+          actualSize: input.size,
+          reason: sizeValidation.error || "Invalid file size",
+        },
+      });
     }
 
     // Sanitize metadata fields before storage (defense-in-depth)
@@ -265,7 +290,7 @@ export class MediaService {
         message: result.message,
         statusCode: result.statusCode,
       });
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     // Move to folder if specified
@@ -287,7 +312,7 @@ export class MediaService {
    * @param mediaId - Media file ID
    * @param context - Request context
    * @returns Media file data
-   * @throws ServiceError with NOT_FOUND if file doesn't exist
+   * @throws NextlyError(NOT_FOUND) if the file doesn't exist.
    */
   async findById(
     mediaId: string,
@@ -298,9 +323,9 @@ export class MediaService {
     const result = await this.legacyMediaService.getMediaById(mediaId);
 
     if (!result.success || !result.data) {
-      throw ServiceError.notFound(`Media file not found: ${mediaId}`, {
-        entity: "media",
-        mediaId,
+      // §13.8: generic "Not found." with mediaId only in logContext.
+      throw NextlyError.notFound({
+        logContext: { entity: "media", mediaId },
       });
     }
 
@@ -336,7 +361,7 @@ export class MediaService {
     const result = await this.legacyMediaService.listMedia(legacyParams);
 
     if (!result.success) {
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     const files = (result.data ?? []).map(m => this.mapToMediaFile(m));
@@ -361,7 +386,7 @@ export class MediaService {
    * @param input - Update data
    * @param context - Request context
    * @returns Updated media file
-   * @throws ServiceError if update fails
+   * @throws NextlyError if update fails.
    */
   async update(
     mediaId: string,
@@ -381,12 +406,12 @@ export class MediaService {
 
     if (!result.success || !result.data) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Media file not found: ${mediaId}`, {
-          entity: "media",
-          mediaId,
+        // §13.8: generic "Not found." with mediaId only in logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "media", mediaId },
         });
       }
-      throw this.mapLegacyErrorToServiceError(result);
+      throw this.mapLegacyErrorToNextlyError(result);
     }
 
     this.logger.info("Media file updated", { mediaId });
@@ -399,7 +424,7 @@ export class MediaService {
    *
    * @param mediaId - Media file ID
    * @param context - Request context
-   * @throws ServiceError if deletion fails
+   * @throws NextlyError if deletion fails.
    */
   async delete(mediaId: string, _context: RequestContext): Promise<void> {
     this.logger.debug("Deleting media file", { mediaId });
@@ -408,12 +433,12 @@ export class MediaService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Media file not found: ${mediaId}`, {
-          entity: "media",
-          mediaId,
+        // §13.8: generic "Not found." with mediaId only in logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "media", mediaId },
         });
       }
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     this.logger.info("Media file deleted", { mediaId });
@@ -501,7 +526,7 @@ export class MediaService {
    * @param mediaId - Media file ID
    * @param folderId - Target folder ID (null for root)
    * @param context - Request context
-   * @throws ServiceError if move fails
+   * @throws NextlyError if move fails.
    */
   async moveToFolder(
     mediaId: string,
@@ -517,13 +542,18 @@ export class MediaService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(result.message, {
-          entity: "media",
-          mediaId,
-          folderId,
+        // Driver text moves into logContext per §13.8 — only generic "Not found."
+        // hits the wire. The legacyMessage is kept operator-side for diagnostics.
+        throw NextlyError.notFound({
+          logContext: {
+            entity: "media",
+            mediaId,
+            folderId,
+            legacyMessage: result.message,
+          },
         });
       }
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     this.logger.info("Media moved to folder", { mediaId, folderId });
@@ -555,7 +585,7 @@ export class MediaService {
    * @param input - Folder data
    * @param context - Request context
    * @returns Created folder
-   * @throws ServiceError if creation fails
+   * @throws NextlyError if creation fails.
    */
   async createFolder(
     input: CreateFolderInput,
@@ -577,15 +607,27 @@ export class MediaService {
 
     if (!result.success || !result.data) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound("Parent folder not found", {
-          entity: "folder",
-          parentId: input.parentId,
+        // Generic NOT_FOUND — parentId stays operator-side.
+        throw NextlyError.notFound({
+          logContext: {
+            entity: "folder",
+            reason: "parent-folder-missing",
+            parentId: input.parentId,
+          },
         });
       }
       if (result.statusCode === 409) {
-        throw ServiceError.duplicate(result.message, { name: input.name });
+        // Generic "Resource already exists." per §13.8 — name stays operator-side.
+        throw NextlyError.duplicate({
+          logContext: {
+            entity: "folder",
+            reason: "folder-name-conflict",
+            name: input.name,
+            legacyMessage: result.message,
+          },
+        });
       }
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     this.logger.info("Folder created", { folderId: result.data.id });
@@ -599,7 +641,7 @@ export class MediaService {
    * @param folderId - Folder ID
    * @param context - Request context
    * @returns Folder data
-   * @throws ServiceError with NOT_FOUND if folder doesn't exist
+   * @throws NextlyError(NOT_FOUND) if the folder doesn't exist.
    */
   async findFolderById(
     folderId: string,
@@ -610,9 +652,9 @@ export class MediaService {
     const result = await this.legacyFolderService.getFolderById(folderId);
 
     if (!result.success || !result.data) {
-      throw ServiceError.notFound(`Folder not found: ${folderId}`, {
-        entity: "folder",
-        folderId,
+      // §13.8: generic "Not found." with folderId only in logContext.
+      throw NextlyError.notFound({
+        logContext: { entity: "folder", folderId },
       });
     }
 
@@ -631,7 +673,7 @@ export class MediaService {
     const result = await this.legacyFolderService.listRootFolders();
 
     if (!result.success) {
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     return (result.data ?? []).map(f => this.mapToMediaFolder(f));
@@ -653,7 +695,7 @@ export class MediaService {
     const result = await this.legacyFolderService.listSubfolders(parentId);
 
     if (!result.success) {
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     return (result.data ?? []).map(f => this.mapToMediaFolder(f));
@@ -676,12 +718,12 @@ export class MediaService {
 
     if (!result.success || !result.data) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Folder not found: ${folderId}`, {
-          entity: "folder",
-          folderId,
+        // §13.8: generic "Not found." with folderId only in logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "folder", folderId },
         });
       }
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     return {
@@ -701,7 +743,7 @@ export class MediaService {
    * @param input - Update data
    * @param context - Request context
    * @returns Updated folder
-   * @throws ServiceError if update fails
+   * @throws NextlyError if update fails.
    */
   async updateFolder(
     folderId: string,
@@ -723,15 +765,26 @@ export class MediaService {
 
     if (!result.success || !result.data) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Folder not found: ${folderId}`, {
-          entity: "folder",
-          folderId,
+        // §13.8: generic "Not found." with folderId only in logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "folder", folderId },
         });
       }
       if (result.statusCode === 400) {
-        throw ServiceError.validation(result.message, { folderId });
+        // Per §13.8 the per-error message names the field but never the value;
+        // driver text moves to logContext.
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "folder",
+              code: "INVALID",
+              message: "Folder update is invalid.",
+            },
+          ],
+          logContext: { folderId, legacyMessage: result.message },
+        });
       }
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     this.logger.info("Folder updated", { folderId });
@@ -745,7 +798,7 @@ export class MediaService {
    * @param folderId - Folder ID
    * @param deleteContents - Whether to delete contents (default: false)
    * @param context - Request context
-   * @throws ServiceError if deletion fails
+   * @throws NextlyError if deletion fails.
    */
   async deleteFolder(
     folderId: string,
@@ -761,18 +814,30 @@ export class MediaService {
 
     if (!result.success) {
       if (result.statusCode === 404) {
-        throw ServiceError.notFound(`Folder not found: ${folderId}`, {
-          entity: "folder",
-          folderId,
+        // §13.8: generic "Not found." with folderId only in logContext.
+        throw NextlyError.notFound({
+          logContext: { entity: "folder", folderId },
         });
       }
       if (result.statusCode === 400) {
-        throw ServiceError.validation(result.message, {
-          folderId,
-          hint: "Set deleteContents=true to delete folder with contents",
+        // Folder-not-empty rejection. Per §13.8 the per-error message names
+        // the field but never the value; the operator hint stays in logContext.
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "deleteContents",
+              code: "INVALID",
+              message: "Folder cannot be deleted in its current state.",
+            },
+          ],
+          logContext: {
+            folderId,
+            legacyMessage: result.message,
+            hint: "Set deleteContents=true to delete folder with contents",
+          },
         });
       }
-      throw this.mapSimpleErrorToServiceError(result);
+      throw this.mapSimpleErrorToNextlyError(result);
     }
 
     this.logger.info("Folder deleted", { folderId });
@@ -859,43 +924,69 @@ export class MediaService {
   }
 
   /**
-   * Convert legacy service result format to ServiceError
+   * Convert legacy result-shape responses (`{ success, statusCode, message, data }`)
+   * from the underlying MediaService/MediaFolderService into a NextlyError.
+   *
+   * The legacy `message` field is treated as operator-only context — it
+   * frequently contains driver text or specific identifiers, neither of
+   * which §13.8 allows on the public message. The legacy message is stored
+   * on logContext and the factory's canonical public message is used.
    */
-  private mapLegacyErrorToServiceError(result: {
+  private mapLegacyErrorToNextlyError(result: {
     success: boolean;
     statusCode: number;
     message: string;
     data: unknown;
-  }): ServiceError {
+  }): NextlyError {
     const { statusCode, message } = result;
+    const logContext = { legacyStatusCode: statusCode, legacyMessage: message };
 
     switch (statusCode) {
       case 400:
-        return ServiceError.validation(message);
+        // We don't know the offending field here, so use a generic
+        // "request" path; driver text stays in logContext.
+        return NextlyError.validation({
+          errors: [
+            {
+              path: "request",
+              code: "INVALID",
+              message: "Request is invalid.",
+            },
+          ],
+          logContext,
+        });
       case 401:
-        return ServiceError.unauthorized(message);
+        return NextlyError.authRequired({ logContext });
       case 403:
-        return ServiceError.forbidden(message);
+        return NextlyError.forbidden({ logContext });
       case 404:
-        return ServiceError.notFound(message);
+        return NextlyError.notFound({ logContext });
       case 409:
-        return ServiceError.duplicate(message);
+        return NextlyError.duplicate({ logContext });
       case 422:
-        return ServiceError.businessRule(message);
+        // BUSINESS_RULE_VIOLATION has no factory — build directly per spec.
+        return new NextlyError({
+          code: "BUSINESS_RULE_VIOLATION",
+          publicMessage:
+            "The operation could not be completed due to a business rule.",
+          statusCode: 422,
+          logContext,
+        });
       default:
-        return ServiceError.internal(message);
+        return NextlyError.internal({ logContext });
     }
   }
 
   /**
-   * Convert simple result format to ServiceError
+   * Convert the simple legacy result-shape (no `data` field) into a
+   * NextlyError. Thin adapter over the full mapper.
    */
-  private mapSimpleErrorToServiceError(result: {
+  private mapSimpleErrorToNextlyError(result: {
     success: boolean;
     statusCode: number;
     message: string;
-  }): ServiceError {
-    return this.mapLegacyErrorToServiceError({
+  }): NextlyError {
+    return this.mapLegacyErrorToNextlyError({
       ...result,
       data: null,
     });
