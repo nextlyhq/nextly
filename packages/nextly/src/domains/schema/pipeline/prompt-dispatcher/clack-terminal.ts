@@ -25,6 +25,8 @@ import type {
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
+  Resolution,
+  ResolutionKind,
 } from "../pushschema-pipeline-interfaces.js";
 
 import { PromptCancelledError, TTYRequiredError } from "./errors.js";
@@ -44,30 +46,154 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     classification: "safe" | "destructive" | "interactive";
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
-    const { candidates } = args;
+    const { candidates, events } = args;
 
-    if (candidates.length === 0) {
-      // Pure-additive apply (or all renames pre-resolved). No prompt needed.
-      // F5 PR 5 will extend this dispatcher to walk args.events here when
-      // candidates is empty but events exist.
+    // Fast path: nothing to ask, nothing to do.
+    if (candidates.length === 0 && events.length === 0) {
       return { confirmedRenames: [], resolutions: [], proceed: true };
     }
 
     if (!hasTTY()) {
-      // Build a short summary of the renames the user would have been asked
-      // about so the error log is actionable.
-      const sample = candidates
+      // Build an actionable error message covering both renames and
+      // F5/F6 events so users know what they would have been asked.
+      const renameSample = candidates
         .slice(0, 3)
         .map(c => `${c.fromColumn} -> ${c.toColumn} on ${c.tableName}`)
         .join(", ");
-      const more =
-        candidates.length > 3 ? `, +${candidates.length - 3} more` : "";
+      const eventSample = events
+        .slice(0, 3)
+        .map(e =>
+          e.kind === "type_change"
+            ? `type change on ${e.tableName}.${e.columnName} (${e.fromType} -> ${e.toType})`
+            : `${e.kind === "add_not_null_with_nulls" ? "NOT NULL on" : "required field"} ${e.tableName}.${e.columnName}`
+        )
+        .join(", ");
+      const parts: string[] = [];
+      if (candidates.length > 0) {
+        parts.push(`${candidates.length} rename candidate(s): ${renameSample}`);
+      }
+      if (events.length > 0) {
+        parts.push(`${events.length} resolution event(s): ${eventSample}`);
+      }
       throw new TTYRequiredError(
-        `Schema change has ${candidates.length} rename candidate(s) needing confirmation: ${sample}${more}.`
+        `Schema change needs confirmation. ${parts.join("; ")}.`
       );
     }
 
-    return await this.runShrinkingPoolPrompts(candidates);
+    // Phase 1: rename candidates via shrinking-pool prompt.
+    const renameResult =
+      candidates.length > 0
+        ? await this.runShrinkingPoolPrompts(candidates)
+        : {
+            confirmedRenames: [],
+            resolutions: [] as Resolution[],
+            proceed: true,
+          };
+    if (!renameResult.proceed) return renameResult;
+
+    // Phase 2: F5/F6 events.
+    const eventResult = await this.runEventPrompts(events);
+
+    return {
+      confirmedRenames: renameResult.confirmedRenames,
+      resolutions: eventResult.resolutions,
+      proceed: eventResult.proceed,
+    };
+  }
+
+  // Walk classifier events in order. NOT-NULL kinds get a multi-step
+  // (select kind -> text value if provide_default -> next event); type_change
+  // gets a single warning + Y/N. Any abort or cancel returns proceed=false.
+  private async runEventPrompts(
+    events: ClassifierEvent[]
+  ): Promise<{ resolutions: Resolution[]; proceed: boolean }> {
+    if (events.length === 0) {
+      return { resolutions: [], proceed: true };
+    }
+
+    const resolutions: Resolution[] = [];
+
+    clack.intro("Schema change requires confirmation");
+
+    for (const event of events) {
+      if (event.kind === "type_change") {
+        // Render the per-dialect warning text and ask Y/N.
+        clack.note(
+          [
+            event.perDialectWarning.pg,
+            event.perDialectWarning.mysql,
+            event.perDialectWarning.sqlite,
+          ].join("\n"),
+          `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`
+        );
+        const proceed = await clack.confirm({
+          message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
+          initialValue: false,
+        });
+        if (clack.isCancel(proceed) || proceed === false) {
+          clack.outro("Cancelled");
+          return { resolutions, proceed: false };
+        }
+        // type_change has no resolution kinds; the user has acknowledged
+        // the warning. Nothing to push into resolutions[].
+        continue;
+      }
+
+      // F5 NOT-NULL kinds.
+      const headline =
+        event.kind === "add_not_null_with_nulls"
+          ? `Adding NOT NULL to "${event.tableName}.${event.columnName}"\n${event.nullCount} of ${event.tableRowCount} rows have NULL values.`
+          : `New required field "${event.tableName}.${event.columnName}" on table with ${event.tableRowCount} existing rows.`;
+      clack.note(headline, "Resolution needed");
+
+      const labels: Record<ResolutionKind, string> = {
+        provide_default: "Provide a default value for empty rows",
+        make_optional: "Make the field optional (cancel the NOT NULL)",
+        delete_nonconforming:
+          event.kind === "add_not_null_with_nulls"
+            ? `Delete the ${event.nullCount} rows with empty values`
+            : "Delete rows that violate the constraint",
+        abort: "Cancel everything",
+      };
+      const options = event.applicableResolutions.map(kind => ({
+        value: kind,
+        label: labels[kind],
+      }));
+      const choice = await clack.select({
+        message: "How do you want to handle this?",
+        options,
+      });
+      if (clack.isCancel(choice)) {
+        clack.outro("Cancelled");
+        return { resolutions, proceed: false };
+      }
+      const kind = choice;
+      if (kind === "abort") {
+        clack.outro("Cancelled");
+        return { resolutions, proceed: false };
+      }
+      if (kind === "provide_default") {
+        const value = await clack.text({
+          message: `Default value for "${event.columnName}":`,
+          validate: v =>
+            !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
+        });
+        if (clack.isCancel(value)) {
+          clack.outro("Cancelled");
+          return { resolutions, proceed: false };
+        }
+        resolutions.push({
+          kind: "provide_default",
+          eventId: event.id,
+          value,
+        });
+      } else {
+        resolutions.push({ kind, eventId: event.id });
+      }
+    }
+
+    clack.outro("Resolutions confirmed");
+    return { resolutions, proceed: true };
   }
 
   // Walks candidates in a shrinking-pool pattern:

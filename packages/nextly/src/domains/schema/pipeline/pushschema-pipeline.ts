@@ -25,6 +25,10 @@ import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
 import { generateRuntimeSchema } from "../services/runtime-schema-generator.js";
 
+import {
+  countNulls as countNullsHelper,
+  countRows as countRowsHelper,
+} from "./classifier/count-helpers.js";
 import { buildDesiredTableFromFields } from "./diff/build-from-fields.js";
 import { diffSnapshots } from "./diff/diff.js";
 import { introspectLiveSnapshot } from "./diff/introspect-live.js";
@@ -276,16 +280,18 @@ export class PushSchemaPipeline {
       // Phase B: rename detection + prompt + resolution application.
       const candidates = this.deps.renameDetector.detect(operations, dialect);
 
-      // F5 Classifier reads typed Operation[] and returns ClassificationResult
-      // { level, events }. PR 1 wires the new shape with empty count
-      // callbacks (noopClassifier ignores them); PR 2 supplies real callbacks
-      // bound to the live DB so countNulls/countRows fire on real changes.
+      // F5 PR 5: count callbacks bound to the live DB. RealClassifier uses
+      // them to populate add_not_null_with_nulls events with the actual
+      // NULL row count + table size; noopClassifier ignores them. The
+      // orchestrator owns DB access here so the classifier itself stays
+      // pure (DI surface).
       const classificationResult = await this.deps.classifier.classify({
         operations,
         drizzleWarnings: [],
         hasDataLoss: false,
-        countNulls: () => Promise.resolve(0),
-        countRows: () => Promise.resolve(0),
+        countNulls: (table, column) =>
+          countNullsHelper(db, dialect, table, column),
+        countRows: table => countRowsHelper(db, dialect, table),
         dialect,
       });
 
