@@ -260,11 +260,15 @@ const COLLECTIONS_METHODS: Record<
       const currentVersion = collection.schemaVersion;
       const tableName = collection.tableName;
 
-      // F1 field-level resolutions (provide_default / mark_nullable / cancel)
-      // are collected by the dialog but not yet wired through the pipeline.
-      // F8/F12 will absorb that flow when the Classifier lands. Renames are
-      // handled below via BrowserPromptDispatcher.
-      void resolutions;
+      // F5 PR 6: legacy F1 per-field resolutions get translated to typed
+      // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
+      // pipeline emits events. Until admin dialogs ship the new
+      // `eventResolutions` contract, this translator keeps existing UIs
+      // working end-to-end through the new pipeline. F8 will delete the
+      // legacy shape entirely when the dialog ships the new contract.
+      const legacyBundle = resolutions
+        ? { tableName, byFieldName: resolutions }
+        : undefined;
 
       // F3: route through the PushSchemaPipeline via the F2 contract.
       // Critical: must build the FULL DesiredSchema snapshot (all
@@ -329,7 +333,8 @@ const COLLECTIONS_METHODS: Record<
       // mid-apply prompts — the dialog is the prompt UX.
       const promptDispatcher = new BrowserPromptDispatcher(
         renameResolutions ?? [],
-        eventResolutions ?? []
+        eventResolutions ?? [],
+        legacyBundle
       );
       const apply = createApplyDesiredSchema({
         applyPipeline: (desiredArg, sourceArg, channelArg) => {

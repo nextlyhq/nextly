@@ -29,14 +29,31 @@ export interface BrowserRenameResolution {
   choice: "rename" | "drop_and_add";
 }
 
+// Legacy F1 admin-dialog resolution shape. Existing admin UIs send this
+// per-field (`{ fieldName: { action, value? } }`) instead of the typed
+// Resolution[] contract. F5 PR 6 keeps this shape supported via a
+// translator inside dispatch() so admin UIs work end-to-end without
+// having to ship dialog updates first.
+export interface LegacyFieldResolution {
+  action: "provide_default" | "mark_nullable" | "cancel";
+  value?: unknown;
+}
+export interface LegacyResolutionsBundle {
+  // The collection's tableName the user is editing — needed to construct
+  // candidate eventIds for matching against pipeline events.
+  tableName: string;
+  byFieldName: Record<string, LegacyFieldResolution>;
+}
+
 export class BrowserPromptDispatcher implements PromptDispatcher {
-  // F5 PR 6: now takes BOTH rename resolutions (existing F4 PR 5 contract)
-  // and F5/F6 typed resolutions (pre-attached to the apply payload by the
-  // admin UI). Both arrive together; we filter each to the events the
-  // pipeline actually emitted so stale payloads don't silently sneak through.
+  // F5 PR 6: takes rename resolutions (F4 PR 5 contract), typed event
+  // resolutions (new F5/F6 contract), and optionally a legacy resolution
+  // bundle from un-upgraded admin UIs. Legacy entries are translated to
+  // typed Resolutions inside dispatch() once the events are visible.
   constructor(
     private readonly renameResolutions: BrowserRenameResolution[],
-    private readonly eventResolutions: Resolution[] = []
+    private readonly eventResolutions: Resolution[] = [],
+    private readonly legacy?: LegacyResolutionsBundle
   ) {}
 
   dispatch(args: {
@@ -54,13 +71,28 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
       validEventIds.has(r.eventId)
     );
 
+    // Translate legacy per-field resolutions to typed Resolution[] by
+    // matching field name to the pipeline event for the same table+column.
+    // Only fields with an emitted event get translated; fields without an
+    // event don't need a resolution.
+    const translated = this.legacy
+      ? translateLegacyResolutions(this.legacy, events)
+      : [];
+    // Merge: typed resolutions take priority over legacy ones when both
+    // target the same eventId (defends against payload duplication).
+    const usedEventIds = new Set(filteredEventResolutions.map(r => r.eventId));
+    const mergedEventResolutions: Resolution[] = [
+      ...filteredEventResolutions,
+      ...translated.filter(r => !usedEventIds.has(r.eventId)),
+    ];
+
     if (candidates.length === 0) {
       // No rename ambiguities, but events may still need resolution
       // (e.g. NOT-NULL on a populated column with the user's pre-confirmed
       // resolution attached).
       return Promise.resolve({
         confirmedRenames: [],
-        resolutions: filteredEventResolutions,
+        resolutions: mergedEventResolutions,
         proceed: true,
       });
     }
@@ -113,8 +145,45 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
 
     return Promise.resolve({
       confirmedRenames,
-      resolutions: filteredEventResolutions,
+      resolutions: mergedEventResolutions,
       proceed: true,
     });
   }
+}
+
+// Translates legacy admin-dialog per-field resolutions to typed Resolution[]
+// by matching field names to pipeline events on the user's table.
+// - mark_nullable -> make_optional
+// - cancel        -> abort
+// - provide_default -> provide_default (with value)
+// Fields without a matching emitted event are dropped (no resolution needed).
+function translateLegacyResolutions(
+  bundle: LegacyResolutionsBundle,
+  events: ClassifierEvent[]
+): Resolution[] {
+  const out: Resolution[] = [];
+  // Group events on the user's table by columnName for O(1) lookup.
+  const eventByColumn = new Map<string, ClassifierEvent>();
+  for (const event of events) {
+    if (event.tableName !== bundle.tableName) continue;
+    eventByColumn.set(event.columnName, event);
+  }
+
+  for (const [fieldName, legacy] of Object.entries(bundle.byFieldName)) {
+    const event = eventByColumn.get(fieldName);
+    if (!event) continue;
+
+    if (legacy.action === "provide_default") {
+      out.push({
+        kind: "provide_default",
+        eventId: event.id,
+        value: legacy.value,
+      });
+    } else if (legacy.action === "mark_nullable") {
+      out.push({ kind: "make_optional", eventId: event.id });
+    } else if (legacy.action === "cancel") {
+      out.push({ kind: "abort", eventId: event.id });
+    }
+  }
+  return out;
 }
