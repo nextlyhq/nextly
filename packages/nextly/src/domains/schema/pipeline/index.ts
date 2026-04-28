@@ -27,11 +27,11 @@ import {
   type ApplyDesiredSchemaDeps,
   type ApplyDesiredSchemaFn,
 } from "./apply.js";
+import { ClackTerminalPromptDispatcher } from "./prompt-dispatcher/clack-terminal.js";
 import {
   noopClassifier,
   noopMigrationJournal,
   noopPreRenameExecutor,
-  noopPromptDispatcher,
 } from "./pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "./pushschema-pipeline.js";
 import { RegexRenameDetector } from "./rename-detector.js";
@@ -95,11 +95,14 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
+      // F4 Option E PR 4: real terminal-channel PromptDispatcher.
+      // Throws TTYRequiredError on non-TTY runtimes; the pipeline's
+      // classifyErrorCode maps that to CONFIRMATION_REQUIRED_NO_TTY.
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: noopClassifier,
-        promptDispatcher: noopPromptDispatcher,
+        promptDispatcher: new ClackTerminalPromptDispatcher(),
         preRenameExecutor: noopPreRenameExecutor,
         migrationJournal: noopMigrationJournal,
       });
