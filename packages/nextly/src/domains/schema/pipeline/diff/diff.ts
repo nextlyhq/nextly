@@ -9,8 +9,10 @@
 //   - Detect renames. drop_column + add_column on the same table are emitted
 //     as separate ops; the F4 RegexRenameDetector reads them later and turns
 //     confirmed pairs into rename_column ops via applyResolutions().
-//   - Generate SQL. SQL templates live in pre-resolution/sql-templates.ts
-//     (PR 2) for the ops we own; pushSchema generates SQL for the rest.
+//   - Generate SQL. SQL templates live in pipeline/sql-templates/ (F11 PR 3)
+//     for both apply pipeline (renames + drops) and migrate:create (all op
+//     types). pushSchema still generates SQL for the additive remainder
+//     during apply.
 //   - Look at indexes / constraints / foreign keys. Out of scope for v1
 //     (drizzle-kit pushSchema handles those after pre-resolution).
 //

@@ -24,13 +24,11 @@ import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { isPreResolutionOp, type Operation } from "../diff/types.js";
-
-import {
-  buildDropColumnSql,
-  buildDropTableSql,
-  buildRenameColumnSql,
-  buildRenameTableSql,
-} from "./sql-templates.js";
+// F11 PR 3: SQL-template generation moved to the shared sql-templates/
+// module (pipeline/sql-templates/) so both the apply pipeline (renames +
+// drops) and migrate:create (all op types) consume the same per-dialect
+// templates. Eliminates the byte-identical-SQL drift risk.
+import { generateSQL } from "../sql-templates/index.js";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;
@@ -80,45 +78,14 @@ function orderForExecution(ops: Operation[]): Operation[] {
   return [...renameTables, ...renameColumns, ...dropColumns, ...dropTables];
 }
 
+// F11 PR 3: this function used to dispatch to four `buildXxxSql` helpers
+// from the now-deleted `pre-resolution/sql-templates.ts`. The new shared
+// `sql-templates/` module exposes a single `generateSQL(op, dialect)`
+// entry point that handles all 9 Operation variants. The `isPreResolutionOp`
+// filter still gates which ops reach this executor — additive ops (add_*,
+// change_*) are handled by pushSchema's later pass, not here.
 function sqlForOp(op: Operation, dialect: SupportedDialect): string {
-  switch (op.type) {
-    case "rename_column":
-      return buildRenameColumnSql(
-        op.tableName,
-        op.fromColumn,
-        op.toColumn,
-        dialect
-      );
-    case "rename_table":
-      return buildRenameTableSql(op.fromName, op.toName, dialect);
-    case "drop_column":
-      return buildDropColumnSql(op.tableName, op.columnName, dialect);
-    case "drop_table":
-      return buildDropTableSql(op.tableName, dialect);
-    case "add_table":
-    case "add_column":
-    case "change_column_type":
-    case "change_column_nullable":
-    case "change_column_default":
-      // Filter (isPreResolutionOp) ensures we never reach here at runtime.
-      // Listing the additive cases keeps the switch exhaustive for current
-      // Operation variants - the default branch's `never` check below
-      // catches FUTURE variants added to the union.
-      throw new Error(
-        `executePreResolutionOps: non-pre-resolution op leaked through filter: ${op.type}`
-      );
-    default: {
-      // If a new Operation variant is added later, the switch becomes
-      // non-exhaustive and TS narrows op to that new variant here. The
-      // `never` annotation forces a compile error - so adding a variant
-      // requires updating this switch (and the filter alongside it).
-      const _exhaustive: never = op;
-      void _exhaustive;
-      throw new Error(
-        `executePreResolutionOps: unhandled op variant: ${(op as { type: string }).type}`
-      );
-    }
-  }
+  return generateSQL(op, dialect);
 }
 
 async function runRaw(

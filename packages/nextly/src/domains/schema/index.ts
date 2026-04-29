@@ -45,15 +45,11 @@ export {
   type SchemaGeneratorOptions,
 } from "./services/schema-generator";
 
-// Migration generator for SQL migration files
-export {
-  MigrationGenerator,
-  type MigrationOperationType,
-  type SchemaChange,
-  type SchemaDiff,
-  type GeneratedMigration,
-  type MigrationGeneratorOptions,
-} from "./services/migration-generator";
+// F11 PR 3: MigrationGenerator class deleted — superseded by the
+// `pipeline/sql-templates/` module + `migrate-create/generate.ts`
+// orchestrator. The new path uses the F4 Option E diff engine instead
+// of inline SQL string-builders, so renames/type-changes/drops are
+// detected automatically.
 
 // Zod schema generator for runtime validation
 export {
