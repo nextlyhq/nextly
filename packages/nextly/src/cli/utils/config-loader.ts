@@ -31,6 +31,7 @@ import {
   defineConfig,
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config.js";
+import { NextlyError } from "../../errors/index.js";
 
 /**
  * Options for loading the config file.
@@ -180,11 +181,13 @@ async function loadConfigInternal(
   }
 
   if (!existsSync(configPath)) {
-    throw new ConfigLoaderError(
-      `Config file not found: ${configPath}`,
-      "CONFIG_NOT_FOUND",
-      configPath
-    );
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Failed to load Nextly configuration.",
+      statusCode: 400,
+      logMessage: "Config loader error",
+      logContext: { configPath, reason: "config-not-found" },
+    });
   }
 
   debugLog(options, "Loading config from:", configPath);
@@ -217,11 +220,17 @@ async function loadConfigInternal(
     const rawConfig = mod.default ?? mod;
 
     if (!rawConfig || typeof rawConfig !== "object") {
-      throw new ConfigLoaderError(
-        `Config file must export a configuration object. Got: ${typeof rawConfig}`,
-        "INVALID_CONFIG_EXPORT",
-        configPath
-      );
+      throw new NextlyError({
+        code: "INVALID_INPUT",
+        publicMessage: "Failed to load Nextly configuration.",
+        statusCode: 400,
+        logMessage: "Config loader error",
+        logContext: {
+          configPath,
+          reason: "invalid-config-export",
+          exportType: typeof rawConfig,
+        },
+      });
     }
 
     let config = defineConfig(rawConfig);
@@ -236,14 +245,20 @@ async function loadConfigInternal(
           try {
             transformedConfig = plugin.config(transformedConfig);
           } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            throw new ConfigLoaderError(
-              `Plugin "${plugin.name}" config transformer failed: ${message}`,
-              "LOAD_ERROR",
-              configPath,
-              error instanceof Error ? error : undefined
-            );
+            throw new NextlyError({
+              code: "INVALID_INPUT",
+              publicMessage: "Failed to load Nextly configuration.",
+              statusCode: 400,
+              logMessage: "Config loader error",
+              logContext: {
+                configPath,
+                reason: "plugin-config-transformer-failed",
+                pluginName: plugin.name,
+                cause:
+                  error instanceof Error ? error.message : String(error),
+              },
+              cause: error instanceof Error ? error : undefined,
+            });
           }
         }
       }
@@ -271,53 +286,22 @@ async function loadConfigInternal(
       dependencies,
     };
   } catch (error) {
-    if (error instanceof ConfigLoaderError) {
+    if (NextlyError.is(error)) {
       throw error;
     }
 
-    const message =
-      error instanceof Error ? error.message : "Unknown error loading config";
-    throw new ConfigLoaderError(
-      `Failed to load config from ${configPath}: ${message}`,
-      "LOAD_ERROR",
-      configPath,
-      error instanceof Error ? error : undefined
-    );
-  }
-}
-
-/**
- * Error thrown when config loading fails.
- */
-export class ConfigLoaderError extends Error {
-  /**
-   * Error code for programmatic handling.
-   */
-  code: "CONFIG_NOT_FOUND" | "INVALID_CONFIG_EXPORT" | "LOAD_ERROR";
-
-  /**
-   * Path to the config file that caused the error.
-   */
-  configPath?: string;
-
-  /**
-   * Original error that caused this error.
-   */
-  cause?: Error;
-
-  constructor(
-    message: string,
-    code: ConfigLoaderError["code"],
-    configPath?: string,
-    cause?: Error
-  ) {
-    super(message);
-    this.name = "ConfigLoaderError";
-    this.code = code;
-    this.configPath = configPath;
-    this.cause = cause;
-
-    Object.setPrototypeOf(this, ConfigLoaderError.prototype);
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Failed to load Nextly configuration.",
+      statusCode: 400,
+      logMessage: "Config loader error",
+      logContext: {
+        configPath,
+        reason: "load-error",
+        cause: error instanceof Error ? error.message : String(error),
+      },
+      cause: error instanceof Error ? error : undefined,
+    });
   }
 }
 

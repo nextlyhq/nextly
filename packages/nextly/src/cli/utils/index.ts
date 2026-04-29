@@ -13,7 +13,6 @@ export {
   clearConfigCache,
   getCachedConfig,
   findNextlyConfig,
-  ConfigLoaderError,
   type LoadConfigOptions,
   type LoadConfigResult,
   type ConfigChangeCallback,
