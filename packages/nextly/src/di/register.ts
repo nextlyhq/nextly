@@ -548,6 +548,33 @@ async function initializeSchemaRegistry(
     registry.registerStaticSchemas(getDialectTables(dialect));
     adapter.setTableResolver(registry);
 
+    // Step 1.5 (F8 PR 6): first-run static-table push. Probes for
+    // `nextly_migration_journal` and, if missing, creates the static
+    // schema via freshPushSchema. Must run BEFORE Step 2's
+    // loadDynamicTables — that step queries `dynamic_collections`
+    // which doesn't exist on a brand-new DB. Failure-safe (logs but
+    // doesn't throw); see init/first-run.ts.
+    try {
+      const { ensureFirstRunSetup } = await import("../init/first-run.js");
+      // initializeSchemaRegistry doesn't have resolvedLogger in scope;
+      // console is the right fallback because first-run is a one-time
+      // user-visible event and the boot logger wiring isn't done yet.
+      await ensureFirstRunSetup({
+        adapter,
+        logger: {
+          debug: msg => console.debug(msg),
+          info: msg => console.log(msg),
+          warn: msg => console.warn(msg),
+          error: msg => console.error(msg),
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[registerServices] First-run setup helper crashed: ${msg}. Continuing.`
+      );
+    }
+
     // Step 2: Dynamic collections.
     await loadDynamicTables(
       adapter,

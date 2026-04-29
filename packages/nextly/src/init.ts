@@ -40,10 +40,12 @@ import {
   shutdownServices,
 } from "./di/register";
 import { getNextly as getDirectAPI } from "./direct-api/nextly";
+import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "./init/build-service-config";
+import { runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
@@ -220,6 +222,32 @@ export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
         console.log(`  - JSONB support: ${capabilities.supportsJsonb}`);
         console.log(`  - RETURNING support: ${capabilities.supportsReturning}`);
         console.log(`  - Full-text search: ${capabilities.supportsFts}`);
+
+        // F8 PR 6: drift check. First-run static-table setup already
+        // ran inside registerServices (see first-run.ts). This path
+        // only logs a single warning when config has drifted from
+        // the live schema — it does NOT auto-apply (real apply goes
+        // through HMR or `nextly db:sync` which both have a TTY).
+        // The drift check itself is failure-safe; we don't wrap a
+        // try/catch around getService("config") so a real DI bug
+        // crashes loudly instead of being masked.
+        const config = getService("config");
+        const driftLogger = {
+          debug: (msg: string) => console.debug(msg),
+          info: (msg: string) => console.log(msg),
+          warn: (msg: string) => console.warn(msg),
+          error: (msg: string) => console.error(msg),
+        };
+        const collections = (config.collections ?? []).map(c => ({
+          slug: c.slug,
+          tableName: resolveCollectionTableName(c.slug, c.dbName),
+          fields: c.fields ?? [],
+        }));
+        await runDriftCheck({
+          adapter,
+          collections,
+          logger: driftLogger,
+        });
 
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
