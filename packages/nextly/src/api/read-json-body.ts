@@ -11,8 +11,15 @@ import { NextlyError } from "../errors";
  * Generic over the parsed body type so callers can specify a narrower shape
  * without re-asserting at the call site (the function performs no runtime
  * validation beyond JSON-parseability).
+ *
+ * Accepts an optional `extraLogContext` so route-specific identifiers (e.g.
+ * a single's slug) can be threaded into the operator log without resorting
+ * to a route-local copy of the helper.
  */
-export async function readJsonBody<T = unknown>(req: Request): Promise<T> {
+export async function readJsonBody<T = unknown>(
+  req: Request,
+  extraLogContext?: Record<string, unknown>
+): Promise<T> {
   try {
     return (await req.json()) as T;
   } catch {
@@ -28,7 +35,7 @@ export async function readJsonBody<T = unknown>(req: Request): Promise<T> {
           },
         ],
       },
-      logContext: { reason: "invalid-json-body" },
+      logContext: { reason: "invalid-json-body", ...extraLogContext },
     });
   }
 }

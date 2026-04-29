@@ -31,6 +31,7 @@ import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema } from "../types/media";
 
 import { createSuccessResponse } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 
 function getMediaService(): MediaService {
@@ -66,27 +67,6 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
   };
 }
 
-async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
-  try {
-    return (await req.json()) as Record<string, unknown>;
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { reason: "invalid-json-body" },
-    });
-  }
-}
-
 /**
  * POST handler for bulk media upload
  *
@@ -114,7 +94,7 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
     const mediaService = getMediaService();
-    const body = await readJsonBody(request);
+    const body = await readJsonBody<Record<string, unknown>>(request);
     const filesInput = body.files;
     const uploadedBy =
       typeof body.uploadedBy === "string" ? body.uploadedBy : undefined;
@@ -230,7 +210,7 @@ export const POST = withErrorHandler(
 export const DELETE = withErrorHandler(
   async (request: Request): Promise<Response> => {
     const mediaService = getMediaService();
-    const body = await readJsonBody(request);
+    const body = await readJsonBody<Record<string, unknown>>(request);
     const mediaIds = body.mediaIds;
 
     if (!Array.isArray(mediaIds) || mediaIds.length === 0) {

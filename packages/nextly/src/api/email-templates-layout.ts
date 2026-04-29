@@ -20,38 +20,17 @@
  */
 
 import { container } from "../di";
-import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
 import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getEmailTemplateService(): Promise<EmailTemplateService> {
   await getNextly();
   return container.get<EmailTemplateService>("emailTemplateService");
-}
-
-async function readJsonBody(req: Request): Promise<unknown> {
-  try {
-    return await req.json();
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { reason: "invalid-json-body" },
-    });
-  }
 }
 
 /**
@@ -105,7 +84,7 @@ export const PATCH = withErrorHandler(
 
     const service = await getEmailTemplateService();
 
-    const body = (await readJsonBody(request)) as Record<string, unknown>;
+    const body = await readJsonBody(request);
 
     // Selective string-typed copy: a non-string value silently drops the
     // field rather than triggering a 400 (matches pre-migration behavior).

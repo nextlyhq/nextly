@@ -33,6 +33,7 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 
 import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -51,35 +52,6 @@ async function getSingleEntryService(): Promise<SingleEntryService> {
 async function getSingleRegistry(): Promise<SingleRegistryService> {
   await getNextly();
   return getService("singleRegistryService");
-}
-
-/**
- * Parse a JSON request body and convert a parse failure into the canonical
- * `VALIDATION_ERROR`. The slug context is supplied separately so the same
- * helper works for any handler in this file.
- */
-async function readJsonBody(
-  req: Request,
-  slug: string
-): Promise<Record<string, unknown>> {
-  try {
-    return (await req.json()) as Record<string, unknown>;
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { slug, reason: "invalid-json-body" },
-    });
-  }
 }
 
 /**
@@ -221,7 +193,7 @@ export const PATCH = withErrorHandler(
     const { slug } = await context.params;
     const service = await getSingleEntryService();
 
-    const body = await readJsonBody(request, slug);
+    const body = await readJsonBody<Record<string, unknown>>(request, { slug });
 
     const { searchParams } = new URL(request.url);
     const locale = searchParams.get("locale") || undefined;

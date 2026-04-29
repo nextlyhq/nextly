@@ -56,6 +56,7 @@ import {
   createPaginatedResponse,
   createSuccessResponse,
 } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -77,27 +78,6 @@ function createAuthenticatedContext(userId: string): RequestContext {
       permissions: [],
     },
   };
-}
-
-async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
-  try {
-    return (await req.json()) as Record<string, unknown>;
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { reason: "invalid-json-body" },
-    });
-  }
 }
 
 /**
@@ -281,7 +261,7 @@ export function updateMedia(
       routeCtx: { params: Promise<{ id: string }> }
     ): Promise<Response> => {
       const mediaService = await getMediaService();
-      const body = await readJsonBody(req);
+      const body = await readJsonBody<Record<string, unknown>>(req);
 
       let validated: z.infer<typeof UpdateMediaInputSchema>;
       try {
@@ -347,7 +327,7 @@ export function moveMediaToFolder(
     ): Promise<Response> => {
       const mediaService = await getMediaService();
       const { id } = await routeCtx.params;
-      const body = await readJsonBody(req);
+      const body = await readJsonBody<Record<string, unknown>>(req);
       const folderId = body.folderId as string | null | undefined;
       const context = createRequestContext();
 

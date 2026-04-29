@@ -78,6 +78,7 @@ import {
   createPaginatedResponse,
   createSuccessResponse,
 } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -128,27 +129,6 @@ function createAuthenticatedContext(userId: string): RequestContext {
       permissions: [],
     },
   };
-}
-
-async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
-  try {
-    return (await req.json()) as Record<string, unknown>;
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { reason: "invalid-json-body" },
-    });
-  }
 }
 
 // ============================================================
@@ -365,7 +345,7 @@ async function handleUpdateMedia(
   mediaId: string
 ): Promise<Response> {
   const mediaService = await getMediaService();
-  const body = await readJsonBody(request);
+  const body = await readJsonBody<Record<string, unknown>>(request);
 
   let validated: z.infer<typeof UpdateMediaInputSchema>;
   try {
@@ -396,7 +376,7 @@ async function handleMoveMedia(
   mediaId: string
 ): Promise<Response> {
   const mediaService = await getMediaService();
-  const body = await readJsonBody(request);
+  const body = await readJsonBody<Record<string, unknown>>(request);
   const folderId = body.folderId as string | null | undefined;
   const context = createRequestContext();
 
@@ -427,7 +407,7 @@ async function handleListFolders(request: Request): Promise<Response> {
 
 async function handleCreateFolder(request: Request): Promise<Response> {
   const mediaService = await getMediaService();
-  const body = await readJsonBody(request);
+  const body = await readJsonBody<Record<string, unknown>>(request);
 
   const { createdBy, ...folderInput } = body as {
     createdBy?: string;
@@ -477,7 +457,7 @@ async function handleUpdateFolder(
   folderId: string
 ): Promise<Response> {
   const mediaService = await getMediaService();
-  const body = await readJsonBody(request);
+  const body = await readJsonBody<Record<string, unknown>>(request);
   const context = createRequestContext();
 
   const folder = await mediaService.updateFolder(folderId, body, context);
