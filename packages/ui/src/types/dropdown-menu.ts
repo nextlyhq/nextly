@@ -1,5 +1,5 @@
-import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import * as React from "react";
+import type * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
+import type * as React from "react";
 
 /**
  * Props for the DropdownMenuSubTrigger component

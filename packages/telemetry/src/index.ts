@@ -51,6 +51,7 @@ function randomSessionId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function init(opts: InitOptions): Promise<void> {
   const env = opts.env ?? process.env;
   const isTty = opts.isTty ?? Boolean(process.stdout.isTTY);

@@ -1,12 +1,12 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cva, type VariantProps } from "class-variance-authority";
 import { X } from "lucide-react";
-import {
-  forwardRef,
+import type {
   ElementRef,
   ComponentPropsWithoutRef,
   HTMLAttributes,
 } from "react";
+import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";

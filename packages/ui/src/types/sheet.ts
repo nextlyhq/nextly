@@ -4,7 +4,7 @@
  * TypeScript type definitions for the Sheet component (Dialog variant).
  */
 
-import * as DialogPrimitive from "@radix-ui/react-dialog";
+import type * as DialogPrimitive from "@radix-ui/react-dialog";
 
 /**
  * Sheet root component props
