@@ -9,20 +9,18 @@ import {
   computeJournalSummaryFromOperations,
 } from "../pushschema-pipeline.js";
 
-// Tiny constructors so the tests don't need the full op shapes.
+// Tiny constructors so the tests don't need the full op shapes. Each
+// returns an `Operation` of the discriminated kind under test; only the
+// fields the helper inspects (op.type) need to be present, but TS still
+// requires the rest of the shape — so we keep them minimal but valid.
 const addTable = (): Operation => ({
   type: "add_table",
-  table: { name: "t", columns: [], primaryKey: undefined } as unknown as Operation extends {
-    type: "add_table";
-    table: infer T;
-  }
-    ? T
-    : never,
+  table: { name: "t", columns: [] },
 });
 const addColumn = (): Operation => ({
   type: "add_column",
   tableName: "t",
-  column: { name: "c", type: "text", nullable: true } as never,
+  column: { name: "c", type: "text", nullable: true },
 });
 const dropTable = (): Operation => ({ type: "drop_table", tableName: "t" });
 const dropColumn = (): Operation => ({
