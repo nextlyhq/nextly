@@ -8,6 +8,7 @@
 export type {
   MigrationJournalSource,
   MigrationJournalStatus,
+  MigrationJournalScopeKind,
 } from "./types.js";
 
 export {

@@ -5,6 +5,7 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type {
+  MigrationJournalScopeKind,
   MigrationJournalSource,
   MigrationJournalStatus,
 } from "./types.js";
@@ -39,6 +40,16 @@ export const nextlyMigrationJournalSqlite = sqliteTable(
 
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
+
+    // F10 PR 1: scope + summary columns. All nullable for forward-compat
+    // with rows written before this migration ran. Pipeline starts
+    // populating these in F10 PR 2.
+    scopeKind: text("scope_kind").$type<MigrationJournalScopeKind>(),
+    scopeSlug: text("scope_slug"),
+    summaryAdded: integer("summary_added"),
+    summaryRemoved: integer("summary_removed"),
+    summaryRenamed: integer("summary_renamed"),
+    summaryChanged: integer("summary_changed"),
   },
   table => [
     index("nextly_migration_journal_status_idx").on(table.status),

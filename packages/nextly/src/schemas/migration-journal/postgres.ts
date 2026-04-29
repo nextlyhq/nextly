@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import type {
+  MigrationJournalScopeKind,
   MigrationJournalSource,
   MigrationJournalStatus,
 } from "./types.js";
@@ -54,6 +55,18 @@ export const nextlyMigrationJournalPg = pgTable(
     // Failure details: only populated when status === 'failed'.
     errorCode: varchar("error_code", { length: 64 }),
     errorMessage: text("error_message"),
+
+    // F10 PR 1: scope + summary columns. All nullable for forward-compat
+    // with rows written before this migration ran. Pipeline starts
+    // populating these in F10 PR 2.
+    scopeKind: varchar("scope_kind", {
+      length: 20,
+    }).$type<MigrationJournalScopeKind>(),
+    scopeSlug: text("scope_slug"),
+    summaryAdded: integer("summary_added"),
+    summaryRemoved: integer("summary_removed"),
+    summaryRenamed: integer("summary_renamed"),
+    summaryChanged: integer("summary_changed"),
   },
   table => [
     // Filter rows by lifecycle state (e.g. find stuck `in_progress` rows).
