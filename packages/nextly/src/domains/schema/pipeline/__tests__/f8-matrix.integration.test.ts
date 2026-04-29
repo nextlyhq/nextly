@@ -26,9 +26,20 @@
 // file to keep PR 7 focused.
 
 import Database from "better-sqlite3";
-import { sql } from "drizzle-orm";
+import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
+
+import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db.js";
 
 import { RealClassifier } from "../classifier/classifier.js";
 import { RealPreCleanupExecutor } from "../pre-cleanup/executor.js";
@@ -423,10 +434,126 @@ describe("F8 matrix — SQLite — NOT-NULL coercion via provide_default", () =>
       )
       .get() as { c: number };
     expect(nullCount.c).toBe(0);
+  });
+});
 
-    // sql is unused in this file outside dialect quoting — keep the
-    // import so future scenarios that need parameterized DDL can use
-    // sql.raw without re-importing.
-    void sql;
+// ---------------------------------------------------------------------------
+// Cross-dialect parity: same NOT-NULL scenario against real PostgreSQL
+//
+// Auto-skips when TEST_POSTGRES_URL is unset (CI sets it via
+// docker-compose; local devs set it via the same compose file).
+// Why this lives here, not in pushschema-pipeline-option-e: F4's PG
+// suite was written before F5+F6 wired the real PreCleanupExecutor and
+// uses noopClassifier. The NOT-NULL coercion path is F5+F6 territory,
+// so the parity test belongs alongside the SQLite scenario.
+// ---------------------------------------------------------------------------
+
+describe("F8 matrix — PostgreSQL — NOT-NULL coercion via provide_default", () => {
+  const ctx = makeTestContext("postgresql");
+  if (!ctx.available || !ctx.url) {
+    it.skip("Skipping PG NOT-NULL coercion: TEST_POSTGRES_URL not set", () => {});
+    return;
+  }
+
+  let pool: Pool;
+  let pgDb: ReturnType<typeof drizzlePg>;
+  const tableName = `${ctx.prefix}_dc_orders_nn`;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: ctx.url ?? undefined });
+    pgDb = drizzlePg(pool);
+    await pool.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
+  });
+
+  afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
+    await pool.end();
+  });
+
+  it("backfills NULL rows then promotes the column to NOT NULL", async () => {
+    await pool.query(
+      `CREATE TABLE "${tableName}" (
+        "id" text PRIMARY KEY,
+        "title" text NOT NULL,
+        "slug" text NOT NULL,
+        "created_at" timestamp,
+        "updated_at" timestamp,
+        "total" text
+      )`
+    );
+    await pool.query(
+      `INSERT INTO "${tableName}" (id, title, slug, total) VALUES
+        ('o1', 't-1', 's-1', '100'),
+        ('o2', 't-2', 's-2', NULL),
+        ('o3', 't-3', 's-3', NULL),
+        ('o4', 't-4', 's-4', '400')`
+    );
+
+    const desired: DesiredSchema = {
+      collections: {
+        orders: {
+          slug: "orders",
+          tableName,
+          fields: [{ name: "total", type: "text", required: true }] as never,
+        },
+      },
+      singles: {},
+      components: {},
+    };
+
+    const dispatcher = withResolutionsDispatcher([
+      {
+        kind: "provide_default",
+        eventId: `add_not_null_with_nulls:${tableName}.total`,
+        value: "0",
+      },
+    ]);
+
+    const pipeline = new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor("postgresql", pgDb),
+      renameDetector: new RegexRenameDetector(),
+      classifier: new RealClassifier(),
+      promptDispatcher: dispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: new RealPreCleanupExecutor(),
+      migrationJournal: noopMigrationJournal,
+    });
+
+    const result = await pipeline.apply({
+      desired,
+      db: pgDb,
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(result.success).toBe(true);
+
+    // NULL rows backfilled with the provided default.
+    const o2 = await pool.query(
+      `SELECT total FROM "${tableName}" WHERE id = 'o2'`
+    );
+    expect(o2.rows[0].total).toBe("0");
+    const o3 = await pool.query(
+      `SELECT total FROM "${tableName}" WHERE id = 'o3'`
+    );
+    expect(o3.rows[0].total).toBe("0");
+
+    // Existing non-null rows untouched.
+    const o1 = await pool.query(
+      `SELECT total FROM "${tableName}" WHERE id = 'o1'`
+    );
+    expect(o1.rows[0].total).toBe("100");
+
+    // Constraint actually applied — INSERT NULL must now reject.
+    let insertRejected = false;
+    try {
+      await pool.query(
+        `INSERT INTO "${tableName}" (id, title, slug, total) VALUES ('o5', 't-5', 's-5', NULL)`
+      );
+    } catch {
+      insertRejected = true;
+    }
+    expect(insertRejected).toBe(true);
   });
 });

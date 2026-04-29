@@ -16,6 +16,7 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { runStatement } from "../_internal/run-statement.js";
 import type { NextlySchemaSnapshot } from "../diff/types.js";
 import { PromptCancelledError } from "../prompt-dispatcher/errors.js";
 import type { PreCleanupExecutor } from "../pushschema-pipeline-interfaces.js";
@@ -23,31 +24,6 @@ import type { ClassifierEvent, Resolution } from "../resolution/types.js";
 
 import { applyMakeOptionalToSnapshot } from "./snapshot-patch.js";
 import { validateDefaultValue } from "./validate-default.js";
-
-// PG/MySQL: drizzle-orm's tx exposes async `execute(sql)`.
-// SQLite (better-sqlite3): drizzle-orm/better-sqlite3 exposes sync
-// `run(sql)` instead. F8 PR 7 surfaced this dialect mismatch — F5
-// PreCleanupExecutor previously assumed `tx.execute` everywhere and
-// crashed on SQLite during NOT-NULL coercion. The dispatcher below
-// mirrors the same dialect-aware pattern from pre-resolution/executor.ts.
-interface AsyncExecutableTx {
-  execute: (q: unknown) => Promise<unknown>;
-}
-interface SyncRunnableTx {
-  run: (q: unknown) => unknown;
-}
-
-async function runStatement(
-  tx: unknown,
-  dialect: SupportedDialect,
-  stmt: unknown
-): Promise<void> {
-  if (dialect === "sqlite") {
-    (tx as SyncRunnableTx).run(stmt);
-    return;
-  }
-  await (tx as AsyncExecutableTx).execute(stmt);
-}
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
