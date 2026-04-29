@@ -147,11 +147,15 @@ DB_QUERY_TIMEOUT=15000
 
 ### Running Migrations
 
-Before starting the app for the first time in production, run database migrations:
+Before deploying new application code, run database migrations:
 
 ```bash
-pnpm db:push
+DATABASE_URL=$PROD_URL pnpm exec nextly migrate
 ```
+
+For the recommended GitHub Actions workflow + Vercel build-step pattern + other-platform setups, see the [Production migrations guide](/docs/guides/production-migrations). It covers `nextly migrate:create`, `nextly migrate:check` (CI integrity gate), and the `nextly_migrations` ledger table.
+
+The deployed app never touches schema. All migrations run as a CLI step before deploy. See the production-migrations guide for why.
 
 ## Storage Setup for Production
 

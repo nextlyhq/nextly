@@ -4,6 +4,13 @@
  * Implements the `nextly migrate:fresh` command for dropping all tables
  * and re-running all migrations from scratch.
  *
+ * **Runtime restriction (F11):** This module is CLI-only. Do NOT
+ * import it from runtime code (init/, route-handler/, dispatcher/, api/,
+ * actions/, direct-api/, routeHandler.ts, next.ts). Enforced by ESLint
+ * (`no-restricted-imports`); see docs/guides/production-migrations.mdx.
+ * `migrate:fresh` is a destructive local-dev convenience and never
+ * appropriate for production use.
+ *
  * @module cli/commands/migrate-fresh
  * @since 1.0.0
  *
