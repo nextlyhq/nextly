@@ -245,13 +245,15 @@ const COLLECTIONS_METHODS: Record<
   },
   // Apply confirmed schema changes via the in-process schema service.
   //
-  // F1 PR 3: single-process model. drizzle-kit/api is loaded lazily by the
-  // schema service via drizzle-kit-lazy.ts (PR 1's webpackIgnore +
-  // turbopackIgnore magic comments keep it out of the handler bundle), so
-  // DDL runs cleanly in the same process serving requests. No more
-  // wrapper-mode IPC routing. bumpSchemaVersion fires automatically on
-  // success via SchemaChangeService.setOnApplySuccess (registered in
-  // di/register.ts:355-356).
+  // F1 PR 3: single-process model. drizzle-kit/api is loaded lazily via
+  // drizzle-kit-lazy.ts (webpackIgnore + turbopackIgnore magic comments
+  // keep it out of the handler bundle), so DDL runs cleanly in the same
+  // process serving requests. No more wrapper-mode IPC routing.
+  //
+  // F8 PR 3: bumpSchemaVersion is called directly here after a
+  // successful pipeline apply (was previously wired via
+  // SchemaChangeService.setOnApplySuccess in di/register.ts; that
+  // service + its DI registration are gone).
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");

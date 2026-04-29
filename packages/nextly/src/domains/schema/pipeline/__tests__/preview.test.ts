@@ -8,7 +8,10 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import type { Classifier } from "../pushschema-pipeline-interfaces.js";
+import type {
+  Classifier,
+  ClassificationLevel,
+} from "../pushschema-pipeline-interfaces.js";
 import type { ClassifierEvent } from "../resolution/types.js";
 
 import { previewDesiredSchema } from "../preview.js";
@@ -18,8 +21,10 @@ const noopRenameDetector = {
   detect: vi.fn().mockReturnValue([]),
 };
 
+// Typed level so future changes to ClassificationLevel break compile
+// instead of silently passing a string mismatch.
 function classifierStub(
-  level: "safe" | "destructive" | "interactive" | "warning",
+  level: ClassificationLevel,
   events: ClassifierEvent[]
 ): Classifier {
   return {

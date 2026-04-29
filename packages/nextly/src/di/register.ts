@@ -828,11 +828,26 @@ async function syncCodeFirstCollections(
 
   // F8 PR 3: route auto-sync through the F2 applyDesiredSchema pipeline.
   // Was SchemaPushService.syncSchema() with `{ force: true,
-  // skipExistingTables: true }` (legacy idiom for "create missing
-  // tables, leave existing alone"). The pipeline's diff naturally
-  // produces add_table operations only for tables that don't yet exist
-  // — same outcome, single code path, no per-table CREATE TABLE SQL
-  // generation or hand-rolled error handling.
+  // skipExistingTables: true }` — legacy idiom for "create missing
+  // tables, leave existing alone." We preserve that semantic by
+  // filtering down to only collections whose physical tables DO NOT
+  // EXIST before invoking the pipeline. Why this matters:
+  //
+  //   The pipeline runs the classifier on every diff. If we passed
+  //   collections with existing tables, the classifier could emit
+  //   add_not_null_with_nulls or add_required_field_no_default events
+  //   for drift between the live table and the new config. Those
+  //   events trigger the (terminal) PromptDispatcher, which throws
+  //   TTYRequiredError on production deploys (Docker, PM2, systemd).
+  //   That would crash boot where the legacy code silently skipped.
+  //
+  //   By restricting to truly-missing tables, the pipeline only sees
+  //   add_table ops — pure additive, no prompts, no TTY dependency.
+  //
+  //   Drift on existing tables is intentionally not handled here —
+  //   the dev-server.ts auto-sync (manual `nextly db:sync`) and the
+  //   HMR reload-config path remain the canonical drift-handling
+  //   entry points (those have a TTY and accept prompts).
   try {
     const { applyDesiredSchema } = await import(
       "../domains/schema/pipeline/index.js"
@@ -840,12 +855,12 @@ async function syncCodeFirstCollections(
     const { generateRuntimeSchema } = await import(
       "../domains/schema/services/runtime-schema-generator.js"
     );
+    type DesiredCollection =
+      import("../domains/schema/pipeline/types.js").DesiredCollection;
 
     const collectionsToSyncSet = new Set(collectionsNeedingTableSync);
-    const desiredCollections: Record<
-      string,
-      { slug: string; tableName: string; fields: unknown[] }
-    > = {};
+    const desiredCollections: Record<string, DesiredCollection> = {};
+    const slugsAfterFilter: string[] = [];
     for (const collection of transformedConfig.collections) {
       if (!collectionsToSyncSet.has(collection.slug)) continue;
       const baseTableName =
@@ -853,18 +868,47 @@ async function syncCodeFirstCollections(
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
         : `dc_${baseTableName}`;
+
+      // Skip collections whose tables already exist — the pipeline's
+      // diff would compare against the live table and could emit
+      // interactive events. Mirrors legacy `skipExistingTables: true`.
+      let tableExists = false;
+      try {
+        tableExists = await adapter.tableExists(tableName);
+      } catch {
+        // Defensive: treat introspect failure as "table missing" so
+        // the pipeline can attempt to create it. If it really exists
+        // and we're wrong, drizzle-kit will emit `CREATE TABLE IF NOT
+        // EXISTS`-equivalent semantics or a no-op diff.
+      }
+      if (tableExists) {
+        logger.info?.(
+          `Table ${tableName} already exists for ${collection.slug}, skipping`
+        );
+        // Still mark as applied so the registry status reflects reality.
+        await collectionRegistry
+          .updateMigrationStatus(collection.slug, "applied")
+          .catch(() => {});
+        continue;
+      }
+
       desiredCollections[collection.slug] = {
         slug: collection.slug,
         tableName,
         fields: collection.fields ?? [],
       };
+      slugsAfterFilter.push(collection.slug);
+    }
+
+    if (slugsAfterFilter.length === 0) {
+      // Every collection that was flagged for sync now has a table —
+      // legacy behavior was to silently return here too.
+      return;
     }
 
     const result = await applyDesiredSchema(
       {
-        collections: desiredCollections as Parameters<
-          typeof applyDesiredSchema
-        >[0]["collections"],
+        collections: desiredCollections,
         singles: {},
         components: {},
       },
@@ -881,9 +925,10 @@ async function syncCodeFirstCollections(
 
     // Post-apply: update migration_status + register runtime schemas in
     // the adapter resolver. The pipeline owns CREATE TABLE; these are
-    // app-level concerns that stay in the boot path.
+    // app-level concerns that stay in the boot path. Iterates only
+    // slugs that actually went through the pipeline (post-filter).
     const syncDialect = adapter.getCapabilities().dialect;
-    for (const slug of collectionsNeedingTableSync) {
+    for (const slug of slugsAfterFilter) {
       const desired = desiredCollections[slug];
       if (!desired) continue;
       await collectionRegistry
