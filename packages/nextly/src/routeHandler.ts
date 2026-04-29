@@ -40,6 +40,7 @@ import {
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import { getSchemaJournal } from "./api/schema-journal";
 import { POST as emailSend } from "./api/email-send";
 import { POST as emailSendWithTemplate } from "./api/email-send-template";
 import {
@@ -343,6 +344,32 @@ async function handleDashboardRequest(
 }
 
 // ============================================================================
+// Schema Direct Dispatch (F10 PR 4)
+// ============================================================================
+
+/**
+ * Delegate a schema request directly to the named handler.
+ *
+ * Schema handlers own their auth (requireAuthentication + super-admin
+ * gate). Read-only GET endpoints — no body to consume. Same intercept
+ * pattern as dashboard / api-keys / general settings.
+ */
+async function handleSchemaRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getSchemaJournal":
+      return getSchemaJournal(req);
+    default:
+      return new Response(
+        JSON.stringify({ error: "Unknown schema operation" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+  }
+}
+
+// ============================================================================
 // Email Direct Dispatch
 // ============================================================================
 
@@ -624,6 +651,13 @@ async function handleServiceRequest(
   // endpoints — no body to consume, but keeping consistent dispatch pattern.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
+  }
+
+  // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================
+  // Schema-journal handler owns its auth (requireAuthentication +
+  // super-admin gate). Read-only GET — no body to consume.
+  if (service === "schema") {
+    return handleSchemaRequest(req, method);
   }
 
   // ==================== EMAIL DIRECT DISPATCH ====================

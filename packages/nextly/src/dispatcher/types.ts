@@ -23,7 +23,8 @@ export type ServiceType =
   | "generalSettings"
   | "imageSizes"
   | "dashboard"
-  | "email";
+  | "email"
+  | "schema";
 
 export type OperationType =
   | "single"
