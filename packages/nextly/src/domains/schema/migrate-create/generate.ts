@@ -210,9 +210,21 @@ function buildDesiredSnapshotFromConfig(
  * Replace accepted (drop_column, add_column) pairs with a rename_column
  * op. Declined decisions and unmatched ops pass through unchanged.
  *
- * Implementation note: filter out the matching drop+add ops in one pass,
- * then append the rename ops. Preserves the original order for non-
- * rename ops, which matters for deterministic diff snapshots in tests.
+ * F11 PR 3 review fix #2: dedupe accepted decisions so each drop column
+ * and each add column appears in at most one rename. Without this, the
+ * rename detector's Cartesian product (N drops × N adds per table) plus
+ * the per-candidate prompt loop could produce overlapping accepts —
+ * e.g. accepting both (title→name) and (title→label) would emit two
+ * RENAME COLUMN ops on the same source column, the second of which
+ * fails at apply because `title` no longer exists.
+ *
+ * Strategy: first-acceptance-wins. Iterate accepted decisions in
+ * detector-emit order; skip any whose drop column or add column has
+ * already been claimed by a prior accept. The skipped decision's
+ * drop+add ops stay in the operation list (treated as a normal drop+add)
+ * — that's the safest fallback because the operator can re-run
+ * migrate:create after editing the file if they wanted a different
+ * pairing.
  */
 function applyRenameDecisions(
   ops: Operation[],
@@ -221,13 +233,22 @@ function applyRenameDecisions(
   const accepted = decisions.filter(d => d.accepted);
   if (accepted.length === 0) return ops;
 
-  // Index accepted candidates for O(1) lookup keyed by table+column.
+  // Index accepted candidates with first-acceptance-wins dedup.
   const acceptedDrops = new Set<string>();
   const acceptedAdds = new Set<string>();
+  const effectiveAccepts: RenameDecision[] = [];
   for (const d of accepted) {
     const c = d.candidate;
-    acceptedDrops.add(`${c.tableName}::${c.fromColumn}`);
-    acceptedAdds.add(`${c.tableName}::${c.toColumn}`);
+    const dropKey = `${c.tableName}::${c.fromColumn}`;
+    const addKey = `${c.tableName}::${c.toColumn}`;
+    if (acceptedDrops.has(dropKey) || acceptedAdds.has(addKey)) {
+      // Overlapping accept — skip. The drop+add ops stay in the
+      // operation list and become a normal DROP+ADD pair.
+      continue;
+    }
+    acceptedDrops.add(dropKey);
+    acceptedAdds.add(addKey);
+    effectiveAccepts.push(d);
   }
 
   // Filter out the matching drop_column / add_column pairs. TS narrows
@@ -248,8 +269,8 @@ function applyRenameDecisions(
     remaining.push(op);
   }
 
-  // Append rename_column ops for the accepted candidates.
-  for (const d of accepted) {
+  // Append rename_column ops for each effective acceptance.
+  for (const d of effectiveAccepts) {
     const c = d.candidate;
     const renameOp: RenameColumnOp = {
       type: "rename_column",

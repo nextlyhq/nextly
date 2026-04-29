@@ -55,6 +55,7 @@ import {
   generateMigration,
   type MinimalConfigEntity,
 } from "../../domains/schema/migrate-create/generate.js";
+import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames.js";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
 import { createContext, type CommandContext } from "../program.js";
 import {
@@ -193,6 +194,18 @@ export async function runMigrateCreate(
   const nonInteractive =
     options.nonInteractive === true || !process.stdout.isTTY;
 
+  // F11 PR 3 review fix #8: surface a warning when --accept-renames was
+  // passed but interactive mode is in effect. The flag is only consulted
+  // by the prompt-renames helper when nonInteractive=true; silently
+  // ignoring it would mislead the operator into thinking they had a
+  // safety net they don't actually have.
+  if (options.acceptRenames === true && !nonInteractive) {
+    logger.warn(
+      "--accept-renames has no effect in interactive mode. " +
+        "Pass --non-interactive to use it (typically only for CI)."
+    );
+  }
+
   // Convert config entries to the minimal shape the orchestrator needs.
   const collections = toMinimalEntities(configResult.config.collections, "dc_");
   const singles = toMinimalEntities(
@@ -230,6 +243,14 @@ export async function runMigrateCreate(
       autoAcceptRenames: options.acceptRenames === true,
     });
   } catch (error) {
+    // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
+    // from real errors so we don't print a noisy "Failed to generate
+    // migration: Cancelled by user." stack-style message.
+    if (error instanceof PromptCancelledError) {
+      // The prompt-renames helper already printed clack's `cancel()`
+      // message before throwing. Just exit.
+      process.exit(1);
+    }
     logger.error(
       `Failed to generate migration: ${error instanceof Error ? error.message : String(error)}`
     );
@@ -282,7 +303,11 @@ async function runBlankPath(
   const sqlPath = resolve(migrationsDir, `${baseName}.sql`);
 
   await mkdir(migrationsDir, { recursive: true });
-  const content = formatBlankFile(baseName, dialect, now);
+  // F11 PR 3 review fix #7: pass the slug-only name (not the timestamp-
+  // prefixed baseName) so the file's `-- Migration:` header matches the
+  // non-blank path's convention (e.g. "-- Migration: custom_seed", not
+  // "-- Migration: 20260429_154500_123_custom_seed").
+  const content = formatBlankFile(slugify(name), dialect, now);
   await writeFile(sqlPath, content, "utf-8");
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The
@@ -316,6 +341,15 @@ async function runBlankPath(
  * CollectionConfig / SingleConfig / ComponentConfig types have many more
  * attributes that we don't need here (and listing them all just to please
  * the type checker would be brittle as those configs evolve).
+ *
+ * F11 PR 3 review TODO #6: this adapter currently extracts only `slug`,
+ * `fields`, and `dbName`. Real config types may include:
+ * - per-field `dbName` overrides (column-name override; runtime respects
+ *   them — silently ignoring here would emit phantom-rename diffs).
+ * - `disableDatabase: true` on collections (should filter out).
+ * Address either by widening this adapter or by importing the real
+ * config types. Out of PR 3 scope; F18 cross-dialect integration tests
+ * will surface the gap if it bites.
  */
 function toMinimalEntities(
   entities: unknown[],

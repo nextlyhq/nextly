@@ -25,6 +25,7 @@ import { generatePgSQL } from "./postgres.js";
 import { generateSqliteSQL } from "./sqlite.js";
 
 export { quoteIdent } from "./identifier-quoting.js";
+export { MysqlUnsupportedOperationError } from "./mysql.js";
 export { SqliteUnsupportedOperationError } from "./sqlite.js";
 
 export function generateSQL(op: Operation, dialect: SupportedDialect): string {

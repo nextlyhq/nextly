@@ -131,7 +131,7 @@ describe("generateMigration", () => {
     expect(sql).toContain('ALTER TABLE "dc_posts" ADD COLUMN "excerpt"');
   });
 
-  it("rename: non-interactive auto-accept emits RENAME COLUMN", async () => {
+  it("rename: non-interactive auto-accept emits RENAME COLUMN (description -> summary)", async () => {
     const desired = buildDesiredSnapshotFromConfigForTest(
       [POSTS_V1],
       [],
@@ -146,7 +146,7 @@ describe("generateMigration", () => {
     );
 
     const result = await generateMigration({
-      name: "rename_title_to_name",
+      name: "rename_description_to_summary",
       dialect: "postgresql",
       migrationsDir,
       collections: [POSTS_V2_RENAMED],
@@ -317,6 +317,74 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     const out = applyRenameDecisionsForTest(ops, decisions);
     expect(out).toHaveLength(2);
     expect(out.map(o => o.type)).toEqual(["drop_column", "add_column"]);
+  });
+
+  it("dedupes Cartesian acceptances: only first-accepting decision wins (F11 PR 3 review fix #2)", () => {
+    // Setup: table dc_posts has drops [a, b] and adds [x, y]. The
+    // RegexRenameDetector emits 4 candidates (a→x, a→y, b→x, b→y).
+    // If user accepts (a→x) AND (a→y), we should emit RENAME a→x ONLY
+    // and leave the second accept's drop+add as a normal pair so apply
+    // doesn't try to RENAME the same column twice.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "a",
+        columnType: "text",
+      },
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "b",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "x", type: "text", nullable: true },
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "y", type: "text", nullable: true },
+      },
+    ];
+    const candidate = (from: string, to: string) => ({
+      candidate: {
+        tableName: "dc_posts",
+        fromColumn: from,
+        toColumn: to,
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        defaultSuggestion: "rename" as const,
+      },
+      accepted: true,
+    });
+    const decisions = [
+      candidate("a", "x"),
+      candidate("a", "y"), // overlapping drop column
+      candidate("b", "x"), // overlapping add column (x already claimed)
+      candidate("b", "y"), // both columns still free, should be accepted
+    ];
+
+    const out = applyRenameDecisionsForTest(ops, decisions);
+
+    // Two RENAME COLUMN ops produced: a→x and b→y. The other two
+    // overlapping decisions are skipped silently.
+    const renames = out.filter(o => o.type === "rename_column");
+    expect(renames).toHaveLength(2);
+    expect(renames).toContainEqual(
+      expect.objectContaining({ fromColumn: "a", toColumn: "x" })
+    );
+    expect(renames).toContainEqual(
+      expect.objectContaining({ fromColumn: "b", toColumn: "y" })
+    );
+
+    // No leftover drop/add ops because both drops + both adds were
+    // claimed (first acceptance wins for each column).
+    expect(out.filter(o => o.type === "drop_column")).toHaveLength(0);
+    expect(out.filter(o => o.type === "add_column")).toHaveLength(0);
   });
 
   it("preserves non-rename ops untouched", () => {

@@ -31,6 +31,20 @@ export interface PromptRenamesOptions {
   autoAccept?: boolean;
 }
 
+/**
+ * F11 PR 3 review fix #3: typed error thrown when the operator cancels
+ * a prompt mid-flow (Ctrl-C). The CLI catches this and calls
+ * `process.exit(1)`. Keeping the exit out of the domain layer makes
+ * promptRenames testable without spying on `process.exit` (a Ctrl-C in
+ * a unit test would otherwise terminate the test runner).
+ */
+export class PromptCancelledError extends Error {
+  constructor() {
+    super("Cancelled by user.");
+    this.name = "PromptCancelledError";
+  }
+}
+
 export async function promptRenames(
   candidates: RenameCandidate[],
   opts: PromptRenamesOptions = {}
@@ -46,11 +60,10 @@ export async function promptRenames(
       initialValue: c.defaultSuggestion === "rename",
     });
     if (p.isCancel(answer)) {
-      // User pressed Ctrl-C mid-prompt. Surface as exit 1 — the
-      // orchestrator catches and exits cleanly. We log here so the
-      // user sees a clear "cancelled" signal before exit.
+      // User pressed Ctrl-C mid-prompt. Throw the typed error; the CLI
+      // entry point catches and exits.
       p.cancel("Cancelled by user.");
-      process.exit(1);
+      throw new PromptCancelledError();
     }
     decisions.push({ candidate: c, accepted: answer });
   }

@@ -10,6 +10,8 @@ import {
   computeMigrationHash,
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  parseSnapshotFile,
+  SnapshotFileError,
   verifyMigrationHash,
   writeSnapshot,
   type SnapshotFile,
@@ -214,6 +216,105 @@ describe("snapshot-io", () => {
   describe("EMPTY_SNAPSHOT", () => {
     it("is the well-known empty schema", () => {
       expect(EMPTY_SNAPSHOT).toEqual({ tables: [] });
+    });
+  });
+
+  describe("parseSnapshotFile (F11 PR 3 review fix #4)", () => {
+    const VALID_HASH = "a".repeat(64);
+
+    it("accepts a well-formed envelope", () => {
+      const json = JSON.stringify({
+        version: 1,
+        migrationHash: VALID_HASH,
+        snapshot: { tables: [] },
+      });
+      expect(() => parseSnapshotFile(json, "test.snapshot.json")).not.toThrow();
+    });
+
+    it("throws SnapshotFileError on invalid JSON", () => {
+      expect(() => parseSnapshotFile("not json", "test.snapshot.json")).toThrow(
+        SnapshotFileError
+      );
+    });
+
+    it("throws on non-object root", () => {
+      expect(() => parseSnapshotFile("[]", "test.snapshot.json")).toThrow(
+        /expected a JSON object/
+      );
+    });
+
+    it("throws on missing version", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/expected version: 1/);
+    });
+
+    it("throws on wrong version (e.g. future v2 snapshot)", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 2,
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/expected version: 1, got 2/);
+    });
+
+    it("throws on missing migrationHash", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({ version: 1, snapshot: { tables: [] } }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/migrationHash to be a 64-char hex SHA-256/);
+    });
+
+    it("throws on bad-shape migrationHash (too short)", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 1,
+            migrationHash: "abc",
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/64-char hex SHA-256/);
+    });
+
+    it("throws on missing snapshot.tables", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 1,
+            migrationHash: VALID_HASH,
+            snapshot: {},
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/snapshot.tables to be an array/);
+    });
+
+    it("includes the filename in the error message for findability", () => {
+      try {
+        parseSnapshotFile(
+          "garbage",
+          "20260429_154500_001_oopsie.snapshot.json"
+        );
+        throw new Error("expected throw");
+      } catch (err) {
+        expect((err as Error).message).toContain(
+          "20260429_154500_001_oopsie.snapshot.json"
+        );
+      }
     });
   });
 });

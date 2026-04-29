@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Operation } from "../../diff/types.js";
-import { generateSQL } from "../index.js";
+import { generateSQL, MysqlUnsupportedOperationError } from "../index.js";
 
 const my = (op: Operation) => generateSQL(op, "mysql");
 
@@ -80,6 +80,22 @@ describe("generateSQL — mysql", () => {
         toType: "bigint",
       })
     ).toBe("ALTER TABLE `dc_posts` MODIFY COLUMN `views` bigint");
+  });
+
+  it("change_column_nullable THROWS (F11 PR 3 review fix #1)", () => {
+    // MySQL MODIFY COLUMN requires the column type. Until F12 extends
+    // ChangeColumnNullableOp with the type, we throw at template-
+    // generation time (parallel to SQLite). Operators must use
+    // migrate:create --blank and hand-write the ALTER TABLE.
+    expect(() =>
+      my({
+        type: "change_column_nullable",
+        tableName: "dc_posts",
+        columnName: "title",
+        fromNullable: true,
+        toNullable: false,
+      })
+    ).toThrow(MysqlUnsupportedOperationError);
   });
 
   it("change_column_default emits SET DEFAULT / DROP DEFAULT", () => {

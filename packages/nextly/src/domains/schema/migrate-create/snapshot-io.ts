@@ -41,6 +41,10 @@ export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
  * Returns `null` if the directory doesn't exist or contains no
  * `.snapshot.json` files. Callers treat that as "first migration"
  * and use `EMPTY_SNAPSHOT`.
+ *
+ * Throws `SnapshotFileError` on parse failure or invalid envelope so
+ * the caller surfaces a clear error instead of a downstream
+ * "cannot read property 'tables' of undefined" stack trace.
  */
 export async function loadLatestSnapshot(
   metaDir: string
@@ -56,7 +60,76 @@ export async function loadLatestSnapshot(
   if (snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
   const content = await readFile(resolve(metaDir, latest), "utf-8");
-  return { filename: latest, data: JSON.parse(content) as SnapshotFile };
+  return { filename: latest, data: parseSnapshotFile(content, latest) };
+}
+
+/**
+ * F11 PR 3 review fix #4: thrown when a snapshot file is malformed,
+ * unparseable, or has an unexpected version number. Includes the
+ * filename so operators can find the offending file fast.
+ */
+export class SnapshotFileError extends Error {
+  constructor(filename: string, reason: string) {
+    super(`snapshot file ${filename} is invalid: ${reason}`);
+    this.name = "SnapshotFileError";
+  }
+}
+
+/**
+ * Parse + validate a snapshot file. Catches:
+ * - JSON parse failures (corrupt file, partial write from a crashed run).
+ * - Wrong `version` (someone running an old nextly binary against a
+ *   newer snapshot, or vice versa).
+ * - Missing required fields (hand-edited files).
+ *
+ * The validation is structural, not full-schema — Zod-level validation
+ * is deferred to a follow-up if the snapshot envelope grows complex.
+ */
+export function parseSnapshotFile(
+  content: string,
+  filename: string
+): SnapshotFile {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(content);
+  } catch (err) {
+    throw new SnapshotFileError(
+      filename,
+      `JSON parse failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new SnapshotFileError(filename, "expected a JSON object");
+  }
+  const obj = raw as Record<string, unknown>;
+  if (obj.version !== 1) {
+    throw new SnapshotFileError(
+      filename,
+      `expected version: 1, got ${JSON.stringify(obj.version)}. ` +
+        "If this snapshot was created by a newer nextly version, upgrade your CLI."
+    );
+  }
+  if (
+    typeof obj.migrationHash !== "string" ||
+    !/^[a-f0-9]{64}$/.test(obj.migrationHash)
+  ) {
+    throw new SnapshotFileError(
+      filename,
+      `expected migrationHash to be a 64-char hex SHA-256, got ${JSON.stringify(obj.migrationHash)}`
+    );
+  }
+  const snap = obj.snapshot;
+  if (
+    snap === null ||
+    typeof snap !== "object" ||
+    !Array.isArray((snap as { tables?: unknown }).tables)
+  ) {
+    throw new SnapshotFileError(
+      filename,
+      "expected snapshot.tables to be an array"
+    );
+  }
+  return obj as unknown as SnapshotFile;
 }
 
 /**
@@ -118,7 +191,10 @@ export async function verifyMigrationHash(
   } catch {
     return { ok: false, expected: undefined, actual };
   }
-  const data = JSON.parse(raw) as SnapshotFile;
+  // F11 PR 3 review fix #4: validate the parsed envelope so a malformed
+  // snapshot surfaces a clear error instead of "cannot read property
+  // 'migrationHash' of undefined".
+  const data = parseSnapshotFile(raw, `${baseName}.snapshot.json`);
   return {
     ok: data.migrationHash === actual,
     expected: data.migrationHash,

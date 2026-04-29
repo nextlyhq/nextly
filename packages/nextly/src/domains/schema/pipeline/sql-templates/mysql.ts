@@ -88,32 +88,48 @@ function generateRenameColumn(op: RenameColumnOp): string {
   return `ALTER TABLE ${q(op.tableName)} RENAME COLUMN ${q(op.fromColumn)} TO ${q(op.toColumn)}`;
 }
 
-// MySQL has no ALTER COLUMN TYPE — must use MODIFY COLUMN, which requires
-// re-stating the column type (and by extension would need nullable/default
-// to preserve them). For F11 v1 we emit just the type change; if the
-// column was NOT NULL or had a default, the operator must hand-edit the
-// generated migration. Acceptable trade-off for v1 because the apply
-// pipeline uses pushSchema which handles this differently anyway.
+// F11 PR 3 review fix #1: MySQL MODIFY COLUMN requires the column type
+// to be re-stated. ChangeColumnTypeOp carries `toType` so we can emit
+// valid SQL — but the original column's NOT NULL / DEFAULT clauses are
+// dropped (operator must hand-edit if they need to preserve them).
+// Acceptable trade-off for v1.
 function generateChangeColumnType(op: ChangeColumnTypeOp): string {
   return `ALTER TABLE ${q(op.tableName)} MODIFY COLUMN ${q(op.columnName)} ${op.toType}`;
 }
 
-// MySQL MODIFY COLUMN requires the column type. We don't track the
-// current type on a ChangeColumnNullableOp, so we look at fromNullable
-// to decide whether the operator wants nullable=true (DROP NOT NULL)
-// or nullable=false (SET NOT NULL). The operator must hand-edit if
-// they need to preserve a non-default column type or default expression.
+// F11 PR 3 review fix #1: previously emitted SQL with a comment-as-
+// placeholder for the missing column type. That parses (block comment
+// is valid MySQL), but `MODIFY COLUMN` REQUIRES the column type — so
+// the SQL would fail at apply time, NOT at migrate:create time. That
+// is the worst possible failure mode: migrate:create succeeds, the
+// operator commits the file, then prod CI fails with a confusing error
+// pointing at a comment.
+//
+// Fix: throw at template-generation time (parallel to SQLite). F12 may
+// extend ChangeColumnNullableOp with `columnType: string` (the diff
+// engine has access to it; see RenameColumnOp.fromType for precedent).
+// Until then, MySQL operators must use migrate:create --blank and
+// hand-write the MODIFY COLUMN with the explicit type.
 function generateChangeColumnNullable(op: ChangeColumnNullableOp): string {
-  // Without the column's current type we emit a placeholder hint.
-  // F12 may extend ChangeColumnNullableOp with the column type; until
-  // then, document the limitation in the emitted SQL itself.
-  const hint = "/* MySQL: re-state the column type after the column name */";
-  const nullClause = op.toNullable ? "NULL" : "NOT NULL";
-  return `ALTER TABLE ${q(op.tableName)} MODIFY COLUMN ${q(op.columnName)} ${hint} ${nullClause}`;
+  throw new MysqlUnsupportedOperationError(
+    "change_column_nullable",
+    `Cannot generate valid MODIFY COLUMN SQL for ${op.tableName}.${op.columnName} ` +
+      `because the column type is not tracked on this operation. F12 will extend ` +
+      `ChangeColumnNullableOp with the type. For now, use 'nextly migrate:create --blank' ` +
+      `and hand-write 'ALTER TABLE \`${op.tableName}\` MODIFY COLUMN \`${op.columnName}\` ` +
+      `<TYPE> ${op.toNullable ? "NULL" : "NOT NULL"};'.`
+  );
 }
 
 function generateChangeColumnDefault(op: ChangeColumnDefaultOp): string {
   return op.toDefault === undefined
     ? `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} DROP DEFAULT`
     : `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} SET DEFAULT ${op.toDefault}`;
+}
+
+export class MysqlUnsupportedOperationError extends Error {
+  constructor(opType: string, hint: string) {
+    super(`MySQL F11 PR 3 limitation: ${opType}. ${hint}`);
+    this.name = "MysqlUnsupportedOperationError";
+  }
 }
