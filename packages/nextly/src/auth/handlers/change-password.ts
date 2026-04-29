@@ -32,7 +32,7 @@ export async function handleChangePassword(
   const sessionResult = await getSession(request, deps.secret);
   if (!sessionResult.authenticated) {
     return jsonResponse(401, {
-      error: { code: "UNAUTHENTICATED", message: "Authentication required" },
+      error: { code: "AUTH_REQUIRED", message: "Authentication required" },
     });
   }
 

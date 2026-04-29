@@ -24,6 +24,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
+import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -35,12 +36,6 @@ interface RouteContext {
 async function getEmailProviderService(): Promise<EmailProviderService> {
   await getNextly();
   return container.get<EmailProviderService>("emailProviderService");
-}
-
-function requireAuthHeader(request: Request): void {
-  if (!request.headers.get("Authorization")) {
-    throw NextlyError.authRequired();
-  }
 }
 
 const testProviderSchema = z.object({

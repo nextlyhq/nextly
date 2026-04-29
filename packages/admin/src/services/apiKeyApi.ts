@@ -87,9 +87,9 @@ export interface CreateApiKeyResult {
 /**
  * Thin authenticated fetch wrapper for the API key endpoints.
  *
- * The API key backend returns single-wrapped responses (`{ data, meta }`,
- * `{ doc, key }`, `{ success }`) so we return the full parsed JSON and let
- * each caller extract the fields it needs.
+ * Returns the full parsed JSON (canonical wire shape `{ data, meta? }` per
+ * spec §10.2) so each caller can pick the field shape its endpoint emits —
+ * `data` for single docs, `data` + `meta` for paginated lists.
  *
  * Uses the shared `parseApiError` for consistent error handling.
  */
@@ -141,11 +141,15 @@ export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
 export async function createApiKey(
   input: CreateApiKeyPayload
 ): Promise<CreateApiKeyResult> {
-  const json = await apiKeyFetch<CreateApiKeyResult>("/api-keys", {
+  // Canonical wire shape per spec §10.2: route returns { data: { doc, key } }.
+  // Reading the top-level json.doc / json.key (the legacy shape) leaves the
+  // reveal modal blank — the raw key is shown exactly once and cannot be
+  // recovered, so this fix is critical (handoff F12 HIGH IMPACT).
+  const json = await apiKeyFetch<{ data: CreateApiKeyResult }>("/api-keys", {
     method: "POST",
     body: JSON.stringify(input),
   });
-  return { doc: json.doc, key: json.key };
+  return { doc: json.data.doc, key: json.data.key };
 }
 
 /**

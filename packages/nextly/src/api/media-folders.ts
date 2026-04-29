@@ -38,6 +38,7 @@ import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 
 import { createSuccessResponse } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getMediaService(): Promise<MediaService> {
@@ -58,27 +59,6 @@ function createAuthenticatedContext(userId: string): RequestContext {
       permissions: [],
     },
   };
-}
-
-async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
-  try {
-    return (await req.json()) as Record<string, unknown>;
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { reason: "invalid-json-body" },
-    });
-  }
 }
 
 /**
@@ -126,7 +106,7 @@ export const GET = withErrorHandler(
 export const POST = withErrorHandler(
   async (request: NextRequest): Promise<Response> => {
     const mediaService = await getMediaService();
-    const body = await readJsonBody(request);
+    const body = await readJsonBody<Record<string, unknown>>(request);
 
     const { createdBy, ...folderInput } = body as {
       createdBy?: string;
@@ -211,7 +191,7 @@ export function updateFolder(
     ): Promise<Response> => {
       const mediaService = await getMediaService();
       const params = await ctx.params;
-      const body = await readJsonBody(req);
+      const body = await readJsonBody<Record<string, unknown>>(req);
       const context = createRequestContext();
 
       const folder = await mediaService.updateFolder(params.id, body, context);

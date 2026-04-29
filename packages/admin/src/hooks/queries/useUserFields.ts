@@ -35,7 +35,7 @@ import {
   type UserFieldDefinitionRecord,
   type CreateUserFieldPayload,
   type UpdateUserFieldPayload,
-  type UserFieldsMeta,
+  type UserAdminConfig,
 } from "@admin/services/userFieldsApi";
 
 // ============================================================
@@ -55,21 +55,23 @@ export const userFieldKeys = {
 
 /**
  * useUserFields — Fetch all user field definitions.
- * Returns `{ data: UserFieldDefinitionRecord[], meta?: UserFieldsMeta }`.
- * Meta includes `adminConfig` with `listFields` and `group` from defineConfig().
+ *
+ * Returns `{ fields: UserFieldDefinitionRecord[], adminConfig?: UserAdminConfig }`.
+ * Per spec §10.2 and handoff F14, `adminConfig` is part of the structured
+ * `data` payload (not `meta`, which is reserved for pagination).
  * Client-side pagination/search is handled by the page component.
  */
 export function useUserFields(
   options?: Omit<
     UseQueryOptions<
-      { data: UserFieldDefinitionRecord[]; meta?: UserFieldsMeta },
+      { fields: UserFieldDefinitionRecord[]; adminConfig?: UserAdminConfig },
       Error
     >,
     "queryKey" | "queryFn"
   >
 ) {
   return useQuery<
-    { data: UserFieldDefinitionRecord[]; meta?: UserFieldsMeta },
+    { fields: UserFieldDefinitionRecord[]; adminConfig?: UserAdminConfig },
     Error
   >({
     queryKey: userFieldKeys.lists(),

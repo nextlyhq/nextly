@@ -48,7 +48,8 @@ async function fetchProviders(): Promise<ProviderOption[]> {
     });
     if (!res.ok) return [];
     const json = await res.json();
-    return (json.data?.data as ProviderOption[]) ?? [];
+    // Canonical wire shape per spec §10.2: { data: ProviderOption[] }.
+    return (json.data as ProviderOption[]) ?? [];
   } catch {
     return [];
   }
@@ -61,7 +62,8 @@ async function fetchTemplates(): Promise<TemplateOption[]> {
     });
     if (!res.ok) return [];
     const json = await res.json();
-    return (json.data?.data as TemplateOption[]) ?? [];
+    // Canonical wire shape per spec §10.2: { data: TemplateOption[] }.
+    return (json.data as TemplateOption[]) ?? [];
   } catch {
     return [];
   }

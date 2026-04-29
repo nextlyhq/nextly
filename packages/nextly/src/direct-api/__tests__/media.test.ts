@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import { NextlyError, NotFoundError } from "../errors";
+import { NextlyError, NotFoundError, ValidationError } from "../errors";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -87,12 +87,11 @@ describe("Direct API - Media Operations", () => {
     });
 
     it("should throw on upload failure", async () => {
-      const error = {
-        code: "VALIDATION_ERROR",
-        message: "File too large",
-        httpStatus: 400,
-      };
-      mocks.mediaService.upload.mockRejectedValue(error);
+      // Services throw NextlyError directly (post-PR-4); the namespace
+      // passes it through unchanged after `convertServiceError` was deleted.
+      mocks.mediaService.upload.mockRejectedValue(
+        new ValidationError("File too large")
+      );
 
       await expect(
         nextly.media.upload({
@@ -278,12 +277,11 @@ describe("Direct API - Media Operations", () => {
     });
 
     it("should throw on not found", async () => {
-      const error = {
-        code: "NOT_FOUND",
-        message: "Not found",
-        httpStatus: 404,
-      };
-      mocks.mediaService.delete.mockRejectedValue(error);
+      // Services throw NextlyError directly (post-PR-4); the namespace
+      // passes it through unchanged after `convertServiceError` was deleted.
+      mocks.mediaService.delete.mockRejectedValue(
+        new NotFoundError("Not found")
+      );
 
       await expect(nextly.media.delete({ id: "missing" })).rejects.toThrow(
         NotFoundError

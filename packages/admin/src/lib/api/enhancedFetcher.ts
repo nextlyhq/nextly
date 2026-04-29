@@ -50,16 +50,12 @@ export async function enhancedFetcher<T = unknown, M = unknown>(
     return { data: undefined as T };
   }
 
-  // Handle response with success/message structure
-  if (json.data?.success === false) {
-    const apiMessage =
-      (json.data && (json.data.error || json.data.message)) || "Request failed";
-    throw new Error(apiMessage);
-  }
-
-  // Return data and optional meta
+  // Canonical wire shape (per spec §10.2): { data: <T>, meta?: { ... } }.
+  // The legacy `{ data: { success: false } }` branch is gone — every error
+  // surfaces as a non-2xx response with `{ error: { ... } }` and is caught
+  // above by `parseApiError`.
   return {
-    data: json.data?.data as T,
-    meta: json.data?.meta as M | undefined,
+    data: json.data as T,
+    meta: json.meta as M | undefined,
   };
 }

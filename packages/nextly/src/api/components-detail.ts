@@ -29,6 +29,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 
+import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -43,21 +44,6 @@ interface RouteContext {
 async function getComponentRegistry(): Promise<ComponentRegistryService> {
   await getNextly();
   return getService("componentRegistryService");
-}
-
-/**
- * Stub auth check — preserves the legacy behavior of accepting any request
- * with an `Authorization` header. The real token validation lands when the
- * auth middleware migration completes; until then, presence-only is the
- * documented contract for this surface.
- */
-function requireAuthHeader(request: Request): void {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    throw NextlyError.authRequired();
-  }
-  // TODO: Validate the auth token and extract user ID
-  // For now, we accept any Authorization header as authenticated
 }
 
 /**

@@ -6,7 +6,12 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import { NextlyError, NotFoundError, ValidationError } from "../errors";
+import {
+  NextlyError,
+  NotFoundError,
+  ValidationError,
+  DatabaseError,
+} from "../errors";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -361,11 +366,11 @@ describe("Direct API - Singles Operations", () => {
     });
 
     it("should throw NextlyError when registry service fails", async () => {
-      mocks.singleRegistryService.listSingles.mockRejectedValue({
-        code: "DATABASE_ERROR",
-        message: "Database connection failed",
-        httpStatus: 500,
-      });
+      // Services throw NextlyError directly (post-PR-4); the namespace
+      // passes it through unchanged after `convertServiceError` was deleted.
+      mocks.singleRegistryService.listSingles.mockRejectedValue(
+        new DatabaseError("Database connection failed")
+      );
 
       await expect(nextly.findGlobals()).rejects.toThrow(NextlyError);
     });

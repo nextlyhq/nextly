@@ -23,7 +23,6 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
-  convertServiceError,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
@@ -93,30 +92,26 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         if (config.disableErrors && isNotFoundError(error)) {
           return null;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
     async create(args: CreateUserArgs): Promise<User> {
-      try {
-        const data = (args.data ?? {}) as Record<string, unknown>;
-        const { name, image, roles, isActive, ...customFields } = data;
-        const user = await ctx.userService.create(
-          {
-            email: args.email,
-            name: (name as string) ?? "",
-            password: args.password,
-            image: image as string | undefined,
-            roles: roles as string[] | undefined,
-            isActive: isActive as boolean | undefined,
-            ...customFields,
-          },
-          createRequestContext(args)
-        );
-        return user;
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const data = args.data ?? {};
+      const { name, image, roles, isActive, ...customFields } = data;
+      const user = await ctx.userService.create(
+        {
+          email: args.email,
+          name: (name as string) ?? "",
+          password: args.password,
+          image: image as string | undefined,
+          roles: roles as string[] | undefined,
+          isActive: isActive as boolean | undefined,
+          ...customFields,
+        },
+        createRequestContext(args)
+      );
+      return user;
     },
 
     async update(args: UpdateUserArgs): Promise<User> {
@@ -128,26 +123,22 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         );
       }
 
-      try {
-        const data = (args.data ?? {}) as Record<string, unknown>;
-        const { email, name, image, emailVerified, isActive, ...customFields } =
-          data;
-        const user = await ctx.userService.update(
-          args.id,
-          {
-            email: email as string | undefined,
-            name: name as string | undefined,
-            image: image as string | undefined,
-            emailVerified: emailVerified as Date | null | undefined,
-            isActive: isActive as boolean | undefined,
-            ...customFields,
-          },
-          createRequestContext(args)
-        );
-        return user;
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const data = args.data ?? {};
+      const { email, name, image, emailVerified, isActive, ...customFields } =
+        data;
+      const user = await ctx.userService.update(
+        args.id,
+        {
+          email: email as string | undefined,
+          name: name as string | undefined,
+          image: image as string | undefined,
+          emailVerified: emailVerified as Date | null | undefined,
+          isActive: isActive as boolean | undefined,
+          ...customFields,
+        },
+        createRequestContext(args)
+      );
+      return user;
     },
 
     async delete(args: DeleteUserArgs): Promise<DeleteResult> {
@@ -159,15 +150,11 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         );
       }
 
-      try {
-        await ctx.userService.delete(args.id, createRequestContext(args));
-        return {
-          deleted: true,
-          ids: [args.id],
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      await ctx.userService.delete(args.id, createRequestContext(args));
+      return {
+        deleted: true,
+        ids: [args.id],
+      };
     },
   };
 }
