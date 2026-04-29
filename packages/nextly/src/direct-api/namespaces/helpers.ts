@@ -13,7 +13,6 @@ import type { RequestContext } from "../../shared/types/index";
 import {
   NextlyError,
   NextlyErrorCode,
-  NotFoundError,
   ValidationError,
   fromServiceError,
 } from "../errors";
@@ -188,16 +187,12 @@ export function convertServiceError(error: unknown): NextlyError {
  * Returns `true` when the thrown value represents a "not found" outcome.
  *
  * Used to honor the `disableErrors` flag on find operations so callers get
- * `null` instead of an exception.
+ * `null` instead of an exception. Uses the canonical type guard so the check
+ * survives package-boundary identity issues (when one consumer's NextlyError
+ * is a different module instance from ours, instanceof returns false).
  */
 export function isNotFoundError(error: unknown): boolean {
-  if (error instanceof NotFoundError) {
-    return true;
-  }
-  if (error instanceof NextlyError && error.statusCode === 404) {
-    return true;
-  }
-  return false;
+  return NextlyError.isNotFound(error);
 }
 
 /**
