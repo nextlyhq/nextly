@@ -17,12 +17,12 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
 import { container } from "../../di/container";
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   ApiKeyMeta,
   ApiKeyService,
 } from "../../services/auth/api-key-service";
 import type { PaginatedResponse } from "../../types/pagination";
-import { NextlyError, NextlyErrorCode } from "../errors";
 import type {
   CheckAccessArgs,
   CheckApiKeyArgs,
@@ -409,7 +409,7 @@ async function resolveApiKeyOwner(
     .limit(1)) as Array<{ userId: string }>;
 
   if (rows.length === 0) {
-    throw new NextlyError("API key not found", NextlyErrorCode.NOT_FOUND, 404);
+    throw NextlyError.notFound({ logContext: { entity: "apiKey", apiKeyId: id } });
   }
   return rows[0].userId;
 }

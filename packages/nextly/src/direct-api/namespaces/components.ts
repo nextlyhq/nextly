@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-import { NextlyError, NextlyErrorCode, NotFoundError } from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   ComponentDefinition,
   ComponentListResult,
@@ -67,11 +67,11 @@ export function createComponentsNamespace(
       const config = mergeConfig(ctx.defaultConfig, args);
 
       if (!args.slug) {
-        throw new NextlyError(
-          "'slug' is required for components.findBySlug()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'slug' is required for components.findBySlug()",
+          statusCode: 400,
+        });
       }
 
       try {
@@ -83,10 +83,9 @@ export function createComponentsNamespace(
           if (config.disableErrors) {
             return null;
           }
-          throw new NotFoundError(
-            `Component with slug '${args.slug}' not found`,
-            { slug: args.slug }
-          );
+          throw NextlyError.notFound({
+            logContext: { slug: args.slug, entity: "component" },
+          });
         }
 
         return mapComponentRecord(component);
@@ -103,27 +102,27 @@ export function createComponentsNamespace(
 
     async create(args: CreateComponentArgs): Promise<ComponentDefinition> {
       if (!args.slug) {
-        throw new NextlyError(
-          "'slug' is required for components.create()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'slug' is required for components.create()",
+          statusCode: 400,
+        });
       }
 
       if (!args.label) {
-        throw new NextlyError(
-          "'label' is required for components.create()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'label' is required for components.create()",
+          statusCode: 400,
+        });
       }
 
       if (!args.fields || !Array.isArray(args.fields)) {
-        throw new NextlyError(
-          "'fields' array is required for components.create()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'fields' array is required for components.create()",
+          statusCode: 400,
+        });
       }
 
       const { calculateSchemaHash } = await import(
@@ -152,19 +151,19 @@ export function createComponentsNamespace(
 
     async update(args: UpdateComponentArgs): Promise<ComponentDefinition> {
       if (!args.slug) {
-        throw new NextlyError(
-          "'slug' is required for components.update()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'slug' is required for components.update()",
+          statusCode: 400,
+        });
       }
 
       if (!args.data || typeof args.data !== "object") {
-        throw new NextlyError(
-          "'data' object is required for components.update()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'data' object is required for components.update()",
+          statusCode: 400,
+        });
       }
 
       const updateData: Record<string, unknown> = {};
@@ -202,11 +201,11 @@ export function createComponentsNamespace(
 
     async delete(args: DeleteComponentArgs): Promise<DeleteResult> {
       if (!args.slug) {
-        throw new NextlyError(
-          "'slug' is required for components.delete()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'slug' is required for components.delete()",
+          statusCode: 400,
+        });
       }
 
       await ctx.componentRegistryService.deleteComponent(args.slug);

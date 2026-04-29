@@ -261,20 +261,23 @@ describe("NextlyError factories", () => {
   });
 });
 
-describe("Brand interoperability with the migration shims", () => {
-  it("NextlyError.is recognises a ServiceError instance via the brand", async () => {
-    // The shim ServiceError stamps the same Symbol.for brand on its prototype.
-    const { ServiceError, ServiceErrorCode } = await import("./service-error");
-    const err = new ServiceError(ServiceErrorCode.NOT_FOUND, "thing not found");
+describe("Brand interoperability via cross-realm symbol", () => {
+  it("NextlyError.is recognises a foreign-realm class that stamps the same Symbol.for brand", () => {
+    // Simulates a separately-bundled module instance of NextlyError or a
+    // plugin-defined error: stamping the brand by Symbol.for with the
+    // canonical key is the supported integration point.
+    const NEXTLY_ERROR_BRAND = Symbol.for("@revnixhq/nextly/NextlyError");
+    class ForeignBranded extends Error {
+      readonly code = "NOT_FOUND";
+      static {
+        (ForeignBranded.prototype as unknown as Record<symbol, unknown>)[
+          NEXTLY_ERROR_BRAND
+        ] = true;
+      }
+    }
+    const err = new ForeignBranded("thing not found");
     expect(NextlyError.is(err)).toBe(true);
     expect(NextlyError.isCode(err, "NOT_FOUND")).toBe(true);
-    expect(NextlyError.isNotFound(err)).toBe(true);
-  });
-
-  it("NextlyError.is recognises a direct-api NotFoundError via prototype-chain inheritance of the brand", async () => {
-    const { NotFoundError } = await import("../direct-api/errors");
-    const err = new NotFoundError("missing", { id: "p_99" });
-    expect(NextlyError.is(err)).toBe(true);
     expect(NextlyError.isNotFound(err)).toBe(true);
   });
 });

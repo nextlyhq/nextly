@@ -47,6 +47,7 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/register";
+import { NextlyError } from "../errors/nextly-error";
 import type { ApiKeyService } from "../services/auth/api-key-service";
 import { AuthService } from "../services/auth/auth-service";
 import { PermissionService } from "../services/auth/permission-service";
@@ -67,7 +68,6 @@ import type { UserFieldDefinitionService } from "../services/users/user-field-de
 import type { UserService } from "../services/users/user-service";
 import type { PaginatedResponse } from "../types/pagination";
 
-import { NextlyError, NextlyErrorCode } from "./errors";
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
 import type { NextlyContext } from "./namespaces/context";
@@ -601,11 +601,12 @@ const globalForDirectApi = globalThis as unknown as {
  */
 export function getNextly(config?: DirectAPIConfig): Nextly {
   if (!isServicesRegistered()) {
-    throw new NextlyError(
-      "Nextly services not initialized. Call registerServices() before using the Direct API.",
-      NextlyErrorCode.INTERNAL_ERROR,
-      500
-    );
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage:
+        "Nextly services not initialized. Call registerServices() before using the Direct API.",
+      statusCode: 500,
+    });
   }
 
   if (!globalForDirectApi.__nextly_directApiInstance) {

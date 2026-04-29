@@ -1,5 +1,49 @@
 # @revnixhq/nextly
 
+## 0.0.140
+
+### Minor Changes — BREAKING
+
+- **Unified error system migration complete.** This release closes Task 21 (PRs 1–12) by removing every legacy error class and shim. Wire format was already canonical post-PR 10; this release deletes the source-side shims and SDK exports.
+
+  **Removed (BREAKING):**
+  - `ServiceError`, `ServiceErrorCode`, `isServiceError` (was at `@revnixhq/nextly/errors`) — replaced by `NextlyError`.
+  - All `*Error` subclasses exported from `@revnixhq/nextly/direct-api`: `NotFoundError`, `ValidationError`, `UnauthorizedError`, `ForbiddenError`, `ConflictError`, `DuplicateError`, `DatabaseError` — replaced by `NextlyError` factories.
+  - Legacy `NextlyErrorCode` enum (was at `@revnixhq/nextly/direct-api`) — use the canonical string codes from `NEXTLY_ERROR_STATUS` at `@revnixhq/nextly/errors`. Note: the legacy `UNAUTHORIZED` value was renamed to `AUTH_REQUIRED` in PR 10; existing wire shape is unchanged.
+  - Legacy `is*Error` type guards (`isNextlyError`, `isNotFoundError`, `isUnauthorizedError`, `isForbiddenError`, `isConflictError`, `isDuplicateError`, `isDatabaseError`, `isNextlyValidationError`) at `@revnixhq/nextly` root export — replaced by static guards on `NextlyError` (`NextlyError.is`, `NextlyError.isNotFound`, `NextlyError.isValidation`, etc.).
+  - `fromServiceError` (was at `@revnixhq/nextly/direct-api`) — services already throw `NextlyError` directly post-PR 4.
+  - Legacy `@revnixhq/nextly/api/error-handler` module (file `api/error-handler.ts`) — use the canonical `withErrorHandler` from `@revnixhq/nextly/api` (sourced from `with-error-handler.ts`).
+  - Domain error classes `EmailAttachmentError`, `FieldTransformError`, `ConfigLoaderError` (already removed in PR #95 / Task 21 PR 11).
+
+  **Migration:**
+
+  ```ts
+  // Service / domain code
+  throw new ServiceError(ServiceErrorCode.NOT_FOUND, "...")
+  // becomes
+  throw NextlyError.notFound({ logContext: { entity, id } })
+
+  // Direct API consumers
+  throw new NotFoundError("...")             // becomes
+  throw NextlyError.notFound({ logContext: { ... } })
+
+  throw new ValidationError("...", { ... })  // becomes
+  throw NextlyError.validation({ errors: [...] })
+
+  // Type narrowing
+  err instanceof NotFoundError               // becomes
+  NextlyError.isNotFound(err)
+
+  err instanceof ServiceError                // becomes
+  NextlyError.is(err)
+  ```
+
+  **Wire format:** unchanged from PR 10 — all responses use the canonical `{ data: <T> }` / `{ error: { code, message, requestId, ... } }` envelope.
+
+  **Known omissions for follow-up:**
+  - Plan §12.5–§12.7 contract test (`api/__tests__/api-contract.test.ts`) was not added in this PR — wire format is already verified by per-route tests.
+  - Plan §12.9 deep docs sweep (including a new `docs/guides/error-handling.md`) is deferred to a follow-up doc-only PR.
+
 ## 0.0.139
 
 ### Patch Changes

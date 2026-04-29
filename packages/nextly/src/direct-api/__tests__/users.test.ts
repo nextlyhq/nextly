@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import { NextlyError, NotFoundError, ValidationError } from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -285,7 +285,7 @@ describe("Direct API - Users Operations", () => {
 
     it("should return null with disableErrors when not found", async () => {
       mocks.userService.findById.mockRejectedValue(
-        new NotFoundError("User not found")
+        NextlyError.notFound({ logContext: { entity: "user" } })
       );
 
       const result = await nextly.users.findByID({
@@ -300,12 +300,12 @@ describe("Direct API - Users Operations", () => {
       // Services throw NextlyError directly (post-PR-4); the namespace
       // passes it through unchanged after `convertServiceError` was deleted.
       mocks.userService.findById.mockRejectedValue(
-        new NotFoundError("User not found")
+        NextlyError.notFound({ logContext: { entity: "user" } })
       );
 
-      await expect(nextly.users.findByID({ id: "missing" })).rejects.toThrow(
-        NotFoundError
-      );
+      await expect(
+        nextly.users.findByID({ id: "missing" })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 
@@ -350,7 +350,11 @@ describe("Direct API - Users Operations", () => {
       // Services throw NextlyError directly (post-PR-4); the namespace
       // passes it through unchanged after `convertServiceError` was deleted.
       mocks.userService.create.mockRejectedValue(
-        new ValidationError("Email already exists")
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "Email already exists",
+          statusCode: 400,
+        })
       );
 
       await expect(
@@ -439,12 +443,12 @@ describe("Direct API - Users Operations", () => {
       // Services throw NextlyError directly (post-PR-4); the namespace
       // passes it through unchanged after `convertServiceError` was deleted.
       mocks.userService.delete.mockRejectedValue(
-        new NotFoundError("User not found")
+        NextlyError.notFound({ logContext: { entity: "user" } })
       );
 
-      await expect(nextly.users.delete({ id: "missing" })).rejects.toThrow(
-        NotFoundError
-      );
+      await expect(
+        nextly.users.delete({ id: "missing" })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 });

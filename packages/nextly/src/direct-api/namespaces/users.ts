@@ -8,9 +8,9 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { User } from "../../services/users/user-service";
 import type { PaginatedResponse } from "../../types/pagination";
-import { NextlyError, NextlyErrorCode } from "../errors";
 import type {
   CreateUserArgs,
   DeleteResult,
@@ -116,11 +116,11 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
 
     async update(args: UpdateUserArgs): Promise<User> {
       if (!args.id) {
-        throw new NextlyError(
-          "'id' is required for users.update()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'id' is required for users.update()",
+          statusCode: 400,
+        });
       }
 
       const data = args.data ?? {};
@@ -143,11 +143,11 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
 
     async delete(args: DeleteUserArgs): Promise<DeleteResult> {
       if (!args.id) {
-        throw new NextlyError(
-          "'id' is required for users.delete()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'id' is required for users.delete()",
+          statusCode: 400,
+        });
       }
 
       await ctx.userService.delete(args.id, createRequestContext(args));

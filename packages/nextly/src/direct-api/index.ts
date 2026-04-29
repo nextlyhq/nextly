@@ -34,4 +34,7 @@
 // Export Nextly class, factory, and convenience object
 export { Nextly, getNextly, resetNextlyInstance, nextly } from "./nextly";
 export * from "./types";
-export * from "./errors";
+// Canonical NextlyError replaces the legacy direct-api error subclass
+// hierarchy (NotFoundError, ValidationError, etc.) — those were deleted in
+// Task 21 PR 12. SDK consumers narrow via `NextlyError.isNotFound(err)` etc.
+export { NextlyError } from "../errors/nextly-error";

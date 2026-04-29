@@ -10,13 +10,8 @@
 
 import { buildClaims } from "../../auth/jwt/claims.js";
 import { signAccessToken } from "../../auth/jwt/sign.js";
+import { NextlyError } from "../../errors/nextly-error";
 import { env } from "../../lib/env";
-import {
-  NextlyError,
-  NextlyErrorCode,
-  NotFoundError,
-  ValidationError,
-} from "../errors";
 import type {
   AuthResult,
   ChangePasswordArgs,
@@ -50,11 +45,12 @@ export async function login(
 
   const secret = env.NEXTLY_SECRET_RESOLVED;
   if (!secret) {
-    throw new NextlyError(
-      "NEXTLY_SECRET is not configured. Set NEXTLY_SECRET in your environment variables.",
-      NextlyErrorCode.INTERNAL_ERROR,
-      500
-    );
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage:
+        "NEXTLY_SECRET is not configured. Set NEXTLY_SECRET in your environment variables.",
+      statusCode: 500,
+    });
   }
 
   const maxAge = 30 * 24 * 60 * 60;
@@ -97,11 +93,12 @@ export async function me(
   args: { user: UserContext }
 ): Promise<AuthResult> {
   if (!args.user?.id) {
-    throw new NextlyError(
-      "user.id is required for me() - Direct API requires explicit user context",
-      NextlyErrorCode.INVALID_INPUT,
-      400
-    );
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        "user.id is required for me() - Direct API requires explicit user context",
+      statusCode: 400,
+    });
   }
 
   try {
@@ -111,7 +108,7 @@ export async function me(
     };
   } catch (err) {
     if (NextlyError.isNotFound(err)) {
-      throw new NotFoundError("User not found", { userId: args.user.id });
+      throw NextlyError.notFound({ logContext: { userId: args.user.id } });
     }
     throw err;
   }
@@ -120,9 +117,7 @@ export async function me(
 /**
  * Update the current user's profile (name/image only).
  *
- * PR 4 (unified-error-system): updateCurrentUser returns the user directly
- * and throws NextlyError on failure. NOT_FOUND is rewrapped as the
- * direct-api NotFoundError for SDK consumer compatibility.
+ * Throws `NextlyError` on failure (NOT_FOUND when the user doesn't exist).
  */
 export async function updateMe(
   ctx: NextlyContext,
@@ -132,11 +127,12 @@ export async function updateMe(
   }
 ): Promise<AuthResult> {
   if (!args.user?.id) {
-    throw new NextlyError(
-      "user.id is required for updateMe() - Direct API requires explicit user context",
-      NextlyErrorCode.INVALID_INPUT,
-      400
-    );
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        "user.id is required for updateMe() - Direct API requires explicit user context",
+      statusCode: 400,
+    });
   }
 
   try {
@@ -149,7 +145,7 @@ export async function updateMe(
     };
   } catch (err) {
     if (NextlyError.isNotFound(err)) {
-      throw new NotFoundError("User not found", { userId: args.user.id });
+      throw NextlyError.notFound({ logContext: { userId: args.user.id } });
     }
     throw err;
   }
@@ -158,10 +154,8 @@ export async function updateMe(
 /**
  * Register a new user with email + password.
  *
- * PR 4 (unified-error-system): registerUser returns the created user
- * directly and throws NextlyError on failure. VALIDATION_ERROR is
- * rewrapped as direct-api ValidationError to keep the legacy
- * `errors`-record shape for SDK consumers.
+ * Throws `NextlyError` on failure (e.g. VALIDATION_ERROR with
+ * `errors[]` already populated by the service).
  */
 export async function register(
   ctx: NextlyContext,
@@ -169,22 +163,14 @@ export async function register(
 ): Promise<{ user: Record<string, unknown> }> {
   const { email, password, collection: _collection, ...rest } = args;
 
-  try {
-    const user = await ctx.authService.registerUser({
-      email,
-      password,
-      name: (rest as { name?: string }).name,
-    });
-    return {
-      user: user,
-    };
-  } catch (err) {
-    if (NextlyError.isValidation(err)) {
-      const msg = (err as Error).message || "Validation failed";
-      throw new ValidationError(msg, { _root: [msg] });
-    }
-    throw err;
-  }
+  const user = await ctx.authService.registerUser({
+    email,
+    password,
+    name: (rest as { name?: string }).name,
+  });
+  return {
+    user: user,
+  };
 }
 
 /**
@@ -195,11 +181,12 @@ export async function changePassword(
   args: ChangePasswordArgs & { user: UserContext }
 ): Promise<{ success: true }> {
   if (!args.user?.id) {
-    throw new NextlyError(
-      "user.id is required for changePassword() - Direct API requires explicit user context",
-      NextlyErrorCode.INVALID_INPUT,
-      400
-    );
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        "user.id is required for changePassword() - Direct API requires explicit user context",
+      statusCode: 400,
+    });
   }
 
   // PR 4 (unified-error-system): changePassword returns void and throws

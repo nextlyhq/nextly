@@ -107,34 +107,12 @@ export {
 // Import and use directly: `import { nextly } from '@revnixhq/nextly'`
 export { nextly } from "./direct-api";
 
-// Direct API error classes for error handling in catch blocks
-export {
-  NextlyError,
-  NextlyErrorCode,
-  NotFoundError,
-  UnauthorizedError,
-  ForbiddenError,
-  ConflictError,
-  DuplicateError,
-  DatabaseError,
-  // Note: ValidationError is exported as NextlyValidationError to avoid
-  // conflict with the ValidationError interface from the validation module.
-  // Use isNextlyValidationError() type guard or check error.code === 'VALIDATION_ERROR'.
-  ValidationError as NextlyValidationError,
-} from "./direct-api/errors";
-
-// Direct API type guards for runtime error checking
-export {
-  isNextlyError,
-  isNotFoundError,
-  isUnauthorizedError,
-  isForbiddenError,
-  isConflictError,
-  isDuplicateError,
-  isDatabaseError,
-  isValidationError as isNextlyValidationError,
-  fromServiceError,
-} from "./direct-api/errors";
+// Canonical NextlyError — re-exported here for ergonomic catch-block use.
+// For richer surface (codes, public-data types, etc.) import from
+// `@revnixhq/nextly/errors`. Use the static type guards on `NextlyError`
+// (e.g. `NextlyError.isNotFound(err)`) — the legacy `is*Error` helpers
+// were removed in PR 12 (final unified-error-system cleanup).
+export { NextlyError } from "./errors";
 
 // Direct API types - type-safe slug resolution (for generated types integration)
 export type {
@@ -257,9 +235,6 @@ export {
   type ServiceMap,
 } from "./di";
 
-// Errors
-export { ServiceError, ServiceErrorCode, isServiceError } from "./errors";
-
 // Validation Types and Utilities
 export type {
   ValidationErrorCode,
@@ -344,17 +319,6 @@ export {
   type PluginDefinition,
   type PluginHookRegistry,
 } from "./plugins";
-
-// API Route Error Handler Utilities
-export {
-  withErrorHandler,
-  serviceErrorToResponse,
-  createSuccessResponse,
-  createErrorResponse,
-  type ErrorHandlerOptions,
-  type ApiErrorResponse,
-  type ApiSuccessResponse,
-} from "./api/error-handler";
 
 // ============================================================
 // COLLECTIONS & FIELD TYPES (Plan 04)

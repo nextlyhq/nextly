@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import { NextlyError, NotFoundError, ValidationError } from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -90,7 +90,11 @@ describe("Direct API - Media Operations", () => {
       // Services throw NextlyError directly (post-PR-4); the namespace
       // passes it through unchanged after `convertServiceError` was deleted.
       mocks.mediaService.upload.mockRejectedValue(
-        new ValidationError("File too large")
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "File too large",
+          statusCode: 400,
+        })
       );
 
       await expect(
@@ -184,7 +188,7 @@ describe("Direct API - Media Operations", () => {
 
     it("should return null with disableErrors when not found", async () => {
       mocks.mediaService.findById.mockRejectedValue(
-        new NotFoundError("Not found")
+        NextlyError.notFound({ logContext: { entity: "media" } })
       );
 
       const result = await nextly.media.findByID({
@@ -197,12 +201,12 @@ describe("Direct API - Media Operations", () => {
 
     it("should throw on not found without disableErrors", async () => {
       mocks.mediaService.findById.mockRejectedValue(
-        new NotFoundError("Not found")
+        NextlyError.notFound({ logContext: { entity: "media" } })
       );
 
-      await expect(nextly.media.findByID({ id: "missing" })).rejects.toThrow(
-        NotFoundError
-      );
+      await expect(
+        nextly.media.findByID({ id: "missing" })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 
@@ -280,12 +284,12 @@ describe("Direct API - Media Operations", () => {
       // Services throw NextlyError directly (post-PR-4); the namespace
       // passes it through unchanged after `convertServiceError` was deleted.
       mocks.mediaService.delete.mockRejectedValue(
-        new NotFoundError("Not found")
+        NextlyError.notFound({ logContext: { entity: "media" } })
       );
 
-      await expect(nextly.media.delete({ id: "missing" })).rejects.toThrow(
-        NotFoundError
-      );
+      await expect(
+        nextly.media.delete({ id: "missing" })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 

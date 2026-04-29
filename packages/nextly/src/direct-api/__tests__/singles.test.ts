@@ -6,12 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import {
-  NextlyError,
-  NotFoundError,
-  ValidationError,
-  DatabaseError,
-} from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -74,16 +69,16 @@ describe("Direct API - Singles Operations", () => {
       );
     });
 
-    it("should throw NotFoundError on failure with 404", async () => {
+    it("should throw NextlyError(NOT_FOUND) on failure with 404", async () => {
       mocks.singleEntryService.get.mockResolvedValue({
         success: false,
         statusCode: 404,
         message: "Single not found",
       });
 
-      await expect(nextly.findGlobal({ slug: "nonexistent" })).rejects.toThrow(
-        NotFoundError
-      );
+      await expect(
+        nextly.findGlobal({ slug: "nonexistent" })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("should throw NextlyError on other failures", async () => {
@@ -152,7 +147,7 @@ describe("Direct API - Singles Operations", () => {
       );
     });
 
-    it("should throw ValidationError on validation failure", async () => {
+    it("should throw NextlyError(VALIDATION_ERROR) on validation failure", async () => {
       mocks.singleEntryService.update.mockResolvedValue({
         success: false,
         statusCode: 400,
@@ -165,10 +160,10 @@ describe("Direct API - Singles Operations", () => {
           slug: "site-settings",
           data: {},
         })
-      ).rejects.toThrow(ValidationError);
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
-    it("should throw NotFoundError when single not found", async () => {
+    it("should throw NextlyError(NOT_FOUND) when single not found", async () => {
       mocks.singleEntryService.update.mockResolvedValue({
         success: false,
         statusCode: 404,
@@ -180,7 +175,7 @@ describe("Direct API - Singles Operations", () => {
           slug: "nonexistent",
           data: { key: "value" },
         })
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 
@@ -369,13 +364,17 @@ describe("Direct API - Singles Operations", () => {
       // Services throw NextlyError directly (post-PR-4); the namespace
       // passes it through unchanged after `convertServiceError` was deleted.
       mocks.singleRegistryService.listSingles.mockRejectedValue(
-        new DatabaseError("Database connection failed")
+        new NextlyError({
+          code: "DATABASE_ERROR",
+          publicMessage: "Database connection failed",
+          statusCode: 500,
+        })
       );
 
       await expect(nextly.findGlobals()).rejects.toThrow(NextlyError);
     });
 
-    it("should throw NotFoundError when a single entry fetch returns 404", async () => {
+    it("should throw NextlyError(NOT_FOUND) when a single entry fetch returns 404", async () => {
       mocks.singleRegistryService.listSingles.mockResolvedValue({
         data: [makeRegistryRecord("missing-single")],
         total: 1,
@@ -386,7 +385,9 @@ describe("Direct API - Singles Operations", () => {
         message: "Single not found",
       });
 
-      await expect(nextly.findGlobals()).rejects.toThrow(NotFoundError);
+      await expect(nextly.findGlobals()).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
     });
   });
 });

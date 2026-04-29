@@ -9,8 +9,8 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { PaginatedResponse } from "../../types/pagination";
-import { NextlyError, NextlyErrorCode, NotFoundError } from "../errors";
 import type {
   BulkDeleteArgs,
   BulkOperationResult,
@@ -142,11 +142,11 @@ export async function update<TSlug extends CollectionSlug>(
   const config = mergeConfig(ctx.defaultConfig, args);
 
   if (!args.id && !args.where) {
-    throw new NextlyError(
-      "Either 'id' or 'where' clause is required for update",
-      NextlyErrorCode.INVALID_INPUT,
-      400
-    );
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Either 'id' or 'where' clause is required for update",
+      statusCode: 400,
+    });
   }
 
   if (args.id) {
@@ -186,9 +186,12 @@ export async function update<TSlug extends CollectionSlug>(
     );
 
     if (bulkResult.successCount === 0) {
-      throw new NotFoundError("No documents matched the where clause", {
-        collection: args.collection,
-        where: args.where,
+      throw NextlyError.notFound({
+        logContext: {
+          collection: args.collection,
+          where: args.where,
+          reason: "where-clause-no-match",
+        },
       });
     }
 
@@ -198,21 +201,21 @@ export async function update<TSlug extends CollectionSlug>(
     });
 
     if (!updated) {
-      throw new NextlyError(
-        "Document was updated but could not be retrieved",
-        NextlyErrorCode.INTERNAL_ERROR,
-        500
-      );
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "Document was updated but could not be retrieved",
+        statusCode: 500,
+      });
     }
 
     return updated;
   }
 
-  throw new NextlyError(
-    "Either 'id' or 'where' clause is required for update",
-    NextlyErrorCode.INVALID_INPUT,
-    400
-  );
+  throw new NextlyError({
+    code: "INVALID_INPUT",
+    publicMessage: "Either 'id' or 'where' clause is required for update",
+    statusCode: 400,
+  });
 }
 
 /**
@@ -225,11 +228,11 @@ export async function deleteEntry(
   const config = mergeConfig(ctx.defaultConfig, args);
 
   if (!args.id && !args.where) {
-    throw new NextlyError(
-      "Either 'id' or 'where' clause is required for delete",
-      NextlyErrorCode.INVALID_INPUT,
-      400
-    );
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Either 'id' or 'where' clause is required for delete",
+      statusCode: 400,
+    });
   }
 
   if (args.id) {
@@ -273,11 +276,11 @@ export async function deleteEntry(
     };
   }
 
-  throw new NextlyError(
-    "Either 'id' or 'where' clause is required for delete",
-    NextlyErrorCode.INVALID_INPUT,
-    400
-  );
+  throw new NextlyError({
+    code: "INVALID_INPUT",
+    publicMessage: "Either 'id' or 'where' clause is required for delete",
+    statusCode: 400,
+  });
 }
 
 /**

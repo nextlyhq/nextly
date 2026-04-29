@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import { NextlyError, NotFoundError } from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -156,7 +156,7 @@ describe("Direct API - Forms Operations", () => {
       expect(result).toBeNull();
     });
 
-    it("should throw NotFoundError without disableErrors", async () => {
+    it("should throw NextlyError(NOT_FOUND) without disableErrors", async () => {
       mocks.collectionsHandler.listEntries.mockResolvedValue({
         success: true,
         statusCode: 200,
@@ -169,7 +169,7 @@ describe("Direct API - Forms Operations", () => {
 
       await expect(
         nextly.forms.findBySlug({ slug: "nonexistent" })
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("should throw when slug is missing", async () => {
@@ -419,7 +419,7 @@ describe("Direct API - Forms Operations", () => {
       );
     });
 
-    it("should throw NotFoundError when slug doesn't resolve", async () => {
+    it("should throw NextlyError(NOT_FOUND) when slug doesn't resolve", async () => {
       mocks.collectionsHandler.listEntries.mockResolvedValueOnce({
         success: true,
         statusCode: 200,
@@ -429,7 +429,7 @@ describe("Direct API - Forms Operations", () => {
 
       await expect(
         nextly.forms.submissions({ form: "nonexistent-form" })
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("should pass limit and page", async () => {
