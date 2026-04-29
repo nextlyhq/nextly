@@ -180,6 +180,78 @@ describe("runChecks (F11 PR 4)", () => {
     });
   });
 
+  describe("INVALID_SNAPSHOT (F11 PR 4 review fix #3)", () => {
+    it("exits 1 with INVALID_SNAPSHOT when a paired snapshot is malformed JSON", async () => {
+      // .sql exists; paired snapshot exists but is invalid JSON.
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        "CREATE TABLE foo (id text);",
+        "utf-8"
+      );
+      await writeFile(
+        join(
+          migrationsDir,
+          "meta",
+          "20260101_120000_001_initial.snapshot.json"
+        ),
+        "{not valid json",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("INVALID_SNAPSHOT")
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("JSON parse failed")
+      );
+    });
+
+    it("exits 1 with INVALID_SNAPSHOT when a snapshot has wrong version", async () => {
+      // .sql exists; paired snapshot has version 2 (future format).
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        "CREATE TABLE foo (id text);",
+        "utf-8"
+      );
+      await writeFile(
+        join(
+          migrationsDir,
+          "meta",
+          "20260101_120000_001_initial.snapshot.json"
+        ),
+        JSON.stringify({
+          version: 2,
+          migrationHash: "a".repeat(64),
+          snapshot: { tables: [] },
+        }),
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("INVALID_SNAPSHOT")
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("expected version: 1, got 2")
+      );
+    });
+  });
+
   describe("MISSING_MIGRATION", () => {
     it("exits 1 when a snapshot has no paired .sql", async () => {
       await writeSnapshot(

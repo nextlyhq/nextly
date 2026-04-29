@@ -4,17 +4,20 @@
  * Implements `nextly migrate:check` per the F11 spec §6.4.
  *
  * CI-friendly integrity verification for migration files. Does NOT
- * connect to a database. Three checks run in order; first failure
+ * connect to a database. Five checks run in order; first failure
  * exits non-zero with a specific error code:
  *
- *   1. CHECKSUM_MISMATCH  — A `.sql` file's content differs from the
+ *   1. CHECKSUM_MISMATCH  - A `.sql` file's content differs from the
  *      hash recorded in its paired `.snapshot.json` (someone edited
  *      the file after `migrate:create` generated it).
- *   2. MISSING_SNAPSHOT   — A `.sql` file has no paired `.snapshot.json`
+ *   2. MISSING_SNAPSHOT   - A `.sql` file has no paired `.snapshot.json`
  *      (operator deleted the snapshot or the file was added by hand).
- *   3. MISSING_MIGRATION  — A `.snapshot.json` file has no paired `.sql`
+ *   3. INVALID_SNAPSHOT   - A `.snapshot.json` file is malformed
+ *      (corrupted JSON, hand-edited, or written by a future nextly
+ *      version with an incompatible envelope).
+ *   4. MISSING_MIGRATION  - A `.snapshot.json` file has no paired `.sql`
  *      (someone deleted the SQL but kept the snapshot).
- *   4. SCHEMA_DRIFT       — `nextly.config.ts` has uncommitted changes
+ *   5. SCHEMA_DRIFT       - `nextly.config.ts` has uncommitted changes
  *      relative to the latest snapshot (operator forgot to run
  *      `migrate:create` after editing config).
  *
@@ -65,11 +68,11 @@ import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
 // Types
 // ============================================================================
 
-export interface MigrateCheckCommandOptions {
-  // No command-specific options today. Global options (--config, --cwd,
-  // --verbose, --quiet) are inherited from the program.
-  _placeholder?: never;
-}
+// F11 PR 4: no command-specific options today. Global options
+// (--config, --cwd, --verbose, --quiet) are inherited from the program.
+// `Record<string, never>` is the idiomatic "intentionally empty" shape;
+// avoids the `_placeholder?: never` workaround the first draft used.
+export type MigrateCheckCommandOptions = Record<string, never>;
 
 interface ResolvedMigrateCheckOptions {
   config?: string;
@@ -184,11 +187,12 @@ export async function runChecks(args: {
     try {
       result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
     } catch (err) {
-      // SnapshotFileError fires when the snapshot exists but is
-      // malformed. Surface as the equivalent of MISSING_SNAPSHOT (the
-      // file isn't usable) with the original message for context.
+      // F11 PR 4 review fix #3: distinct INVALID_SNAPSHOT code so the
+      // operator can tell "snapshot file is corrupt / version-mismatched"
+      // (fix = regenerate or upgrade nextly) apart from "snapshot is
+      // missing entirely" (fix = git checkout).
       if (err instanceof SnapshotFileError) {
-        logger.error(`MISSING_SNAPSHOT: ${err.message}`);
+        logger.error(`INVALID_SNAPSHOT: ${err.message}`);
         process.exit(1);
         return;
       }
@@ -236,8 +240,9 @@ export async function runChecks(args: {
     const latest = await loadLatestSnapshot(metaDir);
     previousSnapshot = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
   } catch (err) {
+    // F11 PR 4 review fix #3: see INVALID_SNAPSHOT comment above.
     if (err instanceof SnapshotFileError) {
-      logger.error(`MISSING_SNAPSHOT: ${err.message}`);
+      logger.error(`INVALID_SNAPSHOT: ${err.message}`);
       process.exit(1);
       return;
     }
