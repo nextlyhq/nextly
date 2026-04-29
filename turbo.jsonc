@@ -63,6 +63,8 @@
     "UPLOADTHING_SECRET",
     "DATABASE_URL",
     "DB_DIALECT",
+    "GITHUB_ACTOR", // @revnixhq/nextly migrate: appliedBy actor in CI
+    "USER", // @revnixhq/nextly migrate: appliedBy actor on dev laptops
     "DEBUG",
     "DEBUG_CACHE",
     "DEBUG_RBAC",
@@ -70,6 +72,7 @@
     "HEALTH_CHECK_CACHE_SECONDS",
     "INIT_CWD",
     "NEXTLY_ACCEPT_DATA_LOSS",
+    "NEXTLY_APPLIED_BY", // @revnixhq/nextly migrate: override appliedBy actor (F11)
     "NEXTLY_DEBUG_TIMEZONE",
     "NEXTLY_DELETE_THRESHOLD",
     "NEXTLY_EMAIL_MAX_ATTACHMENT_COUNT",

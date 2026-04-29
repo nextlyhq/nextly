@@ -27,12 +27,11 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
-import type { MigrationRecordStatus } from "../../schemas/dynamic-collections/types.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import type {
+  MigrationErrorJson,
+  MigrationRecordStatus,
+} from "../../schemas/dynamic-collections/types.js";
+import { createContext, type CommandContext } from "../program.js";
 import {
   createAdapter,
   validateDatabaseEnv,
@@ -80,27 +79,37 @@ interface ParsedMigration {
 }
 
 /**
- * Database migration record
+ * Database migration record (F11 schema). Mirrors `nextly_migrations`.
  */
 interface MigrationRecord {
   id: string;
-  name: string;
-  batch: number;
-  checksum: string;
+  filename: string;
+  sha256: string;
   status: MigrationRecordStatus;
-  errorMessage?: string;
-  executedAt: Date;
+  appliedBy: string | null;
+  durationMs: number | null;
+  errorJson: MigrationErrorJson | null;
+  appliedAt: Date;
 }
 
 /**
- * Combined status of a migration (file + database state)
+ * Combined status of a migration (file + database state).
+ *
+ * F11 adds two new states:
+ * - `applied (modified)`: hash mismatch — file edited after apply.
+ * - `applied (file missing)`: DB row exists but `.sql` file is gone.
  */
 interface MigrationStatus {
-  name: string;
-  status: "applied" | "pending" | "failed";
-  batch: number | null;
+  filename: string;
+  status:
+    | "applied"
+    | "applied (modified)"
+    | "applied (file missing)"
+    | "pending"
+    | "failed";
   appliedAt: Date | null;
-  errorMessage?: string;
+  durationMs: number | null;
+  errorJson: MigrationErrorJson | null;
   checksumMismatch: boolean;
 }
 
@@ -243,8 +252,16 @@ export async function runMigrateStatus(
       dialect
     );
 
+    // F11: include the new status variants in the applied bucket so the
+    // summary count reflects "actually-applied rows" regardless of whether
+    // the file was modified or missing post-apply.
     const summary = {
-      applied: migrationStatuses.filter(m => m.status === "applied").length,
+      applied: migrationStatuses.filter(
+        m =>
+          m.status === "applied" ||
+          m.status === "applied (modified)" ||
+          m.status === "applied (file missing)"
+      ).length,
       pending: migrationStatuses.filter(m => m.status === "pending").length,
       failed: migrationStatuses.filter(m => m.status === "failed").length,
       collectionsWithPendingChanges: pendingCollections.length,
@@ -322,6 +339,14 @@ function parseMigrationFile(
   };
 }
 
+// F11: kept in sync with `cli/commands/migrate.ts:ensureMigrationsTable`.
+// This is a duplicated helper today; both call sites need the new schema
+// in lockstep. A shared helper extraction is a follow-up cleanup (out of
+// PR 1 scope to keep diff focused).
+//
+// MIRROR: keep this in sync with `migrate.ts:ensureMigrationsTable`
+// AND with `database/migrations/<dialect>/20260429_000000_000_initial_journal.sql`
+// AND with `migrate-fresh.ts:generateSqliteCreateStatements`.
 async function ensureMigrationsTable(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
@@ -332,47 +357,73 @@ async function ensureMigrationsTable(
     case "postgresql":
       createTableSql = `
         CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-          "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          "name" VARCHAR(255) NOT NULL UNIQUE,
-          "batch" INTEGER NOT NULL,
-          "checksum" VARCHAR(64) NOT NULL,
-          "status" VARCHAR(20) NOT NULL DEFAULT 'pending',
-          "error_message" TEXT,
-          "executed_at" TIMESTAMP NOT NULL DEFAULT NOW()
-        )
+          "id"           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          "filename"     TEXT NOT NULL UNIQUE,
+          "sha256"       CHAR(64) NOT NULL,
+          "applied_at"   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          "applied_by"   TEXT,
+          "duration_ms"  INTEGER,
+          "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
+          "error_json"   JSONB,
+          "rollback_sql" TEXT
+        );
+        CREATE INDEX IF NOT EXISTS "nextly_migrations_applied_at_idx"
+          ON "nextly_migrations" ("applied_at");
       `;
       break;
     case "mysql":
       createTableSql = `
         CREATE TABLE IF NOT EXISTS \`nextly_migrations\` (
-          \`id\` VARCHAR(36) PRIMARY KEY,
-          \`name\` VARCHAR(255) NOT NULL UNIQUE,
-          \`batch\` INTEGER NOT NULL,
-          \`checksum\` VARCHAR(64) NOT NULL,
-          \`status\` VARCHAR(20) NOT NULL DEFAULT 'pending',
-          \`error_message\` TEXT,
-          \`executed_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+          \`id\`           VARCHAR(36) PRIMARY KEY,
+          \`filename\`     VARCHAR(512) NOT NULL UNIQUE,
+          \`sha256\`       CHAR(64) NOT NULL,
+          \`applied_at\`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          \`applied_by\`   VARCHAR(255),
+          \`duration_ms\`  INTEGER,
+          \`status\`       VARCHAR(20) NOT NULL CHECK (\`status\` IN ('applied', 'failed')),
+          \`error_json\`   JSON,
+          \`rollback_sql\` TEXT,
+          INDEX \`nextly_migrations_applied_at_idx\` (\`applied_at\`)
         )
       `;
       break;
     case "sqlite":
       createTableSql = `
         CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-          "id" TEXT PRIMARY KEY,
-          "name" TEXT NOT NULL UNIQUE,
-          "batch" INTEGER NOT NULL,
-          "checksum" TEXT NOT NULL,
-          "status" TEXT NOT NULL DEFAULT 'pending',
-          "error_message" TEXT,
-          "executed_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-        )
+          "id"           TEXT PRIMARY KEY,
+          "filename"     TEXT NOT NULL UNIQUE,
+          "sha256"       TEXT NOT NULL,
+          "applied_at"   INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+          "applied_by"   TEXT,
+          "duration_ms"  INTEGER,
+          "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
+          "error_json"   TEXT,
+          "rollback_sql" TEXT
+        );
+        CREATE INDEX IF NOT EXISTS "nextly_migrations_applied_at_idx"
+          ON "nextly_migrations" ("applied_at");
       `;
       break;
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${dialect as string}`);
   }
 
   await adapter.executeQuery(createTableSql);
+}
+
+// F11: parses the structured error_json column. SQLite stores TEXT;
+// PG/MySQL return parsed objects (or string-encoded depending on driver).
+function parseErrorJson(value: unknown): MigrationErrorJson | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "object") return value as MigrationErrorJson;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as MigrationErrorJson;
+    } catch {
+      return { message: value };
+    }
+  }
+  return null;
 }
 
 async function getAppliedMigrations(
@@ -381,24 +432,58 @@ async function getAppliedMigrations(
 ): Promise<MigrationRecord[]> {
   const query =
     dialect === "mysql"
-      ? "SELECT * FROM `nextly_migrations` ORDER BY `executed_at` ASC"
-      : 'SELECT * FROM "nextly_migrations" ORDER BY "executed_at" ASC';
+      ? "SELECT * FROM `nextly_migrations` ORDER BY `applied_at` ASC"
+      : 'SELECT * FROM "nextly_migrations" ORDER BY "applied_at" ASC';
 
   try {
     const results = await adapter.executeQuery<Record<string, unknown>>(query);
 
     return results.map(row => ({
-      id: String(row.id),
-      name: String(row.name),
-      batch: Number(row.batch),
-      checksum: String(row.checksum),
-      status: String(row.status) as MigrationRecordStatus,
-      errorMessage: row.error_message ? String(row.error_message) : undefined,
-      executedAt: new Date(row.executed_at as string | number),
+      id: coerceString(row.id),
+      filename: coerceString(row.filename),
+      sha256: coerceString(row.sha256),
+      status: coerceString(row.status) as MigrationRecordStatus,
+      appliedBy: coerceStringOrNull(row.applied_by),
+      durationMs: coerceNumberOrNull(row.duration_ms),
+      errorJson: parseErrorJson(row.error_json),
+      appliedAt: coerceDate(row.applied_at),
     }));
   } catch {
     return [];
   }
+}
+
+// F11: small coercion helpers for adapter-returned `Record<string, unknown>`.
+// Avoids the `String(unknown)` no-base-to-string lint trip when the column
+// might (in theory) come back as an object.
+function coerceString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  return "";
+}
+
+function coerceStringOrNull(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  return null;
+}
+
+function coerceNumberOrNull(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function coerceDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  if (typeof value === "string" || typeof value === "number")
+    return new Date(value);
+  return new Date(0);
 }
 
 async function getCollectionsWithPendingChanges(
@@ -440,64 +525,78 @@ async function getCollectionsWithPendingChanges(
     const results = await adapter.executeQuery<Record<string, unknown>>(query);
 
     return results.map(row => ({
-      slug: String(row.slug),
-      name: String(row.name),
-      migrationStatus: String(row.migration_status),
-      lastMigrationId: row.last_migration_id
-        ? String(row.last_migration_id)
-        : null,
+      slug: coerceString(row.slug),
+      name: coerceString(row.name),
+      migrationStatus: coerceString(row.migration_status),
+      lastMigrationId: coerceStringOrNull(row.last_migration_id),
     }));
   } catch {
     return [];
   }
 }
 
+// F11: derive the per-row status from file-vs-record state. Three new
+// outcomes vs the pre-F11 model:
+// - `applied (modified)`: hash mismatch. File edited after apply.
+// - `applied (file missing)`: DB has the row but the .sql is gone.
+//   `nextly migrate` will treat the latter as MIGRATION_MISSING (exit 3),
+//   but `migrate:status` keeps surfacing it as a row so operators can
+//   investigate and either restore the file or contact whoever deleted it.
 function buildMigrationStatuses(
   files: ParsedMigration[],
   applied: MigrationRecord[]
 ): MigrationStatus[] {
-  const appliedMap = new Map(applied.map(m => [m.name, m]));
+  const appliedMap = new Map(applied.map(m => [m.filename, m]));
   const statuses: MigrationStatus[] = [];
 
   for (const file of files) {
     const record = appliedMap.get(file.name);
 
     if (record) {
-      const checksumMismatch = record.checksum !== file.checksum;
+      const checksumMismatch = record.sha256 !== file.checksum;
+      let status: MigrationStatus["status"];
+      if (record.status === "failed") {
+        status = "failed";
+      } else if (checksumMismatch) {
+        status = "applied (modified)";
+      } else {
+        status = "applied";
+      }
 
       statuses.push({
-        name: file.name,
-        status: record.status === "failed" ? "failed" : "applied",
-        batch: record.batch,
-        appliedAt: record.executedAt,
-        errorMessage: record.errorMessage,
+        filename: file.name,
+        status,
+        appliedAt: record.appliedAt,
+        durationMs: record.durationMs,
+        errorJson: record.errorJson,
         checksumMismatch,
       });
 
       appliedMap.delete(file.name);
     } else {
       statuses.push({
-        name: file.name,
+        filename: file.name,
         status: "pending",
-        batch: null,
         appliedAt: null,
+        durationMs: null,
+        errorJson: null,
         checksumMismatch: false,
       });
     }
   }
 
-  for (const [name, record] of appliedMap) {
+  for (const [filename, record] of appliedMap) {
     statuses.push({
-      name: `${name} (missing file)`,
-      status: record.status === "failed" ? "failed" : "applied",
-      batch: record.batch,
-      appliedAt: record.executedAt,
-      errorMessage: record.errorMessage,
+      filename,
+      status: record.status === "failed" ? "failed" : "applied (file missing)",
+      appliedAt: record.appliedAt,
+      durationMs: record.durationMs,
+      errorJson: record.errorJson,
       checksumMismatch: false,
     });
   }
 
-  return statuses.sort((a, b) => a.name.localeCompare(b.name));
+  return statuses.sort((a, b) => a.filename.localeCompare(b.filename));
 }
 
 function displayStatus(
@@ -516,26 +615,16 @@ function displayStatus(
   } else {
     logger.newline();
 
-    const headers = ["Migration", "Status", "Batch", "Applied At"];
+    // F11: dropped Batch column (forward-only model has no batches);
+    // added Duration so operators can spot slow migrations at a glance.
+    const headers = ["Migration", "Status", "Applied At", "Duration"];
     const rows: (string | number | boolean)[][] = migrations.map(m => {
-      let statusDisplay: string;
-      switch (m.status) {
-        case "applied":
-          statusDisplay = m.checksumMismatch ? "Applied (modified)" : "Applied";
-          break;
-        case "pending":
-          statusDisplay = "Pending";
-          break;
-        case "failed":
-          statusDisplay = "Failed";
-          break;
-      }
-
+      const statusDisplay = formatStatusForDisplay(m.status);
       return [
-        m.name,
+        m.filename,
         statusDisplay,
-        m.batch ?? "-",
         m.appliedAt ? formatDate(m.appliedAt) : "-",
+        m.durationMs !== null ? `${m.durationMs}ms` : "-",
       ];
     });
 
@@ -543,13 +632,18 @@ function displayStatus(
 
     if (verbose) {
       const failedMigrations = migrations.filter(
-        m => m.status === "failed" && m.errorMessage
+        m => m.status === "failed" && m.errorJson
       );
       if (failedMigrations.length > 0) {
         logger.newline();
         logger.error("Error Details:");
         for (const m of failedMigrations) {
-          logger.error(`  ${m.name}: ${m.errorMessage}`);
+          // F11: render the structured error_json so operators see SQLSTATE
+          // and the failing statement, not just an opaque message.
+          const e = m.errorJson;
+          logger.error(`  ${m.filename}: ${e?.message ?? "unknown error"}`);
+          if (e?.sqlState) logger.error(`    sqlState: ${e.sqlState}`);
+          if (e?.statement) logger.error(`    statement: ${e.statement}`);
         }
       }
 
@@ -558,7 +652,7 @@ function displayStatus(
         logger.newline();
         logger.warn("Modified Migrations (checksum mismatch):");
         for (const m of modifiedMigrations) {
-          logger.warn(`  ${m.name}`);
+          logger.warn(`  ${m.filename}`);
         }
       }
     }
@@ -604,6 +698,25 @@ function displayStatus(
   }
 }
 
+// F11: render the status union as a human-friendly string. Title-cased
+// for table display; matches the colour intent (green = applied, yellow
+// = applied (modified), red = applied (file missing) / failed). The
+// underlying logger doesn't take colours here; we just title-case the text.
+function formatStatusForDisplay(status: MigrationStatus["status"]): string {
+  switch (status) {
+    case "applied":
+      return "Applied";
+    case "applied (modified)":
+      return "Applied (modified)";
+    case "applied (file missing)":
+      return "Applied (file missing)";
+    case "pending":
+      return "Pending";
+    case "failed":
+      return "Failed";
+  }
+}
+
 function formatDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -626,7 +739,7 @@ export function registerMigrateStatusCommand(program: Command): void {
     .description("Show current migration status")
     .option("--json", "Output as JSON for scripting/CI", false)
     .action(async (cmdOptions: MigrateStatusCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+      const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
       const resolvedOptions: ResolvedMigrateStatusOptions = {

@@ -522,64 +522,88 @@ export interface DynamicCollectionRecord extends DynamicCollectionInsert {
 // ============================================================
 
 /**
- * Status of a migration record.
+ * Status of a migration record (F11).
  *
- * - `pending`: Migration is queued but not yet executed
+ * Two-state lifecycle: rows are inserted ONLY after the apply attempt
+ * completes, so there's no transient `pending` value on disk. Applies
+ * to the `nextly_migrations` file-based ledger written by `nextly migrate`.
+ *
  * - `applied`: Migration was successfully applied
  * - `failed`: Migration failed during execution
  */
-export type MigrationRecordStatus = "pending" | "applied" | "failed";
+export type MigrationRecordStatus = "applied" | "failed";
 
 /**
- * Insert type for creating a new migration record.
+ * Structured error payload stored in `nextly_migrations.error_json` on
+ * failed applies (F11).
  *
- * Used when tracking collection schema migrations in the
- * `nextly_migrations` table.
+ * Lets operators jump straight to the failing statement instead of
+ * grepping through a single `error_message` text blob.
+ */
+export interface MigrationErrorJson {
+  /** Database-specific error code (e.g. PG SQLSTATE `42703`). */
+  sqlState?: string;
+  /**
+   * The SQL statement that triggered the error.
+   *
+   * **Always undefined in F11.** PG/SQLite run all migration statements
+   * inside a single transaction so the driver only reports the bubbled-up
+   * error, not the specific failing statement. F15 will introduce
+   * per-statement journaling on MySQL (which has non-transactional DDL)
+   * and populate this field for that path. Until then, treat this as
+   * reserved.
+   */
+  statement?: string;
+  /** Human-readable error message from the driver. */
+  message: string;
+}
+
+/**
+ * Insert type for creating a new migration record (F11).
+ *
+ * Mirrors the F11 spec column shape. `id` and `appliedAt` have
+ * defaults at the schema level so they're optional here.
  *
  * @example
  * ```typescript
  * const migration: MigrationRecordInsert = {
- *   name: '20250119_120000_create_posts',
- *   batch: 1,
- *   checksum: 'sha256-abc123...',
+ *   filename: '20260429_154500_123_add_excerpt.sql',
+ *   sha256: 'abc123…',
+ *   status: 'applied',
+ *   appliedBy: 'github-actions-12345',
+ *   durationMs: 42,
  * };
  * ```
  */
 export interface MigrationRecordInsert {
   /**
-   * Migration name following the pattern:
-   * `YYYYMMDD_HHMMSS_description`
-   * @example "20250119_120000_create_posts"
+   * Migration filename without directory. Unique across the table.
+   *
+   * @example "20260429_154500_123_add_excerpt.sql"
    */
-  name: string;
+  filename: string;
 
-  /**
-   * Batch number for grouping migrations.
-   * Migrations in the same batch were applied together.
-   */
-  batch: number;
+  /** SHA-256 of the .sql file content. 64 hex chars. */
+  sha256: string;
 
-  /**
-   * SHA-256 checksum of the migration file content.
-   * Used to detect if a migration file was modified after creation.
-   */
-  checksum: string;
+  /** Apply outcome. */
+  status: MigrationRecordStatus;
 
-  /**
-   * Current status of the migration.
-   * Defaults to 'pending' when created.
-   */
-  status?: MigrationRecordStatus;
+  /** Resolved CLI actor (env-var precedence). */
+  appliedBy?: string | null;
 
-  /**
-   * Error message if the migration failed.
-   * Only populated when status is 'failed'.
-   */
-  errorMessage?: string;
+  /** Wall-clock apply duration in milliseconds. */
+  durationMs?: number | null;
+
+  /** Structured error payload on failure. */
+  errorJson?: MigrationErrorJson | null;
+
+  /** Reserved for v2 corrective rollback. Always null in v1. */
+  rollbackSql?: string | null;
 }
 
 /**
- * Full record type for a migration.
+ * Full record type for a migration (F11).
  *
  * Extends `MigrationRecordInsert` with database-generated fields.
  *
@@ -587,21 +611,21 @@ export interface MigrationRecordInsert {
  * ```typescript
  * const record: MigrationRecord = {
  *   id: 'uuid-123',
- *   name: '20250119_120000_create_posts',
- *   batch: 1,
- *   checksum: 'sha256-abc123...',
+ *   filename: '20260429_154500_123_add_excerpt.sql',
+ *   sha256: 'abc123…',
  *   status: 'applied',
- *   executedAt: new Date(),
+ *   appliedBy: 'sarah@laptop',
+ *   durationMs: 42,
+ *   appliedAt: new Date(),
+ *   errorJson: null,
+ *   rollbackSql: null,
  * };
  * ```
  */
 export interface MigrationRecord extends MigrationRecordInsert {
-  /** Unique identifier (UUID or CUID) */
+  /** Unique identifier (UUID v4) */
   id: string;
 
-  /** Status is required on full record */
-  status: MigrationRecordStatus;
-
-  /** When the migration was executed */
-  executedAt: Date;
+  /** When the migration was applied (UTC). */
+  appliedAt: Date;
 }

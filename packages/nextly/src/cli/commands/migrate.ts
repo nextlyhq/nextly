@@ -22,9 +22,10 @@
  * ```
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { resolve, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,12 +33,11 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
-import type { MigrationRecordStatus } from "../../schemas/dynamic-collections/types.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import type {
+  MigrationErrorJson,
+  MigrationRecordStatus,
+} from "../../schemas/dynamic-collections/types.js";
+import { createContext, type CommandContext } from "../program.js";
 import {
   createAdapter,
   validateDatabaseEnv,
@@ -107,30 +107,38 @@ interface ParsedMigration {
 }
 
 /**
- * Database migration record
+ * Database migration record (F11 schema).
+ *
+ * Mirrors the row shape of `nextly_migrations` from the F11 spec.
+ * `appliedBy`/`durationMs`/`errorJson` may be NULL on rows written by
+ * older Nextly builds before F11; new writes always populate them.
  */
 interface MigrationRecord {
   id: string;
-  name: string;
-  batch: number;
-  checksum: string;
+  filename: string;
+  sha256: string;
   status: MigrationRecordStatus;
-  errorMessage?: string;
-  executedAt: Date;
+  appliedBy: string | null;
+  durationMs: number | null;
+  errorJson: MigrationErrorJson | null;
+  appliedAt: Date;
 }
 
 /**
  * Result of a single migration execution
  */
 interface MigrationExecutionResult {
-  name: string;
+  filename: string;
   success: boolean;
   durationMs: number;
   error?: string;
 }
 
 /**
- * Result of the migrate command
+ * Result of the migrate command (F11).
+ *
+ * Per Q4=A, F11 is forward-only — no `batch` concept (there's no
+ * rollback grouping to track).
  */
 interface MigrateResult {
   /** Number of migrations applied */
@@ -139,8 +147,6 @@ interface MigrateResult {
   skipped: number;
   /** Number of migrations failed */
   failed: number;
-  /** Batch number used for this run */
-  batch: number;
   /** Individual migration results */
   migrations: MigrationExecutionResult[];
   /** Total duration in milliseconds */
@@ -518,6 +524,17 @@ function parseSqlSections(content: string): { upSql: string; downSql: string } {
   };
 }
 
+// F11: ensureMigrationsTable runs as a safety net on bare DBs that haven't
+// applied the bundled `0001_initial_journal.sql` yet. The bundled migration
+// runs FIRST in normal flow; this function is idempotent (`IF NOT EXISTS`).
+// The CHECK constraint enforces the F11 two-state lifecycle (`'applied'` /
+// `'failed'`); rows are inserted only after the apply attempt completes.
+//
+// MIRROR: keep this in sync with `migrate-status.ts:ensureMigrationsTable`
+// AND with `database/migrations/<dialect>/20260429_000000_000_initial_journal.sql`
+// AND with `migrate-fresh.ts:generateSqliteCreateStatements`. A future PR
+// extracts this into a shared helper; until then, a drift check would
+// silently break production migration apply.
 async function ensureMigrationsTable(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
@@ -528,47 +545,110 @@ async function ensureMigrationsTable(
     case "postgresql":
       createTableSql = `
         CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-          "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          "name" VARCHAR(255) NOT NULL UNIQUE,
-          "batch" INTEGER NOT NULL,
-          "checksum" VARCHAR(64) NOT NULL,
-          "status" VARCHAR(20) NOT NULL DEFAULT 'pending',
-          "error_message" TEXT,
-          "executed_at" TIMESTAMP NOT NULL DEFAULT NOW()
-        )
+          "id"           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          "filename"     TEXT NOT NULL UNIQUE,
+          "sha256"       CHAR(64) NOT NULL,
+          "applied_at"   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          "applied_by"   TEXT,
+          "duration_ms"  INTEGER,
+          "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
+          "error_json"   JSONB,
+          "rollback_sql" TEXT
+        );
+        CREATE INDEX IF NOT EXISTS "nextly_migrations_applied_at_idx"
+          ON "nextly_migrations" ("applied_at");
       `;
       break;
     case "mysql":
       createTableSql = `
         CREATE TABLE IF NOT EXISTS \`nextly_migrations\` (
-          \`id\` VARCHAR(36) PRIMARY KEY,
-          \`name\` VARCHAR(255) NOT NULL UNIQUE,
-          \`batch\` INTEGER NOT NULL,
-          \`checksum\` VARCHAR(64) NOT NULL,
-          \`status\` VARCHAR(20) NOT NULL DEFAULT 'pending',
-          \`error_message\` TEXT,
-          \`executed_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+          \`id\`           VARCHAR(36) PRIMARY KEY,
+          \`filename\`     VARCHAR(512) NOT NULL UNIQUE,
+          \`sha256\`       CHAR(64) NOT NULL,
+          \`applied_at\`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          \`applied_by\`   VARCHAR(255),
+          \`duration_ms\`  INTEGER,
+          \`status\`       VARCHAR(20) NOT NULL CHECK (\`status\` IN ('applied', 'failed')),
+          \`error_json\`   JSON,
+          \`rollback_sql\` TEXT,
+          INDEX \`nextly_migrations_applied_at_idx\` (\`applied_at\`)
         )
       `;
       break;
     case "sqlite":
       createTableSql = `
         CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-          "id" TEXT PRIMARY KEY,
-          "name" TEXT NOT NULL UNIQUE,
-          "batch" INTEGER NOT NULL,
-          "checksum" TEXT NOT NULL,
-          "status" TEXT NOT NULL DEFAULT 'pending',
-          "error_message" TEXT,
-          "executed_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-        )
+          "id"           TEXT PRIMARY KEY,
+          "filename"     TEXT NOT NULL UNIQUE,
+          "sha256"       TEXT NOT NULL,
+          "applied_at"   INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+          "applied_by"   TEXT,
+          "duration_ms"  INTEGER,
+          "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
+          "error_json"   TEXT,
+          "rollback_sql" TEXT
+        );
+        CREATE INDEX IF NOT EXISTS "nextly_migrations_applied_at_idx"
+          ON "nextly_migrations" ("applied_at");
       `;
       break;
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${dialect as string}`);
   }
 
   await adapter.executeQuery(createTableSql);
+}
+
+// F11: small coercion helpers for adapter-returned `Record<string, unknown>`.
+// Per `feedback_no_type_workarounds`, we use real type guards instead of
+// `String(unknown)` (which trips no-base-to-string on object values).
+function coerceString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  return "";
+}
+
+function coerceStringOrNull(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  return null;
+}
+
+function coerceNumberOrNull(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function coerceDate(value: unknown): Date {
+  if (value instanceof Date) return value;
+  if (typeof value === "string" || typeof value === "number")
+    return new Date(value);
+  return new Date(0);
+}
+
+// F11: parse the structured `error_json` column. SQLite stores JSON as TEXT,
+// PG returns the parsed object directly via JSONB, MySQL returns a JSON-typed
+// value that may come back as a string or object depending on driver.
+// This helper normalises all three.
+function parseErrorJson(value: unknown): MigrationErrorJson | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "object") return value as MigrationErrorJson;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as MigrationErrorJson;
+    } catch {
+      // Driver gave us something unparseable; surface it as message-only
+      // so operators still see SOMETHING in `nextly migrate:status`.
+      return { message: value };
+    }
+  }
+  return null;
 }
 
 async function getAppliedMigrations(
@@ -577,44 +657,47 @@ async function getAppliedMigrations(
 ): Promise<MigrationRecord[]> {
   const query =
     dialect === "mysql"
-      ? "SELECT * FROM `nextly_migrations` ORDER BY `executed_at` ASC"
-      : 'SELECT * FROM "nextly_migrations" ORDER BY "executed_at" ASC';
+      ? "SELECT * FROM `nextly_migrations` ORDER BY `applied_at` ASC"
+      : 'SELECT * FROM "nextly_migrations" ORDER BY "applied_at" ASC';
 
   try {
     const results = await adapter.executeQuery<Record<string, unknown>>(query);
 
     return results.map(row => ({
-      id: String(row.id),
-      name: String(row.name),
-      batch: Number(row.batch),
-      checksum: String(row.checksum),
-      status: String(row.status) as MigrationRecordStatus,
-      errorMessage: row.error_message ? String(row.error_message) : undefined,
-      executedAt: new Date(row.executed_at as string | number),
+      id: coerceString(row.id),
+      filename: coerceString(row.filename),
+      sha256: coerceString(row.sha256),
+      status: coerceString(row.status) as MigrationRecordStatus,
+      appliedBy: coerceStringOrNull(row.applied_by),
+      durationMs: coerceNumberOrNull(row.duration_ms),
+      errorJson: parseErrorJson(row.error_json),
+      appliedAt: coerceDate(row.applied_at),
     }));
   } catch {
     return [];
   }
 }
 
-async function getNextBatchNumber(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect
-): Promise<number> {
-  const query =
-    dialect === "mysql"
-      ? "SELECT MAX(`batch`) as max_batch FROM `nextly_migrations`"
-      : 'SELECT MAX("batch") as max_batch FROM "nextly_migrations"';
-
-  try {
-    const results = await adapter.executeQuery<{ max_batch: number | null }>(
-      query
-    );
-    const maxBatch = results[0]?.max_batch ?? 0;
-    return maxBatch + 1;
-  } catch {
-    return 1;
-  }
+// F11: hash mismatch is now a hard fail. Per spec §6.2 + Q9=B, mandatory
+// hash verification catches "someone edited an applied migration" before
+// any further DDL runs. Operators recover by either reverting the edit or
+// writing a NEW corrective migration. Same hard-fail for files referenced
+// in the journal but missing from disk (`MIGRATION_MISSING`).
+//
+// IMPORTANT: only rows with status='applied' count as "already applied"
+// for the pending-set computation. Rows with status='failed' are RETURNED
+// as pending so the operator can fix the SQL and re-run. The retry path
+// in `executeMigrationInTransaction` deletes the prior failed row inside
+// the same transaction so the unique(filename) constraint doesn't trip.
+//
+// Exported as `findPendingMigrationsForTest` so unit tests can exercise
+// the retry-of-failed-migration semantics without spinning up a DB.
+export function findPendingMigrationsForTest(
+  files: ParsedMigration[],
+  applied: MigrationRecord[],
+  logger: CommandContext["logger"]
+): ParsedMigration[] {
+  return findPendingMigrations(files, applied, logger);
 }
 
 function findPendingMigrations(
@@ -622,18 +705,44 @@ function findPendingMigrations(
   applied: MigrationRecord[],
   logger: CommandContext["logger"]
 ): ParsedMigration[] {
-  const appliedNames = new Set(applied.map(m => m.name));
-  const appliedChecksums = new Map(applied.map(m => [m.name, m.checksum]));
+  // Only successfully-applied rows block re-application. Failed rows
+  // represent recoverable state — the operator typically iterates on the
+  // SQL and re-runs `nextly migrate`. Treating failed rows as "already
+  // applied" would silently skip the retry; the bug also breaks the spec
+  // §6.2 recovery loop. See PR 1 review issue #1.
+  const successfullyApplied = applied.filter(m => m.status === "applied");
+  const appliedFilenames = new Set(successfullyApplied.map(m => m.filename));
+  const appliedHashes = new Map(
+    successfullyApplied.map(m => [m.filename, m.sha256])
+  );
+  const fileNames = new Set(files.map(f => f.name));
+
+  // Check for files in the journal that no longer exist on disk.
+  // Only count successfully-applied rows here — a failed row pointing at
+  // a now-deleted file is just stale state from a prior failed run, not
+  // a missing applied migration.
+  for (const record of successfullyApplied) {
+    if (!fileNames.has(record.filename)) {
+      logger.error(
+        `MIGRATION_MISSING: '${record.filename}' was applied previously but is no longer present in the migrations directory. ` +
+          `Restore the file from version control before proceeding.`
+      );
+      process.exit(3);
+    }
+  }
 
   const pending: ParsedMigration[] = [];
 
   for (const file of files) {
-    if (appliedNames.has(file.name)) {
-      const appliedChecksum = appliedChecksums.get(file.name);
-      if (appliedChecksum && appliedChecksum !== file.checksum) {
-        logger.warn(
-          `Migration '${file.name}' has been modified since it was applied (checksum mismatch)`
+    if (appliedFilenames.has(file.name)) {
+      const expectedHash = appliedHashes.get(file.name);
+      if (expectedHash && expectedHash !== file.checksum) {
+        logger.error(
+          `MIGRATION_TAMPERED: '${file.name}' has been modified since it was applied. ` +
+            `Expected SHA-256: ${expectedHash}; computed: ${file.checksum}. ` +
+            `If this change is intentional, write a new corrective migration instead.`
         );
+        process.exit(2);
       }
       continue;
     }
@@ -642,6 +751,25 @@ function findPendingMigrations(
   }
 
   return pending.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+// F11: resolve "who/what ran this migration" with a documented precedence
+// chain so prod debugging can answer "which CI job applied this row?".
+//
+// F11 PR 1 review fix #11: explicit `undefined` checks instead of `||`
+// so an unusual valid actor name like "0" or "false" doesn't silently
+// fall through to the next env var.
+function getAppliedBy(): string {
+  if (
+    process.env.NEXTLY_APPLIED_BY !== undefined &&
+    process.env.NEXTLY_APPLIED_BY !== ""
+  )
+    return process.env.NEXTLY_APPLIED_BY;
+  if (process.env.GITHUB_ACTOR !== undefined && process.env.GITHUB_ACTOR !== "")
+    return process.env.GITHUB_ACTOR;
+  if (process.env.USER !== undefined && process.env.USER !== "")
+    return process.env.USER;
+  return hostname();
 }
 
 async function executeMigrations(
@@ -655,15 +783,10 @@ async function executeMigrations(
   const { logger } = context;
   const results: MigrationExecutionResult[] = [];
   const startTime = Date.now();
+  const appliedBy = getAppliedBy();
 
-  let batch = 0;
   let applied = 0;
   let failed = 0;
-
-  if (!options.dryRun) {
-    batch = await getNextBatchNumber(adapter, dialect);
-    logger.debug(`Using batch number: ${batch}`);
-  }
 
   for (const migration of migrations) {
     const migrationStart = Date.now();
@@ -682,7 +805,7 @@ async function executeMigrations(
       }
 
       results.push({
-        name: migration.name,
+        filename: migration.name,
         success: true,
         durationMs: Date.now() - migrationStart,
       });
@@ -697,7 +820,7 @@ async function executeMigrations(
         adapter,
         dialect,
         migration,
-        batch,
+        appliedBy,
         logger
       );
 
@@ -705,7 +828,7 @@ async function executeMigrations(
       logger.success(`  Applied in ${formatDuration(duration)}`);
 
       results.push({
-        name: migration.name,
+        filename: migration.name,
         success: true,
         durationMs: duration,
       });
@@ -715,10 +838,45 @@ async function executeMigrations(
       const errorMessage =
         error instanceof Error ? error.message : String(error);
 
+      // F11: capture structured error info so operators can debug from
+      // `nextly migrate:status` without re-reading driver logs.
+      const errorJson: MigrationErrorJson = {
+        sqlState: extractSqlState(error),
+        message: errorMessage,
+        // Per-statement failure tracking is F15 scope (per-statement
+        // journaling on `nextly_migration_journal`); F11's transactional
+        // PG/SQLite path can't isolate which statement failed inside a tx.
+      };
+
       logger.error(`  Failed: ${errorMessage}`);
 
+      // Best-effort: record the failed migration in the journal so the
+      // next `migrate:status` shows it as `failed`. If THIS write also
+      // fails (e.g., DB unreachable), we just log and continue — the
+      // surrounding `for` loop's `break` ensures we don't try the next.
+      //
+      // F11 PR 1 review fix #1: delete any prior failed row first so
+      // the unique(filename) constraint doesn't block this INSERT when
+      // the operator is on their second-or-later attempt.
+      try {
+        await deleteFailedMigrationRow(adapter, dialect, migration.name);
+        await recordMigration(adapter, dialect, {
+          id: randomUUID(),
+          filename: migration.name,
+          sha256: migration.checksum,
+          status: "failed",
+          appliedBy,
+          durationMs: duration,
+          errorJson,
+        });
+      } catch (recordErr) {
+        logger.warn(
+          `  Could not record failure in nextly_migrations: ${recordErr instanceof Error ? recordErr.message : String(recordErr)}`
+        );
+      }
+
       results.push({
-        name: migration.name,
+        filename: migration.name,
         success: false,
         durationMs: duration,
         error: errorMessage,
@@ -733,23 +891,41 @@ async function executeMigrations(
     applied,
     skipped: 0,
     failed,
-    batch,
     migrations: results,
     durationMs: Date.now() - startTime,
     isDryRun: options.dryRun ?? false,
   };
 }
 
+// F11: extract a SQLSTATE-like code from common driver error shapes.
+// PG (`pg`) sets `code`; MySQL (`mysql2`) sets `code` + `sqlState`; SQLite
+// (`better-sqlite3`) puts SQLITE_* in `code`. We surface whichever exists.
+function extractSqlState(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const e = error as { sqlState?: unknown; code?: unknown };
+  if (typeof e.sqlState === "string") return e.sqlState;
+  if (typeof e.code === "string") return e.code;
+  return undefined;
+}
+
 async function executeMigrationInTransaction(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   migration: ParsedMigration,
-  batch: number,
+  appliedBy: string,
   logger: CommandContext["logger"]
 ): Promise<void> {
-  const id = generateUUID();
+  const id = randomUUID();
+  const startMs = Date.now();
 
   await executeTransaction(adapter, dialect, async () => {
+    // F11 PR 1 review fix #1: if a previous run failed, there's a
+    // status='failed' row for this filename. The unique(filename)
+    // constraint would block our INSERT. Delete the prior failed row
+    // INSIDE this transaction so the retry is atomic — either both
+    // the cleanup and the new row commit, or neither does.
+    await deleteFailedMigrationRow(adapter, dialect, migration.name);
+
     const statements = splitSqlStatements(migration.upSql);
 
     for (const statement of statements) {
@@ -759,12 +935,16 @@ async function executeMigrationInTransaction(
       }
     }
 
+    // F11: record `applied_by` and `duration_ms` so operators can debug
+    // "who ran this and how long did it take?" without external tooling.
     await recordMigration(adapter, dialect, {
       id,
-      name: migration.name,
-      batch,
-      checksum: migration.checksum,
+      filename: migration.name,
+      sha256: migration.checksum,
       status: "applied",
+      appliedBy,
+      durationMs: Date.now() - startMs,
+      errorJson: null,
     });
 
     if (migration.collections.length > 0) {
@@ -823,41 +1003,112 @@ async function executeTransaction(
   }
 }
 
+// F11 PR 1 review fix #1: clear any prior failed-status row for a
+// filename before inserting a new row. The unique(filename) constraint
+// would otherwise block retries. Always safe — at most one failed row
+// can exist per filename, and deleting nothing is a no-op.
+async function deleteFailedMigrationRow(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  filename: string
+): Promise<void> {
+  const escaped = escapeSql(filename);
+  const sql =
+    dialect === "mysql"
+      ? `DELETE FROM \`nextly_migrations\` WHERE \`filename\` = '${escaped}' AND \`status\` = 'failed'`
+      : `DELETE FROM "nextly_migrations" WHERE "filename" = '${escaped}' AND "status" = 'failed'`;
+  await adapter.executeQuery(sql);
+}
+
+// F11: insert a row into `nextly_migrations` per the spec §7 schema.
+// SQLite stores `error_json` as TEXT so we JSON-encode it here; PG/MySQL
+// have native JSON column types and accept the same JSON literal.
+//
+// Exported as `recordMigrationForTest` so unit tests can capture the
+// emitted SQL without standing up a real DB.
+export async function recordMigrationForTest(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  record: {
+    id: string;
+    filename: string;
+    sha256: string;
+    status: MigrationRecordStatus;
+    appliedBy: string | null;
+    durationMs: number | null;
+    errorJson: MigrationErrorJson | null;
+  }
+): Promise<void> {
+  return recordMigration(adapter, dialect, record);
+}
+
 async function recordMigration(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   record: {
     id: string;
-    name: string;
-    batch: number;
-    checksum: string;
+    filename: string;
+    sha256: string;
     status: MigrationRecordStatus;
-    errorMessage?: string;
+    appliedBy: string | null;
+    durationMs: number | null;
+    errorJson: MigrationErrorJson | null;
   }
 ): Promise<void> {
+  const appliedByLiteral = record.appliedBy
+    ? `'${escapeSql(record.appliedBy)}'`
+    : "NULL";
+  const durationLiteral =
+    record.durationMs !== null && record.durationMs !== undefined
+      ? String(record.durationMs)
+      : "NULL";
+  // JSON-encode the error payload. Null on success rows. We use literal
+  // SQL strings here because the existing migrate flow uses raw queries
+  // (not Drizzle's typed builder) — F11 doesn't change that pattern.
+  const errorJsonLiteral = record.errorJson
+    ? `'${escapeSql(JSON.stringify(record.errorJson))}'`
+    : "NULL";
+
   let insertSql: string;
 
   switch (dialect) {
     case "postgresql":
       insertSql = `
-        INSERT INTO "nextly_migrations" ("id", "name", "batch", "checksum", "status", "error_message", "executed_at")
-        VALUES ('${record.id}', '${escapeSql(record.name)}', ${record.batch}, '${record.checksum}', '${record.status}', ${record.errorMessage ? `'${escapeSql(record.errorMessage)}'` : "NULL"}, NOW())
+        INSERT INTO "nextly_migrations"
+          ("id", "filename", "sha256", "status", "applied_by", "duration_ms", "error_json", "applied_at")
+        VALUES
+          ('${record.id}', '${escapeSql(record.filename)}', '${record.sha256}', '${record.status}',
+           ${appliedByLiteral}, ${durationLiteral}, ${errorJsonLiteral}::jsonb, NOW())
       `;
       break;
     case "mysql":
       insertSql = `
-        INSERT INTO \`nextly_migrations\` (\`id\`, \`name\`, \`batch\`, \`checksum\`, \`status\`, \`error_message\`, \`executed_at\`)
-        VALUES ('${record.id}', '${escapeSql(record.name)}', ${record.batch}, '${record.checksum}', '${record.status}', ${record.errorMessage ? `'${escapeSql(record.errorMessage)}'` : "NULL"}, NOW())
+        INSERT INTO \`nextly_migrations\`
+          (\`id\`, \`filename\`, \`sha256\`, \`status\`, \`applied_by\`, \`duration_ms\`, \`error_json\`, \`applied_at\`)
+        VALUES
+          ('${record.id}', '${escapeSql(record.filename)}', '${record.sha256}', '${record.status}',
+           ${appliedByLiteral}, ${durationLiteral}, ${errorJsonLiteral}, NOW())
       `;
       break;
     case "sqlite":
+      // SQLite stores epoch-ms as INTEGER per the F11 schema. F11 PR 1
+      // review fix #3: julianday() gives real sub-second precision.
+      // The earlier `strftime('%s','now') * 1000` formula was second-
+      // precision masquerading as ms — the `* 1000` just zero-pads.
+      // 2440587.5 is the Julian day for 1970-01-01T00:00:00Z; subtracting
+      // it gives days since the Unix epoch; * 86400000 converts to ms.
+      // `error_json` is TEXT (JSON.parse on read).
       insertSql = `
-        INSERT INTO "nextly_migrations" ("id", "name", "batch", "checksum", "status", "error_message", "executed_at")
-        VALUES ('${record.id}', '${escapeSql(record.name)}', ${record.batch}, '${record.checksum}', '${record.status}', ${record.errorMessage ? `'${escapeSql(record.errorMessage)}'` : "NULL"}, strftime('%s', 'now'))
+        INSERT INTO "nextly_migrations"
+          ("id", "filename", "sha256", "status", "applied_by", "duration_ms", "error_json", "applied_at")
+        VALUES
+          ('${record.id}', '${escapeSql(record.filename)}', '${record.sha256}', '${record.status}',
+           ${appliedByLiteral}, ${durationLiteral}, ${errorJsonLiteral},
+           CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))
       `;
       break;
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${dialect as string}`);
   }
 
   await adapter.executeQuery(insertSql);
@@ -1082,13 +1333,9 @@ function splitSqlStatements(sql: string): string[] {
   return statements;
 }
 
-function generateUUID(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
+// F11: dropped local generateUUID() in favor of node:crypto's randomUUID,
+// which is what the rest of the codebase uses (matches schema/migration-journal
+// pattern from F8 PR 5). Avoids re-implementing UUID v4 generation.
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
@@ -1111,7 +1358,7 @@ function displayResults(result: MigrateResult, context: CommandContext): void {
   }
 
   logger.info("Migration Summary:");
-  logger.keyValue("Batch", result.batch);
+  // F11: dropped "Batch" key (no batch concept in forward-only model).
 
   if (result.applied > 0) {
     logger.keyValue("Applied", formatCount(result.applied, "migration"));
@@ -1125,7 +1372,7 @@ function displayResults(result: MigrateResult, context: CommandContext): void {
     logger.newline();
     const headers = ["Migration", "Status", "Duration"];
     const rows: (string | number | boolean)[][] = result.migrations.map(m => [
-      m.name,
+      m.filename,
       m.success ? "Applied" : "Failed",
       formatDuration(m.durationMs),
     ]);
@@ -1137,7 +1384,7 @@ function displayResults(result: MigrateResult, context: CommandContext): void {
     logger.newline();
     logger.error("Error Details:");
     for (const m of failedMigrations) {
-      logger.error(`  ${m.name}: ${m.error}`);
+      logger.error(`  ${m.filename}: ${m.error}`);
     }
   }
 }
@@ -1154,7 +1401,7 @@ export function registerMigrateCommand(program: Command): void {
     .option("--dry-run", "Show what would be migrated without executing", false)
     .option("--step <n>", "Run only N migrations", parseInt)
     .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+      const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
       const resolvedOptions: ResolvedMigrateOptions = {

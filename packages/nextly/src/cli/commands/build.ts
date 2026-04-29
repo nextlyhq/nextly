@@ -50,11 +50,7 @@ import {
   toSingularLabel,
   toPluralLabel,
 } from "../../shared/lib/pluralization.js";
-import {
-  createContext,
-  type CommandContext,
-  type GlobalOptions,
-} from "../program.js";
+import { createContext, type CommandContext } from "../program.js";
 import {
   createAdapter,
   validateDatabaseEnv,
@@ -189,10 +185,11 @@ interface ParsedMigration {
 }
 
 /**
- * Database migration record
+ * Database migration record (F11). Subset of `nextly_migrations` columns
+ * needed by `nextly build` to print "applied vs pending" stats.
  */
 interface MigrationRecord {
-  name: string;
+  filename: string;
   status: string;
 }
 
@@ -854,7 +851,8 @@ async function checkMigrationStatus(
       dialect
     );
 
-    const appliedMap = new Map(appliedMigrations.map(m => [m.name, m]));
+    // F11: keyed by `filename` (renamed from `name` in the table schema).
+    const appliedMap = new Map(appliedMigrations.map(m => [m.filename, m]));
 
     // Check each migration file
     for (const file of migrationFiles) {
@@ -921,16 +919,17 @@ async function getAppliedMigrations(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
 ): Promise<MigrationRecord[]> {
+  // F11: column rename — `name` → `filename`, `executed_at` → `applied_at`.
   const query =
     dialect === "mysql"
-      ? "SELECT `name`, `status` FROM `nextly_migrations` ORDER BY `executed_at` ASC"
-      : 'SELECT "name", "status" FROM "nextly_migrations" ORDER BY "executed_at" ASC';
+      ? "SELECT `filename`, `status` FROM `nextly_migrations` ORDER BY `applied_at` ASC"
+      : 'SELECT "filename", "status" FROM "nextly_migrations" ORDER BY "applied_at" ASC';
 
   try {
     const results = await adapter.executeQuery<Record<string, unknown>>(query);
 
     return results.map(row => ({
-      name: String(row.name),
+      filename: String(row.filename),
       status: String(row.status),
     }));
   } catch {
@@ -962,7 +961,7 @@ export function registerBuildCommand(program: Command): void {
     .option("--no-schemas", "Skip Drizzle schema generation")
     .option("--no-zod", "Skip Zod validation schema generation")
     .action(async (cmdOptions: BuildCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals() as GlobalOptions;
+      const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
       const resolvedOptions: ResolvedBuildOptions = {
