@@ -350,6 +350,10 @@ async function runBlankPath(
  * Address either by widening this adapter or by importing the real
  * config types. Out of PR 3 scope; F18 cross-dialect integration tests
  * will surface the gap if it bites.
+ *
+ * MIRROR: keep this in sync with `migrate-check.ts:toMinimalEntities`
+ * (same shape adapter; PR 4 duplicated rather than introducing a shared
+ * CLI helper module just for this).
  */
 function toMinimalEntities(
   entities: unknown[],
