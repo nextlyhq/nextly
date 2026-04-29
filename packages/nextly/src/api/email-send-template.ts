@@ -14,8 +14,11 @@
  * returns the canonical `{ data: <result> }` envelope per spec §10.2.
  * Auth uses the existing `requireAuthentication` middleware bridged to
  * `NextlyError` via `toNextlyAuthError`. Validation flows through
- * `nextlyValidationFromZod` (F11), and `EmailAttachmentError` through
- * the shared `nextlyErrorFromEmailAttachment` helper.
+ * `nextlyValidationFromZod` (F11). The attachment resolver throws
+ * `NextlyError` directly (validation for caller-fixable failures,
+ * internal for storage I/O) — `withErrorHandler` produces the canonical
+ * envelope. The machine-readable `EMAIL_ATTACHMENT_*` code lives at
+ * `error.data.errors[0].code`.
  *
  * @module api/email-send-template
  */
@@ -25,13 +28,11 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { isEmailAttachmentError } from "../domains/email/errors";
 import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
 
 import { createSuccessResponse } from "./create-success-response";
-import { nextlyErrorFromEmailAttachment } from "./email-attachment-to-nextly-error";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -106,24 +107,17 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailService();
-    try {
-      const result = await service.sendWithTemplate(
-        args.template,
-        args.to,
-        args.variables ?? {},
-        {
-          providerId: args.providerId,
-          cc: args.cc,
-          bcc: args.bcc,
-          attachments: args.attachments,
-        }
-      );
-      return createSuccessResponse(result);
-    } catch (err) {
-      if (isEmailAttachmentError(err)) {
-        throw nextlyErrorFromEmailAttachment(err);
+    const result = await service.sendWithTemplate(
+      args.template,
+      args.to,
+      args.variables ?? {},
+      {
+        providerId: args.providerId,
+        cc: args.cc,
+        bcc: args.bcc,
+        attachments: args.attachments,
       }
-      throw err;
-    }
+    );
+    return createSuccessResponse(result);
   }
 );

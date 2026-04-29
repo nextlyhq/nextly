@@ -21,7 +21,6 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
-  convertServiceError,
   createErrorFromResult,
   isNotFoundError,
   looksLikeId,
@@ -53,30 +52,23 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
-      try {
-        const where: WhereFilter = {};
-        if (args.status) {
-          where.status = { equals: args.status };
-        }
-
-        const result = await ctx.collectionsHandler.listEntries({
-          collectionName: ctx.formsCollectionSlug,
-          page,
-          limit,
-          where: Object.keys(where).length > 0 ? where : undefined,
-        });
-
-        if (!result.success) {
-          throw createErrorFromResult(result);
-        }
-
-        return result.data as PaginatedResponse<Record<string, unknown>>;
-      } catch (error) {
-        if (error instanceof NextlyError) {
-          throw error;
-        }
-        throw convertServiceError(error);
+      const where: WhereFilter = {};
+      if (args.status) {
+        where.status = { equals: args.status };
       }
+
+      const result = await ctx.collectionsHandler.listEntries({
+        collectionName: ctx.formsCollectionSlug,
+        page,
+        limit,
+        where: Object.keys(where).length > 0 ? where : undefined,
+      });
+
+      if (!result.success) {
+        throw createErrorFromResult(result);
+      }
+
+      return result.data as PaginatedResponse<Record<string, unknown>>;
     },
 
     async findBySlug(
@@ -120,13 +112,10 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
 
         return docs[0];
       } catch (error) {
-        if (error instanceof NextlyError) {
-          throw error;
-        }
         if (config.disableErrors && isNotFoundError(error)) {
           return null;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
@@ -147,71 +136,64 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         );
       }
 
-      try {
-        const form = await namespace.findBySlug({
-          slug: args.form,
-          disableErrors: true,
-        });
+      const form = await namespace.findBySlug({
+        slug: args.form,
+        disableErrors: true,
+      });
 
-        if (!form) {
-          return {
-            success: false,
-            error: "Form not found",
-          };
-        }
-
-        if (form.status !== "published") {
-          return {
-            success: false,
-            error: "This form is not currently accepting submissions",
-          };
-        }
-
-        const submissionData: Record<string, unknown> = {
-          form: form.id,
-          data: args.data,
-          status: "new",
-          submittedAt: new Date(),
-        };
-
-        if (args.metadata?.ipAddress) {
-          submissionData.ipAddress = args.metadata.ipAddress;
-        }
-        if (args.metadata?.userAgent) {
-          submissionData.userAgent = args.metadata.userAgent;
-        }
-
-        const createResult = await ctx.collectionsHandler.createEntry(
-          { collectionName: ctx.submissionsCollectionSlug },
-          submissionData
-        );
-
-        if (!createResult.success) {
-          return {
-            success: false,
-            error: createResult.message || "Failed to create submission",
-          };
-        }
-
-        const settings = form.settings as
-          | { confirmationType?: string; redirectUrl?: string }
-          | undefined;
-        const redirect =
-          settings?.confirmationType === "redirect"
-            ? settings.redirectUrl
-            : undefined;
-
+      if (!form) {
         return {
-          success: true,
-          submission: createResult.data as Record<string, unknown>,
-          redirect,
+          success: false,
+          error: "Form not found",
         };
-      } catch (error) {
-        if (error instanceof NextlyError) {
-          throw error;
-        }
-        throw convertServiceError(error);
       }
+
+      if (form.status !== "published") {
+        return {
+          success: false,
+          error: "This form is not currently accepting submissions",
+        };
+      }
+
+      const submissionData: Record<string, unknown> = {
+        form: form.id,
+        data: args.data,
+        status: "new",
+        submittedAt: new Date(),
+      };
+
+      if (args.metadata?.ipAddress) {
+        submissionData.ipAddress = args.metadata.ipAddress;
+      }
+      if (args.metadata?.userAgent) {
+        submissionData.userAgent = args.metadata.userAgent;
+      }
+
+      const createResult = await ctx.collectionsHandler.createEntry(
+        { collectionName: ctx.submissionsCollectionSlug },
+        submissionData
+      );
+
+      if (!createResult.success) {
+        return {
+          success: false,
+          error: createResult.message || "Failed to create submission",
+        };
+      }
+
+      const settings = form.settings as
+        | { confirmationType?: string; redirectUrl?: string }
+        | undefined;
+      const redirect =
+        settings?.confirmationType === "redirect"
+          ? settings.redirectUrl
+          : undefined;
+
+      return {
+        success: true,
+        submission: createResult.data as Record<string, unknown>,
+        redirect,
+      };
     },
 
     async submissions(
@@ -228,44 +210,37 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
-      try {
-        let formId = args.form;
+      let formId = args.form;
 
-        const isSlug = !looksLikeId(args.form);
+      const isSlug = !looksLikeId(args.form);
 
-        if (isSlug) {
-          const form = await namespace.findBySlug({
-            slug: args.form,
-            disableErrors: true,
-          });
-
-          if (!form) {
-            throw new NotFoundError(`Form with slug '${args.form}' not found`, {
-              slug: args.form,
-            });
-          }
-
-          formId = form.id as string;
-        }
-
-        const result = await ctx.collectionsHandler.listEntries({
-          collectionName: ctx.submissionsCollectionSlug,
-          page,
-          limit,
-          where: { form: { equals: formId } },
+      if (isSlug) {
+        const form = await namespace.findBySlug({
+          slug: args.form,
+          disableErrors: true,
         });
 
-        if (!result.success) {
-          throw createErrorFromResult(result);
+        if (!form) {
+          throw new NotFoundError(`Form with slug '${args.form}' not found`, {
+            slug: args.form,
+          });
         }
 
-        return result.data as PaginatedResponse<Record<string, unknown>>;
-      } catch (error) {
-        if (error instanceof NextlyError) {
-          throw error;
-        }
-        throw convertServiceError(error);
+        formId = form.id as string;
       }
+
+      const result = await ctx.collectionsHandler.listEntries({
+        collectionName: ctx.submissionsCollectionSlug,
+        page,
+        limit,
+        where: { form: { equals: formId } },
+      });
+
+      if (!result.success) {
+        throw createErrorFromResult(result);
+      }
+
+      return result.data as PaginatedResponse<Record<string, unknown>>;
     },
   };
 

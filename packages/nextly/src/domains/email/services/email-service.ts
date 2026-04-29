@@ -18,7 +18,7 @@ import { env } from "../../../lib/env";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { EmailAttachmentError, EmailErrorCode } from "../errors";
+import { EmailErrorCode } from "../errors";
 import type {
   EmailAttachmentInput,
   EmailConfig,
@@ -86,18 +86,21 @@ export class EmailService extends BaseService {
   /**
    * Resolve caller-provided attachments into bytes-ready form.
    * Returns `undefined` when no attachments supplied. Throws
-   * `EmailAttachmentError` on any validation or I/O failure — the
-   * caller (or `send()`) lets that propagate.
+   * `NextlyError` (validation for caller-fixable failures, internal for
+   * storage I/O) on any failure — the caller (or `send()`) lets that
+   * propagate.
    */
   private async resolveAttachmentsOrNone(
     inputs: EmailAttachmentInput[] | undefined
   ): Promise<ResolvedAttachment[] | undefined> {
     if (!inputs || inputs.length === 0) return undefined;
     if (!this.attachmentSource) {
-      throw new EmailAttachmentError(
-        EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
-        "Email attachments are not supported in this configuration: no media storage wired to EmailService."
-      );
+      throw NextlyError.internal({
+        logContext: {
+          emailAttachmentCode: EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+          reason: "no-attachment-source",
+        },
+      });
     }
     const deps: ResolveAttachmentsDeps = {
       limits: getAttachmentLimits(),
@@ -252,9 +255,10 @@ export class EmailService extends BaseService {
     attachments?: EmailAttachmentInput[];
   }): Promise<{ success: boolean; messageId?: string }> {
     // Resolve attachments BEFORE the provider try/catch so that
-    // EmailAttachmentError (count/size/media-not-found/storage-read)
-    // propagates to the caller instead of being swallowed into a
-    // generic `{ success: false }` response.
+    // NextlyError (validation for caller-fixable failures, internal for
+    // storage I/O — see attachment-resolver) propagates to the caller
+    // instead of being swallowed into a generic `{ success: false }`
+    // response.
     const resolvedAttachments = await this.resolveAttachmentsOrNone(
       options.attachments
     );

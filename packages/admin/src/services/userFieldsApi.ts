@@ -92,18 +92,22 @@ export interface UserFieldsMeta extends PaginationMeta {
 
 /**
  * List all user field definitions.
- * Backend returns a flat array (no server-side pagination).
- * Includes `adminConfig` in meta with `listFields` and `group` from defineConfig().
+ *
+ * Per spec §10.2 (handoff F14), the route now returns
+ * `{ data: { fields: UserFieldDefinitionRecord[], adminConfig?: UserAdminConfig } }`.
+ * The wire shape moved `adminConfig` out of `meta` (which is reserved for
+ * pagination) into the structured `data` payload, so we unwrap and return
+ * the inner object directly.
  */
 export async function listFields(): Promise<{
-  data: UserFieldDefinitionRecord[];
-  meta?: UserFieldsMeta;
+  fields: UserFieldDefinitionRecord[];
+  adminConfig?: UserAdminConfig;
 }> {
-  return enhancedFetcher<UserFieldDefinitionRecord[], UserFieldsMeta>(
-    "/user-fields",
-    {},
-    true
-  );
+  const result = await enhancedFetcher<{
+    fields: UserFieldDefinitionRecord[];
+    adminConfig?: UserAdminConfig;
+  }>("/user-fields", {}, true);
+  return result.data;
 }
 
 /**

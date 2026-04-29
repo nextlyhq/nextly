@@ -8,7 +8,7 @@ import {
   Skeleton,
   Spinner,
 } from "@revnixhq/ui";
-import type { ReactElement} from "react";
+import type { ReactElement } from "react";
 import { useEffect, useRef } from "react";
 import {
   useForm,
@@ -144,9 +144,9 @@ export default function EditUserPage(): ReactElement {
     if (user && !isDirty) {
       // Build custom field values from user data using field definitions
       const customFields: Record<string, unknown> = {};
-      if (fieldsData?.data) {
+      if (fieldsData?.fields) {
         const userRecord = user as unknown as Record<string, unknown>;
-        for (const def of fieldsData.data) {
+        for (const def of fieldsData.fields) {
           if (def.isActive && def.name in userRecord) {
             customFields[def.name] = userRecord[def.name];
           }
@@ -315,7 +315,9 @@ export default function EditUserPage(): ReactElement {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { void refetchUser(); }}
+              onClick={() => {
+                void refetchUser();
+              }}
               className="ml-2"
             >
               Retry
@@ -420,7 +422,9 @@ export default function EditUserPage(): ReactElement {
           <FormProvider {...form}>
             <form
               id="edit-user-form"
-              onSubmit={(e) => { void handleSubmit(onSubmit)(e); }}
+              onSubmit={e => {
+                void handleSubmit(onSubmit)(e);
+              }}
               className="space-y-8"
             >
               {/* Form Fields */}
@@ -432,7 +436,9 @@ export default function EditUserPage(): ReactElement {
                 roles={roles}
                 isLoadingRoles={isLoadingRoles}
                 rolesError={rolesError}
-                onRetryRoles={() => { void refetchRoles(); }}
+                onRetryRoles={() => {
+                  void refetchRoles();
+                }}
                 showActiveAccount={true}
               />
 

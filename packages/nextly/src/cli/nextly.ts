@@ -64,6 +64,7 @@ if (existsSync(envPath)) {
 async function main(): Promise<void> {
   const { createProgram } = await import("./program.js");
   const { createLogger } = await import("./utils/logger.js");
+  const { NextlyError } = await import("../errors/index.js");
   const telemetry = await import("@nextly/telemetry");
 
   const program = createProgram();
@@ -87,7 +88,31 @@ async function main(): Promise<void> {
       // Swallow.
     }
 
-    if (error instanceof Error) {
+    const debugMode =
+      process.env.DEBUG === "true" || process.env.DEBUG === "1";
+
+    if (NextlyError.is(error)) {
+      // CLI is operator-facing — print publicMessage as the headline,
+      // then a one-line `[code] key=value …` summary from logContext for
+      // triage. cause.stack only under DEBUG=true per existing convention.
+      logger.error(error.publicMessage);
+      const ctxParts: string[] = [`[${String(error.code)}]`];
+      if (error.logContext) {
+        for (const [k, v] of Object.entries(error.logContext)) {
+          if (v === undefined) continue;
+          ctxParts.push(
+            `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`
+          );
+        }
+      }
+      if (ctxParts.length > 1) {
+        console.error(ctxParts.join(" "));
+      }
+      if (debugMode && error.cause?.stack) {
+        logger.newline();
+        console.error(error.cause.stack);
+      }
+    } else if (error instanceof Error) {
       // Check if this is a Commander error (user input error)
       if ("code" in error) {
         // Commander errors (e.g., missing required argument)
@@ -99,7 +124,7 @@ async function main(): Promise<void> {
       logger.error(error.message);
 
       // Show stack trace in debug mode
-      if (process.env.DEBUG === "true" || process.env.DEBUG === "1") {
+      if (debugMode) {
         logger.newline();
         console.error(error.stack);
       }

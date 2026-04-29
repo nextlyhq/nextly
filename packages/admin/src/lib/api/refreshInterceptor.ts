@@ -94,7 +94,7 @@ export function refreshAccessToken(): Promise<boolean> {
 
 /**
  * `fetch`-shaped helper that silently refreshes the access token on a 401
- * TOKEN_EXPIRED and retries the original request once. On UNAUTHENTICATED or
+ * TOKEN_EXPIRED and retries the original request once. On AUTH_REQUIRED or
  * SESSION_UPGRADED it redirects to the login page. Any other response is
  * returned as-is.
  *
@@ -125,7 +125,7 @@ export async function authFetch(
     return res;
   }
 
-  if (code === "UNAUTHENTICATED" || code === "SESSION_UPGRADED") {
+  if (code === "AUTH_REQUIRED" || code === "SESSION_UPGRADED") {
     redirectToLogin();
   }
 

@@ -165,8 +165,8 @@ export function UserCustomFields({
 
   // Filter to active fields and sort by sortOrder
   const activeFields = useMemo(() => {
-    if (!data?.data) return [];
-    return data.data
+    if (!data?.fields) return [];
+    return data.fields
       .filter(f => f.isActive)
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }, [data]);

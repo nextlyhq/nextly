@@ -36,6 +36,7 @@ import type { ApiKeyService } from "../services/auth/api-key-service";
 import { isSuperAdmin } from "../services/lib/permissions";
 
 import { createSuccessResponse } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -65,27 +66,6 @@ function denySessionOnly(action: "create" | "update" | "delete"): never {
   throw NextlyError.forbidden({
     logContext: { reason: "session-only", action },
   });
-}
-
-async function readJsonBody(req: Request): Promise<unknown> {
-  try {
-    return await req.json();
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { reason: "invalid-json-body" },
-    });
-  }
 }
 
 /**

@@ -57,7 +57,10 @@ describe("resolveAttachments", () => {
       mediaId: `m${i}`,
     }));
     await expect(resolveAttachments(inputs, deps)).rejects.toMatchObject({
-      code: EmailErrorCode.ATTACHMENT_COUNT_EXCEEDED,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ code: EmailErrorCode.ATTACHMENT_COUNT_EXCEEDED }],
+      },
     });
     expect(deps.findMedia).not.toHaveBeenCalled();
     expect(deps.readBytes).not.toHaveBeenCalled();
@@ -68,7 +71,10 @@ describe("resolveAttachments", () => {
     await expect(
       resolveAttachments([{ mediaId: "missing" }], deps)
     ).rejects.toMatchObject({
-      code: EmailErrorCode.ATTACHMENT_MEDIA_NOT_FOUND,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ code: EmailErrorCode.ATTACHMENT_MEDIA_NOT_FOUND }],
+      },
     });
     expect(deps.readBytes).not.toHaveBeenCalled();
   });
@@ -80,7 +86,10 @@ describe("resolveAttachments", () => {
     await expect(
       resolveAttachments([{ mediaId: "m1" }], deps)
     ).rejects.toMatchObject({
-      code: EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+      code: "INTERNAL_ERROR",
+      logContext: {
+        emailAttachmentCode: EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+      },
     });
   });
 
@@ -93,7 +102,10 @@ describe("resolveAttachments", () => {
     await expect(
       resolveAttachments([{ mediaId: "a" }, { mediaId: "b" }], deps)
     ).rejects.toMatchObject({
-      code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED }],
+      },
     });
   });
 
@@ -113,7 +125,10 @@ describe("resolveAttachments", () => {
         deps
       )
     ).rejects.toMatchObject({
-      code: EmailErrorCode.ATTACHMENT_MEDIA_NOT_FOUND,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ code: EmailErrorCode.ATTACHMENT_MEDIA_NOT_FOUND }],
+      },
     });
     expect(findMedia).toHaveBeenCalledTimes(2);
   });

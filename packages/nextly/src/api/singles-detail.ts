@@ -31,7 +31,9 @@ import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
+import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
+import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -50,50 +52,6 @@ async function getSingleEntryService(): Promise<SingleEntryService> {
 async function getSingleRegistry(): Promise<SingleRegistryService> {
   await getNextly();
   return getService("singleRegistryService");
-}
-
-/**
- * Stub auth check — preserves the legacy behavior of accepting any request
- * with an `Authorization` header. The real token validation lands when the
- * auth middleware migration completes; until then, presence-only is the
- * documented contract for this surface (matches the PR-7 stub in
- * `singles-schema-detail.ts`).
- */
-function requireAuthHeader(request: Request): void {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    throw NextlyError.authRequired();
-  }
-  // TODO: Validate the auth token and extract user ID
-}
-
-/**
- * Parse a JSON request body and convert a parse failure into the canonical
- * `VALIDATION_ERROR`. The slug context is supplied separately so the same
- * helper works for any handler in this file.
- */
-async function readJsonBody(
-  req: Request,
-  slug: string
-): Promise<Record<string, unknown>> {
-  try {
-    return (await req.json()) as Record<string, unknown>;
-  } catch {
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage: "Validation failed.",
-      publicData: {
-        errors: [
-          {
-            path: "",
-            code: "invalid_json",
-            message: "Request body is not valid JSON.",
-          },
-        ],
-      },
-      logContext: { slug, reason: "invalid-json-body" },
-    });
-  }
 }
 
 /**
@@ -235,7 +193,7 @@ export const PATCH = withErrorHandler(
     const { slug } = await context.params;
     const service = await getSingleEntryService();
 
-    const body = await readJsonBody(request, slug);
+    const body = await readJsonBody<Record<string, unknown>>(request, { slug });
 
     const { searchParams } = new URL(request.url);
     const locale = searchParams.get("locale") || undefined;

@@ -195,7 +195,7 @@ export async function update<TSlug extends CollectionSlug>(
     const updated = await findByID<TSlug>(ctx, {
       collection: args.collection,
       id: bulkResult.success[0],
-    } as FindByIDArgs<TSlug>);
+    });
 
     if (!updated) {
       throw new NextlyError(

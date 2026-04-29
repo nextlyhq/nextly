@@ -14,12 +14,11 @@
  * returns the canonical `{ data: <result> }` envelope per spec §10.2.
  * Auth uses the existing `requireAuthentication` middleware bridged to
  * `NextlyError` via `toNextlyAuthError`. Validation errors flow through
- * `nextlyValidationFromZod` (F11). `EmailAttachmentError` from the
- * attachment resolution pipeline is converted via the shared
- * `nextlyErrorFromEmailAttachment` helper — both client-facing 400s and
- * the operator-only 500 land on canonical NextlyError shapes. The
- * machine-readable `EMAIL_ATTACHMENT_*` code moves from the legacy
- * top-level `code` to `error.data.errors[0].code`.
+ * `nextlyValidationFromZod` (F11). The attachment resolver throws
+ * `NextlyError` directly (validation for caller-fixable failures,
+ * internal for storage I/O) — `withErrorHandler` produces the canonical
+ * envelope. The machine-readable `EMAIL_ATTACHMENT_*` code lives at
+ * `error.data.errors[0].code`.
  *
  * @module api/email-send
  */
@@ -29,13 +28,11 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { isEmailAttachmentError } from "../domains/email/errors";
 import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
 
 import { createSuccessResponse } from "./create-success-response";
-import { nextlyErrorFromEmailAttachment } from "./email-attachment-to-nextly-error";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -115,14 +112,7 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailService();
-    try {
-      const result = await service.send(args);
-      return createSuccessResponse(result);
-    } catch (err) {
-      if (isEmailAttachmentError(err)) {
-        throw nextlyErrorFromEmailAttachment(err);
-      }
-      throw err;
-    }
+    const result = await service.send(args);
+    return createSuccessResponse(result);
   }
 );

@@ -49,7 +49,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { convertServiceError, mapPermission, mapRole } from "./helpers";
+import { mapPermission, mapRole } from "./helpers";
 
 /**
  * `nextly.roles.*` namespace — role CRUD and permission assignment.
@@ -70,166 +70,139 @@ export interface RolesNamespace {
 export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
   return {
     async find(args: FindRolesArgs = {}): Promise<PaginatedResponse<Role>> {
-      try {
-        // PR 4 (unified-error-system): listRoles returns `{ data, meta }`
-        // directly and throws NextlyError on failure.
-        const result = await ctx.rbacRoleService.listRoles({
-          search: args.search,
-          page: args.page ?? 1,
-          pageSize: args.limit ?? 10,
-        });
+      // PR 4 (unified-error-system): listRoles returns `{ data, meta }`
+      // directly and throws NextlyError on failure.
+      const result = await ctx.rbacRoleService.listRoles({
+        search: args.search,
+        page: args.page ?? 1,
+        pageSize: args.limit ?? 10,
+      });
 
-        // The query selects `slug` at runtime but the RoleQueryService return
-        // type doesn't declare it (type gap in the service layer); widen the
-        // runtime shape to the full Role record the mapper expects.
-        const data = result.data as Array<{
-          id: string;
-          name: string;
-          slug: string;
-          description: string | null;
-          level: number;
-          isSystem: boolean;
-        }>;
-        const docs = data.map(r => mapRole(r));
-        const totalDocs = result.meta?.total ?? docs.length;
-        const limit = args.limit ?? 10;
-        const page = args.page ?? 1;
-        const totalPages = Math.ceil(totalDocs / limit) || 1;
+      // The query selects `slug` at runtime but the RoleQueryService return
+      // type doesn't declare it (type gap in the service layer); widen the
+      // runtime shape to the full Role record the mapper expects.
+      const data = result.data as Array<{
+        id: string;
+        name: string;
+        slug: string;
+        description: string | null;
+        level: number;
+        isSystem: boolean;
+      }>;
+      const docs = data.map(r => mapRole(r));
+      const totalDocs = result.meta?.total ?? docs.length;
+      const limit = args.limit ?? 10;
+      const page = args.page ?? 1;
+      const totalPages = Math.ceil(totalDocs / limit) || 1;
 
-        return {
-          docs,
-          totalDocs,
-          limit,
-          page,
-          totalPages,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1,
-          nextPage: page < totalPages ? page + 1 : null,
-          prevPage: page > 1 ? page - 1 : null,
-          pagingCounter: (page - 1) * limit + 1,
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return {
+        docs,
+        totalDocs,
+        limit,
+        page,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+        nextPage: page < totalPages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+        pagingCounter: (page - 1) * limit + 1,
+      };
     },
 
     async findByID(args: FindRoleByIDArgs): Promise<Role> {
-      try {
-        // PR 4: getRoleById returns the role directly, throws NOT_FOUND.
-        const role = await ctx.rbacRoleService.getRoleById(args.id);
-        return mapRole(role);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      // PR 4: getRoleById returns the role directly, throws NOT_FOUND.
+      const role = await ctx.rbacRoleService.getRoleById(args.id);
+      return mapRole(role);
     },
 
     async create(args: CreateRoleArgs): Promise<Role> {
-      try {
-        // Pass through caller-provided permissionIds and childRoleIds.
-        // Previously these were hardcoded to empty arrays, which made
-        // every create call fail against the service's validation
-        // ("At least one permission is required to create a role"). The
-        // service accepts empty arrays only when both are empty AND
-        // the caller has bypassed validation via a different path;
-        // ordinary Direct API callers always need to pass at least one.
-        //
-        // PR 4: createRole returns the created role directly.
-        const role = await ctx.rbacRoleService.createRole({
-          name: args.data.name,
-          slug: args.data.slug,
-          description: args.data.description,
-          level: args.data.level ?? 0,
-          permissionIds: args.data.permissionIds ?? [],
-          childRoleIds: args.data.childRoleIds ?? [],
-        });
-        return mapRole(role);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      // Pass through caller-provided permissionIds and childRoleIds.
+      // Previously these were hardcoded to empty arrays, which made
+      // every create call fail against the service's validation
+      // ("At least one permission is required to create a role"). The
+      // service accepts empty arrays only when both are empty AND
+      // the caller has bypassed validation via a different path;
+      // ordinary Direct API callers always need to pass at least one.
+      //
+      // PR 4: createRole returns the created role directly.
+      const role = await ctx.rbacRoleService.createRole({
+        name: args.data.name,
+        slug: args.data.slug,
+        description: args.data.description,
+        level: args.data.level ?? 0,
+        permissionIds: args.data.permissionIds ?? [],
+        childRoleIds: args.data.childRoleIds ?? [],
+      });
+      return mapRole(role);
     },
 
     async update(args: UpdateRoleArgs): Promise<Role> {
-      try {
-        // PR 4: updateRole returns void; getRoleById returns the role
-        // directly. Both throw on failure.
-        await ctx.rbacRoleService.updateRole(args.id, {
-          name: args.data.name,
-          slug: args.data.slug,
-          description: args.data.description ?? undefined,
-          level: args.data.level,
-        });
-        const updated = await ctx.rbacRoleService.getRoleById(args.id);
-        return mapRole(updated);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      // PR 4: updateRole returns void; getRoleById returns the role
+      // directly. Both throw on failure.
+      await ctx.rbacRoleService.updateRole(args.id, {
+        name: args.data.name,
+        slug: args.data.slug,
+        description: args.data.description ?? undefined,
+        level: args.data.level,
+      });
+      const updated = await ctx.rbacRoleService.getRoleById(args.id);
+      return mapRole(updated);
     },
 
     async delete(args: DeleteRoleArgs): Promise<DeleteResult> {
-      try {
-        // PR 4: deleteRole returns void; throws on failure.
-        await ctx.rbacRoleService.deleteRole(args.id);
-        return { deleted: true, ids: [args.id] };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      // PR 4: deleteRole returns void; throws on failure.
+      await ctx.rbacRoleService.deleteRole(args.id);
+      return { deleted: true, ids: [args.id] };
     },
 
     async getPermissions(args: GetRolePermissionsArgs): Promise<Permission[]> {
-      try {
-        const rolePerms =
-          await ctx.rbacRolePermissionService.listRolePermissions(args.id);
+      const rolePerms = await ctx.rbacRolePermissionService.listRolePermissions(
+        args.id
+      );
 
-        // PR 4: getPermissionById returns the permission directly, throws
-        // NOT_FOUND on missing rows. Catch per-iteration so a single
-        // missing perm doesn't fail the whole list (parity with the
-        // previous null-tolerant behavior).
-        const fullPerms = await Promise.all(
-          rolePerms.map(async rp => {
-            try {
-              const perm = await ctx.rbacPermissionService.getPermissionById(
-                rp.id
-              );
-              return mapPermission(perm);
-            } catch {
-              return null;
-            }
-          })
-        );
+      // PR 4: getPermissionById returns the permission directly, throws
+      // NOT_FOUND on missing rows. Catch per-iteration so a single
+      // missing perm doesn't fail the whole list (parity with the
+      // previous null-tolerant behavior).
+      const fullPerms = await Promise.all(
+        rolePerms.map(async rp => {
+          try {
+            const perm = await ctx.rbacPermissionService.getPermissionById(
+              rp.id
+            );
+            return mapPermission(perm);
+          } catch {
+            return null;
+          }
+        })
+      );
 
-        return fullPerms.filter((p): p is Permission => p !== null);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return fullPerms.filter((p): p is Permission => p !== null);
     },
 
     async setPermissions(args: SetRolePermissionsArgs): Promise<Permission[]> {
-      try {
-        const updatedPerms =
-          await ctx.rbacRolePermissionService.setRolePermissions(
-            args.roleId,
-            args.permissionIds
-          );
-
-        // PR 4: getPermissionById returns the permission directly. Same
-        // null-tolerant pattern as getPermissions above.
-        const fullPerms = await Promise.all(
-          updatedPerms.map(async rp => {
-            try {
-              const perm = await ctx.rbacPermissionService.getPermissionById(
-                rp.id
-              );
-              return mapPermission(perm);
-            } catch {
-              return null;
-            }
-          })
+      const updatedPerms =
+        await ctx.rbacRolePermissionService.setRolePermissions(
+          args.roleId,
+          args.permissionIds
         );
 
-        return fullPerms.filter((p): p is Permission => p !== null);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      // PR 4: getPermissionById returns the permission directly. Same
+      // null-tolerant pattern as getPermissions above.
+      const fullPerms = await Promise.all(
+        updatedPerms.map(async rp => {
+          try {
+            const perm = await ctx.rbacPermissionService.getPermissionById(
+              rp.id
+            );
+            return mapPermission(perm);
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      return fullPerms.filter((p): p is Permission => p !== null);
     },
   };
 }
@@ -257,36 +230,32 @@ export function createPermissionsNamespace(
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
-      try {
-        // PR 4 (unified-error-system): listPermissions returns
-        // `{ data, meta }` directly and throws NextlyError on failure.
-        const result = await ctx.rbacPermissionService.listPermissions({
-          page,
-          pageSize: limit,
-          search: args.search,
-          resource: args.resource,
-          action: args.action,
-        });
+      // PR 4 (unified-error-system): listPermissions returns
+      // `{ data, meta }` directly and throws NextlyError on failure.
+      const result = await ctx.rbacPermissionService.listPermissions({
+        page,
+        pageSize: limit,
+        search: args.search,
+        resource: args.resource,
+        action: args.action,
+      });
 
-        const total = result.meta?.total ?? result.data.length;
-        const totalPages = Math.ceil(total / limit);
-        const docs: Permission[] = result.data.map(p => mapPermission(p));
+      const total = result.meta?.total ?? result.data.length;
+      const totalPages = Math.ceil(total / limit);
+      const docs: Permission[] = result.data.map(p => mapPermission(p));
 
-        return {
-          docs,
-          totalDocs: total,
-          limit,
-          page,
-          totalPages,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1,
-          nextPage: page < totalPages ? page + 1 : null,
-          prevPage: page > 1 ? page - 1 : null,
-          pagingCounter: (page - 1) * limit + 1,
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return {
+        docs,
+        totalDocs: total,
+        limit,
+        page,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+        nextPage: page < totalPages ? page + 1 : null,
+        prevPage: page > 1 ? page - 1 : null,
+        pagingCounter: (page - 1) * limit + 1,
+      };
     },
 
     async findByID(args: FindPermissionByIDArgs): Promise<Permission | null> {
@@ -301,41 +270,33 @@ export function createPermissionsNamespace(
         if (args.disableErrors && NextlyError.isNotFound(error)) {
           return null;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
     async create(args: CreatePermissionArgs): Promise<Permission> {
-      try {
-        const { name, slug, action, resource, description } = args.data;
+      const { name, slug, action, resource, description } = args.data;
 
-        // PR 4: ensurePermission returns `{ id, created }` directly and
-        // throws on failure; getPermissionById returns the permission
-        // directly.
-        const ensured = await ctx.rbacPermissionService.ensurePermission(
-          action,
-          resource,
-          name,
-          slug,
-          description
-        );
+      // PR 4: ensurePermission returns `{ id, created }` directly and
+      // throws on failure; getPermissionById returns the permission
+      // directly.
+      const ensured = await ctx.rbacPermissionService.ensurePermission(
+        action,
+        resource,
+        name,
+        slug,
+        description
+      );
 
-        const fetched = await ctx.rbacPermissionService.getPermissionById(
-          ensured.id
-        );
-        return mapPermission(fetched);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const fetched = await ctx.rbacPermissionService.getPermissionById(
+        ensured.id
+      );
+      return mapPermission(fetched);
     },
 
     async delete(args: DeletePermissionArgs): Promise<void> {
-      try {
-        // PR 4: deletePermissionById returns void; throws on failure.
-        await ctx.rbacPermissionService.deletePermissionById(args.id);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      // PR 4: deletePermissionById returns void; throws on failure.
+      await ctx.rbacPermissionService.deletePermissionById(args.id);
     },
   };
 }
@@ -354,15 +315,11 @@ export interface AccessNamespace {
 export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
   return {
     async check(args: CheckAccessArgs): Promise<boolean> {
-      try {
-        return await ctx.rbacAccessControlService.checkAccess({
-          userId: args.userId,
-          operation: args.operation,
-          resource: args.resource,
-        });
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return await ctx.rbacAccessControlService.checkAccess({
+        userId: args.userId,
+        operation: args.operation,
+        resource: args.resource,
+      });
     },
 
     async checkApiKey(args: CheckApiKeyArgs): Promise<CheckApiKeyResult> {
@@ -474,66 +431,43 @@ export interface ApiKeysNamespace {
 export function createApiKeysNamespace(ctx: NextlyContext): ApiKeysNamespace {
   return {
     async list(args: ListApiKeysArgs = {}): Promise<ApiKeyMeta[]> {
-      try {
-        const allUsers = !args.userId;
-        return await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
-          allUsers,
-        });
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const allUsers = !args.userId;
+      return await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
+        allUsers,
+      });
     },
 
     async findByID(args: FindApiKeyByIDArgs): Promise<ApiKeyMeta | null> {
-      try {
-        return await ctx.apiKeyService.getApiKeyById(args.id, "", {
-          allUsers: true,
-        });
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return await ctx.apiKeyService.getApiKeyById(args.id, "", {
+        allUsers: true,
+      });
     },
 
     async create(
       args: CreateApiKeyArgs
     ): Promise<{ doc: ApiKeyMeta; key: string }> {
-      try {
-        const { meta, key } = await ctx.apiKeyService.createApiKey(
-          args.userId,
-          {
-            name: args.name,
-            description: args.description ?? undefined,
-            tokenType: args.tokenType,
-            roleId: args.roleId ?? undefined,
-            expiresIn: args.expiresIn,
-          }
-        );
-        return { doc: meta, key };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const { meta, key } = await ctx.apiKeyService.createApiKey(args.userId, {
+        name: args.name,
+        description: args.description ?? undefined,
+        tokenType: args.tokenType,
+        roleId: args.roleId ?? undefined,
+        expiresIn: args.expiresIn,
+      });
+      return { doc: meta, key };
     },
 
     async update(args: UpdateApiKeyArgs): Promise<ApiKeyMeta> {
-      try {
-        const userId = await resolveApiKeyOwner(ctx.apiKeyService, args.id);
-        return await ctx.apiKeyService.updateApiKey(args.id, userId, {
-          name: args.name,
-          description: args.description ?? undefined,
-        });
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const userId = await resolveApiKeyOwner(ctx.apiKeyService, args.id);
+      return await ctx.apiKeyService.updateApiKey(args.id, userId, {
+        name: args.name,
+        description: args.description ?? undefined,
+      });
     },
 
     async revoke(args: RevokeApiKeyArgs): Promise<{ success: true }> {
-      try {
-        const userId = await resolveApiKeyOwner(ctx.apiKeyService, args.id);
-        await ctx.apiKeyService.revokeApiKey(args.id, userId);
-        return { success: true };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      const userId = await resolveApiKeyOwner(ctx.apiKeyService, args.id);
+      await ctx.apiKeyService.revokeApiKey(args.id, userId);
+      return { success: true };
     },
   };
 }

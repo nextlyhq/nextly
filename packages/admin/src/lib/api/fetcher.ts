@@ -98,6 +98,6 @@ export async function fetcher<T = unknown>(
     return undefined as T;
   }
 
-  // Assuming actual data is in json.data.data
-  return json.data?.data as T;
+  // Canonical wire shape (per spec §10.2): { data: <T> }.
+  return json.data as T;
 }

@@ -463,8 +463,8 @@ function UserFieldsTable() {
 
   // Sync local fields with server data
   useEffect(() => {
-    if (data?.data) {
-      setLocalFields(data.data);
+    if (data?.fields) {
+      setLocalFields(data.fields);
     }
   }, [data]);
 
@@ -566,8 +566,8 @@ function UserFieldsTable() {
         {
           onError: () => {
             // Revert optimistic update on failure
-            if (data?.data) {
-              setLocalFields(data.data);
+            if (data?.fields) {
+              setLocalFields(data.fields);
             }
             toast.error("Reorder failed", {
               description: "Failed to update field order. Please try again.",

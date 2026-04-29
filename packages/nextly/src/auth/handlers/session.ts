@@ -43,7 +43,7 @@ export async function handleSession(
   // expired JWT we want the cookie to stay so the client can still receive
   // TOKEN_EXPIRED on parallel in-flight requests and participate in the
   // single coalesced refresh — clearing here forces sibling requests into
-  // the no_token → UNAUTHENTICATED branch, which bypasses refresh.
+  // the no_token → AUTH_REQUIRED branch, which bypasses refresh.
   if (result.reason === "invalid") {
     clearCookies.push(clearAccessTokenCookie());
   }
@@ -53,7 +53,7 @@ export async function handleSession(
       ? "SESSION_UPGRADED"
       : result.reason === "expired"
         ? "TOKEN_EXPIRED"
-        : "UNAUTHENTICATED";
+        : "AUTH_REQUIRED";
 
   const message =
     code === "SESSION_UPGRADED"

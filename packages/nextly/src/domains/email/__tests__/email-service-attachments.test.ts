@@ -152,7 +152,12 @@ describe("EmailService.send with attachments", () => {
         html: "<p>x</p>",
         attachments: [{ mediaId: "gone" }],
       })
-    ).rejects.toMatchObject({ code: "EMAIL_ATTACHMENT_MEDIA_NOT_FOUND" });
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [{ code: "EMAIL_ATTACHMENT_MEDIA_NOT_FOUND" }],
+      },
+    });
 
     expect(adapterSend).not.toHaveBeenCalled();
   });
@@ -197,7 +202,11 @@ describe("EmailService.send with attachments", () => {
         attachments: [{ mediaId: "m1" }],
       })
     ).rejects.toMatchObject({
-      code: "EMAIL_ATTACHMENT_STORAGE_READ_FAILED",
+      code: "INTERNAL_ERROR",
+      logContext: {
+        emailAttachmentCode: "EMAIL_ATTACHMENT_STORAGE_READ_FAILED",
+        reason: "no-attachment-source",
+      },
     });
     expect(adapterSend).not.toHaveBeenCalled();
   });

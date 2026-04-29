@@ -10,13 +10,7 @@
  */
 
 import type { RequestContext } from "../../shared/types/index";
-import {
-  NextlyError,
-  NextlyErrorCode,
-  NotFoundError,
-  ValidationError,
-  fromServiceError,
-} from "../errors";
+import { NextlyError, ValidationError, fromServiceError } from "../errors";
 import type {
   ComponentDefinition,
   DirectAPIConfig,
@@ -147,57 +141,15 @@ export function statusCodeToErrorCode(statusCode: number): string {
 }
 
 /**
- * Convert any thrown value into a `NextlyError`.
- *
- * - Passes `NextlyError` subclasses through unchanged.
- * - Upgrades service-error-shaped objects via `fromServiceError()`.
- * - Wraps anything else into a generic `INTERNAL_ERROR`.
- */
-export function convertServiceError(error: unknown): NextlyError {
-  if (error instanceof NextlyError) {
-    return error;
-  }
-
-  if (
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    "message" in error
-  ) {
-    const serviceError = error as {
-      code: string;
-      message: string;
-      httpStatus?: number;
-      details?: unknown;
-    };
-
-    return fromServiceError({
-      code: serviceError.code,
-      message: serviceError.message,
-      httpStatus: serviceError.httpStatus ?? 500,
-      details: serviceError.details,
-    });
-  }
-
-  const message =
-    error instanceof Error ? error.message : "An unexpected error occurred";
-  return new NextlyError(message, NextlyErrorCode.INTERNAL_ERROR, 500);
-}
-
-/**
  * Returns `true` when the thrown value represents a "not found" outcome.
  *
  * Used to honor the `disableErrors` flag on find operations so callers get
- * `null` instead of an exception.
+ * `null` instead of an exception. Uses the canonical type guard so the check
+ * survives package-boundary identity issues (when one consumer's NextlyError
+ * is a different module instance from ours, instanceof returns false).
  */
 export function isNotFoundError(error: unknown): boolean {
-  if (error instanceof NotFoundError) {
-    return true;
-  }
-  if (error instanceof NextlyError && error.statusCode === 404) {
-    return true;
-  }
-  return false;
+  return NextlyError.isNotFound(error);
 }
 
 /**

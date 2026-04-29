@@ -277,6 +277,8 @@ export class SqliteAdapter extends DrizzleAdapter {
    * @remarks
    * This method closes the database connection and releases resources.
    */
+  // better-sqlite3 is synchronous; method is async to satisfy the DatabaseAdapter contract.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async disconnect(): Promise<void> {
     if (!this.db) {
       return;
@@ -322,6 +324,8 @@ export class SqliteAdapter extends DrizzleAdapter {
    *
    * @throws {DatabaseError} If query execution fails
    */
+  // better-sqlite3 is synchronous; method is async to satisfy the DatabaseAdapter contract.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async executeQuery<T = unknown>(
     sql: string,
     params: SqlParam[] = []
@@ -580,7 +584,10 @@ export class SqliteAdapter extends DrizzleAdapter {
    * Creates a TransactionContext for the given database connection.
    */
   private createTransactionContext(db: Database.Database): TransactionContext {
+    // better-sqlite3 is synchronous; the methods below are async to satisfy
+    // the TransactionContext contract shared with truly-async dialect adapters.
     return {
+      // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []
@@ -605,6 +612,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         }
       },
 
+      // eslint-disable-next-line @typescript-eslint/require-await
       insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
@@ -633,6 +641,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         return rows[0];
       },
 
+      // eslint-disable-next-line @typescript-eslint/require-await
       insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
@@ -712,14 +721,17 @@ export class SqliteAdapter extends DrizzleAdapter {
         return this.upsert<T>(table, data, options);
       },
 
+      // eslint-disable-next-line @typescript-eslint/require-await
       savepoint: async (name: string): Promise<void> => {
         db.exec(`SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
 
+      // eslint-disable-next-line @typescript-eslint/require-await
       rollbackToSavepoint: async (name: string): Promise<void> => {
         db.exec(`ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
 
+      // eslint-disable-next-line @typescript-eslint/require-await
       releaseSavepoint: async (name: string): Promise<void> => {
         db.exec(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
       },

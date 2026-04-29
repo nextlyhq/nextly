@@ -61,10 +61,12 @@ export class NextlySDK {
    * const posts = await sdk.find({ collection: 'posts' });
    * ```
    */
-  async find(params: { collection: string }): Promise<unknown> {
+  find(params: { collection: string }): Promise<unknown> {
     // TODO: Implementation in Plan 7 (Local API & Client SDK)
-    throw new Error(
-      `Not implemented - placeholder for Plan 7. Collection: ${params.collection}`
+    return Promise.reject(
+      new Error(
+        `Not implemented - placeholder for Plan 7. Collection: ${params.collection}`
+      )
     );
   }
 
@@ -74,10 +76,12 @@ export class NextlySDK {
    * @param params - Query parameters including collection and ID
    * @returns Promise resolving to the document or null
    */
-  async findByID(params: { collection: string; id: string }): Promise<unknown> {
+  findByID(params: { collection: string; id: string }): Promise<unknown> {
     // TODO: Implementation in Plan 7 (Local API & Client SDK)
-    throw new Error(
-      `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
+    return Promise.reject(
+      new Error(
+        `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
+      )
     );
   }
 
@@ -87,13 +91,15 @@ export class NextlySDK {
    * @param params - Create parameters including collection and data
    * @returns Promise resolving to the created document
    */
-  async create(params: {
+  create(params: {
     collection: string;
     data: Record<string, unknown>;
   }): Promise<unknown> {
     // TODO: Implementation in Plan 7 (Local API & Client SDK)
-    throw new Error(
-      `Not implemented - placeholder for Plan 7. Collection: ${params.collection}`
+    return Promise.reject(
+      new Error(
+        `Not implemented - placeholder for Plan 7. Collection: ${params.collection}`
+      )
     );
   }
 
@@ -103,14 +109,16 @@ export class NextlySDK {
    * @param params - Update parameters including collection, ID, and data
    * @returns Promise resolving to the updated document
    */
-  async update(params: {
+  update(params: {
     collection: string;
     id: string;
     data: Record<string, unknown>;
   }): Promise<unknown> {
     // TODO: Implementation in Plan 7 (Local API & Client SDK)
-    throw new Error(
-      `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
+    return Promise.reject(
+      new Error(
+        `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
+      )
     );
   }
 
@@ -120,10 +128,12 @@ export class NextlySDK {
    * @param params - Delete parameters including collection and ID
    * @returns Promise resolving to the deletion result
    */
-  async delete(params: { collection: string; id: string }): Promise<unknown> {
+  delete(params: { collection: string; id: string }): Promise<unknown> {
     // TODO: Implementation in Plan 7 (Local API & Client SDK)
-    throw new Error(
-      `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
+    return Promise.reject(
+      new Error(
+        `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
+      )
     );
   }
 }

@@ -18,11 +18,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import {
-  convertServiceError,
-  createErrorFromSingleResult,
-  mergeConfig,
-} from "./helpers";
+import { createErrorFromSingleResult, mergeConfig } from "./helpers";
 
 /**
  * Retrieve the content of a single (global) by slug.
@@ -57,10 +53,10 @@ export async function findGlobal<TSlug extends SingleSlug>(
     const single = await ctx.singleRegistryService.getSingleBySlug(args.slug);
     if (single?.fields && Array.isArray(single.fields)) {
       data = transformRichTextFields(
-        result.data as Record<string, unknown>,
-        single.fields as Parameters<typeof transformRichTextFields>[1],
+        result.data,
+        single.fields,
         config.richTextFormat
-      ) as DataFromSingleSlug<TSlug>;
+      );
     }
   }
 
@@ -101,19 +97,14 @@ export async function findGlobals(
 ): Promise<SingleListResult> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  let registryResult;
-  try {
-    registryResult = await ctx.singleRegistryService.listSingles({
-      source: args.source,
-      migrationStatus: args.migrationStatus,
-      locked: args.locked,
-      search: args.search,
-      limit: args.limit,
-      offset: args.offset,
-    });
-  } catch (error) {
-    throw convertServiceError(error);
-  }
+  const registryResult = await ctx.singleRegistryService.listSingles({
+    source: args.source,
+    migrationStatus: args.migrationStatus,
+    locked: args.locked,
+    search: args.search,
+    limit: args.limit,
+    offset: args.offset,
+  });
 
   const entries = await Promise.all(
     registryResult.data.map(async record => {
