@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import type {
+  MigrationJournalScopeKind,
   MigrationJournalSource,
   MigrationJournalStatus,
 } from "./types.js";
@@ -48,6 +49,18 @@ export const nextlyMigrationJournalMysql = mysqlTable(
 
     errorCode: varchar("error_code", { length: 64 }),
     errorMessage: text("error_message"),
+
+    // F10 PR 1: scope + summary columns. All nullable for forward-compat
+    // with rows written before this migration ran. Pipeline starts
+    // populating these in F10 PR 2.
+    scopeKind: varchar("scope_kind", {
+      length: 20,
+    }).$type<MigrationJournalScopeKind>(),
+    scopeSlug: varchar("scope_slug", { length: 255 }),
+    summaryAdded: int("summary_added"),
+    summaryRemoved: int("summary_removed"),
+    summaryRenamed: int("summary_renamed"),
+    summaryChanged: int("summary_changed"),
   },
   table => [
     index("nextly_migration_journal_status_idx").on(table.status),

@@ -27,3 +27,17 @@ export type MigrationJournalStatus =
   | "success"
   | "failed"
   | "aborted";
+
+/**
+ * F10: scope of the apply, surfaced in the journal so the admin
+ * NotificationCenter can render rows like "Posts schema updated"
+ * vs "Authors single updated" vs "Fresh push (initial setup)".
+ *
+ * Nullable in the table for forward-compat with rows written before
+ * the F10 PR 1 column migration ran.
+ */
+export type MigrationJournalScopeKind =
+  | "collection"
+  | "single"
+  | "global"
+  | "fresh-push";
