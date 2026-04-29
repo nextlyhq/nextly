@@ -168,9 +168,6 @@ importers:
       next:
         specifier: ^16.2.3
         version: 16.2.4(@babel/core@7.28.5)(@playwright/test@1.56.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-      nextly:
-        specifier: ^0.0.1
-        version: 0.0.1
       pg:
         specifier: ^8.16.3
         version: 8.16.3
@@ -6541,9 +6538,6 @@ packages:
       sass:
         optional: true
 
-  nextly@0.0.1:
-    resolution: {integrity: sha512-FPjHyIzbs7AymGxgUZ1pUxtn1i8PMGOaZX4SAeeeaMCeYu79MVJoqdS9lTzgAFvyH3Z1L/mfncTuG9sg08cpSw==}
-
   node-abi@3.80.0:
     resolution: {integrity: sha512-LyPuZJcI9HVwzXK1GPxWNzrr+vr8Hp/3UqlmWxxh8p54U1ZbclOqbSog9lWHaCX+dBaiGi6n/hIX+mKu74GmPA==}
     engines: {node: '>=10'}
@@ -12053,7 +12047,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.8(@types/node@24.10.0)(@vitest/ui@4.0.8)(happy-dom@20.9.0)(jiti@2.6.1)(jsdom@27.1.0)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3)
+      vitest: 4.0.8(@types/node@20.19.17)(@vitest/ui@4.0.8)(happy-dom@20.9.0)(jiti@2.6.1)(jsdom@27.1.0)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/utils@4.0.8':
     dependencies:
@@ -14325,8 +14319,6 @@ snapshots:
     transitivePeerDependencies:
       - '@babel/core'
       - babel-plugin-macros
-
-  nextly@0.0.1: {}
 
   node-abi@3.80.0:
     dependencies:
