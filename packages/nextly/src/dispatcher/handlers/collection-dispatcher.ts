@@ -406,6 +406,10 @@ const COLLECTIONS_METHODS: Record<
             source: sourceArg,
             promptChannel: channelArg,
             databaseName,
+            // F10 PR 2: tag the journal row with the collection slug
+            // the user is editing so the admin NotificationCenter can
+            // render "Posts schema updated" instead of generic "global".
+            uiTargetSlug: p.collectionName,
           });
         },
         // Optimistic-lock: only the slug being saved has a known

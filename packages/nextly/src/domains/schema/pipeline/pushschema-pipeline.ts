@@ -47,6 +47,8 @@ import type {
   Classifier,
   DrizzleStatementExecutor,
   MigrationJournal,
+  MigrationJournalScope,
+  MigrationJournalSummary,
   PreCleanupExecutor,
   PreRenameExecutor,
   PromptDispatcher,
@@ -225,6 +227,75 @@ export interface PushSchemaPipelineTestHooks {
   ) => Promise<number>;
 }
 
+// F10 PR 2: derive the per-change-kind counts from the pipeline's
+// post-resolution operation list. The counts mirror what the admin
+// NotificationCenter renders ("1 added, 1 renamed"), so we count the
+// FINAL ops (after `applyResolutionsToOperations` has folded confirmed
+// (drop_column, add_column) pairs into rename_column ops) — otherwise
+// renames would double-count as one removed + one added.
+//
+// Op-kind mapping:
+//   add_table, add_column                    -> added
+//   drop_table, drop_column                  -> removed
+//   rename_table, rename_column              -> renamed
+//   change_column_*                          -> changed
+//
+// Pure helper. Test seam: exported.
+export function computeJournalSummaryFromOperations(
+  operations: ReadonlyArray<Operation>
+): MigrationJournalSummary {
+  let added = 0;
+  let removed = 0;
+  let renamed = 0;
+  let changed = 0;
+  for (const op of operations) {
+    switch (op.type) {
+      case "add_table":
+      case "add_column":
+        added++;
+        break;
+      case "drop_table":
+      case "drop_column":
+        removed++;
+        break;
+      case "rename_table":
+      case "rename_column":
+        renamed++;
+        break;
+      case "change_column_type":
+      case "change_column_nullable":
+      case "change_column_default":
+        changed++;
+        break;
+      default: {
+        // Exhaustive switch — TS infers `op` as `never` here. New op
+        // kinds added to the union must update this map.
+        const exhaustive: never = op;
+        void exhaustive;
+        break;
+      }
+    }
+  }
+  return { added, removed, renamed, changed };
+}
+
+// F10 PR 2: derive the journal scope from the apply source + the
+// optional UI-target slug (forwarded by the admin Save dispatcher).
+// HMR/code-first applies re-run the full managed-tables snapshot, so
+// they're tagged as global. UI-first saves are scoped to the one
+// collection slug being edited.
+//
+// Pure helper. Test seam: exported.
+export function computeJournalScope(
+  source: "ui" | "code",
+  uiTargetSlug: string | undefined
+): MigrationJournalScope {
+  if (source === "ui" && uiTargetSlug) {
+    return { kind: "collection", slug: uiTargetSlug };
+  }
+  return { kind: "global" };
+}
+
 export class PushSchemaPipeline {
   constructor(
     private deps: PushSchemaPipelineDeps,
@@ -240,11 +311,18 @@ export class PushSchemaPipeline {
     // MySQL-only: drizzle-kit's MySQL pushSchema requires the database
     // name. PG and SQLite ignore it.
     databaseName?: string;
+    // F10 PR 2: forwarded by the admin Save dispatcher when source is
+    // "ui" so the journal can record `scope: { kind: "collection",
+    // slug: <user's collection> }`. HMR/code-first applies omit it
+    // and get tagged as global.
+    uiTargetSlug?: string;
   }): Promise<PipelineResult> {
     const { desired, db, dialect, source, promptChannel, databaseName } = args;
+    const scope = computeJournalScope(source, args.uiTargetSlug);
     const journalId = await this.deps.migrationJournal.recordStart({
       source,
       statementsPlanned: 0,
+      scope,
     });
 
     try {
@@ -456,9 +534,15 @@ export class PushSchemaPipeline {
         statementsExecuted = await txFn(runApply);
       }
 
+      // F10 PR 2: derive the per-change-kind summary from the
+      // post-resolution ops so the journal row carries audit-friendly
+      // counts ("1 added, 1 renamed") for the admin NotificationCenter.
+      const summary = computeJournalSummaryFromOperations(resolvedOps);
+
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: true,
         statementsExecuted,
+        summary,
       });
 
       return {
