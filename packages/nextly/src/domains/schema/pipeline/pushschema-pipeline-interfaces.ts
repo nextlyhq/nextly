@@ -110,16 +110,42 @@ export interface PreCleanupExecutor {
   }): Promise<NextlySchemaSnapshot>;
 }
 
-// F8: writes start/end records to the dynamic_migrations table for
-// observability + recovery. Stub returns dummy IDs and writes nothing.
+// F10 PR 2: scope of the apply, persisted into the journal so the admin
+// NotificationCenter can render meaningful audit rows. Mirrors
+// `MigrationJournalScopeKind` from `schemas/migration-journal/types.ts`.
+export interface MigrationJournalScope {
+  kind: "collection" | "single" | "global" | "fresh-push";
+  slug?: string;
+}
+
+// F10 PR 2: per-change-kind counts derived from the pipeline's diff
+// result. Persisted into the journal so audit rows can show
+// "1 added, 1 renamed" instead of opaque statement counts.
+export interface MigrationJournalSummary {
+  added: number;
+  removed: number;
+  renamed: number;
+  changed: number;
+}
+
+// F8: writes start/end records to the nextly_migration_journal table
+// for observability + recovery. F10 PR 2 extends with optional scope +
+// summary args so admin audit rows can render meaningful detail; older
+// callers omitting the args remain compatible (legacy noop columns).
 export interface MigrationJournal {
   recordStart(args: {
     source: "ui" | "code";
     statementsPlanned: number;
+    scope?: MigrationJournalScope;
   }): Promise<string>;
   recordEnd(
     journalId: string,
-    args: { success: boolean; statementsExecuted: number; error?: unknown }
+    args: {
+      success: boolean;
+      statementsExecuted: number;
+      error?: unknown;
+      summary?: MigrationJournalSummary;
+    }
   ): Promise<void>;
 }
 
