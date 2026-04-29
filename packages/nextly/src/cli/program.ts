@@ -22,7 +22,8 @@ import { registerGenerateTypesCommand } from "./commands/generate-types.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerMigrateCreateCommand } from "./commands/migrate-create.js";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh.js";
-import { registerMigrateResetCommand } from "./commands/migrate-reset.js";
+// F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
+// is "write a new corrective migration", not "run DOWN sections."
 import { registerMigrateStatusCommand } from "./commands/migrate-status.js";
 import { registerMigrateCommand } from "./commands/migrate.js";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup.js";
@@ -199,14 +200,11 @@ function registerCommands(program: Command): void {
   registerGenerateTypesCommand(program);
   registerGenerateSchemaCommand(program);
 
-  // Migration commands
+  // Migration commands (F11: forward-only; no rollback commands).
   registerMigrateCommand(program); // Imported from ./commands/migrate.js
   registerMigrateCreateCommand(program);
   registerMigrateStatusCommand(program);
-  registerMigrateDownCommand(program);
   registerMigrateFreshCommand(program);
-  registerMigrateResetCommand(program);
-  registerMigrateRefreshCommand(program);
 
   // Permissions commands
   program.addCommand(createPermissionsCleanupCommand());
@@ -287,32 +285,12 @@ function registerGenerateSchemaCommand(program: Command): void {
 // registerMigrateCommand is imported from ./commands/migrate.js
 // registerMigrateCreateCommand is imported from ./commands/migrate-create.js
 // registerMigrateStatusCommand is imported from ./commands/migrate-status.js
-
-function registerMigrateDownCommand(program: Command): void {
-  program
-    .command("migrate:down")
-    .alias("migrate:rollback") // Backward compatibility
-    .description("Roll back the last batch of migrations")
-    .option("--step <n>", "Roll back N migrations", parseInt)
-    .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      notImplemented("migrate:down", context);
-    });
-}
-
 // registerMigrateFreshCommand is imported from ./commands/migrate-fresh.js
-// registerMigrateResetCommand is imported from ./commands/migrate-reset.js
-
-function registerMigrateRefreshCommand(program: Command): void {
-  program
-    .command("migrate:refresh")
-    .description("Roll back all migrations and re-run them")
-    .option("-f, --force", "Skip confirmation prompt", false)
-    .option("--seed", "Run seeders after migrations", false)
-    .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      notImplemented("migrate:refresh", context);
-    });
-}
+//
+// F11 PR 2 (Q4=A): removed `migrate:down` (alias `migrate:rollback`) and
+// `migrate:refresh` "not implemented" stubs. They previously printed a
+// "not implemented" message; their existence implied a future rollback
+// feature that the F11 spec explicitly rejects (§5 non-goals: "Forward-
+// only in v1; corrective new migrations are the v1 rollback pattern").
+// Operators with a typo / muscle memory now get the standard "unknown
+// command" error from commander, which is the correct signal.

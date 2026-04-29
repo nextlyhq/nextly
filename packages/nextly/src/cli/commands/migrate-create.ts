@@ -889,7 +889,23 @@ function sanitizeName(name: string): string {
 }
 
 /**
- * Generate blank migration file content
+ * F11 PR 2: test seam for the no-DOWN regression assertion. Re-export
+ * of the internal `generateBlankMigrationContent` so a unit test can
+ * verify the format without spawning the CLI.
+ */
+export function generateBlankMigrationContentForTest(
+  name: string,
+  dialect: SupportedDialect
+): string {
+  return generateBlankMigrationContent(name, dialect);
+}
+
+/**
+ * Generate blank migration file content.
+ *
+ * F11 PR 2 (Q4=A): forward-only model. No `-- DOWN` section emitted.
+ * If a deployed migration needs to be reverted, write a NEW corrective
+ * migration that reverses it.
  */
 function generateBlankMigrationContent(
   name: string,
@@ -908,11 +924,28 @@ function generateBlankMigrationContent(
 -- UP
 -- Add your migration SQL here
 
-
--- DOWN
--- Add your rollback SQL here
-
 `;
+}
+
+/**
+ * F11 PR 2: test seam for the no-DOWN regression assertion. Re-export
+ * of the internal `formatMigrationFile` so a unit test can verify the
+ * format without spawning the CLI.
+ */
+export function formatMigrationFileForTest(
+  migration: GeneratedMigration,
+  collections: DynamicCollectionRecord[],
+  singles: DynamicCollectionRecord[] = [],
+  components: ComponentRecord[] = [],
+  hasUserExt: boolean = false
+): string {
+  return formatMigrationFile(
+    migration,
+    collections,
+    singles,
+    components,
+    hasUserExt
+  );
 }
 
 /**
@@ -944,6 +977,9 @@ function formatMigrationFile(
 
   const dialectName = getDialectDisplayName(migration.dialect);
 
+  // F11 PR 2 (Q4=A): forward-only — no `-- DOWN` section emitted.
+  // The MigrationGenerator may still populate `migration.down` internally
+  // (out of scope for PR 2 to refactor); we just don't write it to disk.
   return `-- Migration: ${migration.description}
 ${collectionList}${singleList}${componentList}${userExtLine}-- Generated at: ${migration.generatedAt.toISOString()}
 -- Dialect: ${dialectName}
@@ -951,9 +987,6 @@ ${collectionList}${singleList}${componentList}${userExtLine}-- Generated at: ${m
 
 -- UP
 ${migration.up}
-
--- DOWN
-${migration.down}
 `;
 }
 
