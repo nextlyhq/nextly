@@ -163,7 +163,7 @@ export async function uploadMedia(
       } else {
         redirectToLogin();
       }
-    } else if (code === "UNAUTHENTICATED" || code === "SESSION_UPGRADED") {
+    } else if (code === "AUTH_REQUIRED" || code === "SESSION_UPGRADED") {
       redirectToLogin();
     }
   }

@@ -105,7 +105,7 @@ export interface ErrorResponse {
   error: string;
   data: null;
   /**
-   * Machine-readable error code (e.g. "TOKEN_EXPIRED", "UNAUTHENTICATED").
+   * Machine-readable error code (e.g. "TOKEN_EXPIRED", "AUTH_REQUIRED").
    * Included in the JSON body so clients can distinguish "needs refresh"
    * from "fully unauthenticated" without parsing the human-readable message.
    */
@@ -332,7 +332,7 @@ export async function requireAuthentication(
       "Authentication required",
       "You must be logged in to access this resource",
       undefined,
-      "UNAUTHENTICATED"
+      "AUTH_REQUIRED"
     );
   }
 
