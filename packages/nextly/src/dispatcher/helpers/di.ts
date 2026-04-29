@@ -11,6 +11,7 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
+import type { DrizzleMigrationJournal } from "../../domains/schema/journal/migration-journal";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
@@ -25,6 +26,21 @@ export function getAdapterFromDI(): DrizzleAdapter | undefined {
   try {
     if (container.has("adapter")) {
       return container.get<DrizzleAdapter>("adapter");
+    }
+  } catch {
+    // DI not initialized
+  }
+  return undefined;
+}
+
+// F8 PR 5: lazy lookup for the MigrationJournal singleton. Returns
+// undefined if DI hasn't run yet — callers fall back to noop.
+export function getMigrationJournalFromDI():
+  | DrizzleMigrationJournal
+  | undefined {
+  try {
+    if (container.has("migrationJournal")) {
+      return container.get<DrizzleMigrationJournal>("migrationJournal");
     }
   } catch {
     // DI not initialized

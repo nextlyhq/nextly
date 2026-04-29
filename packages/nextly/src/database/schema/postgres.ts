@@ -10,6 +10,7 @@ import {
   uniqueIndex,
   boolean,
   varchar,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 export const systemMigrations = pgTable("system_migrations", {
@@ -765,10 +766,11 @@ export const media = pgTable(
     caption: text("caption"), // Optional caption/description
     tags: text("tags").array(), // Array of tags for organization and search
 
-    // Folder organization (null for root/unorganized files)
-    // Note: FK reference uses arrow function for forward reference since mediaFolders is defined later
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    folderId: text("folder_id").references((): any => mediaFolders.id, {
+    // Folder organization (null for root/unorganized files).
+    // Self-reference uses an explicit return type to break TS's
+    // circular inference; AnyPgColumn matches Drizzle's references()
+    // callback contract without the bare `any`.
+    folderId: text("folder_id").references((): AnyPgColumn => mediaFolders.id, {
       onDelete: "set null",
     }),
 
@@ -829,9 +831,8 @@ export const mediaFolders = pgTable(
     name: varchar("name", { length: 255 }).notNull(), // Folder name
     description: text("description"), // Optional description
 
-    // Hierarchy
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parentId: text("parent_id").references((): any => mediaFolders.id, {
+    // Hierarchy. Self-reference uses AnyPgColumn (see folderId comment).
+    parentId: text("parent_id").references((): AnyPgColumn => mediaFolders.id, {
       onDelete: "cascade",
     }), // Null for root folders
 
@@ -927,3 +928,12 @@ export const imageSizes = pgTable(
   },
   t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );
+
+// F8 PR 5: nextly_migration_journal — records every pipeline apply
+// (success/failure/abort) for audit + observability. Distinct from
+// `nextly_migrations` (which is the file-based migration ledger
+// powering `nextly migrate`). Defined in
+// schemas/migration-journal/postgres.ts; re-exported here so
+// getDialectTables() picks it up and ensureCoreTables creates it
+// at first boot.
+export { nextlyMigrationJournalPg as nextlyMigrationJournal } from "../../schemas/migration-journal/postgres";

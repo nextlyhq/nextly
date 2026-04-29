@@ -5,7 +5,6 @@ import {
   text,
   index,
   uniqueIndex,
-  real,
 } from "drizzle-orm/sqlite-core";
 
 export const systemMigrations = sqliteTable("system_migrations", {
@@ -837,3 +836,6 @@ export const imageSizes = sqliteTable(
 export const usersPermissionCacheRelation = relations(users, ({ many }) => ({
   permissionCache: many(userPermissionCache),
 }));
+
+// F8 PR 5: see postgres.ts re-export comment.
+export { nextlyMigrationJournalSqlite as nextlyMigrationJournal } from "../../schemas/migration-journal/sqlite";

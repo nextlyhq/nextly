@@ -28,10 +28,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push.js";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
+import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
 import type {
@@ -286,6 +283,24 @@ export async function performAutoSync(
       ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
       : undefined;
 
+  // F8 PR 5: construct the journal inline — db-sync runs in CLI
+  // context where DI is not yet initialized. The service writes
+  // directly to nextly_migration_journal once that table exists
+  // (created earlier by ensureCoreTables).
+  const { DrizzleMigrationJournal } = await import(
+    "../../domains/schema/journal/migration-journal.js"
+  );
+  const cliMigrationJournal = new DrizzleMigrationJournal({
+    db,
+    dialect,
+    logger: {
+      debug: msg => logger.debug(msg),
+      info: msg => logger.info(msg),
+      warn: msg => logger.warn(msg),
+      error: msg => logger.error(msg),
+    },
+  });
+
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
@@ -295,7 +310,7 @@ export async function performAutoSync(
         promptDispatcher: new ClackTerminalPromptDispatcher(),
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal: noopMigrationJournal,
+        migrationJournal: cliMigrationJournal,
       });
       return pipeline.apply({
         desired: desiredArg,
