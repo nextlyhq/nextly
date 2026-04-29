@@ -9,8 +9,9 @@ import {
 // F10 PR 1: assert all three dialect tables expose the 6 new columns.
 // Property-existence checks (Drizzle table objects) keep the test
 // ORM-agnostic; we don't assert on the underlying SQL types here —
-// those are exercised by the generated migration files in PR 1 and
-// the integration tests in later F10 PRs.
+// those are exercised at runtime via pushSchema's add_column path
+// (covered by F8 pipeline tests) and via the journal-write integration
+// tests in F10 PR 2.
 describe("F10 journal scope+summary columns", () => {
   const newColumns = [
     "scopeKind",
