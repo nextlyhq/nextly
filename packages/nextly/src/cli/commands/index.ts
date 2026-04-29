@@ -58,6 +58,8 @@ export {
 
 // F11 PR 2 (Q4=A): migrate:reset removed (forward-only model). Operators
 // who relied on rollback should write a new corrective migration instead.
+// BREAKING: external callers importing `runMigrateReset` or
+// `MigrateResetCommandOptions` from this barrel must remove that import.
 
 // Init command
 export {

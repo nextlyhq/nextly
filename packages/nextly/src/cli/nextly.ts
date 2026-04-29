@@ -11,8 +11,9 @@
  * - Global options: --config, --verbose, --quiet, --cwd, --no-color
  * - Development commands: dev, build, init
  * - Type generation: generate:types, generate:schema
- * - Migration commands: migrate, migrate:create, migrate:status, migrate:down,
- *   migrate:fresh, migrate:reset, migrate:refresh
+ * - Migration commands: migrate, migrate:create, migrate:status, migrate:fresh
+ *   (F11 PR 2: removed migrate:down, migrate:reset, migrate:refresh per Q4=A
+ *   forward-only model. Rollback = write a new corrective migration.)
  *
  * @example
  * ```bash

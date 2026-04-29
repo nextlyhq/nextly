@@ -200,7 +200,7 @@ function registerCommands(program: Command): void {
   registerGenerateTypesCommand(program);
   registerGenerateSchemaCommand(program);
 
-  // Migration commands (F11: forward-only — no rollback commands).
+  // Migration commands (F11: forward-only; no rollback commands).
   registerMigrateCommand(program); // Imported from ./commands/migrate.js
   registerMigrateCreateCommand(program);
   registerMigrateStatusCommand(program);

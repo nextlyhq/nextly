@@ -889,6 +889,18 @@ function sanitizeName(name: string): string {
 }
 
 /**
+ * F11 PR 2: test seam for the no-DOWN regression assertion. Re-export
+ * of the internal `generateBlankMigrationContent` so a unit test can
+ * verify the format without spawning the CLI.
+ */
+export function generateBlankMigrationContentForTest(
+  name: string,
+  dialect: SupportedDialect
+): string {
+  return generateBlankMigrationContent(name, dialect);
+}
+
+/**
  * Generate blank migration file content.
  *
  * F11 PR 2 (Q4=A): forward-only model. No `-- DOWN` section emitted.
@@ -913,6 +925,27 @@ function generateBlankMigrationContent(
 -- Add your migration SQL here
 
 `;
+}
+
+/**
+ * F11 PR 2: test seam for the no-DOWN regression assertion. Re-export
+ * of the internal `formatMigrationFile` so a unit test can verify the
+ * format without spawning the CLI.
+ */
+export function formatMigrationFileForTest(
+  migration: GeneratedMigration,
+  collections: DynamicCollectionRecord[],
+  singles: DynamicCollectionRecord[] = [],
+  components: ComponentRecord[] = [],
+  hasUserExt: boolean = false
+): string {
+  return formatMigrationFile(
+    migration,
+    collections,
+    singles,
+    components,
+    hasUserExt
+  );
 }
 
 /**
