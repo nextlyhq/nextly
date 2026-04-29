@@ -43,6 +43,7 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
+  getMigrationJournalFromDI,
 } from "../helpers/di";
 import {
   parseRichTextFormat,
@@ -385,6 +386,10 @@ const COLLECTIONS_METHODS: Record<
           // typed events that admin UIs can opt into via `eventResolutions`
           // (Resolution[]) once the dialog is updated. F8 will delete the
           // legacy service and the legacy `resolutions` field.
+          // F8 PR 5: real journal from DI (with noop fallback so tests
+          // that bypass DI keep working).
+          const migrationJournal =
+            getMigrationJournalFromDI() ?? noopMigrationJournal;
           const pipeline = new PushSchemaPipeline({
             executor: new DrizzleStatementExecutor(dialect, db),
             renameDetector: new RegexRenameDetector(),
@@ -392,7 +397,7 @@ const COLLECTIONS_METHODS: Record<
             promptDispatcher,
             preRenameExecutor: noopPreRenameExecutor,
             preCleanupExecutor: new RealPreCleanupExecutor(),
-            migrationJournal: noopMigrationJournal,
+            migrationJournal,
           });
           return pipeline.apply({
             desired: desiredArg,

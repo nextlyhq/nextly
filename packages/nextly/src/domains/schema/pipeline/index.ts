@@ -19,6 +19,7 @@
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
+  getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di.js";
 import { DrizzleStatementExecutor } from "../services/drizzle-statement-executor.js";
 
@@ -102,6 +103,11 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
       // F5 PR 6: real classifier + real pre-cleanup executor wired here too.
       // This is the DI-bound entry point used by callers that don't manage
       // their own pipeline instance.
+      // F8 PR 5: prefer the DI-registered journal; fall back to noop
+      // when DI hasn't run yet (e.g. some test contexts construct the
+      // pipeline before registerServices()).
+      const migrationJournal =
+        getMigrationJournalFromDI() ?? noopMigrationJournal;
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
@@ -109,7 +115,7 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
         promptDispatcher: new ClackTerminalPromptDispatcher(),
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal: noopMigrationJournal,
+        migrationJournal,
       });
 
       // MySQL note: the DI-bound entry point doesn't have access to

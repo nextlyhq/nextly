@@ -336,8 +336,29 @@ export async function registerServices(
   // applyDesiredSchema (already DI-wired). bumpSchemaVersion is now
   // called directly from the dispatcher's apply handler after a
   // successful pipeline apply (was previously wired via
-  // SchemaChangeService.setOnApplySuccess). PR 4 deletes the legacy
+  // SchemaChangeService.setOnApplySuccess). PR 4 deleted the legacy
   // service classes themselves.
+
+  // F8 PR 5: MigrationJournal — records every pipeline apply
+  // (success/failure/abort) into nextly_migration_journal. Construction
+  // is dialect-aware: the same DB instance + dialect the adapter wraps.
+  try {
+    const dialect = adapter.getCapabilities().dialect;
+    const { DrizzleMigrationJournal } = await import(
+      "../domains/schema/journal/migration-journal.js"
+    );
+    const journal = new DrizzleMigrationJournal({
+      db: adapter.getDrizzle(),
+      dialect,
+      logger: resolvedLogger,
+    });
+    container.registerSingleton("migrationJournal", () => journal);
+  } catch (err) {
+    // Journal init failure is non-fatal — pipeline falls back to noop.
+    resolvedLogger.warn?.(
+      `[registerServices] Failed to register MigrationJournal: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   container.registerSingleton<Logger>("logger", () => resolvedLogger);
   container.registerSingleton<NextlyServiceConfig>(

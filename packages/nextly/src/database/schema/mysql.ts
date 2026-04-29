@@ -10,6 +10,7 @@ import {
   text,
   boolean,
   timestamp,
+  type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
 
 export const systemMigrations = mysqlTable("system_migrations", {
@@ -576,7 +577,10 @@ export const media = mysqlTable(
 
     // Folder organization (null for root/unorganized files)
     folderId: varchar("folder_id", { length: 255 }).references(
-      (): any => mediaFolders.id,
+      // The self-referencing FK requires an explicit return type to
+      // break TS's circular inference; AnyMySqlColumn matches what
+      // Drizzle's references() callback expects without the bare any.
+      (): AnyMySqlColumn => mediaFolders.id,
       { onDelete: "set null" }
     ),
 
@@ -614,7 +618,10 @@ export const mediaFolders = mysqlTable(
 
     // Hierarchy
     parentId: varchar("parent_id", { length: 255 }).references(
-      (): any => mediaFolders.id,
+      // The self-referencing FK requires an explicit return type to
+      // break TS's circular inference; AnyMySqlColumn matches what
+      // Drizzle's references() callback expects without the bare any.
+      (): AnyMySqlColumn => mediaFolders.id,
       { onDelete: "cascade" }
     ),
 
@@ -791,3 +798,6 @@ export { siteSettingsMysql as siteSettings } from "../../schemas/general-setting
 export { userFieldDefinitionsMysql as userFieldDefinitions } from "../../schemas/user-field-definitions/mysql";
 export { emailProvidersMysql as emailProviders } from "../../schemas/email-providers/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../../schemas/email-templates/mysql";
+
+// F8 PR 5: see postgres.ts re-export comment.
+export { nextlyMigrationJournalMysql as nextlyMigrationJournal } from "../../schemas/migration-journal/mysql";

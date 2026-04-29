@@ -37,7 +37,10 @@ import type {
 } from "../domains/schema/pipeline/diff/types.js";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor.js";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
-import type { PromptDispatcher } from "../domains/schema/pipeline/pushschema-pipeline-interfaces.js";
+import type {
+  MigrationJournal,
+  PromptDispatcher,
+} from "../domains/schema/pipeline/pushschema-pipeline-interfaces.js";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
@@ -138,9 +141,17 @@ export async function reloadNextlyConfig(opts?: {
   // collection registry as the F1 preview gate did.
   let logger: LoggerLike | undefined;
   let adapter: AdapterLike | undefined;
+  // F8 PR 5: pull the journal from DI so HMR-driven applies get
+  // recorded alongside admin-UI applies. Optional — if DI hasn't
+  // registered it (e.g. very early HMR), we fall back to the noop
+  // and the apply still proceeds.
+  let migrationJournal: MigrationJournal | undefined;
   try {
     logger = (await resolve("logger")) as LoggerLike;
     adapter = (await resolve("databaseAdapter")) as AdapterLike;
+    migrationJournal = (await resolve("migrationJournal")) as
+      | MigrationJournal
+      | undefined;
   } catch {
     // DI not initialised yet (init-time race). Nothing to do.
     return;
@@ -271,7 +282,9 @@ export async function reloadNextlyConfig(opts?: {
         promptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal: noopMigrationJournal,
+        // F8 PR 5: real journal from DI; falls back to noop if DI
+        // hasn't registered it yet (very-early HMR cycles).
+        migrationJournal: migrationJournal ?? noopMigrationJournal,
       });
       return pipeline.apply({
         desired: desiredArg,

@@ -927,3 +927,12 @@ export const imageSizes = pgTable(
   },
   t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );
+
+// F8 PR 5: nextly_migration_journal — records every pipeline apply
+// (success/failure/abort) for audit + observability. Distinct from
+// `nextly_migrations` (which is the file-based migration ledger
+// powering `nextly migrate`). Defined in
+// schemas/migration-journal/postgres.ts; re-exported here so
+// getDialectTables() picks it up and ensureCoreTables creates it
+// at first boot.
+export { nextlyMigrationJournalPg as nextlyMigrationJournal } from "../../schemas/migration-journal/postgres";
