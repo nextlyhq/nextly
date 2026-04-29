@@ -10,73 +10,39 @@
  * These functions are called by the main route handler when it detects
  * `service === "apiKeys"` in the parsed route (wired in Subtask 3.2.1).
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: <result> }` envelope per spec §10.2. Errors flow
+ * through the wrapper and serialize as `application/problem+json`. The
+ * legacy non-paginated `{ data: [...], meta: { total } }` for `listApiKeys`
+ * is replaced with the canonical `{ data: [...] }` (no synthetic pagination
+ * meta — listing returns every key the caller is allowed to see). The
+ * session-only 403 surface drops its policy-specific public message in
+ * favor of the canonical "You don't have permission to perform this action."
+ * (per §13.8); the legacy reason lives in `logContext`.
+ *
  * @module api/api-keys
  * @since 1.0.0
  */
 
 import { z } from "zod";
 
-import {
-  createJsonErrorResponse,
-  isErrorResponse,
-  requireAnyPermission,
-} from "../auth/middleware";
+import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
+import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { CreateApiKeySchema, UpdateApiKeySchema } from "../schemas/api-keys";
 import type { ApiKeyService } from "../services/auth/api-key-service";
 import { isSuperAdmin } from "../services/lib/permissions";
 
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
 async function getApiKeyService(): Promise<ApiKeyService> {
   await getNextly();
   return container.get<ApiKeyService>("apiKeyService");
 }
-
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>
-): Response {
-  return Response.json({ data, ...(meta && { meta }) }, { status: statusCode });
-}
-
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    { error: { message, ...(code && { code }) } },
-    { status: statusCode }
-  );
-}
-
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[API Keys] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof z.ZodError) {
-    const first = error.issues[0];
-    return errorResponse(
-      first?.message ?? "Validation error",
-      400,
-      "VALIDATION_ERROR"
-    );
-  }
-
-  if (error instanceof Error) {
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-const SESSION_ONLY_MESSAGE =
-  "API keys cannot be managed using an API key. Please sign in.";
 
 async function requireApiKeyPermission(
   req: Request,
@@ -89,6 +55,40 @@ async function requireApiKeyPermission(
 }
 
 /**
+ * Throw the canonical FORBIDDEN error for session-only operations. The
+ * legacy "API keys cannot be managed using an API key. Please sign in."
+ * message is replaced with the §13.8-canonical sentence so every 403
+ * across the API ships the same wording. The session-only reason and
+ * the attempted action live in `logContext` for operator triage.
+ */
+function denySessionOnly(action: "create" | "update" | "delete"): never {
+  throw NextlyError.forbidden({
+    logContext: { reason: "session-only", action },
+  });
+}
+
+async function readJsonBody(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      },
+      logContext: { reason: "invalid-json-body" },
+    });
+  }
+}
+
+/**
  * List API keys for the authenticated user.
  *
  * Super-admins see all keys across all users (`allUsers: true`).
@@ -96,22 +96,20 @@ async function requireApiKeyPermission(
  *
  * Auth: session or API key + `manage-api-keys` permission.
  *
- * Response: `{ data: ApiKeyMeta[], meta: { total: number } }`
+ * Response: `{ "data": ApiKeyMeta[] }` — non-paginated list.
  */
-export async function listApiKeys(req: Request): Promise<Response> {
-  try {
+export const listApiKeys = withErrorHandler(
+  async (req: Request): Promise<Response> => {
     const authResult = await requireApiKeyPermission(req, "read");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const service = await getApiKeyService();
     const allUsers = await isSuperAdmin(authResult.userId);
     const keys = await service.listApiKeys(authResult.userId, { allUsers });
 
-    return successResponse(keys, 200, { total: keys.length });
-  } catch (error) {
-    return handleError(error, "List API keys");
+    return createSuccessResponse(keys);
   }
-}
+);
 
 /**
  * Fetch a single API key by ID.
@@ -122,15 +120,12 @@ export async function listApiKeys(req: Request): Promise<Response> {
  *
  * Auth: session or API key + `manage-api-keys` permission.
  *
- * Response: `{ data: ApiKeyMeta }`
+ * Response: `{ "data": ApiKeyMeta }`
  */
-export async function getApiKeyById(
-  req: Request,
-  id: string
-): Promise<Response> {
-  try {
-    const authResult = await requireApiKeyPermission(req, "read");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+export function getApiKeyById(req: Request, id: string): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireApiKeyPermission(request, "read");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const service = await getApiKeyService();
     const allUsers = await isSuperAdmin(authResult.userId);
@@ -139,13 +134,15 @@ export async function getApiKeyById(
     });
 
     if (!key) {
-      return errorResponse("API key not found", 404, "NOT_FOUND");
+      // Per §13.7 the public message stays "Not found." regardless of
+      // whether the row was missing or merely owned by another user.
+      throw NextlyError.notFound({
+        logContext: { entity: "api-key", id, callerId: authResult.userId },
+      });
     }
 
-    return successResponse(key);
-  } catch (error) {
-    return handleError(error, "Get API key");
-  }
+    return createSuccessResponse(key);
+  })(req);
 }
 
 /**
@@ -157,37 +154,35 @@ export async function getApiKeyById(
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
- * Response: `{ doc: ApiKeyMeta, key: string }` — `key` is the one-time raw secret.
+ * Response: `{ "data": { "doc": ApiKeyMeta, "key": string } }` — `key` is
+ * the one-time raw secret. Status 201.
  */
-export async function createApiKey(req: Request): Promise<Response> {
-  try {
+export const createApiKey = withErrorHandler(
+  async (req: Request): Promise<Response> => {
     const authResult = await requireApiKeyPermission(req, "create");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
-    if (authResult.authMethod !== "session") {
-      return errorResponse(SESSION_ONLY_MESSAGE, 403, "SESSION_REQUIRED");
-    }
+    if (authResult.authMethod !== "session") denySessionOnly("create");
 
-    let body: unknown;
+    const body = await readJsonBody(req);
+
+    let validated: z.infer<typeof CreateApiKeySchema>;
     try {
-      body = await req.json();
-    } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      validated = CreateApiKeySchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
     }
 
-    const validated = CreateApiKeySchema.parse(body);
     const service = await getApiKeyService();
     const { meta, key } = await service.createApiKey(
       authResult.userId,
       validated
     );
 
-    // 201 Created. `key` is the one-time raw secret — shown here only.
-    return Response.json({ doc: meta, key }, { status: 201 });
-  } catch (error) {
-    return handleError(error, "Create API key");
+    return createSuccessResponse({ doc: meta, key }, { status: 201 });
   }
-}
+);
 
 /**
  * Update an existing API key's name or description.
@@ -199,28 +194,25 @@ export async function createApiKey(req: Request): Promise<Response> {
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
- * Response: `{ data: ApiKeyMeta }`
+ * Response: `{ "data": ApiKeyMeta }`
  */
-export async function updateApiKey(
-  req: Request,
-  id: string
-): Promise<Response> {
-  try {
-    const authResult = await requireApiKeyPermission(req, "update");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+export function updateApiKey(req: Request, id: string): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireApiKeyPermission(request, "update");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
-    if (authResult.authMethod !== "session") {
-      return errorResponse(SESSION_ONLY_MESSAGE, 403, "SESSION_REQUIRED");
-    }
+    if (authResult.authMethod !== "session") denySessionOnly("update");
 
-    let body: unknown;
+    const body = await readJsonBody(request);
+
+    let validated: z.infer<typeof UpdateApiKeySchema>;
     try {
-      body = await req.json();
-    } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      validated = UpdateApiKeySchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
     }
 
-    const validated = UpdateApiKeySchema.parse(body);
     const service = await getApiKeyService();
     const updated = await service.updateApiKey(
       id,
@@ -228,10 +220,8 @@ export async function updateApiKey(
       validated
     );
 
-    return successResponse(updated);
-  } catch (error) {
-    return handleError(error, "Update API key");
-  }
+    return createSuccessResponse(updated);
+  })(req);
 }
 
 /**
@@ -244,25 +234,18 @@ export async function updateApiKey(
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
- * Response: `{ success: true }`
+ * Response: `{ "data": { "success": true } }`
  */
-export async function revokeApiKey(
-  req: Request,
-  id: string
-): Promise<Response> {
-  try {
-    const authResult = await requireApiKeyPermission(req, "delete");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+export function revokeApiKey(req: Request, id: string): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    const authResult = await requireApiKeyPermission(request, "delete");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
-    if (authResult.authMethod !== "session") {
-      return errorResponse(SESSION_ONLY_MESSAGE, 403, "SESSION_REQUIRED");
-    }
+    if (authResult.authMethod !== "session") denySessionOnly("delete");
 
     const service = await getApiKeyService();
     await service.revokeApiKey(id, authResult.userId);
 
-    return Response.json({ success: true }, { status: 200 });
-  } catch (error) {
-    return handleError(error, "Revoke API key");
-  }
+    return createSuccessResponse({ success: true });
+  })(req);
 }

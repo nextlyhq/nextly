@@ -8,6 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: <result> }` envelope per spec §10.2. Errors are
+ * serialized as `application/problem+json`.
+ *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/singles/[slug]/route.ts
@@ -18,8 +22,8 @@
  */
 
 import { getService } from "../di";
-import { container } from "../di/container";
-import { isServiceError } from "../errors";
+import type { SingleResult } from "../domains/singles/types";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import { transformRichTextFields } from "../lib/field-transform";
@@ -27,9 +31,8 @@ import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
-// ============================================================
-// Types
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
@@ -39,114 +42,109 @@ interface RouteContext {
   params: Promise<{ slug: string }>;
 }
 
-// ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * Ensure services are initialized with config.
- */
-async function ensureServicesInitialized(): Promise<void> {
-  await getNextly();
-}
-
-/**
- * Get the SingleEntryService from the DI container.
- */
 async function getSingleEntryService(): Promise<SingleEntryService> {
-  await ensureServicesInitialized();
+  await getNextly();
   return getService("singleEntryService");
 }
 
-/**
- * Get the SingleRegistryService from the DI container.
- */
 async function getSingleRegistry(): Promise<SingleRegistryService> {
-  await ensureServicesInitialized();
+  await getNextly();
   return getService("singleRegistryService");
 }
 
 /**
- * Create a success response with data
+ * Stub auth check — preserves the legacy behavior of accepting any request
+ * with an `Authorization` header. The real token validation lands when the
+ * auth middleware migration completes; until then, presence-only is the
+ * documented contract for this surface (matches the PR-7 stub in
+ * `singles-schema-detail.ts`).
  */
-function successResponse<T>(data: T, statusCode: number = 200): Response {
-  return Response.json(
-    { data },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Create an error response
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
-      },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Handle errors from service layer
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Singles Detail API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Check for authentication header.
- * Returns error response if not authenticated, null if authenticated.
- */
-function checkAuthentication(request: Request): Response | null {
+function requireAuthHeader(request: Request): void {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
+    throw NextlyError.authRequired();
   }
   // TODO: Validate the auth token and extract user ID
-  // For now, we accept any Authorization header as authenticated
-  return null;
 }
 
-// ============================================================
-// Route Handlers
-// ============================================================
+/**
+ * Parse a JSON request body and convert a parse failure into the canonical
+ * `VALIDATION_ERROR`. The slug context is supplied separately so the same
+ * helper works for any handler in this file.
+ */
+async function readJsonBody(
+  req: Request,
+  slug: string
+): Promise<Record<string, unknown>> {
+  try {
+    return (await req.json()) as Record<string, unknown>;
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      },
+      logContext: { slug, reason: "invalid-json-body" },
+    });
+  }
+}
 
 /**
- * Valid output formats for rich text fields.
+ * Bridge for the legacy `SingleResult` shape (`{ success, statusCode,
+ * data?, message?, errors? }`) emitted by `SingleEntryService`. The service
+ * still uses the F8 result-shape pattern; converting it to a thrown
+ * `NextlyError` at the route boundary keeps the wire format canonical
+ * without touching the service layer in Task 8.
+ *
+ * Mapping:
+ *   - 404 → `NextlyError.notFound`. The slug goes to `logContext`; the
+ *     public message stays the §13.8-compliant "Not found." (no echo).
+ *   - 400 → `NextlyError.validation`. Per-field `errors[]` translate to
+ *     the canonical `data.errors[]` shape; the legacy `field` becomes
+ *     `path` and a generic `INVALID` code fills the missing slot.
+ *   - Anything else → `NextlyError.internal`. The legacy status / message
+ *     are preserved in `logContext` so operators can correlate.
+ *
+ * Removed once `SingleEntryService` is migrated to throw directly.
  */
+function throwFromSingleResult<T>(
+  result: SingleResult<T>,
+  slug: string
+): never {
+  const logContext: Record<string, unknown> = {
+    slug,
+    legacyStatusCode: result.statusCode,
+    legacyMessage: result.message,
+  };
+  if (result.errors) logContext.legacyErrors = result.errors;
+
+  if (result.statusCode === 404) {
+    throw NextlyError.notFound({ logContext });
+  }
+
+  if (result.statusCode === 400) {
+    throw NextlyError.validation({
+      errors: (result.errors ?? []).map(e => ({
+        path: e.field ?? "",
+        code: "INVALID",
+        message: e.message,
+      })),
+      logContext,
+    });
+  }
+
+  throw NextlyError.internal({ logContext });
+}
+
 const VALID_RICH_TEXT_FORMATS = ["json", "html", "both"] as const;
 
-/**
- * Parse and validate the richTextFormat query parameter.
- */
 function parseRichTextFormat(value: string | null): RichTextOutputFormat {
   if (!value) return "json";
   const normalized = value.toLowerCase();
@@ -160,7 +158,8 @@ function parseRichTextFormat(value: string | null): RichTextOutputFormat {
  * GET handler for retrieving a Single document by slug.
  *
  * This is a public endpoint - no authentication required.
- * If the Single document doesn't exist, it will be auto-created with default field values.
+ * If the Single document doesn't exist, it will be auto-created with default
+ * field values.
  *
  * Query Parameters:
  * - depth: Relationship expansion depth (reserved for future use)
@@ -170,39 +169,15 @@ function parseRichTextFormat(value: string | null): RichTextOutputFormat {
  *   - "html": Return HTML string only
  *   - "both": Return object with both { json, html } properties
  *
- * Response Codes:
- * - 200 OK: Single document retrieved successfully
- * - 404 Not Found: Single with slug does not exist in registry
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to fetch Single
- *
- * @param request - Next.js Request object
- * @param context - Route context with params Promise containing slug
- * @returns Response with JSON Single document data
- *
- * @example
- * ```bash
- * # Get Single with default JSON format for rich text
- * curl "http://localhost:3000/api/singles/site-settings"
- *
- * # Get Single with HTML format for rich text fields
- * curl "http://localhost:3000/api/singles/site-settings?richTextFormat=html"
- *
- * # Get Single with both JSON and HTML for rich text fields
- * curl "http://localhost:3000/api/singles/site-settings?richTextFormat=both"
- * # => {"data":{"id":"...","content":{"json":{...},"html":"<p>...</p>"}}}
- * ```
+ * Response:
+ * - 200 OK: `{ "data": { ... } }`
+ * - On error: `application/problem+json` per spec §10.1.
  */
-export async function GET(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    // Public endpoint - no authentication required for reading Singles
+export const GET = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
     const { slug } = await context.params;
     const service = await getSingleEntryService();
 
-    // Parse query parameters
     const { searchParams } = new URL(request.url);
     const depth = searchParams.get("depth")
       ? parseInt(searchParams.get("depth")!, 10)
@@ -212,38 +187,29 @@ export async function GET(
       searchParams.get("richTextFormat")
     );
 
-    // Get Single document (auto-creates if not exists)
     const result = await service.get(slug, { depth, locale });
 
     if (!result.success) {
-      return errorResponse(
-        result.message || "Single not found",
-        result.statusCode,
-        result.statusCode === 404 ? "NOT_FOUND" : undefined
-      );
+      throwFromSingleResult(result, slug);
     }
 
-    // Transform rich text fields if format is not "json" (default)
     let responseData = result.data;
     if (richTextFormat !== "json" && result.data) {
-      // Get the Single's field configuration for transformation
       const registry = await getSingleRegistry();
       const single = await registry.getSingleBySlug(slug);
 
       if (single?.fields && Array.isArray(single.fields)) {
         responseData = transformRichTextFields(
-          result.data as Record<string, unknown>,
+          result.data,
           single.fields,
           richTextFormat
         ) as typeof result.data;
       }
     }
 
-    return withTimezoneFormatting(successResponse(responseData));
-  } catch (error) {
-    return handleError(error, "Get Single");
+    return withTimezoneFormatting(createSuccessResponse(responseData));
   }
-}
+);
 
 /**
  * PATCH handler for updating a Single document.
@@ -258,76 +224,31 @@ export async function GET(
  * - Any fields defined in the Single schema
  * - System fields (id, createdAt) are ignored if included
  *
- * Response Codes:
- * - 200 OK: Single document updated successfully
- * - 400 Bad Request: Invalid JSON body
- * - 401 Unauthorized: Authentication required
- * - 404 Not Found: Single with slug does not exist in registry
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Update failed
- *
- * @param request - Next.js Request object with JSON body
- * @param context - Route context with params Promise containing slug
- * @returns Response with JSON updated Single document
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/singles/site-settings', {
- *   method: 'PATCH',
- *   headers: {
- *     'Content-Type': 'application/json',
- *     'Authorization': 'Bearer <token>',
- *   },
- *   body: JSON.stringify({
- *     siteName: 'My Awesome Site',
- *     tagline: 'Building the future',
- *   }),
- * });
- * const { data: updated } = await response.json();
- * ```
+ * Response:
+ * - 200 OK: `{ "data": { ... } }` (updated document)
+ * - On error: `application/problem+json` per spec §10.1.
  */
-export async function PATCH(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    // Check authentication
-    const authError = checkAuthentication(request);
-    if (authError) {
-      return authError;
-    }
+export const PATCH = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
 
     const { slug } = await context.params;
     const service = await getSingleEntryService();
 
-    // Parse request body
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
-    }
+    const body = await readJsonBody(request, slug);
 
-    // Parse query parameters for locale
     const { searchParams } = new URL(request.url);
     const locale = searchParams.get("locale") || undefined;
 
-    // Update Single document
     const result = await service.update(slug, body, { locale });
 
     if (!result.success) {
-      return errorResponse(
-        result.message || "Update failed",
-        result.statusCode,
-        result.statusCode === 404 ? "NOT_FOUND" : undefined
-      );
+      throwFromSingleResult(result, slug);
     }
 
-    return withTimezoneFormatting(successResponse(result.data));
-  } catch (error) {
-    return handleError(error, "Update Single");
+    return withTimezoneFormatting(createSuccessResponse(result.data));
   }
-}
+);
 
 /**
  * GET handler for retrieving Single schema/metadata by slug.
@@ -337,16 +258,9 @@ export async function PATCH(
  *
  * Requires authentication.
  *
- * Response Codes:
- * - 200 OK: Single schema retrieved successfully
- * - 401 Unauthorized: Authentication required
- * - 404 Not Found: Single with slug does not exist
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to fetch schema
- *
- * @param request - Next.js Request object
- * @param slug - Single slug from URL
- * @returns Response with JSON Single schema
+ * Response:
+ * - 200 OK: `{ "data": { slug, label, fields, ... } }`
+ * - 401 / 404 / 500: `application/problem+json` per spec §10.1.
  *
  * @example
  * ```bash
@@ -355,26 +269,19 @@ export async function PATCH(
  * # => {"data":{"slug":"site-settings","label":"Site Settings","fields":[...]}}
  * ```
  */
-export async function getSchema(
-  request: Request,
-  slug: string
-): Promise<Response> {
-  try {
-    // Check authentication
-    const authError = checkAuthentication(request);
-    if (authError) {
-      return authError;
-    }
+export function getSchema(request: Request, slug: string): Promise<Response> {
+  return withErrorHandler(async (req: Request) => {
+    requireAuthHeader(req);
 
     const registry = await getSingleRegistry();
     const single = await registry.getSingleBySlug(slug);
 
     if (!single) {
-      return errorResponse(`Single '${slug}' not found`, 404, "NOT_FOUND");
+      // Per §13.7: identifier (slug) goes to logContext, never the public
+      // message. The public response is the canonical "Not found." sentence.
+      throw NextlyError.notFound({ logContext: { slug } });
     }
 
-    return successResponse(single);
-  } catch (error) {
-    return handleError(error, "Get Single schema");
-  }
+    return createSuccessResponse(single);
+  })(request);
 }

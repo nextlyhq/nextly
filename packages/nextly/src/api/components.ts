@@ -35,6 +35,7 @@ import {
   createSuccessResponse,
 } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getComponentRegistry(): Promise<ComponentRegistryService> {
   await getNextly();
@@ -63,20 +64,6 @@ const createComponentSchema = z.object({
     })
     .optional(),
 });
-
-// Map a ZodError to NextlyError.validation. Issue codes (`too_small`,
-// `invalid_string`, …) are forwarded so admin clients can render
-// field-level UI; raw issues stay in `logContext` for operator triage.
-function nextlyValidationFromZod(err: z.ZodError): NextlyError {
-  return NextlyError.validation({
-    errors: err.issues.map(issue => ({
-      path: issue.path.join("."),
-      code: issue.code,
-      message: issue.message,
-    })),
-    logContext: { zodIssues: err.issues },
-  });
-}
 
 /**
  * GET handler for listing components with pagination and filters.

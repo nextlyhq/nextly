@@ -8,6 +8,11 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: [...], meta: { total, page, perPage } }` envelope per
+ * spec §10.2. Errors flow through the wrapper and serialize as
+ * `application/problem+json`.
+ *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/singles/route.ts
@@ -18,89 +23,17 @@
  */
 
 import { getService } from "../di";
-import { isServiceError } from "../errors";
 import { getNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
-// ============================================================
-// Helper Functions
-// ============================================================
+import { createPaginatedResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
-/**
- * Get the SingleRegistryService from the DI container.
- * Uses getNextly() to ensure services are initialized with config.
- */
 async function getSingleRegistry(): Promise<SingleRegistryService> {
   await getNextly();
   return getService("singleRegistryService");
 }
-
-/**
- * Create a success response with data and optional meta
- */
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>
-): Response {
-  return Response.json(
-    {
-      data,
-      ...(meta && { meta }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Create an error response
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
-      },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Handle errors from service layer
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Singles API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-// ============================================================
-// Route Handlers
-// ============================================================
 
 /**
  * GET handler for listing Singles with pagination and filters.
@@ -108,29 +41,18 @@ function handleError(error: unknown, operation: string): Response {
  * Query Parameters:
  * - source: Filter by source type ("code" | "ui" | "built-in")
  * - search: Search query for slug and labels
- * - limit: Maximum results (default: 50)
- * - offset: Number of results to skip (default: 0)
+ * - limit: Maximum results (default: 50, becomes `perPage` in response meta)
+ * - offset: Number of results to skip (default: 0, derives `page` in meta)
  *
- * Response Codes:
- * - 200 OK: Singles list retrieved successfully
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to fetch Singles
- *
- * @param request - Next.js Request object
- * @returns Response with JSON Singles list and pagination meta
- *
- * @example
- * ```bash
- * curl "http://localhost:3000/api/singles?source=ui&limit=10"
- * # => {"data":[...],"meta":{"total":5,"limit":10,"offset":0}}
- * ```
+ * Response:
+ * - 200 OK: `{ "data": [...], "meta": { total, page, perPage } }`
+ * - On error: `application/problem+json` per spec §10.1.
  */
-export async function GET(request: Request): Promise<Response> {
-  try {
+export const GET = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     const registry = await getSingleRegistry();
     const { searchParams } = new URL(request.url);
 
-    // Parse query parameters
     const source = searchParams.get("source") as
       | "code"
       | "ui"
@@ -151,14 +73,18 @@ export async function GET(request: Request): Promise<Response> {
       offset,
     });
 
+    // Translate offset-based pagination to the canonical page/perPage meta so
+    // every paginated route ships the same shape (spec §10.2). `perPage` is
+    // clamped to a minimum of 1 to keep the page-derivation safe when the
+    // caller asks for `limit=0`.
+    const perPage = Math.max(1, limit);
+    const page = Math.floor(offset / perPage) + 1;
     return withTimezoneFormatting(
-      successResponse(result.data, 200, {
+      createPaginatedResponse(result.data, {
         total: result.total,
-        limit,
-        offset,
+        page,
+        perPage,
       })
     );
-  } catch (error) {
-    return handleError(error, "List Singles");
   }
-}
+);

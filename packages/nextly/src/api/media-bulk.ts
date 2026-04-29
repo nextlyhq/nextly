@@ -7,6 +7,14 @@
  * IMPORTANT: Before using these routes, you must initialize the service layer by calling
  * `registerServices()` during your application startup.
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
+ * return the canonical `{ data: <result> }` envelope per spec §10.2. The
+ * bulk-result payload (per-file `results`, counts, validationErrors) lives
+ * inside `data`. Errors flow through the wrapper as
+ * `application/problem+json`. The legacy "all-failed → status 500" branch
+ * is dropped: per-file failures are normal data the caller iterates over,
+ * not a server error.
+ *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/media/bulk/route.ts
@@ -17,75 +25,34 @@
  */
 
 import { getService, isServicesRegistered } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema } from "../types/media";
 
-// ============================================================
-// Helper Functions
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
-/**
- * Get the MediaService from the DI container.
- * Throws an error if services haven't been registered.
- */
 function getMediaService(): MediaService {
   if (!isServicesRegistered()) {
-    throw new Error(
-      "Services not initialized. Call registerServices() before using API routes. " +
-        "See https://nextlyhq.com/docs/initialization for setup instructions."
-    );
+    // Per F10 / Task 6: surface initialization failures via the canonical
+    // 503 factory so the public response sticks to the §13.8-canonical
+    // sentence emitted by `serviceUnavailable()`. The setup hint goes to
+    // `logContext` so operators see it without leaking into the wire.
+    throw NextlyError.serviceUnavailable({
+      logMessage: "Media bulk handler called before registerServices()",
+      logContext: {
+        hint: "Call registerServices() before mounting media-bulk routes. See https://nextlyhq.com/docs/initialization",
+      },
+    });
   }
   return getService("mediaService");
 }
 
 /**
- * Create an error response in the legacy format
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  extra?: Record<string, unknown>
-): Response {
-  return Response.json(
-    {
-      success: false,
-      statusCode,
-      message,
-      ...extra,
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Handle errors from service layer and convert to legacy response format
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Bulk Media API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503);
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Create a request context with user info for authenticated operations.
- * Passing null produces a context with no user — media.uploaded_by is
- * nullable, so this is valid for system-context uploads.
+ * Build a request context with user info. Passing null produces a context
+ * with no user — `media.uploaded_by` is nullable, so this is valid for
+ * system-context uploads.
  */
 function createAuthenticatedContext(userId: string | null): RequestContext {
   if (!userId) return {};
@@ -99,9 +66,26 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
   };
 }
 
-// ============================================================
-// Route Handlers
-// ============================================================
+async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
+  try {
+    return (await req.json()) as Record<string, unknown>;
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      },
+      logContext: { reason: "invalid-json-body" },
+    });
+  }
+}
 
 /**
  * POST handler for bulk media upload
@@ -112,41 +96,41 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
  * Request Body (JSON):
  * {
  *   files: Array<{
- *     file: string (base64),  // Or send as multipart/form-data
+ *     file: string (base64),
  *     filename: string,
  *     mimeType: string,
  *     size: number,
  *     uploadedBy: string
- *   }>
+ *   }>,
+ *   uploadedBy?: string,
  * }
  *
- * Response Codes:
- * - 200 OK: At least one file uploaded successfully
- * - 400 Bad Request: No files provided or validation error
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to process bulk upload
- *
- * @param request - Next.js Request object
- * @returns Response with JSON results
- *
- * @example
- * ```bash
- * curl -X POST http://localhost:3000/api/media/bulk \
- *   -H "Content-Type: application/json" \
- *   -d '{"files":[...]}'
- * ```
+ * Response: `{ "data": { totalFiles, successCount, failureCount, results,
+ * validationErrors } }`. Status 200 even when every file failed — per-file
+ * outcomes are part of the payload, not server errors. If the request
+ * itself is malformed (no files, all invalid), throws
+ * `VALIDATION_ERROR` (400).
  */
-export async function POST(request: Request): Promise<Response> {
-  try {
+export const POST = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     const mediaService = getMediaService();
-    const body = await request.json();
-    const { files, uploadedBy } = body;
+    const body = await readJsonBody(request);
+    const filesInput = body.files;
+    const uploadedBy =
+      typeof body.uploadedBy === "string" ? body.uploadedBy : undefined;
 
-    if (!Array.isArray(files) || files.length === 0) {
-      return errorResponse("No files provided", 400);
+    if (!Array.isArray(filesInput) || filesInput.length === 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "files",
+            code: "required_array",
+            message: "files must be a non-empty array.",
+          },
+        ],
+      });
     }
 
-    // Validate each file and prepare upload inputs
     const validatedFiles: Array<{
       buffer: Buffer;
       filename: string;
@@ -159,20 +143,18 @@ export async function POST(request: Request): Promise<Response> {
       error: string;
     }> = [];
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (let i = 0; i < filesInput.length; i++) {
+      const file = filesInput[i] as Record<string, unknown>;
 
-      // Convert base64 to Buffer if needed
       let buffer: Buffer;
       if (typeof file.file === "string") {
-        // Assume base64
         buffer = Buffer.from(file.file, "base64");
       } else if (Buffer.isBuffer(file.file)) {
         buffer = file.file;
       } else {
         validationErrors.push({
           index: i,
-          filename: file.filename || `file-${i}`,
+          filename: (file.filename as string) || `file-${i}`,
           error: "Invalid file format",
         });
         continue;
@@ -182,62 +164,55 @@ export async function POST(request: Request): Promise<Response> {
         file: buffer,
         filename: file.filename,
         mimeType: file.mimeType,
-        size: file.size || buffer.length,
-        uploadedBy: file.uploadedBy || uploadedBy,
+        size: (file.size as number) || buffer.length,
+        uploadedBy: (file.uploadedBy as string) || uploadedBy,
       });
 
       if (!parseResult.success) {
         validationErrors.push({
           index: i,
-          filename: file.filename || `file-${i}`,
+          filename: (file.filename as string) || `file-${i}`,
           error: parseResult.error.issues[0]?.message || "Validation failed",
         });
       } else {
         validatedFiles.push({
           buffer,
-          filename: file.filename,
-          mimeType: file.mimeType,
-          size: file.size || buffer.length,
+          filename: file.filename as string,
+          mimeType: file.mimeType as string,
+          size: (file.size as number) || buffer.length,
         });
       }
     }
 
     if (validatedFiles.length === 0) {
-      return errorResponse("No valid files to upload", 400, {
-        validationErrors,
+      // Every entry failed validation. Surface as the canonical
+      // VALIDATION_ERROR with per-file detail in `data.errors[]` so the
+      // admin client can render inline messages keyed to `path`.
+      throw NextlyError.validation({
+        errors: validationErrors.map(v => ({
+          path: `files[${v.index}]`,
+          code: "INVALID_FILE",
+          message: v.error,
+        })),
+        logContext: { totalFiles: filesInput.length },
       });
     }
 
-    // Get user ID for context (use first file's uploadedBy or body-level
-    // uploadedBy). Null when neither is provided — MediaService will insert
-    // media with uploaded_by = NULL, which the schema allows.
-    const userId = files[0]?.uploadedBy || uploadedBy || null;
+    const firstFile = filesInput[0] as Record<string, unknown>;
+    const userId = (firstFile.uploadedBy as string) || uploadedBy || null;
     const context = createAuthenticatedContext(userId);
 
-    // Process bulk upload using new service
     const result = await mediaService.bulkUpload(validatedFiles, context);
 
-    const success = result.successCount > 0;
-    return Response.json(
-      {
-        success,
-        statusCode: success ? 200 : 500,
-        message: `Uploaded ${result.successCount} of ${result.totalItems} files`,
-        totalFiles: result.totalItems,
-        successCount: result.successCount,
-        failureCount: result.failureCount,
-        results: result.results,
-        validationErrors,
-      },
-      {
-        status: success ? 200 : 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Bulk upload");
+    return createSuccessResponse({
+      totalFiles: result.totalItems,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      results: result.results,
+      validationErrors,
+    });
   }
-}
+);
 
 /**
  * DELETE handler for bulk media deletion
@@ -249,55 +224,35 @@ export async function POST(request: Request): Promise<Response> {
  *   mediaIds: string[]
  * }
  *
- * Response Codes:
- * - 200 OK: At least one file deleted successfully
- * - 400 Bad Request: No media IDs provided
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to process bulk delete
- *
- * @param request - Next.js Request object
- * @returns Response with JSON results
- *
- * @example
- * ```bash
- * curl -X DELETE http://localhost:3000/api/media/bulk \
- *   -H "Content-Type: application/json" \
- *   -d '{"mediaIds":["id1","id2","id3"]}'
- * ```
+ * Response: `{ "data": { totalFiles, successCount, failureCount,
+ * results } }`. Status 200 regardless of per-file outcomes (see POST note).
  */
-export async function DELETE(request: Request): Promise<Response> {
-  try {
+export const DELETE = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     const mediaService = getMediaService();
-    const body = await request.json();
-    const { mediaIds } = body;
+    const body = await readJsonBody(request);
+    const mediaIds = body.mediaIds;
 
     if (!Array.isArray(mediaIds) || mediaIds.length === 0) {
-      return errorResponse("No media IDs provided", 400);
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "mediaIds",
+            code: "required_array",
+            message: "mediaIds must be a non-empty array.",
+          },
+        ],
+      });
     }
 
-    // Create context (bulk delete typically doesn't need auth context for this operation)
     const context: RequestContext = {};
+    const result = await mediaService.bulkDelete(mediaIds as string[], context);
 
-    // Process bulk delete using new service
-    const result = await mediaService.bulkDelete(mediaIds, context);
-
-    const success = result.successCount > 0;
-    return Response.json(
-      {
-        success,
-        statusCode: success ? 200 : 500,
-        message: `Deleted ${result.successCount} of ${result.totalItems} files`,
-        totalFiles: result.totalItems,
-        successCount: result.successCount,
-        failureCount: result.failureCount,
-        results: result.results,
-      },
-      {
-        status: success ? 200 : 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Bulk delete");
+    return createSuccessResponse({
+      totalFiles: result.totalItems,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      results: result.results,
+    });
   }
-}
+);

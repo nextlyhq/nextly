@@ -39,6 +39,7 @@ import {
   createSuccessResponse,
 } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getCollectionRegistry(): Promise<CollectionRegistryService> {
   await getNextly();
@@ -74,20 +75,6 @@ const createCollectionSchema = z.object({
     .optional(),
   hooks: z.array(z.any()).optional(),
 });
-
-// Map a ZodError to NextlyError.validation. Issue codes (`too_small`,
-// `invalid_string`, …) are forwarded so admin clients can render
-// field-level UI; raw issues stay in `logContext` for operator triage.
-function nextlyValidationFromZod(err: z.ZodError): NextlyError {
-  return NextlyError.validation({
-    errors: err.issues.map(issue => ({
-      path: issue.path.join("."),
-      code: issue.code,
-      message: issue.message,
-    })),
-    logContext: { zodIssues: err.issues },
-  });
-}
 
 async function requireUser(request: Request): Promise<{ id: string }> {
   // getSession returns GetSessionResult; extract user or throw the unified
