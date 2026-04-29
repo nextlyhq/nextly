@@ -8,9 +8,9 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { PaginatedResponse } from "../../types/pagination";
-import { NextlyError, NextlyErrorCode, NotFoundError } from "../errors";
 import type {
   FindFormBySlugArgs,
   FindFormsArgs,
@@ -77,11 +77,11 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       const config = mergeConfig(ctx.defaultConfig, args);
 
       if (!args.slug) {
-        throw new NextlyError(
-          "'slug' is required for forms.findBySlug()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'slug' is required for forms.findBySlug()",
+          statusCode: 400,
+        });
       }
 
       try {
@@ -105,8 +105,8 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
           if (config.disableErrors) {
             return null;
           }
-          throw new NotFoundError(`Form with slug '${args.slug}' not found`, {
-            slug: args.slug,
+          throw NextlyError.notFound({
+            logContext: { slug: args.slug, entity: "form" },
           });
         }
 
@@ -121,19 +121,19 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
 
     async submit(args: SubmitFormArgs): Promise<SubmitFormResult> {
       if (!args.form) {
-        throw new NextlyError(
-          "'form' (slug) is required for forms.submit()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'form' (slug) is required for forms.submit()",
+          statusCode: 400,
+        });
       }
 
       if (!args.data || typeof args.data !== "object") {
-        throw new NextlyError(
-          "'data' is required for forms.submit()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'data' is required for forms.submit()",
+          statusCode: 400,
+        });
       }
 
       const form = await namespace.findBySlug({
@@ -200,11 +200,11 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       args: FormSubmissionsArgs
     ): Promise<PaginatedResponse<Record<string, unknown>>> {
       if (!args.form) {
-        throw new NextlyError(
-          "'form' (slug or ID) is required for forms.submissions()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'form' (slug or ID) is required for forms.submissions()",
+          statusCode: 400,
+        });
       }
 
       const limit = args.limit ?? 10;
@@ -221,8 +221,8 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         });
 
         if (!form) {
-          throw new NotFoundError(`Form with slug '${args.form}' not found`, {
-            slug: args.form,
+          throw NextlyError.notFound({
+            logContext: { slug: args.form, entity: "form" },
           });
         }
 

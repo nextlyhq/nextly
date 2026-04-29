@@ -16,13 +16,7 @@
  */
 
 import type { FieldConfig } from "../../../collections/fields/types";
-// PR 4 migration: keep ServiceError import for now because the legacy result-shape
-// callers (single-mutation-service / single-query-service — out of scope for PR 4)
-// still throw ServiceError values. Once those migrate, this fallback path drops.
-// The new path recognises NextlyError directly so callers that have migrated
-// (e.g. component-mutation-service throwing NextlyError downstream) flow through
-// cleanly with the right statusCode/code preserved.
-import { NextlyError, ServiceError } from "../../../errors";
+import { NextlyError } from "../../../errors";
 import type { Logger } from "../../../shared/types";
 import type { SingleDocument, SingleResult } from "../types";
 
@@ -528,10 +522,9 @@ export function normalizeUploadFields(
 /**
  * Build a failure SingleResult from an arbitrary error.
  *
- * Recognises both NextlyError (current throw type) and ServiceError (legacy
- * shim type) — both expose `statusCode` and `publicMessage`. Falls back to
- * the generic shape for non-Nextly errors so unknown failures don't leak
- * driver text onto the wire.
+ * Recognises NextlyError (canonical throw type) — exposes `statusCode` and
+ * `publicMessage`. Falls back to the generic shape for non-NextlyError errors
+ * so unknown failures don't leak driver text onto the wire.
  *
  * Used only by the legacy result-shape callers (single-mutation-service,
  * single-query-service). Once those migrate to throw-based handlers,
@@ -541,35 +534,13 @@ export function buildSingleErrorResult(
   error: unknown,
   defaultMessage: string
 ): SingleResult {
-  // NextlyError — the new canonical error class. Use publicMessage so the
-  // wire never sees logMessage / cause / stack.
+  // NextlyError — the canonical error class. Use publicMessage so the wire
+  // never sees logMessage / cause / stack.
   if (NextlyError.is(error)) {
     return {
       success: false,
       statusCode: error.statusCode,
       message: error.publicMessage,
-    };
-  }
-
-  // ServiceError — legacy shim. Drops any free-form `details` payload onto
-  // `errors` for backward compatibility with existing assertions.
-  if (error instanceof ServiceError) {
-    return {
-      success: false,
-      statusCode: error.httpStatus,
-      message: error.message,
-      // `error.details` is `unknown` (free-form payload). Strings pass through;
-      // objects get JSON-stringified to avoid `[object Object]` (no-base-to-string).
-      errors: error.details
-        ? [
-            {
-              message:
-                typeof error.details === "string"
-                  ? error.details
-                  : JSON.stringify(error.details),
-            },
-          ]
-        : undefined,
     };
   }
 

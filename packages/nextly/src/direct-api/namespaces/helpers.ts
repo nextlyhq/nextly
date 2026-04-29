@@ -9,8 +9,8 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { RequestContext } from "../../shared/types/index";
-import { NextlyError, ValidationError, fromServiceError } from "../errors";
 import type {
   ComponentDefinition,
   DirectAPIConfig,
@@ -69,14 +69,17 @@ export interface ServiceResultLike {
 }
 
 /**
- * Convert a failed service-layer result into a `NextlyError` subclass.
+ * Convert a failed service-layer result into a `NextlyError`.
  */
 export function createErrorFromResult(result: ServiceResultLike): NextlyError {
-  return fromServiceError({
+  return new NextlyError({
     code: statusCodeToErrorCode(result.statusCode),
-    message: result.message,
-    httpStatus: result.statusCode,
-    details: result.data,
+    publicMessage: result.message,
+    statusCode: result.statusCode,
+    logContext:
+      result.data !== undefined && result.data !== null
+        ? { resultData: result.data }
+        : undefined,
   });
 }
 
@@ -101,22 +104,20 @@ export function createErrorFromSingleResult(
     result.errors?.map(e => e.message).join(", ") ||
     "Operation failed";
 
-  if (result.statusCode === 400 && result.errors) {
-    const fieldErrors: Record<string, string[]> = {};
-    for (const error of result.errors) {
-      const field = error.field || "_root";
-      if (!fieldErrors[field]) {
-        fieldErrors[field] = [];
-      }
-      fieldErrors[field].push(error.message);
-    }
-    return new ValidationError(message, fieldErrors);
+  if (result.statusCode === 400 && result.errors && result.errors.length > 0) {
+    return NextlyError.validation({
+      errors: result.errors.map(e => ({
+        path: e.field ?? "",
+        code: "VALIDATION_ERROR",
+        message: e.message,
+      })),
+    });
   }
 
-  return fromServiceError({
+  return new NextlyError({
     code: statusCodeToErrorCode(result.statusCode),
-    message,
-    httpStatus: result.statusCode,
+    publicMessage: message,
+    statusCode: result.statusCode,
   });
 }
 
@@ -128,7 +129,7 @@ export function statusCodeToErrorCode(statusCode: number): string {
     case 400:
       return "VALIDATION_ERROR";
     case 401:
-      return "UNAUTHORIZED";
+      return "AUTH_REQUIRED";
     case 403:
       return "FORBIDDEN";
     case 404:

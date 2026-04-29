@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { ServiceError, ServiceErrorCode } from "../../../errors";
+import { NextlyError } from "../../../errors";
 import { SingleEntryService } from "../services/single-entry-service";
 
 import {
@@ -372,9 +372,13 @@ describe("SingleEntryService", () => {
   // ============================================================
 
   describe("get — error handling", () => {
-    it("translates ServiceError into SingleResult with correct status", async () => {
+    it("translates NextlyError into SingleResult with correct status", async () => {
       ctx.adapter.selectOne.mockRejectedValue(
-        new ServiceError(ServiceErrorCode.VALIDATION_ERROR, "bad field")
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "bad field",
+          statusCode: 400,
+        })
       );
 
       const result = await ctx.service.get("site-settings");
@@ -821,9 +825,13 @@ describe("SingleEntryService", () => {
   // ============================================================
 
   describe("update — error handling", () => {
-    it("translates ServiceError into SingleResult with correct status", async () => {
+    it("translates NextlyError into SingleResult with correct status", async () => {
       ctx.adapter.selectOne.mockRejectedValue(
-        new ServiceError(ServiceErrorCode.VALIDATION_ERROR, "bad input")
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "bad input",
+          statusCode: 400,
+        })
       );
 
       const result = await ctx.service.update("site-settings", {});

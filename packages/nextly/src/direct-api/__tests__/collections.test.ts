@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
-import { NextlyError, NotFoundError } from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import {
@@ -164,7 +164,7 @@ describe("Direct API - Collection Operations", () => {
       expect(result).toBeNull();
     });
 
-    it("should throw NotFoundError without disableErrors", async () => {
+    it("should throw NextlyError(NOT_FOUND) without disableErrors", async () => {
       mocks.collectionsHandler.getEntry.mockResolvedValue({
         success: false,
         statusCode: 404,
@@ -174,7 +174,7 @@ describe("Direct API - Collection Operations", () => {
 
       await expect(
         nextly.findByID({ collection: "posts", id: "missing" })
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("should pass depth and select options", async () => {
@@ -322,7 +322,7 @@ describe("Direct API - Collection Operations", () => {
       ).rejects.toThrow("Either 'id' or 'where' clause is required");
     });
 
-    it("should throw NotFoundError when where matches nothing", async () => {
+    it("should throw NextlyError(NOT_FOUND) when where matches nothing", async () => {
       mocks.collectionsHandler.bulkUpdateByQuery.mockResolvedValue({
         success: [],
         failed: [],
@@ -336,7 +336,7 @@ describe("Direct API - Collection Operations", () => {
           where: { status: { equals: "nonexistent" } },
           data: { title: "test" },
         })
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 

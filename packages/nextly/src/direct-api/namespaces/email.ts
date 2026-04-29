@@ -13,12 +13,12 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderRecord } from "../../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import type { UpdateEmailTemplateInput } from "../../services/email/email-template-service";
 import type { PaginatedResponse } from "../../types/pagination";
-import { NotFoundError, NextlyError } from "../errors";
 import type {
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
@@ -257,10 +257,9 @@ export function createEmailTemplatesNamespace(
           if (config.disableErrors) {
             return null;
           }
-          throw new NotFoundError(
-            `Email template with slug '${args.slug}' not found`,
-            { slug: args.slug }
-          );
+          throw NextlyError.notFound({
+            logContext: { slug: args.slug, entity: "emailTemplate" },
+          });
         }
         return template;
       } catch (error) {

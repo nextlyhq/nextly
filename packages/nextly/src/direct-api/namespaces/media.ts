@@ -8,12 +8,12 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
   MediaFolder,
 } from "../../services/media/media-service";
 import type { PaginatedResponse } from "../../types/pagination";
-import { NextlyError, NextlyErrorCode } from "../errors";
 import type {
   BulkDeleteMediaArgs,
   BulkOperationResult,
@@ -78,11 +78,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
     async create(args: CreateFolderArgs): Promise<MediaFolder> {
       if (!args.name) {
-        throw new NextlyError(
-          "'name' is required for media.folders.create()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'name' is required for media.folders.create()",
+          statusCode: 400,
+        });
       }
 
       return await ctx.mediaService.createFolder(
@@ -153,11 +153,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
     async update(args: UpdateMediaArgs): Promise<MediaFile> {
       if (!args.id) {
-        throw new NextlyError(
-          "'id' is required for media.update()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'id' is required for media.update()",
+          statusCode: 400,
+        });
       }
 
       return await ctx.mediaService.update(
@@ -175,11 +175,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
     async delete(args: DeleteMediaArgs): Promise<DeleteResult> {
       if (!args.id) {
-        throw new NextlyError(
-          "'id' is required for media.delete()",
-          NextlyErrorCode.INVALID_INPUT,
-          400
-        );
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'id' is required for media.delete()",
+          statusCode: 400,
+        });
       }
 
       await ctx.mediaService.delete(args.id, createRequestContext(args));

@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
-import { NextlyError, NotFoundError, ValidationError } from "../errors";
+import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -72,7 +72,11 @@ describe("Direct API - Auth Operations", () => {
       // PR 4: invalid creds throw NextlyError(AUTH_INVALID_CREDENTIALS)
       // from the service. The login() namespace lets it propagate.
       mocks.authService.verifyCredentials.mockRejectedValue(
-        new NextlyError("Invalid email or password", "UNAUTHORIZED", 401)
+        new NextlyError({
+          code: "AUTH_REQUIRED",
+          publicMessage: "Invalid email or password",
+          statusCode: 401,
+        })
       );
 
       await expect(
@@ -112,21 +116,29 @@ describe("Direct API - Auth Operations", () => {
       );
     });
 
-    it("should rewrap NextlyError(NOT_FOUND) as direct-api NotFoundError", async () => {
-      // PR 4: the service throws core NextlyError(NOT_FOUND); the
-      // namespace translates this to the SDK NotFoundError class.
-      const notFound = new NextlyError("User not found", "NOT_FOUND", 404);
-      // Tag with brand-compatible code so NextlyError.isNotFound matches.
+    it("should rewrap NextlyError(NOT_FOUND) with namespace logContext", async () => {
+      // The service throws a NextlyError(NOT_FOUND); the namespace
+      // re-throws NextlyError.notFound({ logContext: { userId } }) so the
+      // userId becomes part of the operator-facing log payload.
+      const notFound = new NextlyError({
+        code: "NOT_FOUND",
+        publicMessage: "User not found",
+        statusCode: 404,
+      });
       mocks.userAccountService.getCurrentUser.mockRejectedValue(notFound);
 
-      await expect(nextly.me({ user: { id: "missing" } })).rejects.toThrow(
-        NotFoundError
+      await expect(nextly.me({ user: { id: "missing" } })).rejects.toMatchObject(
+        { code: "NOT_FOUND" }
       );
     });
 
     it("should propagate other NextlyError failures", async () => {
       mocks.userAccountService.getCurrentUser.mockRejectedValue(
-        new NextlyError("Database error", "INTERNAL_ERROR", 500)
+        new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "Database error",
+          statusCode: 500,
+        })
       );
 
       await expect(nextly.me({ user: { id: "user-1" } })).rejects.toThrow(
@@ -163,14 +175,18 @@ describe("Direct API - Auth Operations", () => {
       ).rejects.toThrow("user.id is required");
     });
 
-    it("should rewrap NextlyError(NOT_FOUND) as direct-api NotFoundError", async () => {
+    it("should rewrap NextlyError(NOT_FOUND) with namespace logContext", async () => {
       mocks.userAccountService.updateCurrentUser.mockRejectedValue(
-        new NextlyError("User not found", "NOT_FOUND", 404)
+        new NextlyError({
+          code: "NOT_FOUND",
+          publicMessage: "User not found",
+          statusCode: 404,
+        })
       );
 
       await expect(
         nextly.updateMe({ user: { id: "missing" }, data: { name: "X" } })
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
 
@@ -193,9 +209,13 @@ describe("Direct API - Auth Operations", () => {
       expect(result.user).toEqual(mockUser);
     });
 
-    it("should rewrap NextlyError(VALIDATION_ERROR) as ValidationError", async () => {
+    it("should propagate NextlyError(VALIDATION_ERROR) from service", async () => {
       mocks.authService.registerUser.mockRejectedValue(
-        new NextlyError("Password too weak", "VALIDATION_ERROR", 400)
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "Password too weak",
+          statusCode: 400,
+        })
       );
 
       await expect(
@@ -203,12 +223,16 @@ describe("Direct API - Auth Operations", () => {
           email: "test@test.com",
           password: "123",
         })
-      ).rejects.toThrow(ValidationError);
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
     it("should propagate other NextlyError failures", async () => {
       mocks.authService.registerUser.mockRejectedValue(
-        new NextlyError("Internal error", "INTERNAL_ERROR", 500)
+        new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "Internal error",
+          statusCode: 500,
+        })
       );
 
       await expect(
@@ -254,11 +278,11 @@ describe("Direct API - Auth Operations", () => {
       // PR 4: AUTH_INVALID_CREDENTIALS comes from the service; the
       // namespace lets it propagate (no rewrapping to UnauthorizedError).
       mocks.authService.changePassword.mockRejectedValue(
-        new NextlyError(
-          "Current password is incorrect",
-          "AUTH_INVALID_CREDENTIALS",
-          401
-        )
+        new NextlyError({
+          code: "AUTH_INVALID_CREDENTIALS",
+          publicMessage: "Current password is incorrect",
+          statusCode: 401,
+        })
       );
 
       await expect(
@@ -319,7 +343,11 @@ describe("Direct API - Auth Operations", () => {
 
     it("should propagate NextlyError on invalid token", async () => {
       mocks.authService.resetPasswordWithToken.mockRejectedValue(
-        new NextlyError("Invalid or expired token", "VALIDATION_ERROR", 400)
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "Invalid or expired token",
+          statusCode: 400,
+        })
       );
 
       await expect(
@@ -348,7 +376,11 @@ describe("Direct API - Auth Operations", () => {
 
     it("should propagate NextlyError on invalid token", async () => {
       mocks.authService.verifyEmail.mockRejectedValue(
-        new NextlyError("Invalid or expired token", "VALIDATION_ERROR", 400)
+        new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "Invalid or expired token",
+          statusCode: 400,
+        })
       );
 
       await expect(nextly.verifyEmail({ token: "bad-token" })).rejects.toThrow(
