@@ -26,8 +26,10 @@ export const nextlyMigrationJournalSqlite = sqliteTable(
 
     // SQLite stores timestamps as integer epoch-ms (matches the
     // dynamic-collections convention). The journal service computes
-    // ms-precision durations from these.
-    startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+    // ms-precision durations from these. $defaultFn matches PG + MySQL.
+    startedAt: integer("started_at", { mode: "timestamp_ms" })
+      .$defaultFn(() => new Date())
+      .notNull(),
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
     durationMs: integer("duration_ms"),
 

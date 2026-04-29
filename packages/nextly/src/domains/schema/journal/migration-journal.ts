@@ -84,7 +84,20 @@ export class DrizzleMigrationJournal implements MigrationJournal {
     source: "ui" | "code";
     statementsPlanned: number;
   }): Promise<string> {
-    const id = crypto.randomUUID();
+    // Wrapped in try/catch: crypto.randomUUID() is sync and only throws
+    // if the runtime lacks a CSPRNG (extremely rare TypeError on niche
+    // VMs). Keep the journal failure-safe contract — return a sentinel
+    // and let the pipeline continue.
+    let id: string;
+    try {
+      id = crypto.randomUUID();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn?.(
+        `[MigrationJournal] crypto.randomUUID() unavailable (${msg}). Skipping journal entry.`
+      );
+      return `${FAILED_INSERT_PREFIX}no-uuid`;
+    }
     const startedAt = new Date();
     const startMs = Date.now();
 
@@ -138,6 +151,10 @@ export class DrizzleMigrationJournal implements MigrationJournal {
 
     const status: "success" | "failed" = args.success ? "success" : "failed";
 
+    // Truncation policy: messages STRICTLY longer than ERROR_MESSAGE_MAX_LEN
+    // are clipped to that length and suffixed with "..." (so the column
+    // can hold up to ERROR_MESSAGE_MAX_LEN + 3 chars). Messages exactly
+    // ERROR_MESSAGE_MAX_LEN chars long pass through unchanged.
     let errorMessage: string | null = null;
     if (!args.success && args.error !== undefined) {
       const raw = stringifyError(args.error);

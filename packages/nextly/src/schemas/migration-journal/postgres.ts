@@ -5,7 +5,6 @@
 
 import {
   pgTable,
-  uuid,
   varchar,
   integer,
   timestamp,
@@ -21,7 +20,12 @@ import type {
 export const nextlyMigrationJournalPg = pgTable(
   "nextly_migration_journal",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    // Client-side default keeps id-generation identical across dialects
+    // (MySQL + SQLite use the same $defaultFn pattern). Avoids parity
+    // drift between PG's defaultRandom() and the others.
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
 
     // Lifecycle.
     source: varchar("source", { length: 20 })
@@ -34,9 +38,10 @@ export const nextlyMigrationJournalPg = pgTable(
 
     // Timing. `started_at` set at recordStart; `ended_at` + `duration_ms`
     // set at recordEnd. Rows stuck at `started_at` only indicate a crash
-    // between recordStart and recordEnd.
+    // between recordStart and recordEnd. Client-side $defaultFn matches
+    // MySQL + SQLite — DB-side defaultNow() was inconsistent.
     startedAt: timestamp("started_at", { withTimezone: true })
-      .defaultNow()
+      .$defaultFn(() => new Date())
       .notNull(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     durationMs: integer("duration_ms"),

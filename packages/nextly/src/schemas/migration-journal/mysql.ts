@@ -34,7 +34,11 @@ export const nextlyMigrationJournalMysql = mysqlTable(
       .notNull(),
 
     // datetime(3) gives ms precision so duration_ms math stays exact.
-    startedAt: datetime("started_at", { fsp: 3 }).notNull(),
+    // $defaultFn matches PG + SQLite — keeps cross-dialect parity even
+    // for callers that omit startedAt at insert time.
+    startedAt: datetime("started_at", { fsp: 3 })
+      .$defaultFn(() => new Date())
+      .notNull(),
     endedAt: datetime("ended_at", { fsp: 3 }),
     durationMs: int("duration_ms"),
 
