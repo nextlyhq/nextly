@@ -216,7 +216,7 @@ export abstract class DrizzleAdapter {
    * Get a Drizzle table object by name from the resolver.
    * Returns null if no resolver is set or table is not found.
    */
-  protected getTableObject(tableName: string): unknown | null {
+  protected getTableObject(tableName: string): unknown {
     return this.tableResolver?.getTable(tableName) ?? null;
   }
 
@@ -243,7 +243,7 @@ export abstract class DrizzleAdapter {
         !colDef ||
         typeof colDef !== "object" ||
         !("name" in colDef) ||
-        typeof (colDef as { name: unknown }).name !== "string"
+        typeof colDef.name !== "string"
       )
         continue;
       const sqlName = (colDef as { name: string }).name;
@@ -470,9 +470,9 @@ export abstract class DrizzleAdapter {
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
-        // getDrizzle() returns unknown - cast needed for dialect-specific Drizzle API
+        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle() as any;
+        const db = this.getDrizzle<any>();
         let query = db.select().from(tableObj);
 
         if (options?.where) {
@@ -489,7 +489,7 @@ export abstract class DrizzleAdapter {
           const columns = getTableColumns(tableObj as never);
           const orderClauses = options.orderBy
             .map((o: OrderBySpec) => {
-              const col = columns[o.column] as never;
+              const col = columns[o.column];
               if (!col) return undefined;
               return o.direction === "desc" ? desc(col) : asc(col);
             })
@@ -582,9 +582,9 @@ export abstract class DrizzleAdapter {
       try {
         // Map snake_case keys to Drizzle JS property names
         const mappedData = this.mapDataToColumnNames(tableObj, data);
-        // getDrizzle() returns unknown - cast needed for dialect-specific Drizzle API
+        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle() as any;
+        const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
 
         if (caps.supportsReturning && options?.returning) {
@@ -696,9 +696,9 @@ export abstract class DrizzleAdapter {
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
-        // getDrizzle() returns unknown - cast needed for dialect-specific Drizzle API
+        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle() as any;
+        const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
         // Map snake_case keys to Drizzle JS property names
         const mappedData = this.mapDataToColumnNames(tableObj, data);
@@ -764,9 +764,9 @@ export abstract class DrizzleAdapter {
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
-        // getDrizzle() returns unknown - cast needed for dialect-specific Drizzle API
+        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle() as any;
+        const db = this.getDrizzle<any>();
         let query = db.delete(tableObj);
 
         const whereCondition = buildDrizzleWhere(tableObj as never, where);
@@ -829,9 +829,9 @@ export abstract class DrizzleAdapter {
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
-        // getDrizzle() returns unknown - cast needed for dialect-specific Drizzle API
+        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = this.getDrizzle() as any;
+        const db = this.getDrizzle<any>();
         const caps = this.getCapabilities();
         const columns = getTableColumns(tableObj as never);
 
@@ -917,6 +917,8 @@ export abstract class DrizzleAdapter {
    *
    * @throws {DatabaseError} If migration fails
    */
+  // Base implementation throws synchronously; dialect adapters override with async logic.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async migrate(_migrations: Migration[]): Promise<MigrationResult> {
     // Base implementation: migrate() requires dialect-specific migrator import.
     // Dialect adapters (PostgresAdapter, MySqlAdapter, SqliteAdapter) should
@@ -940,6 +942,8 @@ export abstract class DrizzleAdapter {
    *
    * @throws {DatabaseError} If rollback fails
    */
+  // Base implementation throws synchronously; dialect adapters override with async logic.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async rollback(): Promise<MigrationResult> {
     // Base implementation: rollback requires dialect-specific handling.
     // Dialect adapters should override this.
@@ -1019,7 +1023,7 @@ export abstract class DrizzleAdapter {
           typeof col.default === "object" &&
           col.default !== null &&
           "sql" in col.default
-            ? (col.default as { sql: string }).sql
+            ? col.default.sql
             : typeof col.default === "string"
               ? `'${col.default}'`
               : String(col.default);
@@ -1098,7 +1102,7 @@ export abstract class DrizzleAdapter {
               typeof op.column.default === "object" &&
               op.column.default !== null &&
               "sql" in op.column.default
-                ? (op.column.default as { sql: string }).sql
+                ? op.column.default.sql
                 : typeof op.column.default === "string"
                   ? `'${op.column.default}'`
                   : String(op.column.default);
@@ -1220,7 +1224,7 @@ export abstract class DrizzleAdapter {
         default:
           throw this.createDatabaseError(
             "query",
-            `tableExists not implemented for dialect: ${this.dialect}`,
+            `tableExists not implemented for dialect: ${String(this.dialect)}`,
             undefined
           );
       }
@@ -1304,7 +1308,7 @@ export abstract class DrizzleAdapter {
         default:
           throw this.createDatabaseError(
             "query",
-            `listTables not implemented for dialect: ${this.dialect}`,
+            `listTables not implemented for dialect: ${String(this.dialect)}`,
             undefined
           );
       }

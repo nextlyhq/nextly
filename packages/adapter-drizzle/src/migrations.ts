@@ -563,7 +563,7 @@ export const migrationHelpers: MigrationHelpers = {
         )
       `;
     } else {
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
     }
 
     await adapter.executeQuery(sql);
