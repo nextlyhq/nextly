@@ -58,6 +58,32 @@ import type { MethodHandler, Params } from "../types";
 
 type CollectionsHandlerType = CollectionsHandler;
 
+// F10 PR 6: render a per-change-kind summary as a toast-friendly
+// phrase. The admin Save handler concatenates this with the
+// collection name like "Posts schema updated. 1 field added".
+//
+// Pure helper. Mirrors the admin-side `formatJournalSummary` from
+// `packages/admin/.../formatters.ts` so server-rendered + admin-
+// rendered text stay consistent. Kept server-side too because the
+// dispatcher needs to send the string in the apply response.
+function formatToastSummary(summary: {
+  added: number;
+  removed: number;
+  renamed: number;
+  changed: number;
+}): string {
+  const parts: string[] = [];
+  if (summary.added) {
+    parts.push(
+      `${summary.added} field${summary.added === 1 ? "" : "s"} added`
+    );
+  }
+  if (summary.renamed) parts.push(`${summary.renamed} renamed`);
+  if (summary.changed) parts.push(`${summary.changed} changed`);
+  if (summary.removed) parts.push(`${summary.removed} removed`);
+  return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
 const COLLECTIONS_METHODS: Record<
   string,
   MethodHandler<CollectionsHandlerType>
@@ -475,6 +501,14 @@ const COLLECTIONS_METHODS: Record<
         // the slug (e.g., registry cache missed).
         newSchemaVersion:
           result.newSchemaVersions[p.collectionName] ?? currentVersion + 1,
+        // F10 PR 6: a contextual toast summary for the admin Save flow.
+        // The pipeline already computed the diff counts for the journal;
+        // we render them as "1 field added" / "1 field added, 1 renamed"
+        // here so the admin doesn't need to recompute. Undefined-safe:
+        // older clients will fall through to a generic toast string.
+        toastSummary: result.summary
+          ? formatToastSummary(result.summary)
+          : undefined,
       };
     },
   },
@@ -739,3 +773,8 @@ export function dispatchCollections(
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute(collectionsHandler, params, body);
 }
+
+// F10 PR 6: test seam — the helper is module-private but pure, and
+// re-exporting under a verbose name keeps the public surface honest
+// while letting unit tests pin its behaviour.
+export const formatToastSummaryForTest = formatToastSummary;

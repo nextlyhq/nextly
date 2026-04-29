@@ -211,6 +211,18 @@ export default function CollectionBuilderEditPage({
           stopRestart(true, "Schema changes applied successfully");
           setShowSchemaDialog(false);
           setPreviewData(null);
+          // F10 PR 6: contextual toast — "Posts schema updated.
+          // 1 field added, 1 renamed". Falls back to a generic
+          // message when the server didn't emit `toastSummary`
+          // (older nextly versions), or omits the suffix when the
+          // server returned the no-changes phrase.
+          const collectionLabel =
+            builder.form.getValues("singularName")?.trim() || slug;
+          const summarySuffix =
+            result.toastSummary && result.toastSummary !== "no changes"
+              ? `. ${result.toastSummary}`
+              : "";
+          toast.success(`${collectionLabel} schema updated${summarySuffix}`);
         } else {
           stopRestart(
             false,
@@ -229,7 +241,7 @@ export default function CollectionBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart]
+    [slug, startRestart, stopRestart, builder.form]
   );
 
   // Save non-schema settings (labels, icon, group, etc.) via existing mutation
