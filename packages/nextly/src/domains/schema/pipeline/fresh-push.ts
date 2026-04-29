@@ -23,9 +23,8 @@
 // behavior tradeoffs — out of F8 scope per the brainstorm.
 //
 // This module REPLACES the dialect dispatch logic from the legacy
-// `DrizzlePushService.apply` (extracted verbatim in F8 PR 2). The
-// legacy class still exists for SchemaChangeService + SchemaPushService
-// dependencies; PR 4 deletes them all.
+// `DrizzlePushService.apply` (extracted verbatim in F8 PR 2; legacy
+// class deleted in F8 PR 4 once all callers had migrated).
 
 import {
   getMySQLDrizzleKit,

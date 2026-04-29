@@ -14,7 +14,13 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { DrizzlePushService } from "../../../../domains/schema/services/drizzle-push-service";
+// F8 PR 4: DrizzlePushService deleted. The "pushSchema preview" describe
+// block that used it is gone too — that behavior (preview doesn't apply
+// DDL) is now structurally enforced by `pipeline/preview.ts` (no apply
+// path exists in the function) and unit-tested in
+// `pipeline/__tests__/preview.test.ts`. F8 PR 7's cross-dialect
+// integration matrix exercises the new preview/apply paths end-to-end
+// against real PG/MySQL/SQLite.
 import { generateRuntimeSchema } from "../../../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { SchemaRegistry } from "../../schema-registry";
@@ -51,12 +57,10 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
 
   let pool: Pool;
   let db: ReturnType<typeof drizzle>;
-  let pushService: DrizzlePushService;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: TEST_DB_URL });
     db = drizzle(pool);
-    pushService = new DrizzlePushService("postgresql", db);
 
     // Create test tables via raw SQL (bypassing pushSchema TTY limitation)
     // This simulates what pushSchema would do, letting us test CRUD via Drizzle API
@@ -295,33 +299,6 @@ describe("Schema Push Integration (Real PostgreSQL)", async () => {
       expect(upserted[0]).toHaveProperty("title", "Updated First Post");
       expect(upserted[0]).toHaveProperty("body", "Updated body");
     });
-  });
-
-  describe("pushSchema preview", () => {
-    // pushSchema() requires a TTY terminal for interactive prompts, even in
-    // preview mode (https://github.com/drizzle-team/drizzle-orm/issues/4651).
-    // This test is skipped in non-TTY environments (CI, piped input).
-    // In development, run with: npx vitest run --reporter=verbose <this file>
-    it.skipIf(!process.stdin.isTTY)(
-      "preview returns statements without applying (TTY only)",
-      async () => {
-        const fields: FieldDefinition[] = [
-          { name: "title", type: "text", required: true },
-          { name: "content", type: "textarea" },
-        ];
-
-        const { schemaRecord } = generateRuntimeSchema(
-          "dc_int_preview_test",
-          fields,
-          "postgresql"
-        );
-
-        const preview = await pushService.preview(schemaRecord);
-
-        expect(preview.applied).toBe(false);
-        expect(preview.statementsToExecute.length).toBeGreaterThan(0);
-      }
-    );
   });
 
   describe("SchemaRegistry integration", () => {

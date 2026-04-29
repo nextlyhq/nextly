@@ -1,7 +1,7 @@
 // Free-function home for the "add missing columns to an existing table"
 // helper. Extracted from SchemaPushService.addMissingColumnsForFields in
-// F8 PR 1 so the legacy SchemaPushService class can be deleted in PR 4
-// without losing this single useful utility.
+// F8 PR 1 so the legacy SchemaPushService class could be deleted in
+// F8 PR 4 without losing this single useful utility.
 //
 // Why a util and not the pipeline: the boot-time singles + components
 // auto-sync paths in cli/commands/dev-server.ts need an INCREMENTAL

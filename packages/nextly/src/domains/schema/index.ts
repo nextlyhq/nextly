@@ -29,12 +29,11 @@ export {
   type RuntimeSchemaResult,
 } from "./services/runtime-schema-generator";
 
-// Drizzle push service (dev-mode auto-sync)
-export {
-  DrizzlePushService,
-  type PushPreviewResult,
-  type PushApplyOptions,
-} from "./services/drizzle-push-service";
+// F8 PR 4: DrizzlePushService re-export removed. Replaced by:
+//   - pipeline/fresh-push.ts (direct pushSchema for migrate:fresh +
+//     ensureCoreTables)
+//   - pipeline/preview.ts (read-only Phase A + B for admin preview)
+//   - applyDesiredSchema (full pipeline for HMR + UI applies)
 
 // Schema generator for creating Drizzle ORM schemas (Collections and Singles)
 export {
@@ -73,11 +72,7 @@ export {
   type TypeGeneratorOptions,
 } from "./services/type-generator";
 
-// Schema push service for development-mode auto-sync
-export {
-  SchemaPushService,
-  type SchemaPushOptions,
-  type SchemaPushResult,
-  type CollectionSyncInfo,
-  type EnvironmentInfo,
-} from "./services/schema-push-service";
+// F8 PR 4: SchemaPushService re-export removed. The boot-time auto-sync
+// (was register.ts:syncCodeFirstCollections) now uses
+// applyDesiredSchema directly. Per-table addMissingColumnsForFields
+// extracted to domains/schema/utils/missing-columns.ts (F8 PR 1).

@@ -1,6 +1,14 @@
 // Shared types for the schema change confirmation flow.
-// Used by SchemaChangeService, the preview/apply API endpoints,
-// the admin UI SchemaChangeDialog, and the code-first terminal prompt.
+// Post F8 PR 4 consumers:
+//   - domains/schema/legacy-preview/translate.ts (server) — produces
+//     SchemaPreviewResult / InteractiveField for backwards compat.
+//   - dispatcher/handlers/collection-dispatcher.ts (server) — uses
+//     FieldResolution only.
+//   - packages/admin/src/services/schemaApi.ts (client) — re-declares
+//     these shapes locally; this file is the source of truth.
+// Task 22 (`tasks/nextly-dev-tasks/22-modernize-admin-schema-dialog.md`)
+// retires these legacy types once the admin dialog is upgraded to
+// consume ClassifierEvent[] directly.
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections.js";
 
