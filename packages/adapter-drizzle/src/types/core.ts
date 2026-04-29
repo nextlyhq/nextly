@@ -76,5 +76,5 @@ export type JsonArray = JsonValue[];
  */
 export interface TableResolver {
   /** Look up a Drizzle table object by table name. Returns null if not found. */
-  getTable(tableName: string): unknown | null;
+  getTable(tableName: string): unknown;
 }

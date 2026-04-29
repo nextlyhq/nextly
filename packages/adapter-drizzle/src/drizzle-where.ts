@@ -47,7 +47,7 @@ function processWhereClause(
         if (isWhereCondition(item)) {
           return buildCondition(columns, item);
         }
-        return processWhereClause(columns, item as WhereClause);
+        return processWhereClause(columns, item);
       })
       .filter((p): p is SQL => p !== undefined);
 
@@ -62,7 +62,7 @@ function processWhereClause(
         if (isWhereCondition(item)) {
           return buildCondition(columns, item);
         }
-        return processWhereClause(columns, item as WhereClause);
+        return processWhereClause(columns, item);
       })
       .filter((p): p is SQL => p !== undefined);
 
@@ -74,8 +74,8 @@ function processWhereClause(
   if (where.not) {
     const notItem = where.not;
     const notCondition = isWhereCondition(notItem)
-      ? buildCondition(columns, notItem as WhereCondition)
-      : processWhereClause(columns, notItem as WhereClause);
+      ? buildCondition(columns, notItem)
+      : processWhereClause(columns, notItem);
 
     if (notCondition) {
       parts.push(not(notCondition));
@@ -137,7 +137,7 @@ function buildCondition(
       return notBetween(col, cond.value, cond.valueTo);
     case "CONTAINS":
       // JSON contains - fall back to LIKE for basic support
-      return like(col, `%${cond.value}%`);
+      return like(col, `%${String(cond.value)}%`);
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);
   }
