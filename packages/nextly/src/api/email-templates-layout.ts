@@ -84,7 +84,7 @@ export const PATCH = withErrorHandler(
 
     const service = await getEmailTemplateService();
 
-    const body = await readJsonBody(request);
+    const body = await readJsonBody<Record<string, unknown>>(request);
 
     // Selective string-typed copy: a non-string value silently drops the
     // field rather than triggering a 400 (matches pre-migration behavior).

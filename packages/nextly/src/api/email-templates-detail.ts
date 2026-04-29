@@ -86,7 +86,7 @@ export const PATCH = withErrorHandler(
     requireAuthHeader(request);
 
     const { id } = await context.params;
-    const body = await readJsonBody(request);
+    const body = await readJsonBody<Record<string, unknown>>(request);
 
     // Selective copy: only forward fields the legacy handler accepted, so
     // unknown keys are silently ignored (matches the pre-migration contract).
