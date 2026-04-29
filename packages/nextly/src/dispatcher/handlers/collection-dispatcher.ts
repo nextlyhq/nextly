@@ -8,13 +8,12 @@
  * collections they can actually read.
  */
 
+import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate.js";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier.js";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
-import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields.js";
-import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff.js";
-import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live.js";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
+import { previewDesiredSchema } from "../../domains/schema/pipeline/preview.js";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -44,7 +43,6 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
-  getSchemaChangeServiceFromDI,
 } from "../helpers/di";
 import {
   parseRichTextFormat,
@@ -160,10 +158,15 @@ const COLLECTIONS_METHODS: Record<
   previewSchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      const schemaChangeService = getSchemaChangeServiceFromDI();
+      // F8 PR 3: pipeline preview + legacy-shape translator. Replaces
+      // SchemaChangeService.preview(). The translator emits the legacy
+      // 3-option resolution set so the admin SchemaChangeDialog renders
+      // unchanged. Task 22 tracks the dialog upgrade to consume
+      // ClassifierEvent[] directly (and reach the 4th `delete_nonconforming`
+      // option that the pipeline emits but the legacy shape can't carry).
       const registry = getCollectionRegistryFromDI();
-      if (!schemaChangeService || !registry) {
-        throw new Error("Schema change service not initialized");
+      if (!registry) {
+        throw new Error("Collection registry not initialized");
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
@@ -176,30 +179,65 @@ const COLLECTIONS_METHODS: Record<
       if (!fields) throw new Error("fields is required in request body");
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
-      // FieldConfig is structurally compatible with FieldDefinition (the schema
-      // service's input type), so we cast through unknown for the type system
-      // even though the runtime values are interchangeable.
+      // FieldConfig is structurally compatible with FieldDefinition; cast
+      // through unknown for the type system.
       const currentFields = (collection.fields ??
         []) as unknown as FieldDefinition[];
       const tableName = collection.tableName;
-      const preview = await schemaChangeService.preview(
-        tableName,
-        currentFields,
-        fields as FieldDefinition[]
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) throw new Error("Database adapter not initialized");
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
+
+      // Build a single-collection DesiredSchema for the pipeline preview.
+      // Singles + components buckets stay empty: the dispatcher's preview
+      // endpoint is collection-scoped today (admin Schema Builder posts
+      // per-collection).
+      const desired: DesiredSchema = {
+        collections: {
+          [p.collectionName]: {
+            slug: p.collectionName,
+            tableName,
+            fields: fields as DesiredCollection["fields"],
+          },
+        },
+        singles: {},
+        components: {},
+      };
+
+      const pipelinePreview = await previewDesiredSchema({
+        desired,
+        db,
+        dialect,
+      });
+
+      const legacyShape = await translatePipelinePreviewToLegacy(
+        pipelinePreview,
+        {
+          tableName,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          db,
+          dialect,
+        }
       );
 
-      // F4 Option E PR 5: also surface rename candidates so the admin
-      // SchemaChangeDialog can render rename radio buttons. Additive to
-      // the existing F1 preview shape; the F1 added/removed/changed
-      // sections still drive the rest of the dialog. Failure here is
-      // non-fatal — the F1 preview is the load-bearing UX.
-      const renamed = await computeRenameCandidatesForPreview(
-        tableName,
-        fields
-      );
+      // Forward rename candidates from the same pipeline preview run
+      // (the F4 Option E PR 5 `computeRenameCandidatesForPreview`
+      // helper is now redundant — pipeline already detected them).
+      const renamed = pipelinePreview.candidates.map(c => ({
+        table: c.tableName,
+        from: c.fromColumn,
+        to: c.toColumn,
+        fromType: c.fromType,
+        toType: c.toType,
+        typesCompatible: c.typesCompatible,
+        defaultSuggestion: c.defaultSuggestion,
+      }));
 
       return {
-        ...preview,
+        ...legacyShape,
         renamed,
         schemaVersion: collection.schemaVersion,
       };
@@ -399,6 +437,19 @@ const COLLECTIONS_METHODS: Record<
           );
         }
         throw new Error(result.error.message);
+      }
+
+      // F8 PR 3: bumpSchemaVersion was previously wired via
+      // SchemaChangeService.setOnApplySuccess in di/register.ts. With the
+      // legacy service gone, the dispatcher fires it directly after a
+      // successful pipeline apply. The bump only matters for UI-first
+      // applies (sets the X-Schema-Version response header so admin
+      // tabs know to refetch); HMR + boot paths don't need it.
+      try {
+        const { bumpSchemaVersion } = await import("../../routeHandler.js");
+        bumpSchemaVersion();
+      } catch {
+        // routeHandler may be unavailable in non-server contexts (tests).
       }
 
       return {
@@ -650,57 +701,11 @@ const COLLECTIONS_METHODS: Record<
   },
 };
 
-// Shape we surface in the preview response. Mirrors RenameCandidate but
-// uses field-style names (`from`/`to`/`table`) to match the existing
-// preview shape on the admin side.
-interface PreviewRenameCandidate {
-  table: string;
-  from: string;
-  to: string;
-  fromType: string;
-  toType: string;
-  typesCompatible: boolean;
-  defaultSuggestion: "rename" | "drop_and_add";
-}
-
-// Runs the Option E pipeline's diff + rename detector for a single
-// collection so the admin SchemaChangeDialog can render rename radio
-// buttons. Failure is non-fatal: the F1 added/removed/changed sections
-// in the dialog still work without it.
-async function computeRenameCandidatesForPreview(
-  tableName: string,
-  fields: unknown[]
-): Promise<PreviewRenameCandidate[]> {
-  const adapter = getAdapterFromDI();
-  if (!adapter) return [];
-
-  try {
-    const dialect = adapter.dialect;
-    const db = adapter.getDrizzle();
-    const live = await introspectLiveSnapshot(db, dialect, [tableName]);
-    const desiredTable = buildDesiredTableFromFields(
-      tableName,
-      fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
-      dialect
-    );
-    const operations = diffSnapshots(live, { tables: [desiredTable] });
-    const detector = new RegexRenameDetector();
-    return detector.detect(operations, dialect).map(c => ({
-      table: c.tableName,
-      from: c.fromColumn,
-      to: c.toColumn,
-      fromType: c.fromType,
-      toType: c.toType,
-      typesCompatible: c.typesCompatible,
-      defaultSuggestion: c.defaultSuggestion,
-    }));
-  } catch (err) {
-    console.warn(
-      `[Schema Preview] Could not compute rename candidates for '${tableName}': ${err instanceof Error ? err.message : String(err)}`
-    );
-    return [];
-  }
-}
+// F8 PR 3 deleted `computeRenameCandidatesForPreview` (and its helper
+// imports `introspectLiveSnapshot`, `buildDesiredTableFromFields`,
+// `diffSnapshots`). Rename candidates now flow out of the same
+// `previewDesiredSchema()` call that produces the rest of the preview
+// response — no second introspect+diff round-trip needed.
 
 /**
  * Dispatch a collections method call. Prefers the DI-registered

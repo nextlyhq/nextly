@@ -330,41 +330,14 @@ export async function registerServices(
     }
   }
 
-  // Register SchemaChangeService for schema change confirmation flow.
-  // Depends on adapter, SchemaRegistry (from initializeSchemaRegistry),
-  // and DrizzlePushService. Created after schema registry is initialized.
-  try {
-    const dialect = adapter.getCapabilities().dialect;
-    if (schemaRegistry) {
-      const { DrizzlePushService } = await import(
-        "../domains/schema/services/drizzle-push-service.js"
-      );
-      const pushService = new DrizzlePushService(dialect, adapter.getDrizzle());
-      container.registerSingleton("drizzlePushService", () => pushService);
-
-      const { SchemaChangeService } = await import(
-        "../services/schema/schema-change-service.js"
-      );
-      const schemaChangeService = new SchemaChangeService(
-        adapter,
-        schemaRegistry,
-        pushService
-      );
-      // Wire schema version bump callback for API response header
-      try {
-        const { bumpSchemaVersion } = await import("../routeHandler.js");
-        schemaChangeService.setOnApplySuccess(bumpSchemaVersion);
-      } catch {
-        // routeHandler may not be available in CLI-only contexts
-      }
-      container.registerSingleton(
-        "schemaChangeService",
-        () => schemaChangeService
-      );
-    }
-  } catch {
-    // SchemaChangeService init failed - confirmation flow unavailable
-  }
+  // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
+  // removed. The legacy preview path now uses pipeline/preview.ts +
+  // legacy-preview/translate.ts (no DI lookup); the apply path uses
+  // applyDesiredSchema (already DI-wired). bumpSchemaVersion is now
+  // called directly from the dispatcher's apply handler after a
+  // successful pipeline apply (was previously wired via
+  // SchemaChangeService.setOnApplySuccess). PR 4 deletes the legacy
+  // service classes themselves.
 
   container.registerSingleton<Logger>("logger", () => resolvedLogger);
   container.registerSingleton<NextlyServiceConfig>(
@@ -853,42 +826,78 @@ async function syncCodeFirstCollections(
     `Auto-syncing ${collectionsNeedingTableSync.length} collection table(s)...`
   );
 
+  // F8 PR 3: route auto-sync through the F2 applyDesiredSchema pipeline.
+  // Was SchemaPushService.syncSchema() with `{ force: true,
+  // skipExistingTables: true }` (legacy idiom for "create missing
+  // tables, leave existing alone"). The pipeline's diff naturally
+  // produces add_table operations only for tables that don't yet exist
+  // — same outcome, single code path, no per-table CREATE TABLE SQL
+  // generation or hand-rolled error handling.
   try {
-    const { SchemaPushService } = await import(
-      "../domains/schema/services/schema-push-service.js"
+    const { applyDesiredSchema } = await import(
+      "../domains/schema/pipeline/index.js"
     );
-    const schemaPushService = new SchemaPushService(adapter, logger);
-
-    // Inline sanitize the service config's user-facing fields into a
-    // SanitizedNextlyConfig so schema-push doesn't need to re-check nils.
-    // We only pass what SchemaPushService actually reads (collections,
-    // plugins, db paths, etc.) — everything else is N/A for auto-sync.
-    const { sanitizeConfig } = await import("../shared/types/config.js");
-    const pushResult = await schemaPushService.syncSchema(
-      sanitizeConfig({
-        collections: transformedConfig.collections,
-        singles: transformedConfig.singles,
-        components: transformedConfig.components,
-        plugins: transformedConfig.plugins,
-      }),
-      collectionsNeedingTableSync,
-      { force: true, skipExistingTables: true }
+    const { generateRuntimeSchema } = await import(
+      "../domains/schema/services/runtime-schema-generator.js"
     );
 
-    for (const synced of pushResult.synced) {
+    const collectionsToSyncSet = new Set(collectionsNeedingTableSync);
+    const desiredCollections: Record<
+      string,
+      { slug: string; tableName: string; fields: unknown[] }
+    > = {};
+    for (const collection of transformedConfig.collections) {
+      if (!collectionsToSyncSet.has(collection.slug)) continue;
+      const baseTableName =
+        collection.dbName ?? collection.slug.replace(/-/g, "_");
+      const tableName = baseTableName.startsWith("dc_")
+        ? baseTableName
+        : `dc_${baseTableName}`;
+      desiredCollections[collection.slug] = {
+        slug: collection.slug,
+        tableName,
+        fields: collection.fields ?? [],
+      };
+    }
+
+    const result = await applyDesiredSchema(
+      {
+        collections: desiredCollections as Parameters<
+          typeof applyDesiredSchema
+        >[0]["collections"],
+        singles: {},
+        components: {},
+      },
+      "code",
+      { promptChannel: "terminal" }
+    );
+
+    if (!result.success) {
+      logger.warn?.(
+        `Auto-sync tables failed (${result.error.code}): ${result.error.message}`
+      );
+      return;
+    }
+
+    // Post-apply: update migration_status + register runtime schemas in
+    // the adapter resolver. The pipeline owns CREATE TABLE; these are
+    // app-level concerns that stay in the boot path.
+    const syncDialect = adapter.getCapabilities().dialect;
+    for (const slug of collectionsNeedingTableSync) {
+      const desired = desiredCollections[slug];
+      if (!desired) continue;
       await collectionRegistry
-        .updateMigrationStatus(synced.slug, "applied")
+        .updateMigrationStatus(slug, "applied")
         .catch(() => {});
-      logger.info?.(`Created table ${synced.tableName} for ${synced.slug}`);
+      logger.info?.(`Created table ${desired.tableName} for ${slug}`);
 
-      // Register the new table in the SchemaRegistry so adapter CRUD works.
       try {
-        const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator.js"
-        );
-        const syncDialect = adapter.getCapabilities().dialect;
+        // Read fields back from dynamic_collections (the pipeline's
+        // apply already wrote them) so the runtime schema mirrors
+        // exactly what's in the DB. Belt-and-braces against any in-
+        // memory drift between transformedConfig and persisted state.
         const rows = await adapter.executeQuery<{ fields: string }>(
-          `SELECT fields FROM dynamic_collections WHERE table_name = '${synced.tableName}'`
+          `SELECT fields FROM dynamic_collections WHERE table_name = '${desired.tableName}'`
         );
         if (rows[0]) {
           const fields =
@@ -897,7 +906,7 @@ async function syncCodeFirstCollections(
               : rows[0].fields;
           if (Array.isArray(fields) && fields.length > 0) {
             const { table: runtimeTable } = generateRuntimeSchema(
-              synced.tableName,
+              desired.tableName,
               fields,
               syncDialect
             );
@@ -915,17 +924,13 @@ async function syncCodeFirstCollections(
               resolver &&
               typeof resolver.registerDynamicSchema === "function"
             ) {
-              resolver.registerDynamicSchema(synced.tableName, runtimeTable);
+              resolver.registerDynamicSchema(desired.tableName, runtimeTable);
             }
           }
         }
       } catch {
         // Non-fatal: schema will be registered on next server restart.
       }
-    }
-
-    for (const error of pushResult.errors) {
-      logger.warn?.(`Failed to create table for ${error.slug}: ${error.error}`);
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);

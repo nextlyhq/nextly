@@ -88,7 +88,8 @@ import {
 // ============================================================================
 
 // Global schema version counter for cross-flow notification.
-// Bumped by SchemaChangeService.apply() on successful schema changes.
+// Bumped from collection-dispatcher.ts:applySchemaChanges after a
+// successful pipeline apply (F8 PR 3 — was previously SchemaChangeService).
 // The admin UI reads X-Nextly-Schema-Version from response headers
 // and invalidates caches when the version increases.
 let globalSchemaVersion = 0;

@@ -13,6 +13,7 @@ import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
@@ -144,28 +145,19 @@ export function getUserExtSchemaServiceFromDI():
   return undefined;
 }
 
-// Schema change confirmation flow helpers
-export function getSchemaChangeServiceFromDI():
-  | import("../../services/schema/schema-change-service").SchemaChangeService
-  | undefined {
-  try {
-    if (container.has("schemaChangeService")) {
-       
-      return container.get("schemaChangeService") as any;
-    }
-  } catch {
-    // DI not initialized
-  }
-  return undefined;
-}
+// F8 PR 3 deleted `getSchemaChangeServiceFromDI`. The legacy preview
+// path now goes through `pipeline/preview.ts` + `legacy-preview/translate.ts`
+// (no DI lookup needed). The legacy `SchemaChangeService` class itself is
+// deleted in PR 4.
 
 export function getCollectionRegistryFromDI():
-  | import("../../services/collections/collection-registry-service").CollectionRegistryService
+  | CollectionRegistryService
   | undefined {
   try {
     if (container.has("collectionRegistryService")) {
-       
-      return container.get("collectionRegistryService") as any;
+      return container.get<CollectionRegistryService>(
+        "collectionRegistryService"
+      );
     }
   } catch {
     // DI not initialized
