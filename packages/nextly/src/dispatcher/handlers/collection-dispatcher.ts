@@ -24,6 +24,7 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
+import { getProductionNotifier } from "../../runtime/notifications/index.js";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types.js";
 import type {
   DesiredCollection,
@@ -398,6 +399,9 @@ const COLLECTIONS_METHODS: Record<
             preRenameExecutor: noopPreRenameExecutor,
             preCleanupExecutor: new RealPreCleanupExecutor(),
             migrationJournal,
+            // F10 PR 3: admin-save applies print a terminal box +
+            // write the NDJSON line. Same singleton across UI saves.
+            notifier: getProductionNotifier(),
           });
           return pipeline.apply({
             desired: desiredArg,

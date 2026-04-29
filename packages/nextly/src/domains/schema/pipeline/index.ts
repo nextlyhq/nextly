@@ -21,6 +21,7 @@ import {
   getCollectionRegistryFromDI,
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di.js";
+import { getProductionNotifier } from "../../../runtime/notifications/index.js";
 import { DrizzleStatementExecutor } from "../services/drizzle-statement-executor.js";
 
 import {
@@ -116,6 +117,8 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal,
+        // F10 PR 3: terminal box + NDJSON log line on every apply.
+        notifier: getProductionNotifier(),
       });
 
       // MySQL note: the DI-bound entry point doesn't have access to

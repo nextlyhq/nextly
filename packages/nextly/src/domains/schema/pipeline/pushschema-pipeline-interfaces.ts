@@ -156,6 +156,11 @@ export interface DrizzleStatementExecutor {
   executeStatements(tx: unknown, statements: string[]): Promise<void>;
 }
 
+// F10 PR 3: re-export the Notifier interface so the pipeline's deps
+// list can declare it without a deeper import path. Concrete
+// implementations live under runtime/notifications/.
+export type { Notifier } from "../../../runtime/notifications/types.js";
+
 // Re-export resolution types so consumers can import everything from one place.
 export type {
   ClassificationResult,

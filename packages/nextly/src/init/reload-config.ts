@@ -52,6 +52,7 @@ import type {
   DesiredSchema,
 } from "../domains/schema/pipeline/types.js";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor.js";
+import { getProductionNotifier } from "../runtime/notifications/index.js";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
@@ -285,6 +286,9 @@ export async function reloadNextlyConfig(opts?: {
         // F8 PR 5: real journal from DI; falls back to noop if DI
         // hasn't registered it yet (very-early HMR cycles).
         migrationJournal: migrationJournal ?? noopMigrationJournal,
+        // F10 PR 3: HMR applies print a terminal box + write the
+        // NDJSON line. Same singleton across HMR cycles.
+        notifier: getProductionNotifier(),
       });
       return pipeline.apply({
         desired: desiredArg,

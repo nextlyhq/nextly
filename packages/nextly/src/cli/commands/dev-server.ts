@@ -42,6 +42,7 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 // The legacy fallback sync path is deleted (dead code post-Option E).
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns.js";
+import { getProductionNotifier } from "../../runtime/notifications/index.js";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables.js";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
 import type { FieldDefinition } from "../../schemas/dynamic-collections.js";
@@ -311,6 +312,9 @@ export async function performAutoSync(
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: cliMigrationJournal,
+        // F10 PR 3: db-sync CLI applies print a terminal box + write
+        // the NDJSON line. Same singleton across CLI invocations.
+        notifier: getProductionNotifier(),
       });
       return pipeline.apply({
         desired: desiredArg,
