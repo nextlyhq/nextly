@@ -25,6 +25,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
+import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -35,12 +36,6 @@ interface RouteContext {
 async function getEmailTemplateService(): Promise<EmailTemplateService> {
   await getNextly();
   return container.get<EmailTemplateService>("emailTemplateService");
-}
-
-function requireAuthHeader(request: Request): void {
-  if (!request.headers.get("Authorization")) {
-    throw NextlyError.authRequired();
-  }
 }
 
 async function readJsonBody(req: Request): Promise<unknown> {

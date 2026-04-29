@@ -34,6 +34,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
+import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -43,12 +44,6 @@ async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionServi
   return container.get<UserFieldDefinitionService>(
     "userFieldDefinitionService"
   );
-}
-
-function requireAuthHeader(request: Request): void {
-  if (!request.headers.get("Authorization")) {
-    throw NextlyError.authRequired();
-  }
 }
 
 async function readJsonBody(req: Request): Promise<unknown> {

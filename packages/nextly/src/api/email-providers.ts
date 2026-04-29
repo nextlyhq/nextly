@@ -32,6 +32,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
+import { requireAuthHeader } from "./auth-header-only";
 import { createSuccessResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -39,18 +40,6 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 async function getEmailProviderService(): Promise<EmailProviderService> {
   await getNextly();
   return container.get<EmailProviderService>("emailProviderService");
-}
-
-/**
- * Pre-`withErrorHandler` auth gate. The legacy implementation only checks
- * for the presence of an `Authorization` header — true verification lives
- * downstream. Behavior is preserved verbatim during the mechanical
- * migration; tightening the check is out of scope for Task 21.
- */
-function requireAuthHeader(request: Request): void {
-  if (!request.headers.get("Authorization")) {
-    throw NextlyError.authRequired();
-  }
 }
 
 /**
