@@ -12,3 +12,7 @@ export type { CreateNotifierOptions } from "./dispatcher.js";
 export { buildNotificationEvent } from "./build-event.js";
 export { TerminalChannel } from "./channels/terminal.js";
 export { NDJSONChannel } from "./channels/ndjson.js";
+export {
+  getProductionNotifier,
+  _resetProductionNotifierForTests,
+} from "./production.js";

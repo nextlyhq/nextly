@@ -13,6 +13,7 @@
 import type {
   Classifier,
   MigrationJournal,
+  Notifier,
   PreCleanupExecutor,
   PreRenameExecutor,
   PromptDispatcher,
@@ -56,4 +57,11 @@ export const noopPreCleanupExecutor: PreCleanupExecutor = {
 export const noopMigrationJournal: MigrationJournal = {
   recordStart: () => Promise.resolve("noop-journal-id"),
   recordEnd: () => Promise.resolve(),
+};
+
+// F10 PR 3: pipeline-side stub for the notifications fan-out. Real
+// production wiring lives at runtime/notifications/index.ts; tests use
+// this stub when they don't care about the side-effects.
+export const noopNotifier: Notifier = {
+  notify: () => Promise.resolve(),
 };

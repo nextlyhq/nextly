@@ -49,12 +49,16 @@ import type {
   MigrationJournal,
   MigrationJournalScope,
   MigrationJournalSummary,
+  Notifier,
   PreCleanupExecutor,
   PreRenameExecutor,
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces.js";
+
+import { buildNotificationEvent } from "../../../runtime/notifications/build-event.js";
+import type { MigrationScope } from "../../../runtime/notifications/types.js";
 import type { ClassifierEvent, Resolution } from "./resolution/types.js";
 import type { DesiredSchema } from "./types.js";
 
@@ -203,6 +207,11 @@ export interface PushSchemaPipelineDeps {
   // for make_optional. Slots between PreResolutionExecutor and pushSchema.
   preCleanupExecutor: PreCleanupExecutor;
   migrationJournal: MigrationJournal;
+  // F10 PR 3: notification dispatcher fan-out. Pipeline calls
+  // `notifier.notify(event)` after recordEnd in both success + failure
+  // paths. Defaults to `noopNotifier` in tests; production wires
+  // `createNotifier({channels: [TerminalChannel, NDJSONChannel]})`.
+  notifier: Notifier;
 }
 
 // @internal
@@ -296,6 +305,27 @@ export function computeJournalScope(
   return { kind: "global" };
 }
 
+// F10 PR 3: bridge the two near-identical scope shapes (the journal-
+// interface scope persisted into the DB column vs the notifications-
+// module scope passed to channels). Keeping them as distinct types
+// at the boundary lets each concern evolve independently — e.g. a
+// future "tenant" field on the notification scope shouldn't bleed
+// into the journal column union.
+function toNotificationScope(scope: MigrationJournalScope): MigrationScope {
+  if (scope.kind === "fresh-push") return { kind: "fresh-push" };
+  if (scope.kind === "global") {
+    return scope.slug
+      ? { kind: "global", slug: scope.slug }
+      : { kind: "global" };
+  }
+  // collection | single — both require a slug per
+  // MigrationJournalScope's contract (asserted at the type-system
+  // level because slug is optional only for fresh-push/global).
+  return scope.slug
+    ? { kind: scope.kind, slug: scope.slug }
+    : { kind: "global" };
+}
+
 export class PushSchemaPipeline {
   constructor(
     private deps: PushSchemaPipelineDeps,
@@ -319,6 +349,11 @@ export class PushSchemaPipeline {
   }): Promise<PipelineResult> {
     const { desired, db, dialect, source, promptChannel, databaseName } = args;
     const scope = computeJournalScope(source, args.uiTargetSlug);
+    // F10 PR 3: track wall-clock for the notification event. The
+    // journal already computes its own duration; we duplicate here so
+    // the notification event surfaces duration even when the journal
+    // write best-effort-fails. Cheap (one Date.now()).
+    const startMs = Date.now();
     const journalId = await this.deps.migrationJournal.recordStart({
       source,
       statementsPlanned: 0,
@@ -545,6 +580,20 @@ export class PushSchemaPipeline {
         summary,
       });
 
+      // F10 PR 3: fan out a success notification (terminal box +
+      // NDJSON line, plus any future channels). `notify()` swallows
+      // per-channel failures internally so this can never throw.
+      await this.deps.notifier.notify(
+        buildNotificationEvent({
+          success: true,
+          source,
+          scope: toNotificationScope(scope),
+          summary,
+          durationMs: Date.now() - startMs,
+          journalId,
+        })
+      );
+
       return {
         success: true,
         statementsExecuted,
@@ -552,11 +601,26 @@ export class PushSchemaPipeline {
       };
     } catch (err) {
       const code = this.classifyErrorCode(err);
+      const message = err instanceof Error ? err.message : String(err);
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: false,
         statementsExecuted: 0,
         error: err,
       });
+
+      // F10 PR 3: fan out a failure notification with the typed error
+      // code + message. summary is omitted because the failure may
+      // have happened before the diff was computed.
+      await this.deps.notifier.notify(
+        buildNotificationEvent({
+          success: false,
+          source,
+          scope: toNotificationScope(scope),
+          durationMs: Date.now() - startMs,
+          journalId,
+          error: { code, message },
+        })
+      );
       return {
         success: false,
         statementsExecuted: 0,

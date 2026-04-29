@@ -17,6 +17,7 @@ import type { NextlySchemaSnapshot, Operation } from "../diff/types.js";
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopNotifier,
   noopPreCleanupExecutor,
   noopPreRenameExecutor,
   noopPromptDispatcher,
@@ -187,6 +188,7 @@ function makePipeline(
       preRenameExecutor,
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal,
+      notifier: noopNotifier,
     },
     {
       _kitOverride: { pushSchema: pushSchemaImpl },

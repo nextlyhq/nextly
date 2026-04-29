@@ -30,6 +30,7 @@ import type {
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopNotifier,
   noopPreRenameExecutor,
 } from "../pushschema-pipeline-stubs.js";
 import { RegexRenameDetector } from "../rename-detector.js";
@@ -119,6 +120,7 @@ describe("PushSchemaPipeline Option E end-to-end - PostgreSQL", () => {
       promptDispatcher,
       preRenameExecutor: noopPreRenameExecutor, // not used in Option E flow
       migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
     });
     // No test hooks - we let real drizzle-kit pushSchema run AFTER
     // pre-resolution. That's the whole point of Option E.

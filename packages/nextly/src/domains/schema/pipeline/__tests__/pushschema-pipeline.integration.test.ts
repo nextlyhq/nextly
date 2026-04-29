@@ -29,6 +29,7 @@ import type {
 import {
   noopClassifier,
   noopMigrationJournal,
+  noopNotifier,
   noopPreRenameExecutor,
   noopPromptDispatcher,
   noopRenameDetector,
@@ -81,6 +82,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
           promptDispatcher: noopPromptDispatcher,
           preRenameExecutor: noopPreRenameExecutor,
           migrationJournal: noopMigrationJournal,
+          notifier: noopNotifier,
         },
         {
           _kitOverride: {
@@ -168,6 +170,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
         promptDispatcher: recordingDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
         migrationJournal: noopMigrationJournal,
+        notifier: noopNotifier,
       },
       {
         _kitOverride: {
@@ -267,6 +270,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
         promptDispatcher: noopPromptDispatcher,
         preRenameExecutor: noopPreRenameExecutor,
         migrationJournal: noopMigrationJournal,
+        notifier: noopNotifier,
       },
       {
         _kitOverride: {

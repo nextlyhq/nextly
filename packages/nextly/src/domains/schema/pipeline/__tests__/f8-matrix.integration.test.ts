@@ -46,6 +46,7 @@ import { RealPreCleanupExecutor } from "../pre-cleanup/executor.js";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor.js";
 import {
   noopMigrationJournal,
+  noopNotifier,
   noopPreRenameExecutor,
 } from "../pushschema-pipeline-stubs.js";
 import { PushSchemaPipeline } from "../pushschema-pipeline.js";
@@ -122,6 +123,7 @@ function makePipeline(promptDispatcher: PromptDispatcher) {
     preRenameExecutor: noopPreRenameExecutor,
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
+    notifier: noopNotifier,
   });
 }
 
@@ -517,6 +519,7 @@ describe("F8 matrix — PostgreSQL — NOT-NULL coercion via provide_default", (
       preRenameExecutor: noopPreRenameExecutor,
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
     });
 
     const result = await pipeline.apply({
