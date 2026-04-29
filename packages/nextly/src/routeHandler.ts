@@ -350,7 +350,7 @@ async function handleDashboardRequest(
  * Delegate an email request directly to the existing email POST handlers.
  *
  * The handlers manage their own auth (requireAuthentication), body parsing,
- * Zod validation, and EmailAttachmentError mapping. Intercepting here —
+ * Zod validation, and NextlyError mapping. Intercepting here —
  * before req.text() in handleServiceRequest — keeps the request body
  * stream available for the handler to consume.
  */

@@ -14,7 +14,6 @@ export {
   transformFromStorage,
   getSerializedFieldNames,
   requiresTransformation,
-  FieldTransformError,
   type TransformOptions,
 } from "./field-transform";
 

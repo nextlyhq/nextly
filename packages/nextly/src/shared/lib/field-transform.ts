@@ -12,6 +12,7 @@ import type {
   FieldConfig,
   DataFieldConfig,
 } from "../../collections/fields/types";
+import { NextlyError } from "../../errors";
 
 import {
   formatRichTextOutput,
@@ -54,25 +55,6 @@ export interface TransformOptions {
    * @default "json"
    */
   richTextFormat?: RichTextOutputFormat;
-}
-
-/**
- * Error thrown when field transformation fails.
- */
-export class FieldTransformError extends Error {
-  constructor(
-    public readonly fieldName: string,
-    public readonly fieldType: string,
-    public readonly operation: "serialize" | "deserialize",
-    public readonly cause?: Error
-  ) {
-    const action = operation === "serialize" ? "serialize" : "deserialize";
-    const causeMessage = cause?.message ? `: ${cause.message}` : "";
-    super(
-      `Failed to ${action} field "${fieldName}" (type: ${fieldType})${causeMessage}`
-    );
-    this.name = "FieldTransformError";
-  }
 }
 
 // ============================================================
@@ -323,7 +305,7 @@ function transformValueForStorage(value: unknown, field: FieldConfig): unknown {
  * @param fields - Field configurations for the collection
  * @param options - Transform options
  * @returns Transformed data ready for database storage
- * @throws FieldTransformError if serialization fails
+ * @throws NextlyError (VALIDATION_ERROR with code "TRANSFORM_FAILED") if serialization fails
  *
  * @example
  * ```typescript
@@ -392,12 +374,21 @@ export function transformForStorage(
         result[key] = processedValue;
       }
     } catch (error) {
-      throw new FieldTransformError(
-        key,
-        field.type,
-        "serialize",
-        error instanceof Error ? error : new Error(String(error))
-      );
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: key,
+            code: "TRANSFORM_FAILED",
+            message: "Field transformation failed.",
+          },
+        ],
+        logContext: {
+          fieldName: key,
+          fieldType: field.type,
+          operation: "serialize",
+          cause: error instanceof Error ? error.message : String(error),
+        },
+      });
     }
   }
 
@@ -417,7 +408,7 @@ export function transformForStorage(
  * @param data - Entry data from database
  * @param fields - Field configurations for the collection
  * @returns Transformed data ready for application use
- * @throws FieldTransformError if deserialization fails
+ * @throws NextlyError (VALIDATION_ERROR with code "TRANSFORM_FAILED") if deserialization fails
  *
  * @example
  * ```typescript
@@ -465,12 +456,21 @@ export function transformFromStorage(
       }
       // If already an object/array, keep as-is (database might have returned parsed data)
     } catch (error) {
-      throw new FieldTransformError(
-        key,
-        field.type,
-        "deserialize",
-        error instanceof Error ? error : new Error(String(error))
-      );
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: key,
+            code: "TRANSFORM_FAILED",
+            message: "Field transformation failed.",
+          },
+        ],
+        logContext: {
+          fieldName: key,
+          fieldType: field.type,
+          operation: "deserialize",
+          cause: error instanceof Error ? error.message : String(error),
+        },
+      });
     }
   }
 
