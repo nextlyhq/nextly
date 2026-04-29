@@ -44,6 +44,7 @@ import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "./init/build-service-config";
+import { runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
@@ -220,6 +221,42 @@ export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
         console.log(`  - JSONB support: ${capabilities.supportsJsonb}`);
         console.log(`  - RETURNING support: ${capabilities.supportsReturning}`);
         console.log(`  - Full-text search: ${capabilities.supportsFts}`);
+
+        // F8 PR 6: first-run + drift check. On a brand-new DB this
+        // creates the static system tables (so `next dev` works without
+        // a prior `nextly db:sync`). On an existing DB it logs a
+        // single warning if config has drifted from live schema.
+        // Failures are logged but do NOT block boot — the post-init
+        // tasks below tolerate missing tables.
+        try {
+          const config = getService("config");
+          const driftLogger = {
+            debug: (msg: string) => console.debug(msg),
+            info: (msg: string) => console.log(msg),
+            warn: (msg: string) => console.warn(msg),
+            error: (msg: string) => console.error(msg),
+          };
+          // Project config.collections to the minimal shape drift-check
+          // expects (slug, tableName, fields). Deep imports kept local
+          // to avoid circular type pulls at the init.ts boundary.
+          const collections = (config.collections ?? []).map(c => ({
+            slug: c.slug,
+            tableName: c.dbName?.startsWith("dc_")
+              ? c.dbName
+              : `dc_${(c.dbName ?? c.slug).replace(/-/g, "_")}`,
+            fields: c.fields ?? [],
+          }));
+          await runDriftCheck({
+            adapter,
+            collections,
+            logger: driftLogger,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[nextly] Drift check failed (${msg}). Boot continuing; run \`nextly db:sync\` if you see schema errors.`
+          );
+        }
 
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
