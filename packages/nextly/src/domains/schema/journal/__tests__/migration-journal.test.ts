@@ -302,4 +302,145 @@ describe("DrizzleMigrationJournal", () => {
       }
     );
   });
+
+  // F10 PR 2: scope + summary persistence into the new columns added by
+  // F10 PR 1. recordStart accepts an optional scope; recordEnd accepts an
+  // optional summary. Existing legacy callers omitting the args remain
+  // compatible — the columns are nullable.
+  describe("F10 PR 2: scope + summary persistence", () => {
+    it("recordStart persists scope.kind and scope.slug for collection scope", async () => {
+      const { db, inserts } = makeFakeDb();
+      const journal = new DrizzleMigrationJournal({
+        db,
+        dialect: "postgresql",
+        logger: fakeLogger,
+      });
+
+      await journal.recordStart({
+        source: "ui",
+        statementsPlanned: 3,
+        scope: { kind: "collection", slug: "posts" },
+      });
+
+      expect(inserts).toHaveLength(1);
+      expect(inserts[0].values).toMatchObject({
+        source: "ui",
+        statementsPlanned: 3,
+        scopeKind: "collection",
+        scopeSlug: "posts",
+      });
+    });
+
+    it("recordStart persists scope.kind only for fresh-push (no slug)", async () => {
+      const { db, inserts } = makeFakeDb();
+      const journal = new DrizzleMigrationJournal({
+        db,
+        dialect: "postgresql",
+        logger: fakeLogger,
+      });
+
+      await journal.recordStart({
+        source: "code",
+        statementsPlanned: 5,
+        scope: { kind: "fresh-push" },
+      });
+
+      expect(inserts[0].values).toMatchObject({
+        scopeKind: "fresh-push",
+      });
+      // fresh-push has no slug; column should not be set in the insert
+      // payload (DB stores NULL).
+      expect(inserts[0].values).not.toHaveProperty("scopeSlug");
+    });
+
+    it("recordStart omits scope columns when scope arg absent (legacy callers)", async () => {
+      const { db, inserts } = makeFakeDb();
+      const journal = new DrizzleMigrationJournal({
+        db,
+        dialect: "postgresql",
+        logger: fakeLogger,
+      });
+
+      await journal.recordStart({ source: "code", statementsPlanned: 1 });
+
+      expect(inserts[0].values).not.toHaveProperty("scopeKind");
+      expect(inserts[0].values).not.toHaveProperty("scopeSlug");
+    });
+
+    it("recordEnd persists summary counts on success", async () => {
+      const { db, updates } = makeFakeDb();
+      const journal = new DrizzleMigrationJournal({
+        db,
+        dialect: "postgresql",
+        logger: fakeLogger,
+      });
+      const id = await journal.recordStart({
+        source: "ui",
+        statementsPlanned: 2,
+      });
+
+      await journal.recordEnd(id, {
+        success: true,
+        statementsExecuted: 2,
+        summary: { added: 1, removed: 0, renamed: 1, changed: 0 },
+      });
+
+      expect(updates[0].values).toMatchObject({
+        status: "success",
+        summaryAdded: 1,
+        summaryRemoved: 0,
+        summaryRenamed: 1,
+        summaryChanged: 0,
+      });
+    });
+
+    it("recordEnd omits summary columns when summary arg absent", async () => {
+      const { db, updates } = makeFakeDb();
+      const journal = new DrizzleMigrationJournal({
+        db,
+        dialect: "postgresql",
+        logger: fakeLogger,
+      });
+      const id = await journal.recordStart({
+        source: "ui",
+        statementsPlanned: 1,
+      });
+
+      await journal.recordEnd(id, {
+        success: true,
+        statementsExecuted: 1,
+      });
+
+      expect(updates[0].values).not.toHaveProperty("summaryAdded");
+      expect(updates[0].values).not.toHaveProperty("summaryRemoved");
+      expect(updates[0].values).not.toHaveProperty("summaryRenamed");
+      expect(updates[0].values).not.toHaveProperty("summaryChanged");
+    });
+
+    it("recordEnd accepts summary on failure (e.g. statements 1-2 succeeded before crash)", async () => {
+      const { db, updates } = makeFakeDb();
+      const journal = new DrizzleMigrationJournal({
+        db,
+        dialect: "postgresql",
+        logger: fakeLogger,
+      });
+      const id = await journal.recordStart({
+        source: "ui",
+        statementsPlanned: 4,
+      });
+
+      await journal.recordEnd(id, {
+        success: false,
+        statementsExecuted: 2,
+        error: new Error("constraint violation"),
+        summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
+      });
+
+      expect(updates[0].values).toMatchObject({
+        status: "failed",
+        statementsExecuted: 2,
+        summaryAdded: 1,
+      });
+    });
+  });
 });

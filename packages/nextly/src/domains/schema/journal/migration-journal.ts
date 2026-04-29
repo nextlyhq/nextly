@@ -19,7 +19,11 @@ import {
   nextlyMigrationJournalPg,
   nextlyMigrationJournalSqlite,
 } from "../../../schemas/migration-journal/index.js";
-import type { MigrationJournal } from "../pipeline/pushschema-pipeline-interfaces.js";
+import type {
+  MigrationJournal,
+  MigrationJournalScope,
+  MigrationJournalSummary,
+} from "../pipeline/pushschema-pipeline-interfaces.js";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -83,6 +87,7 @@ export class DrizzleMigrationJournal implements MigrationJournal {
   async recordStart(args: {
     source: "ui" | "code";
     statementsPlanned: number;
+    scope?: MigrationJournalScope;
   }): Promise<string> {
     // Wrapped in try/catch: crypto.randomUUID() is sync and only throws
     // if the runtime lacks a CSPRNG (extremely rare TypeError on niche
@@ -114,13 +119,25 @@ export class DrizzleMigrationJournal implements MigrationJournal {
           };
         }
       ).insert(table);
-      await inserter.values({
+
+      // F10 PR 2: include the new nullable scope columns when callers
+      // pass scope info. Legacy callers (no scope arg) skip the
+      // properties so the DB stores NULL.
+      const insertValues: Record<string, unknown> = {
         id,
         source: args.source,
         status: "in_progress",
         startedAt,
         statementsPlanned: args.statementsPlanned,
-      });
+      };
+      if (args.scope) {
+        insertValues.scopeKind = args.scope.kind;
+        if (args.scope.slug !== undefined) {
+          insertValues.scopeSlug = args.scope.slug;
+        }
+      }
+
+      await inserter.values(insertValues);
       this.startTimes.set(id, startMs);
       return id;
     } catch (err) {
@@ -135,7 +152,12 @@ export class DrizzleMigrationJournal implements MigrationJournal {
 
   async recordEnd(
     journalId: string,
-    args: { success: boolean; statementsExecuted: number; error?: unknown }
+    args: {
+      success: boolean;
+      statementsExecuted: number;
+      error?: unknown;
+      summary?: MigrationJournalSummary;
+    }
   ): Promise<void> {
     if (journalId.startsWith(FAILED_INSERT_PREFIX)) {
       // recordStart's insert failed; nothing to update.
@@ -177,14 +199,26 @@ export class DrizzleMigrationJournal implements MigrationJournal {
           };
         }
       ).update(table);
+
+      // F10 PR 2: include summary columns when callers pass them.
+      // Legacy callers (no summary arg) skip the properties so the DB
+      // stores NULL — column nullability is the forward-compat contract.
+      const setValues: Record<string, unknown> = {
+        status,
+        endedAt,
+        durationMs,
+        statementsExecuted: args.statementsExecuted,
+        errorMessage,
+      };
+      if (args.summary) {
+        setValues.summaryAdded = args.summary.added;
+        setValues.summaryRemoved = args.summary.removed;
+        setValues.summaryRenamed = args.summary.renamed;
+        setValues.summaryChanged = args.summary.changed;
+      }
+
       await updater
-        .set({
-          status,
-          endedAt,
-          durationMs,
-          statementsExecuted: args.statementsExecuted,
-          errorMessage,
-        })
+        .set(setValues)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column type is dialect-specific; structural ID match
         .where(eq(idColumn as any, journalId));
     } catch (err) {
