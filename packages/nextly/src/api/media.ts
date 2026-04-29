@@ -19,6 +19,14 @@
  * }
  * ```
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
+ * return the canonical `{ data: <result> }` (or `{ data: [...], meta:
+ * { total, page, perPage } }` for paginated lists) per spec §10.2. Errors
+ * flow through the wrapper as `application/problem+json`. The legacy
+ * double-wrap `{ success, statusCode, data }` is dropped; delete/move
+ * success becomes `{ data: { success: true } }`. Validation failures
+ * surface field-level detail in `data.errors[]`.
+ *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/media/route.ts
@@ -31,8 +39,10 @@
  * @module api/media
  */
 
+import { z } from "zod";
+
 import { getService } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type {
@@ -42,158 +52,74 @@ import type {
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
-// ============================================================
-// Helper Functions
-// ============================================================
+import {
+  createPaginatedResponse,
+  createSuccessResponse,
+} from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-/**
- * Get the MediaService from the DI container.
- *
- * Uses getNextly() to ensure services are initialized. If Nextly was
- * pre-initialized via instrumentation.ts with config (including storage plugins),
- * this will use that cached instance. Otherwise, it will auto-initialize
- * with default settings (local storage).
- */
 async function getMediaService(): Promise<MediaService> {
-  // getNextly() returns cached instance if already initialized with config,
-  // or auto-initializes with defaults if not
   await getNextly();
   return getService("mediaService");
 }
 
-/**
- * Create a success response in the legacy format
- */
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>
-): Response {
-  return Response.json(
-    {
-      success: true,
-      statusCode,
-      data,
-      ...(meta && { meta }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Create an error response in the legacy format
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  data: unknown = null
-): Response {
-  return Response.json(
-    {
-      success: false,
-      statusCode,
-      message,
-      data,
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Handle errors from service layer and convert to legacy response format
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Media API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(
-      error.message,
-      error.httpStatus,
-      error.details ?? null
-    );
-  }
-
-  if (error instanceof Error) {
-    // Check for service initialization errors
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503);
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Create a request context from the request.
- * Returns an empty context for unauthenticated requests.
- * In production, this would extract user info from auth headers/cookies.
- */
 function createRequestContext(): RequestContext {
-  // TODO: In a real implementation, extract user from auth headers
-  // and populate email, role, permissions from your auth system
   return {};
 }
 
-/**
- * Create a request context with user info for authenticated operations
- */
 function createAuthenticatedContext(userId: string): RequestContext {
-  // For API routes that receive userId directly (like upload),
-  // we create a minimal authenticated context.
-  // In production, you would look up the full user details.
   return {
     user: {
       id: userId,
-      email: `${userId}@api.local`, // Placeholder - should come from auth
+      email: `${userId}@api.local`,
       role: "user",
       permissions: [],
     },
   };
 }
 
-// ============================================================
-// Route Handlers
-// ============================================================
+async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
+  try {
+    return (await req.json()) as Record<string, unknown>;
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      },
+      logContext: { reason: "invalid-json-body" },
+    });
+  }
+}
 
 /**
  * GET handler for listing media with pagination, search, and filters.
  *
  * Query Parameters:
  * - page: Page number (default: 1)
- * - pageSize: Items per page (default: 24)
+ * - pageSize: Items per page (default: 24, becomes `perPage` in response meta)
  * - search: Search query for filename, altText
  * - type: Filter by media type (image, video, audio, document, other)
+ * - folderId: Filter by folder ("root" for root-level media)
  * - sortBy: Sort field (uploadedAt, filename, size)
  * - sortOrder: Sort direction (asc, desc)
  *
- * Response Codes:
- * - 200 OK: Media list retrieved successfully
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to fetch media
- *
- * @param request - Next.js Request object
- * @returns Response with JSON media list
- *
- * @example
- * ```bash
- * curl "http://localhost:3000/api/media?page=1&pageSize=24&type=image"
- * # => {"success":true,"data":[...],"meta":{...}}
- * ```
+ * Response: `{ "data": Media[], "meta": { total, page, perPage } }`.
  */
-export async function GET(request: Request): Promise<Response> {
-  try {
+export const GET = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     const mediaService = await getMediaService();
     const { searchParams } = new URL(request.url);
     const context = createRequestContext();
 
-    // Parse query parameters
     const folderIdParam = searchParams.get("folderId");
     const options: ListMediaOptions = {
       page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
@@ -213,21 +139,18 @@ export async function GET(request: Request): Promise<Response> {
 
     const result = await mediaService.listMedia(options, context);
 
-    // Transform to legacy response format
+    // Canonical pagination meta per spec §10.2: `{ total, page, perPage }`.
+    // The legacy `totalPages` field is dropped — callers compute it as
+    // `Math.ceil(total / perPage)`.
     return withTimezoneFormatting(
-      successResponse(result.data, 200, {
+      createPaginatedResponse(result.data, {
         total: result.pagination.total,
-        page: options.page,
-        pageSize: options.pageSize,
-        totalPages: Math.ceil(
-          result.pagination.total / (options.pageSize ?? 24)
-        ),
+        page: options.page ?? 1,
+        perPage: Math.max(1, options.pageSize ?? 24),
       })
     );
-  } catch (error) {
-    return handleError(error, "List media");
   }
-}
+);
 
 /**
  * POST handler for uploading media files.
@@ -238,120 +161,102 @@ export async function GET(request: Request): Promise<Response> {
  * Form Data:
  * - file: File to upload (required)
  * - uploadedBy: User ID (required)
+ * - folderId: Optional folder to upload into.
  *
- * Response Codes:
- * - 201 Created: Media uploaded successfully
- * - 400 Bad Request: Invalid input or missing file
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Upload failed
- *
- * @param request - Next.js Request object with FormData
- * @returns Response with JSON uploaded media object
- *
- * @example
- * ```typescript
- * const formData = new FormData();
- * formData.append('file', file);
- * formData.append('uploadedBy', userId);
- * const response = await fetch('/api/media', {
- *   method: 'POST',
- *   body: formData,
- * });
- * const { data: media } = await response.json();
- * ```
+ * Response: `{ "data": Media }` (status 201).
  */
-export async function POST(request: Request): Promise<Response> {
-  try {
+export const POST = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     const mediaService = await getMediaService();
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
     const uploadedBy = formData.get("uploadedBy") as string | null;
     const folderId = formData.get("folderId") as string | null;
 
+    const errors: Array<{ path: string; code: string; message: string }> = [];
     if (!file) {
-      return errorResponse("File is required", 400);
+      errors.push({
+        path: "file",
+        code: "REQUIRED",
+        message: "file is required.",
+      });
     }
-
     if (!uploadedBy) {
-      return errorResponse("uploadedBy is required", 400);
+      errors.push({
+        path: "uploadedBy",
+        code: "REQUIRED",
+        message: "uploadedBy is required.",
+      });
+    }
+    if (errors.length > 0) {
+      throw NextlyError.validation({ errors });
     }
 
-    // Convert File to Buffer
-    const arrayBuffer = await file.arrayBuffer();
+    // file & uploadedBy are guaranteed defined after the validation above.
+    const fileEnsured = file as File;
+    const uploadedByEnsured = uploadedBy as string;
+
+    const arrayBuffer = await fileEnsured.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Validate input using existing schema
     const input = {
       file: buffer,
-      filename: file.name,
-      mimeType: file.type,
-      size: file.size,
-      uploadedBy,
+      filename: fileEnsured.name,
+      mimeType: fileEnsured.type,
+      size: fileEnsured.size,
+      uploadedBy: uploadedByEnsured,
     };
 
-    const validation = UploadMediaInputSchema.safeParse(input);
-    if (!validation.success) {
-      return errorResponse(
-        validation.error.issues[0]?.message || "Invalid input",
-        400
-      );
+    try {
+      UploadMediaInputSchema.parse(input);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
     }
 
-    // Create request context with user info
-    const context = createAuthenticatedContext(uploadedBy);
+    const context = createAuthenticatedContext(uploadedByEnsured);
 
-    // Call new service
     const mediaFile = await mediaService.upload(
       {
         buffer,
-        filename: file.name,
-        mimeType: file.type,
-        size: file.size,
+        filename: fileEnsured.name,
+        mimeType: fileEnsured.type,
+        size: fileEnsured.size,
         folderId: folderId || undefined,
       },
       context
     );
 
-    return withTimezoneFormatting(successResponse(mediaFile, 201));
-  } catch (error) {
-    return handleError(error, "Upload media");
+    return withTimezoneFormatting(
+      createSuccessResponse(mediaFile, { status: 201 })
+    );
   }
-}
+);
 
 /**
  * GET handler for fetching a single media item by ID.
  *
- * Response Codes:
- * - 200 OK: Media retrieved successfully
- * - 404 Not Found: Media not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to retrieve media
- *
- * @param request - Next.js Request object (unused)
- * @param params - Route params containing media ID
- * @returns Response with JSON media object
- *
- * @example
- * ```bash
- * curl http://localhost:3000/api/media/123
- * # => {"success":true,"data":{...}}
- * ```
+ * Response: `{ "data": Media }`. 404 surface emits canonical
+ * `application/problem+json` with `code: "NOT_FOUND"`.
  */
-export async function getMediaById(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+export function getMediaById(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  try {
-    const mediaService = await getMediaService();
-    const resolvedParams = await params;
-    const context = createRequestContext();
+  return withErrorHandler(
+    async (
+      _req: Request,
+      routeCtx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const { id } = await routeCtx.params;
+      const context = createRequestContext();
 
-    const mediaFile = await mediaService.findById(resolvedParams.id, context);
+      const mediaFile = await mediaService.findById(id, context);
 
-    return withTimezoneFormatting(successResponse(mediaFile, 200));
-  } catch (error) {
-    return handleError(error, "Get media by ID");
-  }
+      return withTimezoneFormatting(createSuccessResponse(mediaFile));
+    }
+  )(request, ctx);
 }
 
 /**
@@ -364,59 +269,36 @@ export async function getMediaById(
  * - caption: Optional caption
  * - tags: Optional tags array
  *
- * Response Codes:
- * - 200 OK: Media updated successfully
- * - 400 Bad Request: Invalid input
- * - 404 Not Found: Media not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Update failed
- *
- * @param request - Next.js Request object with JSON body
- * @param params - Route params containing media ID
- * @returns Response with JSON updated media object
- *
- * @example
- * ```typescript
- * await fetch('/api/media/123', {
- *   method: 'PATCH',
- *   headers: { 'Content-Type': 'application/json' },
- *   body: JSON.stringify({
- *     altText: 'Logo image',
- *     tags: ['branding', 'logo'],
- *   }),
- * });
- * ```
+ * Response: `{ "data": Media }`.
  */
-export async function updateMedia(
+export function updateMedia(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  try {
-    const mediaService = await getMediaService();
-    const body = await request.json();
+  return withErrorHandler(
+    async (
+      req: Request,
+      routeCtx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const body = await readJsonBody(req);
 
-    // Validate input
-    const validation = UpdateMediaInputSchema.safeParse(body);
-    if (!validation.success) {
-      return errorResponse(
-        validation.error.issues[0]?.message || "Invalid input",
-        400
-      );
+      let validated: z.infer<typeof UpdateMediaInputSchema>;
+      try {
+        validated = UpdateMediaInputSchema.parse(body);
+      } catch (err) {
+        if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+        throw err;
+      }
+
+      const { id } = await routeCtx.params;
+      const context = createRequestContext();
+
+      const mediaFile = await mediaService.update(id, validated, context);
+
+      return withTimezoneFormatting(createSuccessResponse(mediaFile));
     }
-
-    const resolvedParams = await params;
-    const context = createRequestContext();
-
-    const mediaFile = await mediaService.update(
-      resolvedParams.id,
-      validation.data,
-      context
-    );
-
-    return withTimezoneFormatting(successResponse(mediaFile, 200));
-  } catch (error) {
-    return handleError(error, "Update media");
-  }
+  )(request, ctx);
 }
 
 /**
@@ -424,47 +306,26 @@ export async function updateMedia(
  *
  * Removes media from both storage and database.
  *
- * Response Codes:
- * - 200 OK: Media deleted successfully
- * - 404 Not Found: Media not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Deletion failed
- *
- * @param request - Next.js Request object (unused)
- * @param params - Route params containing media ID
- * @returns Response with JSON success message
- *
- * @example
- * ```bash
- * curl -X DELETE http://localhost:3000/api/media/123
- * # => {"success":true,"message":"Media deleted successfully"}
- * ```
+ * Response: `{ "data": { "success": true } }`.
  */
-export async function deleteMedia(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+export function deleteMedia(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  try {
-    const mediaService = await getMediaService();
-    const resolvedParams = await params;
-    const context = createRequestContext();
+  return withErrorHandler(
+    async (
+      _req: Request,
+      routeCtx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const { id } = await routeCtx.params;
+      const context = createRequestContext();
 
-    await mediaService.delete(resolvedParams.id, context);
+      await mediaService.delete(id, context);
 
-    return Response.json(
-      {
-        success: true,
-        statusCode: 200,
-        message: "Media deleted successfully",
-      },
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Delete media");
-  }
+      return createSuccessResponse({ success: true });
+    }
+  )(request, ctx);
 }
 
 /**
@@ -473,41 +334,26 @@ export async function deleteMedia(
  * Path: /api/media/[id]/move
  * Body: { folderId: string | null }
  *
- * Response Codes:
- * - 200 OK: Media moved successfully
- * - 404 Not Found: Media or folder not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Move failed
- *
- * @param request - Next.js Request object
- * @param params - Route parameters
- * @returns Response with success message
+ * Response: `{ "data": { "success": true } }`.
  */
-export async function moveMediaToFolder(
+export function moveMediaToFolder(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  try {
-    const mediaService = await getMediaService();
-    const resolvedParams = await params;
-    const body = await request.json();
-    const { folderId } = body;
-    const context = createRequestContext();
+  return withErrorHandler(
+    async (
+      req: Request,
+      routeCtx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const { id } = await routeCtx.params;
+      const body = await readJsonBody(req);
+      const folderId = body.folderId as string | null | undefined;
+      const context = createRequestContext();
 
-    await mediaService.moveToFolder(resolvedParams.id, folderId, context);
+      await mediaService.moveToFolder(id, folderId ?? null, context);
 
-    return Response.json(
-      {
-        success: true,
-        statusCode: 200,
-        message: "Media moved successfully",
-      },
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Move media to folder");
-  }
+      return createSuccessResponse({ success: true });
+    }
+  )(request, ctx);
 }

@@ -7,6 +7,12 @@
  * **IMPORTANT:** For storage plugins to work, initialize Nextly with your config
  * via instrumentation.ts before these routes are called.
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
+ * return the canonical `{ data: <result> }` envelope per spec §10.2.
+ * Errors flow through the wrapper as `application/problem+json`. The
+ * legacy double-wrap `{ success, statusCode, data }` is replaced with
+ * `{ data }`; the delete response becomes `{ data: { success: true } }`.
+ *
  * @example
  * ```typescript
  * // app/api/media/folders/route.ts
@@ -23,97 +29,26 @@
  * ```
  */
 
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 import { getService } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 
-// ============================================================
-// Helper Functions
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
-/**
- * Get the MediaService from the DI container.
- *
- * Uses getNextly() to ensure services are initialized with the cached
- * config (including storage plugins) if available.
- */
 async function getMediaService(): Promise<MediaService> {
   await getNextly();
   return getService("mediaService");
 }
 
-/**
- * Create a success response in the legacy format
- */
-function successResponse<T>(data: T, statusCode: number = 200): NextResponse {
-  return NextResponse.json(
-    {
-      success: true,
-      statusCode,
-      data,
-    },
-    { status: statusCode }
-  );
-}
-
-/**
- * Create an error response in the legacy format
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  error?: string
-): NextResponse {
-  return NextResponse.json(
-    {
-      success: false,
-      statusCode,
-      message,
-      ...(error && { error }),
-    },
-    { status: statusCode }
-  );
-}
-
-/**
- * Handle errors from service layer and convert to legacy response format
- */
-function handleError(error: unknown, operation: string): NextResponse {
-  console.error(`[Media Folders API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503);
-    }
-    return errorResponse(
-      "Failed to " + operation.toLowerCase(),
-      500,
-      error.message
-    );
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Create a request context from the request.
- * Returns an empty context for unauthenticated requests.
- */
 function createRequestContext(): RequestContext {
   return {};
 }
 
-/**
- * Create a request context with user info for authenticated operations
- */
 function createAuthenticatedContext(userId: string): RequestContext {
   return {
     user: {
@@ -125,9 +60,26 @@ function createAuthenticatedContext(userId: string): RequestContext {
   };
 }
 
-// ============================================================
-// Route Handlers
-// ============================================================
+async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
+  try {
+    return (await req.json()) as Record<string, unknown>;
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
+      },
+      logContext: { reason: "invalid-json-body" },
+    });
+  }
+}
 
 /**
  * GET /api/media/folders
@@ -136,13 +88,10 @@ function createAuthenticatedContext(userId: string): RequestContext {
  * - ?root=true - List only root folders (no parent)
  * - ?parentId=xxx - List subfolders of a specific parent
  *
- * Response Codes:
- * - 200 OK: Folders listed successfully
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to list folders
+ * Response: `{ "data": Folder[] }`.
  */
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  try {
+export const GET = withErrorHandler(
+  async (request: NextRequest): Promise<Response> => {
     const mediaService = await getMediaService();
     const context = createRequestContext();
 
@@ -150,21 +99,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const root = searchParams.get("root") === "true";
     const parentId = searchParams.get("parentId");
 
-    let folders;
+    const folders =
+      root || !parentId
+        ? await mediaService.listRootFolders(context)
+        : await mediaService.listSubfolders(parentId, context);
 
-    if (root || !parentId) {
-      // List root folders
-      folders = await mediaService.listRootFolders(context);
-    } else {
-      // List subfolders of a specific parent
-      folders = await mediaService.listSubfolders(parentId, context);
-    }
-
-    return successResponse(folders, 200);
-  } catch (error) {
-    return handleError(error, "List folders");
+    return createSuccessResponse(folders);
   }
-}
+);
 
 /**
  * POST /api/media/folders
@@ -179,65 +121,71 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
  * - parentId?: string | null
  * - createdBy: string (required)
  *
- * Response Codes:
- * - 201 Created: Folder created successfully
- * - 400 Bad Request: Invalid input
- * - 404 Not Found: Parent folder not found
- * - 409 Conflict: Folder with same name already exists
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to create folder
+ * Response: `{ "data": Folder }` (status 201).
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  try {
+export const POST = withErrorHandler(
+  async (request: NextRequest): Promise<Response> => {
     const mediaService = await getMediaService();
-    const body = await request.json();
+    const body = await readJsonBody(request);
 
-    // Extract createdBy for context, rest goes to service
-    const { createdBy, ...folderInput } = body;
+    const { createdBy, ...folderInput } = body as {
+      createdBy?: string;
+      name?: string;
+      [k: string]: unknown;
+    };
 
+    const errors: Array<{ path: string; code: string; message: string }> = [];
     if (!createdBy) {
-      return errorResponse("createdBy is required", 400);
+      errors.push({
+        path: "createdBy",
+        code: "REQUIRED",
+        message: "createdBy is required.",
+      });
     }
-
     if (!folderInput.name) {
-      return errorResponse("name is required", 400);
+      errors.push({
+        path: "name",
+        code: "REQUIRED",
+        message: "name is required.",
+      });
+    }
+    if (errors.length > 0) {
+      throw NextlyError.validation({ errors });
     }
 
-    const context = createAuthenticatedContext(createdBy);
-    const folder = await mediaService.createFolder(folderInput, context);
+    const context = createAuthenticatedContext(createdBy as string);
+    const folder = await mediaService.createFolder(
+      folderInput as Parameters<MediaService["createFolder"]>[0],
+      context
+    );
 
-    return successResponse(folder, 201);
-  } catch (error) {
-    return handleError(error, "Create folder");
+    return createSuccessResponse(folder, { status: 201 });
   }
-}
+);
 
 /**
  * GET /api/media/folders/[id]
  *
  * Get folder by ID
- *
- * Response Codes:
- * - 200 OK: Folder retrieved successfully
- * - 404 Not Found: Folder not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to get folder
  */
-export async function getFolderById(
-  _request: NextRequest,
+export function getFolderById(
+  request: NextRequest,
   routeContext: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
-  try {
-    const mediaService = await getMediaService();
-    const params = await routeContext.params;
-    const context = createRequestContext();
+): Promise<Response> {
+  return withErrorHandler(
+    async (
+      _req: NextRequest,
+      ctx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const params = await ctx.params;
+      const context = createRequestContext();
 
-    const folder = await mediaService.findFolderById(params.id, context);
+      const folder = await mediaService.findFolderById(params.id, context);
 
-    return successResponse(folder, 200);
-  } catch (error) {
-    return handleError(error, "Get folder");
-  }
+      return createSuccessResponse(folder);
+    }
+  )(request, routeContext);
 }
 
 /**
@@ -251,30 +199,26 @@ export async function getFolderById(
  * - color?: string
  * - icon?: string
  * - parentId?: string | null
- *
- * Response Codes:
- * - 200 OK: Folder updated successfully
- * - 400 Bad Request: Invalid input (e.g., circular parent reference)
- * - 404 Not Found: Folder not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to update folder
  */
-export async function updateFolder(
+export function updateFolder(
   request: NextRequest,
   routeContext: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
-  try {
-    const mediaService = await getMediaService();
-    const params = await routeContext.params;
-    const body = await request.json();
-    const context = createRequestContext();
+): Promise<Response> {
+  return withErrorHandler(
+    async (
+      req: NextRequest,
+      ctx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const params = await ctx.params;
+      const body = await readJsonBody(req);
+      const context = createRequestContext();
 
-    const folder = await mediaService.updateFolder(params.id, body, context);
+      const folder = await mediaService.updateFolder(params.id, body, context);
 
-    return successResponse(folder, 200);
-  } catch (error) {
-    return handleError(error, "Update folder");
-  }
+      return createSuccessResponse(folder);
+    }
+  )(request, routeContext);
 }
 
 /**
@@ -283,89 +227,68 @@ export async function updateFolder(
  * Delete folder
  * Query params: ?deleteContents=true/false
  *
- * Response Codes:
- * - 200 OK: Folder deleted successfully
- * - 400 Bad Request: Folder not empty and deleteContents=false
- * - 404 Not Found: Folder not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to delete folder
+ * Response: `{ "data": { "success": true } }`.
  */
-export async function deleteFolder(
+export function deleteFolder(
   request: NextRequest,
   routeContext: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
-  try {
-    const mediaService = await getMediaService();
-    const params = await routeContext.params;
-    const context = createRequestContext();
+): Promise<Response> {
+  return withErrorHandler(
+    async (
+      req: NextRequest,
+      ctx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const params = await ctx.params;
+      const context = createRequestContext();
 
-    const { searchParams } = new URL(request.url);
-    const deleteContents = searchParams.get("deleteContents") === "true";
+      const { searchParams } = new URL(req.url);
+      const deleteContents = searchParams.get("deleteContents") === "true";
 
-    await mediaService.deleteFolder(params.id, deleteContents, context);
+      await mediaService.deleteFolder(params.id, deleteContents, context);
 
-    return NextResponse.json(
-      {
-        success: true,
-        statusCode: 200,
-        message: "Folder deleted successfully",
-      },
-      { status: 200 }
-    );
-  } catch (error) {
-    return handleError(error, "Delete folder");
-  }
+      return createSuccessResponse({ success: true });
+    }
+  )(request, routeContext);
 }
 
 /**
  * GET /api/media/folders/[id]/contents
  *
  * Get folder contents (subfolders + media files)
- *
- * Response Codes:
- * - 200 OK: Folder contents retrieved successfully
- * - 404 Not Found: Folder not found
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to get folder contents
  */
-export async function getFolderContents(
-  _request: NextRequest,
+export function getFolderContents(
+  request: NextRequest,
   routeContext: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
-  try {
-    const mediaService = await getMediaService();
-    const params = await routeContext.params;
-    const context = createRequestContext();
+): Promise<Response> {
+  return withErrorHandler(
+    async (
+      _req: NextRequest,
+      ctx: { params: Promise<{ id: string }> }
+    ): Promise<Response> => {
+      const mediaService = await getMediaService();
+      const params = await ctx.params;
+      const context = createRequestContext();
 
-    const contents = await mediaService.getFolderContents(params.id, context);
+      const contents = await mediaService.getFolderContents(params.id, context);
 
-    return successResponse(contents, 200);
-  } catch (error) {
-    return handleError(error, "Get folder contents");
-  }
+      return createSuccessResponse(contents);
+    }
+  )(request, routeContext);
 }
 
 /**
  * GET /api/media/folders/root/contents
  *
  * Get root folder contents (folders + media without a folder)
- *
- * Response Codes:
- * - 200 OK: Root folder contents retrieved successfully
- * - 503 Service Unavailable: Services not initialized
- * - 500 Internal Server Error: Failed to get root folder contents
  */
-export async function getRootFolderContents(
-  _request: NextRequest
-): Promise<NextResponse> {
-  try {
+export const getRootFolderContents = withErrorHandler(
+  async (_request: NextRequest): Promise<Response> => {
     const mediaService = await getMediaService();
     const context = createRequestContext();
 
     const contents = await mediaService.getFolderContents(null, context);
 
-    return successResponse(contents, 200);
-  } catch (error) {
-    return handleError(error, "Get root folder contents");
+    return createSuccessResponse(contents);
   }
-}
+);
