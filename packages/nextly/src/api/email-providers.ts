@@ -14,89 +14,70 @@
  * export { GET, POST } from '@revnixhq/nextly/api/email-providers';
  * ```
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: <result> }` envelope per spec §10.2. The legacy
+ * `meta: { total }` synthetic field on the GET list is dropped — listing
+ * returns every provider the caller is allowed to see and admin code can
+ * call `data.length` directly. Validation failures throw
+ * `NextlyError.validation` with field-level `data.errors[]` (the helper
+ * `nextlyValidationFromZod` converts ZodError to that shape per F11).
+ *
  * @module api/email-providers
  */
 
 import { z } from "zod";
 
 import { container } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
+
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getEmailProviderService(): Promise<EmailProviderService> {
   await getNextly();
   return container.get<EmailProviderService>("emailProviderService");
 }
 
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>
-): Response {
-  return Response.json(
-    {
-      data,
-      ...(meta && { meta }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+/**
+ * Pre-`withErrorHandler` auth gate. The legacy implementation only checks
+ * for the presence of an `Authorization` header — true verification lives
+ * downstream. Behavior is preserved verbatim during the mechanical
+ * migration; tightening the check is out of scope for Task 21.
+ */
+function requireAuthHeader(request: Request): void {
+  if (!request.headers.get("Authorization")) {
+    throw NextlyError.authRequired();
+  }
 }
 
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
+/**
+ * Parse `request.json()` and surface a structured validation error on
+ * malformed bodies. Mirrors the established pattern from api-keys.ts and
+ * email-templates routes — every "invalid JSON" failure across the API
+ * uses `code: "invalid_json"` for a single empty-path entry.
+ */
+async function readJsonBody(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
       },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Email Providers API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
+      logContext: { reason: "invalid-json-body" },
+    });
   }
-
-  if (error instanceof z.ZodError) {
-    const firstError = error.issues[0];
-    return errorResponse(
-      firstError?.message || "Validation error",
-      400,
-      "VALIDATION_ERROR"
-    );
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-function checkAuthentication(request: Request): Response | null {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
-  }
-  return null;
 }
 
 const createProviderSchema = z.object({
@@ -120,34 +101,28 @@ const createProviderSchema = z.object({
  * Response Codes:
  * - 200 OK: Providers list retrieved successfully
  * - 401 Unauthorized: Authentication required
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Failed to fetch providers
  *
- * @param request - Next.js Request object
- * @returns Response with JSON provider list
+ * Response: `{ "data": EmailProvider[] }` — non-paginated list (the
+ * legacy `meta: { total }` is dropped per Task 21 §10.1).
  *
  * @example
  * ```bash
  * curl -H "Authorization: Bearer <token>" \
  *   "http://localhost:3000/api/email-providers"
- * # => {"data":[...],"meta":{"total":2}}
+ * # => {"data":[...]}
  * ```
  */
-export async function GET(request: Request): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const GET = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    requireAuthHeader(request);
 
     const service = await getEmailProviderService();
     const providers = await service.listProviders();
 
-    return successResponse(providers, 200, {
-      total: providers.length,
-    });
-  } catch (error) {
-    return handleError(error, "List email providers");
+    return createSuccessResponse(providers);
   }
-}
+);
 
 /**
  * POST handler for creating a new email provider.
@@ -168,52 +143,28 @@ export async function GET(request: Request): Promise<Response> {
  * - 201 Created: Provider created successfully
  * - 400 Bad Request: Invalid input
  * - 401 Unauthorized: Authentication required
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Creation failed
  *
- * @param request - Next.js Request object with JSON body
- * @returns Response with JSON created provider (masked configuration)
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/email-providers', {
- *   method: 'POST',
- *   headers: {
- *     'Content-Type': 'application/json',
- *     'Authorization': 'Bearer <token>',
- *   },
- *   body: JSON.stringify({
- *     name: 'SendLayer Production',
- *     type: 'sendlayer',
- *     fromEmail: 'noreply@example.com',
- *     fromName: 'My App',
- *     configuration: { apiKey: 'sl-...' },
- *     isDefault: true,
- *   }),
- * });
- * const { data: provider } = await response.json();
- * ```
+ * Response: `{ "data": EmailProvider }` — created provider with masked
+ * configuration. Status 201.
  */
-export async function POST(request: Request): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const POST = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    requireAuthHeader(request);
 
-    const service = await getEmailProviderService();
+    const body = await readJsonBody(request);
 
-    let body: unknown;
+    let validated: z.infer<typeof createProviderSchema>;
     try {
-      body = await request.json();
-    } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      validated = createProviderSchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
     }
 
-    const validated = createProviderSchema.parse(body);
-
+    const service = await getEmailProviderService();
     const provider = await service.createProvider(validated);
 
-    return successResponse(provider, 201);
-  } catch (error) {
-    return handleError(error, "Create email provider");
+    return createSuccessResponse(provider, { status: 201 });
   }
-}
+);

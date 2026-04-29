@@ -16,173 +16,41 @@
  * export { POST } from '@revnixhq/nextly/api/storage-upload-url';
  * ```
  *
- * Client usage:
- * ```typescript
- * // 1. Get pre-signed upload URL from server
- * const response = await fetch('/api/nextly/storage/upload-url', {
- *   method: 'POST',
- *   headers: { 'Content-Type': 'application/json' },
- *   body: JSON.stringify({
- *     filename: 'photo.jpg',
- *     mimeType: 'image/jpeg',
- *     collection: 'media'
- *   })
- * });
- * const { data } = await response.json();
+ * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
+ * returns the canonical `{ data: <result> }` envelope per spec §10.2.
+ * The legacy double-wrap `{ success, statusCode, data }` is dropped;
+ * admin / SDK callers reading `response.success` break until Task 10
+ * migrates the consuming fetcher (F12 admin-gap ledger).
  *
- * // 2. Upload directly to storage using pre-signed URL
- * await fetch(data.uploadUrl, {
- *   method: data.method,
- *   headers: data.headers,
- *   body: file
- * });
- * ```
+ * Adapter-specific failures (no plugin, `clientUploads` not enabled,
+ * Vercel-Blob `handleUpload` style adapters) collapse to canonical
+ * `NextlyError.validation` shapes — public messages are §13.8 sentences
+ * with no collection-slug identifiers; the slug lives in `logContext`.
  *
  * @module api/storage-upload-url
  */
 
-import { isServiceError } from "../errors";
+import { z } from "zod";
+
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { getMediaStorage } from "../storage/storage";
 import type { ClientUploadData } from "../storage/types";
 
-// ============================================================
-// Types
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-/**
- * Request body for upload URL generation
- */
-interface UploadUrlRequest {
-  /** Original filename */
-  filename: string;
-  /** File MIME type (e.g., 'image/jpeg', 'application/pdf') */
-  mimeType: string;
-  /** Collection slug to upload to */
-  collection: string;
-  /** Optional: Custom URL expiry time in seconds */
-  expiresIn?: number;
-}
-
-// ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * Ensure services are initialized.
- * Uses getNextly() which returns the cached instance with config if available.
- */
 async function ensureServicesInitialized(): Promise<void> {
   await getNextly();
 }
 
-/**
- * Create a success response
- */
-function successResponse<T>(data: T, statusCode: number = 200): Response {
-  return Response.json(
-    {
-      success: true,
-      statusCode,
-      data,
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Create an error response
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  errors?: Array<{ field?: string; message: string }>
-): Response {
-  return Response.json(
-    {
-      success: false,
-      statusCode,
-      message,
-      ...(errors && { errors }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Handle errors from service layer
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Storage Upload URL API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, [
-      { message: error.message },
-    ]);
-  }
-
-  if (error instanceof Error) {
-    // Check for specific error types
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503);
-    }
-    if (error.message.includes("handleUpload")) {
-      // Vercel Blob doesn't support pre-signed URLs
-      return errorResponse(
-        "This storage provider does not support pre-signed upload URLs. " +
-          "Use the standard upload endpoint instead.",
-        400,
-        [{ message: error.message }]
-      );
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Validate request body
- */
-function validateRequest(
-  body: Partial<UploadUrlRequest>
-): { valid: true; data: UploadUrlRequest } | { valid: false; error: Response } {
-  const errors: Array<{ field: string; message: string }> = [];
-
-  if (!body.filename || typeof body.filename !== "string") {
-    errors.push({ field: "filename", message: "filename is required" });
-  }
-
-  if (!body.mimeType || typeof body.mimeType !== "string") {
-    errors.push({ field: "mimeType", message: "mimeType is required" });
-  }
-
-  if (!body.collection || typeof body.collection !== "string") {
-    errors.push({ field: "collection", message: "collection is required" });
-  }
-
-  if (errors.length > 0) {
-    return {
-      valid: false,
-      error: errorResponse("Invalid request body", 400, errors),
-    };
-  }
-
-  return {
-    valid: true,
-    data: body as UploadUrlRequest,
-  };
-}
-
-// ============================================================
-// Route Handler
-// ============================================================
+const uploadUrlRequestSchema = z.object({
+  filename: z.string().min(1, "filename is required"),
+  mimeType: z.string().min(1, "mimeType is required"),
+  collection: z.string().min(1, "collection is required"),
+  expiresIn: z.number().int().positive().optional(),
+});
 
 /**
  * POST handler for generating client upload URLs.
@@ -200,115 +68,162 @@ function validateRequest(
  * - 400 Bad Request: Invalid input or client uploads not enabled
  * - 500 Internal Server Error: URL generation failed
  *
- * @param request - Next.js Request object with JSON body
- * @returns Response with ClientUploadData or error
- *
- * @example Success Response
- * ```json
- * {
- *   "success": true,
- *   "statusCode": 200,
- *   "data": {
- *     "uploadUrl": "https://bucket.s3.region.amazonaws.com/...",
- *     "path": "2026/01/uuid-filename.jpg",
- *     "method": "PUT",
- *     "headers": { "Content-Type": "image/jpeg" },
- *     "expiresAt": "2026-01-13T12:00:00.000Z"
- *   }
- * }
- * ```
- *
- * @example Error Response (client uploads not enabled)
- * ```json
- * {
- *   "success": false,
- *   "statusCode": 400,
- *   "message": "Client uploads not enabled for this collection"
- * }
- * ```
+ * Response: `{ "data": ClientUploadData }` — see the `ClientUploadData`
+ * type for the field shape (`uploadUrl`, `path`, `method`, `headers`,
+ * `expiresAt`).
  */
-export async function POST(request: Request): Promise<Response> {
-  try {
+export const POST = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     await ensureServicesInitialized();
 
-    // Parse JSON body
-    let body: Partial<UploadUrlRequest>;
+    let raw: unknown;
     try {
-      body = await request.json();
+      raw = await request.json();
     } catch {
-      return errorResponse("Invalid JSON body", 400);
+      throw new NextlyError({
+        code: "VALIDATION_ERROR",
+        publicMessage: "Validation failed.",
+        publicData: {
+          errors: [
+            {
+              path: "",
+              code: "invalid_json",
+              message: "Request body is not valid JSON.",
+            },
+          ],
+        },
+        logContext: { reason: "invalid-json-body" },
+      });
     }
 
-    // Validate request
-    const validation = validateRequest(body);
-    if (!validation.valid) {
-      return validation.error;
+    let validated: z.infer<typeof uploadUrlRequestSchema>;
+    try {
+      validated = uploadUrlRequestSchema.parse(raw);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
     }
 
-    const { filename, mimeType, collection } = validation.data;
+    const { filename, mimeType, collection } = validated;
 
-    // Get MediaStorage instance
     const storage = getMediaStorage();
 
-    // Check if client uploads are supported for this collection
     if (!storage.supportsClientUploads(collection)) {
-      // Provide helpful error message based on why it's not supported
+      // Diagnose why and surface a canonical validation error. Public
+      // messages avoid the collection slug per §13.8 — the slug rides in
+      // logContext for operator triage.
       const config = storage.getCollectionConfig(collection);
       const adapter = storage.getAdapterForCollection(collection);
       const adapterInfo = adapter.getInfo?.();
 
+      const baseLogContext: Record<string, unknown> = {
+        collection,
+        adapterType: adapterInfo?.type,
+      };
+
       if (!config) {
-        return errorResponse(
-          `Collection '${collection}' is not configured with a storage plugin. ` +
-            "Configure a storage plugin (e.g., S3) with this collection to enable client uploads.",
-          400,
-          [{ field: "collection", message: "No storage plugin configured" }]
-        );
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "collection",
+              code: "STORAGE_NOT_CONFIGURED",
+              message:
+                "This collection is not configured with a storage plugin.",
+            },
+          ],
+          logContext: { ...baseLogContext, reason: "no-storage-plugin" },
+        });
       }
 
       if (!config.clientUploads) {
-        return errorResponse(
-          `Client uploads are not enabled for collection '${collection}'. ` +
-            "Add 'clientUploads: true' to the collection's storage configuration.",
-          400,
-          [{ field: "collection", message: "clientUploads not enabled" }]
-        );
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "collection",
+              code: "CLIENT_UPLOADS_DISABLED",
+              message: "Client uploads are not enabled for this collection.",
+            },
+          ],
+          logContext: {
+            ...baseLogContext,
+            reason: "clientUploads-not-enabled",
+          },
+        });
       }
 
       if (!adapterInfo?.supportsClientUploads) {
-        return errorResponse(
-          `The storage adapter for collection '${collection}' does not support client uploads. ` +
-            `Storage type: ${adapterInfo?.type || "unknown"}`,
-          400,
-          [
+        throw NextlyError.validation({
+          errors: [
             {
-              field: "collection",
-              message: "Adapter does not support client uploads",
+              path: "collection",
+              code: "ADAPTER_UNSUPPORTED",
+              message:
+                "The configured storage adapter does not support client uploads.",
             },
-          ]
-        );
+          ],
+          logContext: {
+            ...baseLogContext,
+            reason: "adapter-unsupported",
+          },
+        });
       }
 
-      // Fallback error
-      return errorResponse(
-        "Client uploads not enabled for this collection",
-        400
-      );
+      // Fallback for diagnostic gaps (none of the three checks matched).
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "collection",
+            code: "CLIENT_UPLOADS_DISABLED",
+            message: "Client uploads are not enabled for this collection.",
+          },
+        ],
+        logContext: { ...baseLogContext, reason: "unknown" },
+      });
     }
 
-    // Generate client upload URL
-    const uploadData: ClientUploadData | null =
-      await storage.getClientUploadUrl(filename, mimeType, collection);
+    let uploadData: ClientUploadData | null;
+    try {
+      uploadData = await storage.getClientUploadUrl(
+        filename,
+        mimeType,
+        collection
+      );
+    } catch (err) {
+      // Vercel Blob-style adapters require a different upload flow
+      // (`handleUpload` in the route), not pre-signed URLs. Surface a
+      // 400 with the canonical "use the standard upload endpoint" hint.
+      if (
+        err instanceof Error &&
+        err.message.toLowerCase().includes("handleupload")
+      ) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "collection",
+              code: "ADAPTER_UNSUPPORTED",
+              message:
+                "This storage provider does not support pre-signed upload URLs. Use the standard upload endpoint instead.",
+            },
+          ],
+          logContext: {
+            collection,
+            reason: "adapter-no-presigned-urls",
+            cause: err.message,
+          },
+        });
+      }
+      throw err;
+    }
 
     if (!uploadData) {
-      return errorResponse(
-        "Failed to generate upload URL. The storage plugin may not support client uploads.",
-        500
-      );
+      throw NextlyError.internal({
+        logContext: {
+          collection,
+          reason: "presigned-url-generation-returned-null",
+        },
+      });
     }
 
-    return successResponse(uploadData, 200);
-  } catch (error) {
-    return handleError(error, "Generate upload URL");
+    return createSuccessResponse(uploadData);
   }
-}
+);

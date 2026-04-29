@@ -14,6 +14,15 @@
  * export { GET, POST } from '@revnixhq/nextly/api/user-fields';
  * ```
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: <result> }` envelope per spec §10.2. The legacy
+ * GET response carried both the field list and the user `adminConfig` in
+ * `meta` — but spec §10.2 reserves `meta` for pagination only. The
+ * canonical replacement is `{ data: { fields, adminConfig? } }` (same
+ * structured-data pattern as api-keys.ts `createApiKey` returning
+ * `{ data: { doc, key } }`). Validation flows through
+ * `nextlyValidationFromZod` (F11).
+ *
  * @module api/user-fields
  */
 
@@ -21,18 +30,14 @@ import { z } from "zod";
 
 import { container } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
-// ============================================================
-// Helper Functions
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-/**
- * Get the UserFieldDefinitionService from the DI container.
- * Uses getNextly() to ensure services are initialized with config.
- */
 async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionService> {
   await getNextly();
   return container.get<UserFieldDefinitionService>(
@@ -40,104 +45,38 @@ async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionServi
   );
 }
 
-/**
- * Create a success response with data and optional meta
- */
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>
-): Response {
-  return Response.json(
-    {
-      data,
-      ...(meta && { meta }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+function requireAuthHeader(request: Request): void {
+  if (!request.headers.get("Authorization")) {
+    throw NextlyError.authRequired();
+  }
 }
 
-/**
- * Create an error response
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
+async function readJsonBody(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
       },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+      logContext: { reason: "invalid-json-body" },
+    });
+  }
 }
 
-/**
- * Handle errors from service layer
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[User Fields API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof z.ZodError) {
-    const firstError = error.issues[0];
-    return errorResponse(
-      firstError?.message || "Validation error",
-      400,
-      "VALIDATION_ERROR"
-    );
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Check for authentication header.
- * Returns error response if not authenticated, null if authenticated.
- */
-function checkAuthentication(request: Request): Response | null {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
-  }
-  return null;
-}
-
-// ============================================================
-// Validation Schemas
-// ============================================================
-
-/**
- * Option schema for select/radio field types
- */
 const optionSchema = z.object({
   label: z.string().min(1, "Option label is required"),
   value: z.string().min(1, "Option value is required"),
 });
 
-/**
- * Schema for creating a new user field definition
- */
 const createFieldSchema = z.object({
   name: z
     .string()
@@ -173,10 +112,6 @@ const createFieldSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-// ============================================================
-// Route Handlers
-// ============================================================
-
 /**
  * GET handler for listing all user field definitions.
  *
@@ -186,39 +121,38 @@ const createFieldSchema = z.object({
  * Response Codes:
  * - 200 OK: Field definitions list retrieved successfully
  * - 401 Unauthorized: Authentication required
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Failed to fetch field definitions
  *
- * @param request - Next.js Request object
- * @returns Response with JSON field definitions list
+ * Response: `{ "data": { "fields": UserFieldDefinition[], "adminConfig"?:
+ * UsersAdminConfig } }`. The structured-data shape replaces the legacy
+ * `{ data: [...], meta: { total, ...adminConfig } }` because spec §10.2
+ * reserves `meta` for pagination only — admin code must read
+ * `data.fields` and `data.adminConfig` instead of `data` / `meta`.
  *
  * @example
  * ```bash
  * curl -H "Authorization: Bearer <token>" \
  *   "http://localhost:3000/api/user-fields"
- * # => {"data":[...],"meta":{"total":5}}
+ * # => {"data":{"fields":[...],"adminConfig":{...}}}
  * ```
  */
-export async function GET(request: Request): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const GET = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    requireAuthHeader(request);
 
     const service = await getUserFieldDefinitionService();
     const fields = await service.listFields();
 
-    // Read user admin config (listFields, group) from defineConfig()
+    // Read user admin config (listFields, group) from defineConfig().
     const config = container.get<NextlyServiceConfig>("config");
     const adminConfig = config?.users?.admin ?? undefined;
 
-    return successResponse(fields, 200, {
-      total: fields.length,
+    return createSuccessResponse({
+      fields,
       ...(adminConfig && { adminConfig }),
     });
-  } catch (error) {
-    return handleError(error, "List user field definitions");
   }
-}
+);
 
 /**
  * POST handler for creating a new user field definition.
@@ -227,71 +161,38 @@ export async function GET(request: Request): Promise<Response> {
  * The `source` is automatically set to `'ui'`. Code-sourced fields are
  * managed via `defineConfig()` and synced on startup.
  *
- * Request Body:
- * - name: Field name (alphanumeric, starts with letter) (required)
- * - label: Display label (required)
- * - type: Field type - text, textarea, number, email, select, radio, checkbox, date (required)
- * - required: Whether the field is required (optional, default: false)
- * - defaultValue: Default value (optional)
- * - options: Array of {label, value} for select/radio types (optional)
- * - placeholder: Input placeholder text (optional)
- * - description: Help text shown below field (optional)
- * - sortOrder: Display order, lower first (optional, auto-assigned)
- * - isActive: Enable field (optional, default: true)
+ * Request Body: see `createFieldSchema` above for the full shape.
  *
  * Response Codes:
  * - 201 Created: Field definition created successfully
  * - 400 Bad Request: Invalid input
  * - 401 Unauthorized: Authentication required
  * - 409 Conflict: Field name already exists
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Creation failed
  *
- * @param request - Next.js Request object with JSON body
- * @returns Response with JSON created field definition
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/user-fields', {
- *   method: 'POST',
- *   headers: {
- *     'Content-Type': 'application/json',
- *     'Authorization': 'Bearer <token>',
- *   },
- *   body: JSON.stringify({
- *     name: 'company',
- *     label: 'Company',
- *     type: 'text',
- *     placeholder: 'Enter company name',
- *   }),
- * });
- * const { data: field } = await response.json();
- * ```
+ * Response: `{ "data": UserFieldDefinition }` — created field. Status 201.
  */
-export async function POST(request: Request): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const POST = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    requireAuthHeader(request);
 
-    const service = await getUserFieldDefinitionService();
+    const body = await readJsonBody(request);
 
-    let body: unknown;
+    let validated: z.infer<typeof createFieldSchema>;
     try {
-      body = await request.json();
-    } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      validated = createFieldSchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
     }
 
-    const validated = createFieldSchema.parse(body);
-
-    // Force source to 'ui' — code-sourced fields are managed via defineConfig()
+    const service = await getUserFieldDefinitionService();
+    // Force source to 'ui' — code-sourced fields are managed via defineConfig().
     const field = await service.createField({
       ...validated,
       source: "ui",
     });
 
-    return successResponse(field, 201);
-  } catch (error) {
-    return handleError(error, "Create user field definition");
+    return createSuccessResponse(field, { status: 201 });
   }
-}
+);
