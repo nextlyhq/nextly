@@ -20,6 +20,7 @@ import { registerBuildCommand } from "./commands/build.js";
 import { registerDbSyncCommand } from "./commands/db-sync.js";
 import { registerGenerateTypesCommand } from "./commands/generate-types.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerMigrateCheckCommand } from "./commands/migrate-check.js";
 import { registerMigrateCreateCommand } from "./commands/migrate-create.js";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh.js";
 // F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
@@ -203,6 +204,7 @@ function registerCommands(program: Command): void {
   // Migration commands (F11: forward-only; no rollback commands).
   registerMigrateCommand(program); // Imported from ./commands/migrate.js
   registerMigrateCreateCommand(program);
+  registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateFreshCommand(program);
 

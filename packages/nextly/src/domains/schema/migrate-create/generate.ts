@@ -186,8 +186,12 @@ export async function generateMigration(
  * components. Each entity becomes a TableSpec via the shared
  * buildDesiredTableFromFields helper used by the apply pipeline — keeps
  * the desired-snapshot shape consistent across consumers.
+ *
+ * F11 PR 4: exported (was internal in PR 3) so `migrate:check` can build
+ * the desired snapshot for the drift check without spinning up the full
+ * generateMigration orchestrator.
  */
-function buildDesiredSnapshotFromConfig(
+export function buildDesiredSnapshotFromConfig(
   collections: MinimalConfigEntity[],
   singles: MinimalConfigEntity[],
   components: MinimalConfigEntity[],
