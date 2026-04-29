@@ -36,8 +36,9 @@ import { withErrorHandler } from "./with-error-handler";
 function getMediaService(): MediaService {
   if (!isServicesRegistered()) {
     // Per F10 / Task 6: surface initialization failures via the canonical
-    // 503 factory; the public message stays "The service is temporarily
-    // unavailable." while operators see the setup hint in `logContext`.
+    // 503 factory so the public response sticks to the §13.8-canonical
+    // sentence emitted by `serviceUnavailable()`. The setup hint goes to
+    // `logContext` so operators see it without leaking into the wire.
     throw NextlyError.serviceUnavailable({
       logMessage: "Media bulk handler called before registerServices()",
       logContext: {
