@@ -259,8 +259,10 @@ export const POST = withErrorHandler(async (request: Request) => {
   return createSuccessResponse(collection, { status: 201 });
 });
 
-// NOTE: previewSchemaChanges and applySchemaChanges were previously defined here
-// as orphaned functions (no route handler pointed to them). They have been replaced
-// by the SchemaChangeService, which is called via the dispatcher:
-//   POST /api/collections/schema/{slug}/preview -> dispatcher -> SchemaChangeService.preview()
-//   POST /api/collections/schema/{slug}/apply   -> dispatcher -> SchemaChangeService.apply()
+// NOTE: previewSchemaChanges and applySchemaChanges live in the
+// dispatcher (collection-dispatcher.ts). Wire-routes:
+//   POST /api/collections/schema/{slug}/preview -> dispatcher.previewSchemaChanges()
+//     -> pipeline/preview.ts (Phase A diff + Phase B classify)
+//     -> legacy-preview/translate.ts (legacy SchemaPreviewResult shape)
+//   POST /api/collections/schema/{slug}/apply -> dispatcher.applySchemaChanges()
+//     -> applyDesiredSchema (full pipeline including pre-cleanup + pushSchema)

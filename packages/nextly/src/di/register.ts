@@ -330,41 +330,14 @@ export async function registerServices(
     }
   }
 
-  // Register SchemaChangeService for schema change confirmation flow.
-  // Depends on adapter, SchemaRegistry (from initializeSchemaRegistry),
-  // and DrizzlePushService. Created after schema registry is initialized.
-  try {
-    const dialect = adapter.getCapabilities().dialect;
-    if (schemaRegistry) {
-      const { DrizzlePushService } = await import(
-        "../domains/schema/services/drizzle-push-service.js"
-      );
-      const pushService = new DrizzlePushService(dialect, adapter.getDrizzle());
-      container.registerSingleton("drizzlePushService", () => pushService);
-
-      const { SchemaChangeService } = await import(
-        "../services/schema/schema-change-service.js"
-      );
-      const schemaChangeService = new SchemaChangeService(
-        adapter,
-        schemaRegistry,
-        pushService
-      );
-      // Wire schema version bump callback for API response header
-      try {
-        const { bumpSchemaVersion } = await import("../routeHandler.js");
-        schemaChangeService.setOnApplySuccess(bumpSchemaVersion);
-      } catch {
-        // routeHandler may not be available in CLI-only contexts
-      }
-      container.registerSingleton(
-        "schemaChangeService",
-        () => schemaChangeService
-      );
-    }
-  } catch {
-    // SchemaChangeService init failed - confirmation flow unavailable
-  }
+  // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
+  // removed. The legacy preview path now uses pipeline/preview.ts +
+  // legacy-preview/translate.ts (no DI lookup); the apply path uses
+  // applyDesiredSchema (already DI-wired). bumpSchemaVersion is now
+  // called directly from the dispatcher's apply handler after a
+  // successful pipeline apply (was previously wired via
+  // SchemaChangeService.setOnApplySuccess). PR 4 deletes the legacy
+  // service classes themselves.
 
   container.registerSingleton<Logger>("logger", () => resolvedLogger);
   container.registerSingleton<NextlyServiceConfig>(
@@ -853,42 +826,123 @@ async function syncCodeFirstCollections(
     `Auto-syncing ${collectionsNeedingTableSync.length} collection table(s)...`
   );
 
+  // F8 PR 3: route auto-sync through the F2 applyDesiredSchema pipeline.
+  // Was SchemaPushService.syncSchema() with `{ force: true,
+  // skipExistingTables: true }` — legacy idiom for "create missing
+  // tables, leave existing alone." We preserve that semantic by
+  // filtering down to only collections whose physical tables DO NOT
+  // EXIST before invoking the pipeline. Why this matters:
+  //
+  //   The pipeline runs the classifier on every diff. If we passed
+  //   collections with existing tables, the classifier could emit
+  //   add_not_null_with_nulls or add_required_field_no_default events
+  //   for drift between the live table and the new config. Those
+  //   events trigger the (terminal) PromptDispatcher, which throws
+  //   TTYRequiredError on production deploys (Docker, PM2, systemd).
+  //   That would crash boot where the legacy code silently skipped.
+  //
+  //   By restricting to truly-missing tables, the pipeline only sees
+  //   add_table ops — pure additive, no prompts, no TTY dependency.
+  //
+  //   Drift on existing tables is intentionally not handled here —
+  //   the dev-server.ts auto-sync (manual `nextly db:sync`) and the
+  //   HMR reload-config path remain the canonical drift-handling
+  //   entry points (those have a TTY and accept prompts).
   try {
-    const { SchemaPushService } = await import(
-      "../domains/schema/services/schema-push-service.js"
+    const { applyDesiredSchema } = await import(
+      "../domains/schema/pipeline/index.js"
     );
-    const schemaPushService = new SchemaPushService(adapter, logger);
-
-    // Inline sanitize the service config's user-facing fields into a
-    // SanitizedNextlyConfig so schema-push doesn't need to re-check nils.
-    // We only pass what SchemaPushService actually reads (collections,
-    // plugins, db paths, etc.) — everything else is N/A for auto-sync.
-    const { sanitizeConfig } = await import("../shared/types/config.js");
-    const pushResult = await schemaPushService.syncSchema(
-      sanitizeConfig({
-        collections: transformedConfig.collections,
-        singles: transformedConfig.singles,
-        components: transformedConfig.components,
-        plugins: transformedConfig.plugins,
-      }),
-      collectionsNeedingTableSync,
-      { force: true, skipExistingTables: true }
+    const { generateRuntimeSchema } = await import(
+      "../domains/schema/services/runtime-schema-generator.js"
     );
+    type DesiredCollection =
+      import("../domains/schema/pipeline/types.js").DesiredCollection;
 
-    for (const synced of pushResult.synced) {
-      await collectionRegistry
-        .updateMigrationStatus(synced.slug, "applied")
-        .catch(() => {});
-      logger.info?.(`Created table ${synced.tableName} for ${synced.slug}`);
+    const collectionsToSyncSet = new Set(collectionsNeedingTableSync);
+    const desiredCollections: Record<string, DesiredCollection> = {};
+    const slugsAfterFilter: string[] = [];
+    for (const collection of transformedConfig.collections) {
+      if (!collectionsToSyncSet.has(collection.slug)) continue;
+      const baseTableName =
+        collection.dbName ?? collection.slug.replace(/-/g, "_");
+      const tableName = baseTableName.startsWith("dc_")
+        ? baseTableName
+        : `dc_${baseTableName}`;
 
-      // Register the new table in the SchemaRegistry so adapter CRUD works.
+      // Skip collections whose tables already exist — the pipeline's
+      // diff would compare against the live table and could emit
+      // interactive events. Mirrors legacy `skipExistingTables: true`.
+      let tableExists = false;
       try {
-        const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator.js"
+        tableExists = await adapter.tableExists(tableName);
+      } catch {
+        // Defensive: treat introspect failure as "table missing" so
+        // the pipeline can attempt to create it. If it really exists
+        // and we're wrong, drizzle-kit will emit `CREATE TABLE IF NOT
+        // EXISTS`-equivalent semantics or a no-op diff.
+      }
+      if (tableExists) {
+        logger.info?.(
+          `Table ${tableName} already exists for ${collection.slug}, skipping`
         );
-        const syncDialect = adapter.getCapabilities().dialect;
+        // Still mark as applied so the registry status reflects reality.
+        await collectionRegistry
+          .updateMigrationStatus(collection.slug, "applied")
+          .catch(() => {});
+        continue;
+      }
+
+      desiredCollections[collection.slug] = {
+        slug: collection.slug,
+        tableName,
+        fields: collection.fields ?? [],
+      };
+      slugsAfterFilter.push(collection.slug);
+    }
+
+    if (slugsAfterFilter.length === 0) {
+      // Every collection that was flagged for sync now has a table —
+      // legacy behavior was to silently return here too.
+      return;
+    }
+
+    const result = await applyDesiredSchema(
+      {
+        collections: desiredCollections,
+        singles: {},
+        components: {},
+      },
+      "code",
+      { promptChannel: "terminal" }
+    );
+
+    if (!result.success) {
+      logger.warn?.(
+        `Auto-sync tables failed (${result.error.code}): ${result.error.message}`
+      );
+      return;
+    }
+
+    // Post-apply: update migration_status + register runtime schemas in
+    // the adapter resolver. The pipeline owns CREATE TABLE; these are
+    // app-level concerns that stay in the boot path. Iterates only
+    // slugs that actually went through the pipeline (post-filter).
+    const syncDialect = adapter.getCapabilities().dialect;
+    for (const slug of slugsAfterFilter) {
+      const desired = desiredCollections[slug];
+      if (!desired) continue;
+      await collectionRegistry
+        .updateMigrationStatus(slug, "applied")
+        .catch(() => {});
+      logger.info?.(`Created table ${desired.tableName} for ${slug}`);
+
+      try {
+        // Read fields back from dynamic_collections (the pipeline's
+        // apply already wrote them) so the runtime schema mirrors
+        // exactly what's in the DB. Belt-and-braces against any in-
+        // memory drift between transformedConfig and persisted state.
         const rows = await adapter.executeQuery<{ fields: string }>(
-          `SELECT fields FROM dynamic_collections WHERE table_name = '${synced.tableName}'`
+          `SELECT fields FROM dynamic_collections WHERE table_name = '${desired.tableName}'`
         );
         if (rows[0]) {
           const fields =
@@ -897,7 +951,7 @@ async function syncCodeFirstCollections(
               : rows[0].fields;
           if (Array.isArray(fields) && fields.length > 0) {
             const { table: runtimeTable } = generateRuntimeSchema(
-              synced.tableName,
+              desired.tableName,
               fields,
               syncDialect
             );
@@ -915,17 +969,13 @@ async function syncCodeFirstCollections(
               resolver &&
               typeof resolver.registerDynamicSchema === "function"
             ) {
-              resolver.registerDynamicSchema(synced.tableName, runtimeTable);
+              resolver.registerDynamicSchema(desired.tableName, runtimeTable);
             }
           }
         }
       } catch {
         // Non-fatal: schema will be registered on next server restart.
       }
-    }
-
-    for (const error of pushResult.errors) {
-      logger.warn?.(`Failed to create table for ${error.slug}: ${error.error}`);
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);

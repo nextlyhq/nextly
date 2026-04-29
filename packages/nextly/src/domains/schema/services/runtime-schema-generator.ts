@@ -81,7 +81,7 @@ export function generateRuntimeSchema(
       table = generateSQLiteSchema(tableName, fields);
       break;
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
   return {
     table,
@@ -99,7 +99,9 @@ function generatePostgresSchema(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle ORM requires dialect-specific column builders
   const columns: Record<string, any> = {
-    // Standard columns that SchemaPushService always creates
+    // Standard system columns mirrored by buildDesiredTableFromFields
+    // so the diff engine sees the same desired shape this generator
+    // produces at runtime. Match those two paths if you change this list.
     id: pgText("id").primaryKey(),
     // Title column added unless explicitly defined in fields
     ...(hasTitleField ? {} : { title: pgText("title").notNull() }),
@@ -130,7 +132,9 @@ function generateMySQLSchema(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle ORM requires dialect-specific column builders
   const columns: Record<string, any> = {
-    // Standard columns that SchemaPushService always creates
+    // Standard system columns mirrored by buildDesiredTableFromFields
+    // so the diff engine sees the same desired shape this generator
+    // produces at runtime. Match those two paths if you change this list.
     id: mysqlVarchar("id", { length: 36 }).primaryKey(),
     // Title column added unless explicitly defined in fields
     ...(hasTitleField
@@ -164,7 +168,9 @@ function generateSQLiteSchema(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle ORM requires dialect-specific column builders
   const columns: Record<string, any> = {
-    // Standard columns that SchemaPushService always creates
+    // Standard system columns mirrored by buildDesiredTableFromFields
+    // so the diff engine sees the same desired shape this generator
+    // produces at runtime. Match those two paths if you change this list.
     id: sqliteText("id").primaryKey(),
     // Title column added unless explicitly defined in fields
     ...(hasTitleField ? {} : { title: sqliteText("title").notNull() }),
