@@ -95,15 +95,6 @@
     "vitest": "^4.0.8"
   },
   "prettier": "@nextly/prettier-config",
-  "lint-staged": {
-    "*.{js,jsx,ts,tsx}": [
-      "eslint --fix",
-      "prettier --write"
-    ],
-    "*.{json,css,scss,md}": [
-      "prettier --write"
-    ]
-  },
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=18"
