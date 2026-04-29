@@ -50,6 +50,10 @@ function writeLastSeen(value: string): void {
 
 export function useUnreadCount(rows: JournalRow[]): UseUnreadCountResult {
   const queryClient = useQueryClient();
+  // Per-tab state: another tab's `markAllSeen()` does NOT propagate
+  // here. Spec §12 defers BroadcastChannel; the visibilitychange
+  // refresh below is enough for the common single-tab + brief-multitab
+  // workflow.
   const [lastSeen, setLastSeen] = useState<string | null>(() => readLastSeen());
 
   // Re-fetch the journal whenever the admin tab becomes visible. This

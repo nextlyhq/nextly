@@ -18,12 +18,12 @@
 import { useState } from "react";
 
 import { Button } from "@admin/components/ui";
-import { useJournal } from "@admin/hooks/queries/useJournal";
-import type { JournalRow } from "@admin/services/journalApi";
+import { JOURNAL_PAGE_SIZE, useJournal } from "@admin/hooks/queries/useJournal";
+import { journalApi, type JournalRow } from "@admin/services/journalApi";
 
 import { NotificationRow } from "./NotificationRow";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = JOURNAL_PAGE_SIZE;
 
 export function NotificationDropdown(): JSX.Element {
   const [extraRows, setExtraRows] = useState<JournalRow[]>([]);
@@ -51,7 +51,6 @@ export function NotificationDropdown(): JSX.Element {
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const { journalApi } = await import("@admin/services/journalApi");
       const next = await journalApi.list({
         limit: PAGE_SIZE,
         before: oldestStartedAt,

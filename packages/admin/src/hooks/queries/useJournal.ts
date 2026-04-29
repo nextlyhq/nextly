@@ -20,9 +20,18 @@ import {
 
 export const JOURNAL_QUERY_KEY = ["schema", "journal"] as const;
 
+// Default page size for the journal queries. Single source of truth
+// shared by the bell (badge math + first-page fetch) and the dropdown
+// (load-more cursor) so they can never diverge on page size.
+export const JOURNAL_PAGE_SIZE = 20;
+
 export function useJournal(params: ListJournalParams = {}) {
   return useQuery<JournalListResponse, Error>({
-    queryKey: [...JOURNAL_QUERY_KEY, params.limit ?? 20, params.before ?? null],
+    queryKey: [
+      ...JOURNAL_QUERY_KEY,
+      params.limit ?? JOURNAL_PAGE_SIZE,
+      params.before ?? null,
+    ],
     queryFn: () => journalApi.list(params),
     staleTime: 10_000,
     gcTime: 5 * 60 * 1000,

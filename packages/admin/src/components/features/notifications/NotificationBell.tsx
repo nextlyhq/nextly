@@ -15,7 +15,7 @@ import { Bell } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@admin/components/ui";
-import { useJournal } from "@admin/hooks/queries/useJournal";
+import { JOURNAL_PAGE_SIZE, useJournal } from "@admin/hooks/queries/useJournal";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
@@ -34,7 +34,7 @@ export function NotificationBell({ className }: NotificationBellProps) {
   // The journal query is fetched here even when the popover is closed
   // because the badge needs the row list to compute `unread`. Fetched
   // lazily-once via React Query's stale-time; cheap.
-  const { data } = useJournal({ limit: 20 });
+  const { data } = useJournal({ limit: JOURNAL_PAGE_SIZE });
   const rows = data?.rows ?? [];
   const { unread, markAllSeen } = useUnreadCount(rows);
 

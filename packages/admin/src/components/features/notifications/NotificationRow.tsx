@@ -40,6 +40,9 @@ export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
       )}
       role={expandable ? "button" : undefined}
       tabIndex={expandable ? 0 : undefined}
+      // a11y: announce the disclosure state so screen readers can tell
+      // the user whether the inline error pre is currently expanded.
+      aria-expanded={expandable ? expanded : undefined}
       onClick={expandable ? () => setExpanded(v => !v) : undefined}
       onKeyDown={
         expandable
