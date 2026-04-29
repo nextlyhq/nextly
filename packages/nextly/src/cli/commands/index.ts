@@ -56,11 +56,8 @@ export {
   type MigrateFreshCommandOptions,
 } from "./migrate-fresh.js";
 
-export {
-  registerMigrateResetCommand,
-  runMigrateReset,
-  type MigrateResetCommandOptions,
-} from "./migrate-reset.js";
+// F11 PR 2 (Q4=A): migrate:reset removed (forward-only model). Operators
+// who relied on rollback should write a new corrective migration instead.
 
 // Init command
 export {
