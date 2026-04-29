@@ -122,7 +122,14 @@ export function createErrorFromSingleResult(
 }
 
 /**
- * Map an HTTP status code to a canonical `NextlyErrorCode` string.
+ * Map an HTTP status code to the primary canonical `NextlyErrorCode` string
+ * for that status. Mirrors the inverse of `NEXTLY_ERROR_STATUS` from
+ * `error-codes.ts`, picking the most specific representative code per status.
+ *
+ * Statuses outside this table fall back to `INTERNAL_ERROR` — service-layer
+ * results that need a more specific code (e.g. `BUSINESS_RULE_VIOLATION` at
+ * 422) should throw `NextlyError` directly rather than returning a result
+ * shape that funnels through this helper.
  */
 export function statusCodeToErrorCode(statusCode: number): string {
   switch (statusCode) {
@@ -136,6 +143,18 @@ export function statusCodeToErrorCode(statusCode: number): string {
       return "NOT_FOUND";
     case 409:
       return "CONFLICT";
+    case 413:
+      return "PAYLOAD_TOO_LARGE";
+    case 415:
+      return "UNSUPPORTED_MEDIA_TYPE";
+    case 422:
+      return "INVALID_INPUT";
+    case 429:
+      return "RATE_LIMITED";
+    case 502:
+      return "EXTERNAL_SERVICE_ERROR";
+    case 503:
+      return "SERVICE_UNAVAILABLE";
     default:
       return "INTERNAL_ERROR";
   }

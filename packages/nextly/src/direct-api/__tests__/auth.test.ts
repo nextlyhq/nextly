@@ -128,7 +128,7 @@ describe("Direct API - Auth Operations", () => {
       mocks.userAccountService.getCurrentUser.mockRejectedValue(notFound);
 
       await expect(nextly.me({ user: { id: "missing" } })).rejects.toMatchObject(
-        { code: "NOT_FOUND" }
+        { code: "NOT_FOUND", logContext: { userId: "missing" } }
       );
     });
 
@@ -186,7 +186,10 @@ describe("Direct API - Auth Operations", () => {
 
       await expect(
         nextly.updateMe({ user: { id: "missing" }, data: { name: "X" } })
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      ).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        logContext: { userId: "missing" },
+      });
     });
   });
 
