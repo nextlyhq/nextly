@@ -38,6 +38,83 @@ export default [
       ],
     },
   },
+  // F11 PR 5: prevent the deployed app's runtime code from importing
+  // any migrate-* CLI module. The CLI commands (migrate, migrate:create,
+  // migrate:check, migrate:status, migrate:fresh) are intended to be
+  // invoked manually before deploy — never from a request graph or
+  // boot-time path. See docs/guides/production-migrations.mdx.
+  //
+  // Scoped to the runtime folders listed below so that the CLI source
+  // (cli/), the schema-domain (domains/schema/), and tests can still
+  // freely cross-reference the migrate-* modules.
+  //
+  // We use the `regex` matcher (not `group`) because relative imports
+  // like `../cli/commands/migrate.js` aren't matched by minimatch's
+  // `**` traversal. The regex matches any path containing
+  // `cli/commands/migrate` (with or without -create / -check / etc).
+  {
+    files: [
+      "src/init/**/*.ts",
+      "src/route-handler/**/*.ts",
+      "src/dispatcher/**/*.ts",
+      "src/api/**/*.ts",
+      "src/actions/**/*.ts",
+      "src/direct-api/**/*.ts",
+      "src/routeHandler.ts",
+      "src/next.ts",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            // Re-state the drizzle-kit-lazy ban here so this overrides
+            // block doesn't accidentally relax it for init/. ESLint
+            // applies the LAST matching rule, not a union.
+            //
+            // Notes on patterns: eslint's `no-restricted-imports`
+            // patterns use minimatch with default options. `**` does
+            // NOT match `..`, so we list per-depth patterns explicitly.
+            // Two-segment depth covers init/, three-segment depth
+            // covers route-handler/handler/, etc. Trailing `.*`
+            // matches the `.js` / `.ts` extension.
+            {
+              group: [
+                "**/database/drizzle-kit-lazy",
+                "**/database/drizzle-kit-lazy.*",
+                "../database/drizzle-kit-lazy",
+                "../database/drizzle-kit-lazy.*",
+                "../../database/drizzle-kit-lazy",
+                "../../database/drizzle-kit-lazy.*",
+                "../../../database/drizzle-kit-lazy",
+                "../../../database/drizzle-kit-lazy.*",
+              ],
+              message:
+                "Handlers must not import drizzle-kit-lazy directly. Call a service in domains/schema/services/ instead.",
+            },
+            {
+              group: [
+                "**/cli/commands/migrate",
+                "**/cli/commands/migrate.*",
+                "**/cli/commands/migrate-*",
+                "../cli/commands/migrate",
+                "../cli/commands/migrate.*",
+                "../cli/commands/migrate-*",
+                "../../cli/commands/migrate",
+                "../../cli/commands/migrate.*",
+                "../../cli/commands/migrate-*",
+                "../../../cli/commands/migrate",
+                "../../../cli/commands/migrate.*",
+                "../../../cli/commands/migrate-*",
+              ],
+              message:
+                "F11: deployed runtime must not import migrate-* CLI modules. Migrations are a CLI-only concern. See docs/guides/production-migrations.mdx.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     ignores: [
       ".tsup/**",

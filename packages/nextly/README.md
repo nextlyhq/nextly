@@ -491,6 +491,23 @@ import type {
 - Hooks system for extensibility
 - Plugin architecture with type-safe context
 
+## Production deploys
+
+Nextly uses a CLI-driven migration workflow for production schema changes. Migrations are committed as `.sql` files; a CI step runs `nextly migrate` against the production database before the new app code is deployed. The deployed app never touches schema.
+
+```bash
+# Local: edit nextly.config.ts, then generate the migration
+nextly migrate:create --name=add_excerpt
+
+# CI: verify integrity + apply
+nextly migrate:check
+nextly migrate                  # against $DATABASE_URL
+
+# Then deploy your app
+```
+
+See the [Production migrations guide](https://nextlyhq.com/docs/guides/production-migrations) for Vercel + GitHub Actions, Vercel build step, and other-platform setups.
+
 ## Related Packages
 
 - `@nextly/admin` - Admin dashboard and management interface

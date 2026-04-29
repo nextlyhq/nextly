@@ -3,6 +3,10 @@
  *
  * Implements the `nextly migrate:status` command for displaying migration status.
  *
+ * **Runtime restriction (F11 PR 5):** This module is CLI-only. Do NOT
+ * import it from runtime code. Enforced by ESLint; see
+ * docs/guides/production-migrations.mdx.
+ *
  * @module cli/commands/migrate-status
  * @since 1.0.0
  *

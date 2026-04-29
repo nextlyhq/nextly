@@ -4,6 +4,11 @@
  * Implements the `nextly migrate:fresh` command for dropping all tables
  * and re-running all migrations from scratch.
  *
+ * **Runtime restriction (F11 PR 5):** This module is CLI-only. Do NOT
+ * import it from runtime code. Enforced by ESLint; see
+ * docs/guides/production-migrations.mdx. `migrate:fresh` is a destructive
+ * local-dev convenience and never appropriate for production use.
+ *
  * @module cli/commands/migrate-fresh
  * @since 1.0.0
  *

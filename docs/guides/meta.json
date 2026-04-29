@@ -1,4 +1,10 @@
 {
   "title": "Guides",
-  "pages": ["deployment", "authentication", "media-storage", "email"]
+  "pages": [
+    "deployment",
+    "production-migrations",
+    "authentication",
+    "media-storage",
+    "email"
+  ]
 }
