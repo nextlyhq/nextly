@@ -60,9 +60,11 @@ interface MediaApiResponse<T = unknown> {
 /**
  * Shared fetch wrapper for media API endpoints.
  *
- * The media backend uses `/api/media` (not `/admin/api`) and returns
- * `{ success, data, meta, message }` responses. This helper handles
- * both HTTP errors and application-level `success: false` responses.
+ * The backend now returns canonical `{ data, meta? }` responses (per spec
+ * §10.2). This helper synthesizes the legacy `MediaApiResponse<T>` shape
+ * (`{ success, data, meta, message, statusCode }`) so the existing callers
+ * keep working without touching every call site — `success: true` is implied
+ * by a 2xx response and the legacy `message` field is empty.
  */
 async function mediaFetch<T>(
   url: string,
@@ -75,13 +77,18 @@ async function mediaFetch<T>(
     throw parseApiError(json, response.status);
   }
 
-  const result: MediaApiResponse<T> = await response.json();
+  const json = (await response.json()) as {
+    data?: T;
+    meta?: Record<string, unknown>;
+  };
 
-  if (!result.success) {
-    throw new Error(result.message || "Request failed");
-  }
-
-  return result;
+  return {
+    success: true,
+    data: json.data,
+    meta: json.meta,
+    statusCode: response.status,
+    message: "",
+  };
 }
 
 // ============================================================
@@ -169,25 +176,27 @@ export async function uploadMedia(
   }
 
   if (result.status >= 200 && result.status < 300) {
+    // Canonical wire shape per spec §10.2: { data: Media }.
     try {
       const response = JSON.parse(result.responseText);
-      if (response.success && response.data) {
+      if (response.data) {
         return response.data as Media;
       }
-      throw new Error(response.message || "Upload failed");
+      throw new Error("Upload succeeded but server returned no data.");
     } catch (err) {
       if (err instanceof Error) throw err;
       throw new Error("Failed to parse server response");
     }
   }
 
+  // Non-2xx: parse the canonical error response and surface it via parseApiError.
+  let parsed: unknown = null;
   try {
-    const response = JSON.parse(result.responseText);
-    throw new Error(response.message || `Upload failed: ${result.status}`);
-  } catch (err) {
-    if (err instanceof Error) throw err;
-    throw new Error(`Upload failed: ${result.status}`);
+    parsed = JSON.parse(result.responseText);
+  } catch {
+    // ignore parse failure — fall through to the generic message
   }
+  throw parseApiError(parsed, result.status);
 }
 
 // ============================================================
@@ -283,22 +292,27 @@ export async function bulkDeleteMedia(mediaIds: string[]): Promise<{
     throw parseApiError(json, response.status);
   }
 
-  const result = await response.json();
-
-  interface BulkDeleteResult {
-    success: boolean;
-    mediaId: string;
-  }
+  // Canonical wire shape per spec §10.2:
+  //   { data: { totalFiles, successCount, failureCount, results: [...] } }.
+  // The legacy code read the bulk-result fields at the top level, which
+  // returned undefined under the canonical shape and silently reported a
+  // zero-success false-positive.
+  const json = (await response.json()) as {
+    data?: {
+      totalFiles?: number;
+      successCount?: number;
+      failureCount?: number;
+      results?: Array<{ success: boolean; mediaId: string }>;
+    };
+  };
+  const data = json.data ?? {};
 
   return {
-    success: result.success,
-    total: result.totalFiles || mediaIds.length,
-    successCount: result.successCount || 0,
-    failureCount: result.failureCount || 0,
-    failed:
-      result.results
-        ?.filter((r: BulkDeleteResult) => !r.success)
-        .map((r: BulkDeleteResult) => r.mediaId) || [],
+    success: (data.failureCount ?? 0) === 0,
+    total: data.totalFiles ?? mediaIds.length,
+    successCount: data.successCount ?? 0,
+    failureCount: data.failureCount ?? 0,
+    failed: data.results?.filter(r => !r.success).map(r => r.mediaId) ?? [],
   };
 }
 

@@ -16,9 +16,7 @@ import {
   Skeleton,
   TableSkeleton,
 } from "@revnixhq/ui";
-import {
-  Columns,
-} from "lucide-react";
+import { Columns } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -344,13 +342,13 @@ export default function UserTable() {
 
   // Build custom field columns from listFields config
   const customColumns = useMemo((): Column<UserApiResponse>[] => {
-    if (!fieldsData?.data || !fieldsData.meta?.adminConfig?.listFields) {
+    if (!fieldsData?.fields || !fieldsData.adminConfig?.listFields) {
       return [];
     }
 
-    const { listFields: configListFields } = fieldsData.meta.adminConfig;
+    const { listFields: configListFields } = fieldsData.adminConfig;
     const activeFieldMap = new Map<string, UserFieldDefinitionRecord>(
-      fieldsData.data.filter(f => f.isActive).map(f => [f.name, f])
+      fieldsData.fields.filter(f => f.isActive).map(f => [f.name, f])
     );
 
     const cols: Column<UserApiResponse>[] = [];

@@ -463,8 +463,8 @@ function UserFieldsTable() {
 
   // Sync local fields with server data
   useEffect(() => {
-    if (data?.data) {
-      setLocalFields(data.data);
+    if (data?.fields) {
+      setLocalFields(data.fields);
     }
   }, [data]);
 
