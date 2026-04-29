@@ -40,6 +40,7 @@ import {
   shutdownServices,
 } from "./di/register";
 import { getNextly as getDirectAPI } from "./direct-api/nextly";
+import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
@@ -222,41 +223,31 @@ export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
         console.log(`  - RETURNING support: ${capabilities.supportsReturning}`);
         console.log(`  - Full-text search: ${capabilities.supportsFts}`);
 
-        // F8 PR 6: first-run + drift check. On a brand-new DB this
-        // creates the static system tables (so `next dev` works without
-        // a prior `nextly db:sync`). On an existing DB it logs a
-        // single warning if config has drifted from live schema.
-        // Failures are logged but do NOT block boot — the post-init
-        // tasks below tolerate missing tables.
-        try {
-          const config = getService("config");
-          const driftLogger = {
-            debug: (msg: string) => console.debug(msg),
-            info: (msg: string) => console.log(msg),
-            warn: (msg: string) => console.warn(msg),
-            error: (msg: string) => console.error(msg),
-          };
-          // Project config.collections to the minimal shape drift-check
-          // expects (slug, tableName, fields). Deep imports kept local
-          // to avoid circular type pulls at the init.ts boundary.
-          const collections = (config.collections ?? []).map(c => ({
-            slug: c.slug,
-            tableName: c.dbName?.startsWith("dc_")
-              ? c.dbName
-              : `dc_${(c.dbName ?? c.slug).replace(/-/g, "_")}`,
-            fields: c.fields ?? [],
-          }));
-          await runDriftCheck({
-            adapter,
-            collections,
-            logger: driftLogger,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `[nextly] Drift check failed (${msg}). Boot continuing; run \`nextly db:sync\` if you see schema errors.`
-          );
-        }
+        // F8 PR 6: drift check. First-run static-table setup already
+        // ran inside registerServices (see first-run.ts). This path
+        // only logs a single warning when config has drifted from
+        // the live schema — it does NOT auto-apply (real apply goes
+        // through HMR or `nextly db:sync` which both have a TTY).
+        // The drift check itself is failure-safe; we don't wrap a
+        // try/catch around getService("config") so a real DI bug
+        // crashes loudly instead of being masked.
+        const config = getService("config");
+        const driftLogger = {
+          debug: (msg: string) => console.debug(msg),
+          info: (msg: string) => console.log(msg),
+          warn: (msg: string) => console.warn(msg),
+          error: (msg: string) => console.error(msg),
+        };
+        const collections = (config.collections ?? []).map(c => ({
+          slug: c.slug,
+          tableName: resolveCollectionTableName(c.slug, c.dbName),
+          fields: c.fields ?? [],
+        }));
+        await runDriftCheck({
+          adapter,
+          collections,
+          logger: driftLogger,
+        });
 
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
