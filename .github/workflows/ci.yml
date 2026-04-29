@@ -51,6 +51,11 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
+      - name: Build
+        run: pnpm turbo build --filter='./packages/*'
+        env:
+          TURBO_CACHE_DIR: .turbo
+
       - name: Lint
         run: >-
           pnpm turbo lint --continue
@@ -67,11 +72,6 @@ jobs:
       - name: Typecheck
         continue-on-error: true
         run: pnpm turbo check-types --continue
-        env:
-          TURBO_CACHE_DIR: .turbo
-
-      - name: Build
-        run: pnpm turbo build --filter='./packages/*'
         env:
           TURBO_CACHE_DIR: .turbo
 
