@@ -1,31 +1,29 @@
 /**
  * Server Error to Form Field Mapping Utilities
  *
- * Utilities for parsing server-side validation errors and mapping them
- * to React Hook Form fields. Enables inline error display on form fields
- * when the server returns validation errors.
+ * Parses canonical-shape server validation errors and maps them to React Hook
+ * Form fields. Enables inline error display when the server returns validation
+ * errors.
  *
  * ## API Error Format
- * The server returns errors in this format:
+ * Per spec §10.1, the server returns errors as:
  * ```json
  * {
- *   "success": false,
- *   "statusCode": 400,
  *   "error": {
  *     "code": "VALIDATION_ERROR",
- *     "message": "Validation failed",
- *     "details": {
+ *     "message": "Validation failed.",
+ *     "data": {
  *       "errors": [
- *         { "field": "email", "message": "Invalid email format" },
- *         { "field": "links.0.url", "message": "URL is required" }
+ *         { "path": "email", "code": "INVALID_FORMAT", "message": "Must be a valid email address." },
+ *         { "path": "links[0].url", "code": "REQUIRED", "message": "URL is required." }
  *       ]
- *     }
+ *     },
+ *     "requestId": "req_..."
  *   }
  * }
  * ```
  *
  * @module lib/error-mapping
- * @since 1.0.0
  */
 
 import type { UseFormSetError, FieldPath, FieldValues } from "react-hook-form";
@@ -35,30 +33,29 @@ import type { UseFormSetError, FieldPath, FieldValues } from "react-hook-form";
 // ============================================================================
 
 /**
- * Individual field error from server response
+ * Individual field error from server response (canonical wire shape per spec §7.2).
  */
 export interface ServerFieldError {
-  /** Field path (supports dot notation for nested fields, e.g., "links.0.url") */
-  field: string;
-  /** Error message to display */
+  /** Dotted/bracketed field path: "user.email", "items[2].quantity" */
+  path: string;
+  /** Stable error code: "INVALID_FORMAT", "REQUIRED", "TOO_LOW", ... */
+  code: string;
+  /** Human-readable sentence */
   message: string;
-  /** Optional error code for programmatic handling */
-  code?: string;
 }
 
 /**
- * Server error response format (matches ApiErrorResponse from nextly/api/error-handler)
+ * Server error response (canonical wire shape per spec §10.1).
  */
 export interface ServerErrorResponse {
-  success: false;
-  statusCode: number;
   error: {
     code: string;
     message: string;
-    details?: {
+    data?: {
       errors?: ServerFieldError[];
       [key: string]: unknown;
     };
+    requestId?: string;
   };
 }
 
@@ -79,23 +76,14 @@ export interface MapServerErrorsOptions {
 // ============================================================================
 
 /**
- * Parse API response and extract field-level errors
+ * Extract field-level errors from a canonical wire-shape error response.
  *
- * Handles multiple error response formats:
- * 1. Standard format: `error.details.errors[]`
- * 2. Legacy format: `validationErrors` object
- * 3. Axios error format: `response.data.error.details.errors[]`
+ * Reads `error.data.errors[]` only. Returns `null` when the input is not a
+ * canonical error response or has no field-level errors.
  *
- * @param response - API response or error object
- * @returns Array of field errors, or null if none found
- *
- * @example
- * ```typescript
- * const errors = parseServerErrors(apiResponse);
- * if (errors) {
- *   errors.forEach(e => console.log(`${e.field}: ${e.message}`));
- * }
- * ```
+ * Also accepts a fetch/axios-style wrapper where the body is nested under
+ * `.response.data` so `parseServerErrors(thrownError)` works without the
+ * caller having to unwrap the response object.
  */
 export function parseServerErrors(
   response: unknown
@@ -106,53 +94,43 @@ export function parseServerErrors(
 
   const resp = response as Record<string, unknown>;
 
-  // Handle axios/fetch error wrapper (error.response.data)
-  if ("response" in resp && typeof resp.response === "object") {
+  if (
+    "response" in resp &&
+    typeof resp.response === "object" &&
+    resp.response !== null
+  ) {
     const axiosResp = resp.response as Record<string, unknown>;
     if ("data" in axiosResp) {
       return parseServerErrors(axiosResp.data);
     }
   }
 
-  // Standard API error format: { success: false, error: { details: { errors: [] } } }
-  if ("error" in resp && typeof resp.error === "object") {
+  if (
+    "error" in resp &&
+    typeof resp.error === "object" &&
+    resp.error !== null
+  ) {
     const errorObj = resp.error as Record<string, unknown>;
-    if ("details" in errorObj && typeof errorObj.details === "object") {
-      const details = errorObj.details as Record<string, unknown>;
-      if (Array.isArray(details.errors)) {
-        return details.errors.filter(
+    if (
+      "data" in errorObj &&
+      typeof errorObj.data === "object" &&
+      errorObj.data !== null
+    ) {
+      const data = errorObj.data as Record<string, unknown>;
+      if (Array.isArray(data.errors)) {
+        return data.errors.filter(
           (e): e is ServerFieldError =>
             typeof e === "object" &&
             e !== null &&
-            "field" in e &&
+            "path" in e &&
+            "code" in e &&
             "message" in e &&
-            typeof e.field === "string" &&
-            typeof e.message === "string"
+            typeof (e as ServerFieldError).path === "string" &&
+            typeof (e as ServerFieldError).code === "string" &&
+            typeof (e as ServerFieldError).message === "string"
         );
       }
     }
-  }
-
-  // Legacy format: { validationErrors: { field: message } }
-  if ("validationErrors" in resp && typeof resp.validationErrors === "object") {
-    const validationErrors = resp.validationErrors as Record<string, unknown>;
-    return Object.entries(validationErrors).map(([field, message]) => ({
-      field,
-      message: String(message),
-    }));
-  }
-
-  // Direct errors array format: { errors: [] }
-  if (Array.isArray(resp.errors)) {
-    return resp.errors.filter(
-      (e): e is ServerFieldError =>
-        typeof e === "object" &&
-        e !== null &&
-        "field" in e &&
-        "message" in e &&
-        typeof e.field === "string" &&
-        typeof e.message === "string"
-    );
   }
 
   return null;
@@ -235,7 +213,7 @@ export function mapServerErrorsToForm<T extends FieldValues>(
   let firstErrorField: string | null = null;
 
   for (const error of errors) {
-    const fieldPath = error.field as FieldPath<T>;
+    const fieldPath = error.path as FieldPath<T>;
 
     // Set error on form field
     setError(fieldPath, {
@@ -244,16 +222,18 @@ export function mapServerErrorsToForm<T extends FieldValues>(
     });
 
     if (!firstErrorField) {
-      firstErrorField = error.field;
+      firstErrorField = error.path;
     }
   }
 
   // Scroll to and focus first error field
   if (firstErrorField && (scrollToError || focusFirst)) {
-    // Try multiple selectors to find the field element
+    // Try multiple selectors to find the field element. The path may include
+    // bracket notation for arrays ("items[2].quantity") so the id-selector
+    // strips both dots and brackets.
     const selectors = [
       `[name="${firstErrorField}"]`,
-      `#field-${firstErrorField.replace(/\./g, "-")}`,
+      `#field-${firstErrorField.replace(/[.[\]]/g, "-")}`,
       `[data-field="${firstErrorField}"]`,
     ];
 
