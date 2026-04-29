@@ -1,0 +1,55 @@
+{
+  "name": "multi-rename",
+  "description": "Plan-v3 Appendix D scenario: 4 columns dropped + 4 added on the same table. Tests detector's same-table pairing — diff produces 4 drop_column + 4 add_column ops; F4 Option E detector will emit 4 rename candidates.",
+  "dialect": "sqlite",
+  "live": {
+    "tables": [
+      {
+        "name": "dc_posts",
+        "columns": [
+          { "name": "id", "type": "text", "nullable": false },
+          { "name": "title", "type": "text", "nullable": false },
+          { "name": "slug", "type": "text", "nullable": false },
+          { "name": "created_at", "type": "integer", "nullable": true },
+          { "name": "updated_at", "type": "integer", "nullable": true },
+          { "name": "body", "type": "text", "nullable": true },
+          { "name": "author", "type": "text", "nullable": true },
+          { "name": "category", "type": "text", "nullable": true },
+          { "name": "publish_date", "type": "integer", "nullable": true }
+        ],
+        "primaryKey": ["id"]
+      }
+    ]
+  },
+  "desired": {
+    "tables": [
+      {
+        "name": "dc_posts",
+        "columns": [
+          { "name": "id", "type": "text", "nullable": false },
+          { "name": "title", "type": "text", "nullable": false },
+          { "name": "slug", "type": "text", "nullable": false },
+          { "name": "created_at", "type": "integer", "nullable": true },
+          { "name": "updated_at", "type": "integer", "nullable": true },
+          { "name": "content", "type": "text", "nullable": true },
+          { "name": "writer", "type": "text", "nullable": true },
+          { "name": "tag", "type": "text", "nullable": true },
+          { "name": "published_at", "type": "integer", "nullable": true }
+        ],
+        "primaryKey": ["id"]
+      }
+    ]
+  },
+  "expectedOpTypes": [
+    "drop_column",
+    "drop_column",
+    "drop_column",
+    "drop_column",
+    "add_column",
+    "add_column",
+    "add_column",
+    "add_column"
+  ],
+  "expectedDropColumnNames": ["body", "author", "category", "publish_date"],
+  "expectedAddColumnNames": ["content", "writer", "tag", "published_at"]
+}

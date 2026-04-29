@@ -24,8 +24,29 @@ import type { ClassifierEvent, Resolution } from "../resolution/types.js";
 import { applyMakeOptionalToSnapshot } from "./snapshot-patch.js";
 import { validateDefaultValue } from "./validate-default.js";
 
-interface ExecutableTx {
+// PG/MySQL: drizzle-orm's tx exposes async `execute(sql)`.
+// SQLite (better-sqlite3): drizzle-orm/better-sqlite3 exposes sync
+// `run(sql)` instead. F8 PR 7 surfaced this dialect mismatch — F5
+// PreCleanupExecutor previously assumed `tx.execute` everywhere and
+// crashed on SQLite during NOT-NULL coercion. The dispatcher below
+// mirrors the same dialect-aware pattern from pre-resolution/executor.ts.
+interface AsyncExecutableTx {
   execute: (q: unknown) => Promise<unknown>;
+}
+interface SyncRunnableTx {
+  run: (q: unknown) => unknown;
+}
+
+async function runStatement(
+  tx: unknown,
+  dialect: SupportedDialect,
+  stmt: unknown
+): Promise<void> {
+  if (dialect === "sqlite") {
+    (tx as SyncRunnableTx).run(stmt);
+    return;
+  }
+  await (tx as AsyncExecutableTx).execute(stmt);
 }
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -84,7 +105,6 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       args.events.map(e => [e.id, e])
     );
     const threshold = readDeleteThreshold();
-    const tx = args.tx as ExecutableTx;
 
     // 3. Run side-effect resolutions (provide_default + delete_nonconforming).
     for (const r of args.resolutions) {
@@ -113,7 +133,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
         assertSafeIdent(event.columnName);
         // drizzle's sql tag template handles per-driver parameter binding.
         const stmt = sql`UPDATE ${sql.identifier(event.tableName)} SET ${sql.identifier(event.columnName)} = ${r.value} WHERE ${sql.identifier(event.columnName)} IS NULL`;
-        await tx.execute(stmt);
+        await runStatement(args.tx, args.dialect, stmt);
       } else if (r.kind === "delete_nonconforming") {
         if (
           event.kind === "add_not_null_with_nulls" &&
@@ -126,7 +146,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
         assertSafeIdent(event.tableName);
         assertSafeIdent(event.columnName);
         const stmt = sql`DELETE FROM ${sql.identifier(event.tableName)} WHERE ${sql.identifier(event.columnName)} IS NULL`;
-        await tx.execute(stmt);
+        await runStatement(args.tx, args.dialect, stmt);
       }
       // make_optional handled via snapshot patching below.
     }
