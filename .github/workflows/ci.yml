@@ -51,13 +51,12 @@ jobs:
       - name: Check drizzle-kit pin
         run: pnpm check:drizzle-kit-pin
 
-      # TODO(release-flow): remove continue-on-error once existing lint debt is
-      # resolved. As of 2026-04-15 there are ~3.7k pre-existing warnings across
-      # 9 packages (mostly no-explicit-any in nextly + admin). Tracked in a
-      # follow-up "lint debt cleanup" project.
       - name: Lint
-        continue-on-error: true
-        run: pnpm turbo lint --continue
+        run: >-
+          pnpm turbo lint --continue
+          --filter='./packages/*'
+          --filter='!@revnixhq/create-nextly-app'
+          --filter='!@revnixhq/nextly'
         env:
           TURBO_CACHE_DIR: .turbo
 

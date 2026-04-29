@@ -1,2 +1,7 @@
 #!/usr/bin/env sh
+set -e
+pnpm turbo lint --continue \
+  --filter='./packages/*' \
+  --filter='!@revnixhq/create-nextly-app' \
+  --filter='!@revnixhq/nextly'
 pnpm run build
