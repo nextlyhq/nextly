@@ -21,7 +21,6 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
-  convertServiceError,
   createErrorFromResult,
   isNotFoundError,
   looksLikeId,
@@ -75,7 +74,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         if (error instanceof NextlyError) {
           throw error;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
@@ -126,7 +125,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         if (config.disableErrors && isNotFoundError(error)) {
           return null;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
@@ -210,7 +209,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         if (error instanceof NextlyError) {
           throw error;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
@@ -264,7 +263,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         if (error instanceof NextlyError) {
           throw error;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
   };

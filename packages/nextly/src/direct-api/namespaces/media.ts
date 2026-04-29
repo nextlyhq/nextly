@@ -29,7 +29,6 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
-  convertServiceError,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
@@ -68,19 +67,13 @@ export interface MediaNamespace {
 export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
   const folders: MediaFoldersNamespace = {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
-      try {
-        if (args.parent) {
-          return await ctx.mediaService.listSubfolders(
-            args.parent,
-            createRequestContext(args)
-          );
-        }
-        return await ctx.mediaService.listRootFolders(
+      if (args.parent) {
+        return await ctx.mediaService.listSubfolders(
+          args.parent,
           createRequestContext(args)
         );
-      } catch (error) {
-        throw convertServiceError(error);
       }
+      return await ctx.mediaService.listRootFolders(createRequestContext(args));
     },
 
     async create(args: CreateFolderArgs): Promise<MediaFolder> {
@@ -92,40 +85,32 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         );
       }
 
-      try {
-        return await ctx.mediaService.createFolder(
-          {
-            name: args.name,
-            description: args.description,
-            color: args.color,
-            icon: args.icon,
-            parentId: args.parent ?? null,
-          },
-          createRequestContext(args)
-        );
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return await ctx.mediaService.createFolder(
+        {
+          name: args.name,
+          description: args.description,
+          color: args.color,
+          icon: args.icon,
+          parentId: args.parent ?? null,
+        },
+        createRequestContext(args)
+      );
     },
   };
 
   return {
     async upload(args: UploadMediaArgs): Promise<MediaFile> {
-      try {
-        return await ctx.mediaService.upload(
-          {
-            buffer: args.file.data,
-            filename: args.file.name,
-            mimeType: args.file.mimetype,
-            size: args.file.size,
-            altText: args.altText,
-            folderId: args.folder ?? null,
-          },
-          createRequestContext(args)
-        );
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return await ctx.mediaService.upload(
+        {
+          buffer: args.file.data,
+          filename: args.file.name,
+          mimeType: args.file.mimetype,
+          size: args.file.size,
+          altText: args.altText,
+          folderId: args.folder ?? null,
+        },
+        createRequestContext(args)
+      );
     },
 
     async find(
@@ -134,24 +119,20 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       const limit = args.limit ?? 24;
       const page = args.page ?? 1;
 
-      try {
-        const result = await ctx.mediaService.listMedia(
-          {
-            page,
-            pageSize: limit,
-            search: args.search,
-            type: args.mimeType as MediaMimeType | undefined,
-            folderId: args.folder,
-            sortBy: args.sortBy,
-            sortOrder: args.sortOrder,
-          },
-          createRequestContext(args)
-        );
+      const result = await ctx.mediaService.listMedia(
+        {
+          page,
+          pageSize: limit,
+          search: args.search,
+          type: args.mimeType as MediaMimeType | undefined,
+          folderId: args.folder,
+          sortBy: args.sortBy,
+          sortOrder: args.sortOrder,
+        },
+        createRequestContext(args)
+      );
 
-        return toPaginatedResponse(result, limit, page);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return toPaginatedResponse(result, limit, page);
     },
 
     async findByID(args: FindMediaByIDArgs): Promise<MediaFile | null> {
@@ -166,7 +147,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         if (config.disableErrors && isNotFoundError(error)) {
           return null;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
@@ -179,21 +160,17 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         );
       }
 
-      try {
-        return await ctx.mediaService.update(
-          args.id,
-          {
-            filename: args.data.filename,
-            altText: args.data.altText,
-            caption: args.data.caption,
-            tags: args.data.tags,
-            folderId: args.data.folderId,
-          },
-          createRequestContext(args)
-        );
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return await ctx.mediaService.update(
+        args.id,
+        {
+          filename: args.data.filename,
+          altText: args.data.altText,
+          caption: args.data.caption,
+          tags: args.data.tags,
+          folderId: args.data.folderId,
+        },
+        createRequestContext(args)
+      );
     },
 
     async delete(args: DeleteMediaArgs): Promise<DeleteResult> {
@@ -205,15 +182,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         );
       }
 
-      try {
-        await ctx.mediaService.delete(args.id, createRequestContext(args));
-        return {
-          deleted: true,
-          ids: [args.id],
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      await ctx.mediaService.delete(args.id, createRequestContext(args));
+      return {
+        deleted: true,
+        ids: [args.id],
+      };
     },
 
     async bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult> {
@@ -227,24 +200,20 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         };
       }
 
-      try {
-        const result = await ctx.mediaService.bulkDelete(
-          args.ids,
-          createRequestContext(args)
-        );
+      const result = await ctx.mediaService.bulkDelete(
+        args.ids,
+        createRequestContext(args)
+      );
 
-        return {
-          success: result.results.filter(r => r.success).map(r => r.id),
-          failed: result.results
-            .filter(r => !r.success)
-            .map(r => ({ id: r.id, error: r.error ?? "Unknown error" })),
-          total: result.totalItems,
-          successCount: result.successCount,
-          failedCount: result.failureCount,
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return {
+        success: result.results.filter(r => r.success).map(r => r.id),
+        failed: result.results
+          .filter(r => !r.success)
+          .map(r => ({ id: r.id, error: r.error ?? "Unknown error" })),
+        total: result.totalItems,
+        successCount: result.successCount,
+        failedCount: result.failureCount,
+      };
     },
 
     folders,

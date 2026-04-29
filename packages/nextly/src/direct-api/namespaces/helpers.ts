@@ -10,12 +10,7 @@
  */
 
 import type { RequestContext } from "../../shared/types/index";
-import {
-  NextlyError,
-  NextlyErrorCode,
-  ValidationError,
-  fromServiceError,
-} from "../errors";
+import { NextlyError, ValidationError, fromServiceError } from "../errors";
 import type {
   ComponentDefinition,
   DirectAPIConfig,
@@ -143,44 +138,6 @@ export function statusCodeToErrorCode(statusCode: number): string {
     default:
       return "INTERNAL_ERROR";
   }
-}
-
-/**
- * Convert any thrown value into a `NextlyError`.
- *
- * - Passes `NextlyError` subclasses through unchanged.
- * - Upgrades service-error-shaped objects via `fromServiceError()`.
- * - Wraps anything else into a generic `INTERNAL_ERROR`.
- */
-export function convertServiceError(error: unknown): NextlyError {
-  if (error instanceof NextlyError) {
-    return error;
-  }
-
-  if (
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    "message" in error
-  ) {
-    const serviceError = error as {
-      code: string;
-      message: string;
-      httpStatus?: number;
-      details?: unknown;
-    };
-
-    return fromServiceError({
-      code: serviceError.code,
-      message: serviceError.message,
-      httpStatus: serviceError.httpStatus ?? 500,
-      details: serviceError.details,
-    });
-  }
-
-  const message =
-    error instanceof Error ? error.message : "An unexpected error occurred";
-  return new NextlyError(message, NextlyErrorCode.INTERNAL_ERROR, 500);
 }
 
 /**

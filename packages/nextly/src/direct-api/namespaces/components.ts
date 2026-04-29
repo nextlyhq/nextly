@@ -21,12 +21,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import {
-  convertServiceError,
-  isNotFoundError,
-  mapComponentRecord,
-  mergeConfig,
-} from "./helpers";
+import { isNotFoundError, mapComponentRecord, mergeConfig } from "./helpers";
 
 /**
  * Components namespace API, bound to a Nextly context.
@@ -49,25 +44,21 @@ export function createComponentsNamespace(
 ): ComponentsNamespace {
   return {
     async find(args: FindComponentsArgs = {}): Promise<ComponentListResult> {
-      try {
-        const result = await ctx.componentRegistryService.listComponents({
-          source: args.source,
-          migrationStatus: args.migrationStatus,
-          locked: args.locked,
-          search: args.search,
-          limit: args.limit,
-          offset: args.offset,
-        });
+      const result = await ctx.componentRegistryService.listComponents({
+        source: args.source,
+        migrationStatus: args.migrationStatus,
+        locked: args.locked,
+        search: args.search,
+        limit: args.limit,
+        offset: args.offset,
+      });
 
-        return {
-          docs: result.data.map(mapComponentRecord),
-          totalDocs: result.total,
-          limit: args.limit ?? result.data.length,
-          offset: args.offset ?? 0,
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return {
+        docs: result.data.map(mapComponentRecord),
+        totalDocs: result.total,
+        limit: args.limit ?? result.data.length,
+        offset: args.offset ?? 0,
+      };
     },
 
     async findBySlug(
@@ -106,7 +97,7 @@ export function createComponentsNamespace(
         if (config.disableErrors && isNotFoundError(error)) {
           return null;
         }
-        throw convertServiceError(error);
+        throw error;
       }
     },
 
@@ -135,32 +126,28 @@ export function createComponentsNamespace(
         );
       }
 
-      try {
-        const { calculateSchemaHash } = await import(
-          "../../services/schema/schema-hash"
-        );
-        const fieldsTyped =
-          args.fields as unknown as import("../../collections/fields/types").FieldConfig[];
-        const schemaHash = calculateSchemaHash(fieldsTyped);
+      const { calculateSchemaHash } = await import(
+        "../../services/schema/schema-hash"
+      );
+      const fieldsTyped =
+        args.fields as unknown as import("../../collections/fields/types").FieldConfig[];
+      const schemaHash = calculateSchemaHash(fieldsTyped);
 
-        const component = await ctx.componentRegistryService.registerComponent({
-          slug: args.slug,
-          label: args.label,
-          tableName: args.tableName ?? `comp_${args.slug}`,
-          description: args.description,
-          fields: fieldsTyped,
-          admin: args.admin,
-          source: "ui",
-          locked: false,
-          schemaHash,
-          schemaVersion: 1,
-          migrationStatus: "pending",
-        });
+      const component = await ctx.componentRegistryService.registerComponent({
+        slug: args.slug,
+        label: args.label,
+        tableName: args.tableName ?? `comp_${args.slug}`,
+        description: args.description,
+        fields: fieldsTyped,
+        admin: args.admin,
+        source: "ui",
+        locked: false,
+        schemaHash,
+        schemaVersion: 1,
+        migrationStatus: "pending",
+      });
 
-        return mapComponentRecord(component);
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      return mapComponentRecord(component);
     },
 
     async update(args: UpdateComponentArgs): Promise<ComponentDefinition> {
@@ -180,41 +167,37 @@ export function createComponentsNamespace(
         );
       }
 
-      try {
-        const updateData: Record<string, unknown> = {};
+      const updateData: Record<string, unknown> = {};
 
-        if (args.data.label !== undefined) {
-          updateData.label = args.data.label;
-        }
-
-        if (args.data.description !== undefined) {
-          updateData.description = args.data.description;
-        }
-
-        if (args.data.fields !== undefined) {
-          const fieldsTyped = args.data
-            .fields as unknown as import("../../collections/fields/types").FieldConfig[];
-          updateData.fields = fieldsTyped;
-          const { calculateSchemaHash } = await import(
-            "../../services/schema/schema-hash"
-          );
-          updateData.schemaHash = calculateSchemaHash(fieldsTyped);
-        }
-
-        if (args.data.admin !== undefined) {
-          updateData.admin = args.data.admin;
-        }
-
-        const component = await ctx.componentRegistryService.updateComponent(
-          args.slug,
-          updateData,
-          { source: "ui" }
-        );
-
-        return mapComponentRecord(component);
-      } catch (error) {
-        throw convertServiceError(error);
+      if (args.data.label !== undefined) {
+        updateData.label = args.data.label;
       }
+
+      if (args.data.description !== undefined) {
+        updateData.description = args.data.description;
+      }
+
+      if (args.data.fields !== undefined) {
+        const fieldsTyped = args.data
+          .fields as unknown as import("../../collections/fields/types").FieldConfig[];
+        updateData.fields = fieldsTyped;
+        const { calculateSchemaHash } = await import(
+          "../../services/schema/schema-hash"
+        );
+        updateData.schemaHash = calculateSchemaHash(fieldsTyped);
+      }
+
+      if (args.data.admin !== undefined) {
+        updateData.admin = args.data.admin;
+      }
+
+      const component = await ctx.componentRegistryService.updateComponent(
+        args.slug,
+        updateData,
+        { source: "ui" }
+      );
+
+      return mapComponentRecord(component);
     },
 
     async delete(args: DeleteComponentArgs): Promise<DeleteResult> {
@@ -226,15 +209,11 @@ export function createComponentsNamespace(
         );
       }
 
-      try {
-        await ctx.componentRegistryService.deleteComponent(args.slug);
-        return {
-          deleted: true,
-          ids: [args.slug],
-        };
-      } catch (error) {
-        throw convertServiceError(error);
-      }
+      await ctx.componentRegistryService.deleteComponent(args.slug);
+      return {
+        deleted: true,
+        ids: [args.slug],
+      };
     },
   };
 }
