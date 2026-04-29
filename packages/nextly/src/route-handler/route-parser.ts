@@ -1497,6 +1497,41 @@ function parseDashboardRoutes(
 }
 
 // ============================================================================
+// Schema Routes Parser
+// ============================================================================
+
+/**
+ * Parse schema-related routes (F10 PR 4).
+ *
+ *   GET /api/schema/journal → getSchemaJournal (super-admin only)
+ *
+ * The journal endpoint returns recent `nextly_migration_journal` rows
+ * paginated by a `started_at` cursor. Used by the admin
+ * NotificationBell + Dropdown to render audit-log entries.
+ *
+ * Auth + permission checks live inside the handler itself so the
+ * router stays a pure URL → handler-name mapping.
+ */
+function parseSchemaRoutes(
+  id: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "GET") return null;
+
+  if (id === "journal") {
+    return {
+      service: "schema",
+      operation: "list",
+      method: "getSchemaJournal",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
+// ============================================================================
 // Email Routes Parser
 // ============================================================================
 
@@ -1698,6 +1733,12 @@ export function parseRestRoute(
   // Handle Dashboard endpoints
   if (resource === "dashboard") {
     const result = parseDashboardRoutes(id, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle Schema endpoints (F10 PR 4: journal read endpoint)
+  if (resource === "schema") {
+    const result = parseSchemaRoutes(id, httpMethod, routeParams);
     if (result) return result;
   }
 
