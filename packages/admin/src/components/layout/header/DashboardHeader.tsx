@@ -1,4 +1,4 @@
-
+import { NotificationBell } from "@admin/components/features/notifications";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
 import { cn } from "@admin/lib/utils";
@@ -26,7 +26,15 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
       </div>
 
       <div className="flex items-center gap-4">
-        <UserProfileDropdown user={user} onLogout={() => { void logout(); }} />
+        {/* F10 PR 5: bell renders only for super-admins (component
+            self-gates via useCurrentUserPermissions). */}
+        <NotificationBell />
+        <UserProfileDropdown
+          user={user}
+          onLogout={() => {
+            void logout();
+          }}
+        />
       </div>
     </header>
   );
