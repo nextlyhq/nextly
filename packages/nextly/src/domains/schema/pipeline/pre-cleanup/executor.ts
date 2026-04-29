@@ -16,6 +16,7 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { runStatement } from "../_internal/run-statement.js";
 import type { NextlySchemaSnapshot } from "../diff/types.js";
 import { PromptCancelledError } from "../prompt-dispatcher/errors.js";
 import type { PreCleanupExecutor } from "../pushschema-pipeline-interfaces.js";
@@ -23,10 +24,6 @@ import type { ClassifierEvent, Resolution } from "../resolution/types.js";
 
 import { applyMakeOptionalToSnapshot } from "./snapshot-patch.js";
 import { validateDefaultValue } from "./validate-default.js";
-
-interface ExecutableTx {
-  execute: (q: unknown) => Promise<unknown>;
-}
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -84,7 +81,6 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       args.events.map(e => [e.id, e])
     );
     const threshold = readDeleteThreshold();
-    const tx = args.tx as ExecutableTx;
 
     // 3. Run side-effect resolutions (provide_default + delete_nonconforming).
     for (const r of args.resolutions) {
@@ -113,7 +109,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
         assertSafeIdent(event.columnName);
         // drizzle's sql tag template handles per-driver parameter binding.
         const stmt = sql`UPDATE ${sql.identifier(event.tableName)} SET ${sql.identifier(event.columnName)} = ${r.value} WHERE ${sql.identifier(event.columnName)} IS NULL`;
-        await tx.execute(stmt);
+        await runStatement(args.tx, args.dialect, stmt);
       } else if (r.kind === "delete_nonconforming") {
         if (
           event.kind === "add_not_null_with_nulls" &&
@@ -126,7 +122,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
         assertSafeIdent(event.tableName);
         assertSafeIdent(event.columnName);
         const stmt = sql`DELETE FROM ${sql.identifier(event.tableName)} WHERE ${sql.identifier(event.columnName)} IS NULL`;
-        await tx.execute(stmt);
+        await runStatement(args.tx, args.dialect, stmt);
       }
       // make_optional handled via snapshot patching below.
     }

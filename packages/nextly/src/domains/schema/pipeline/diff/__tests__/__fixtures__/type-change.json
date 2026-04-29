@@ -1,0 +1,39 @@
+{
+  "name": "type-change",
+  "description": "Live has count:integer, desired has count:text. Diff produces a change_column_type op (F6 type-change classifier picks this up downstream).",
+  "dialect": "sqlite",
+  "live": {
+    "tables": [
+      {
+        "name": "dc_posts",
+        "columns": [
+          { "name": "id", "type": "text", "nullable": false },
+          { "name": "title", "type": "text", "nullable": false },
+          { "name": "slug", "type": "text", "nullable": false },
+          { "name": "created_at", "type": "integer", "nullable": true },
+          { "name": "updated_at", "type": "integer", "nullable": true },
+          { "name": "count", "type": "integer", "nullable": true }
+        ],
+        "primaryKey": ["id"]
+      }
+    ]
+  },
+  "desired": {
+    "tables": [
+      {
+        "name": "dc_posts",
+        "columns": [
+          { "name": "id", "type": "text", "nullable": false },
+          { "name": "title", "type": "text", "nullable": false },
+          { "name": "slug", "type": "text", "nullable": false },
+          { "name": "created_at", "type": "integer", "nullable": true },
+          { "name": "updated_at", "type": "integer", "nullable": true },
+          { "name": "count", "type": "text", "nullable": true }
+        ],
+        "primaryKey": ["id"]
+      }
+    ]
+  },
+  "expectedOpTypes": ["change_column_type"],
+  "expectedChangedColumnNames": ["count"]
+}

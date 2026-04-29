@@ -162,7 +162,12 @@ jobs:
         run: pnpm turbo build --filter='./packages/*'
 
       - name: Run integration tests against MySQL 8
-        run: pnpm turbo test:integration --filter='@revnixhq/adapter-mysql'
+        # F8 PR 7 fix: include @revnixhq/nextly so the cross-dialect
+        # matrix tests in `domains/schema/pipeline/__tests__/` exercise
+        # against MySQL too. Previously only adapter-mysql ran here,
+        # leaving F5 NOT-NULL coercion + F4 Option E paths uncovered
+        # on MySQL CI.
+        run: pnpm turbo test:integration --filter='@revnixhq/adapter-mysql' --filter='@revnixhq/nextly'
         env:
           TEST_MYSQL_URL: mysql://root:root@localhost:3307/nextly_test
 
@@ -192,4 +197,9 @@ jobs:
         run: pnpm turbo build --filter='./packages/*'
 
       - name: Run integration tests against SQLite (in-memory)
-        run: pnpm turbo test:integration --filter='@revnixhq/adapter-sqlite'
+        # F8 PR 7 fix: include @revnixhq/nextly so the SQLite-based
+        # cross-dialect matrix tests run here too. Previously the
+        # filter was adapter-sqlite only and the new
+        # `f8-matrix.integration.test.ts` (which uses better-sqlite3
+        # in-memory) was filtered out.
+        run: pnpm turbo test:integration --filter='@revnixhq/adapter-sqlite' --filter='@revnixhq/nextly'
