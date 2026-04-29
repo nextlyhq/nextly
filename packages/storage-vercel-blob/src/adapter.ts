@@ -286,18 +286,20 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @see https://vercel.com/docs/storage/vercel-blob/client-upload
    * @throws Error always - client uploads require handleUpload API
    */
-  async getPresignedUploadUrl(
+  getPresignedUploadUrl(
     _key: string,
     _mimeType: string,
     _expiresIn?: number
   ): Promise<ClientUploadData> {
-    throw new Error(
-      "@nextly/storage-vercel-blob: Client uploads require the handleUpload API.\n\n" +
-        "Vercel Blob uses a different pattern for client-side uploads that involves:\n" +
-        "1. A server-side route handler with handleUpload()\n" +
-        "2. The @vercel/blob/client upload() function\n\n" +
-        "See: https://vercel.com/docs/storage/vercel-blob/client-upload\n\n" +
-        "For server-side uploads, use the standard upload() method instead."
+    return Promise.reject(
+      new Error(
+        "@nextly/storage-vercel-blob: Client uploads require the handleUpload API.\n\n" +
+          "Vercel Blob uses a different pattern for client-side uploads that involves:\n" +
+          "1. A server-side route handler with handleUpload()\n" +
+          "2. The @vercel/blob/client upload() function\n\n" +
+          "See: https://vercel.com/docs/storage/vercel-blob/client-upload\n\n" +
+          "For server-side uploads, use the standard upload() method instead."
+      )
     );
   }
 

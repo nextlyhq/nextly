@@ -117,19 +117,21 @@ export function vercelBlobStorage(
      *
      * @see https://vercel.com/docs/storage/vercel-blob/client-upload
      */
-    async getClientUploadUrl(
+    getClientUploadUrl(
       _filename: string,
       _mimeType: string,
       _collection: string
     ): Promise<ClientUploadData> {
       // Vercel Blob doesn't use pre-signed URLs like S3
       // Instead, it requires using the handleUpload API with @vercel/blob/client
-      throw new Error(
-        "@nextly/storage-vercel-blob: Client uploads require the handleUpload API.\n\n" +
-          "Vercel Blob uses a different pattern than S3 for client-side uploads:\n\n" +
-          "1. Create a server-side route handler with handleUpload()\n" +
-          "2. Use upload() from @vercel/blob/client on the frontend\n\n" +
-          "See: https://vercel.com/docs/storage/vercel-blob/client-upload"
+      return Promise.reject(
+        new Error(
+          "@nextly/storage-vercel-blob: Client uploads require the handleUpload API.\n\n" +
+            "Vercel Blob uses a different pattern than S3 for client-side uploads:\n\n" +
+            "1. Create a server-side route handler with handleUpload()\n" +
+            "2. Use upload() from @vercel/blob/client on the frontend\n\n" +
+            "See: https://vercel.com/docs/storage/vercel-blob/client-upload"
+        )
       );
     },
 
@@ -143,10 +145,10 @@ export function vercelBlobStorage(
      * @param path - Storage path (full blob URL)
      * @returns The same URL (Vercel Blob URLs are public)
      */
-    async getSignedDownloadUrl(path: string): Promise<string> {
+    getSignedDownloadUrl(path: string): Promise<string> {
       // Vercel Blob URLs are public by default
       // No signed URL support - just return the public URL
-      return path;
+      return Promise.resolve(path);
     },
   };
 

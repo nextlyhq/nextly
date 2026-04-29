@@ -1,5 +1,6 @@
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import { forwardRef, ElementRef, ComponentPropsWithoutRef } from "react";
+import type { ElementRef, ComponentPropsWithoutRef } from "react";
+import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
 
