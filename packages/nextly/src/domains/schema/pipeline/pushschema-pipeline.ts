@@ -149,6 +149,11 @@ export interface PipelineResult {
   renamesApplied: number;
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
+  // F10 PR 6: per-change-kind diff counts. Set on success only;
+  // absent on failure (the failure may have happened before the diff
+  // was even computed). Mirrors the same shape persisted to the
+  // journal's summary_* columns and emitted in the notification event.
+  summary?: MigrationJournalSummary;
 }
 
 // Shape of drizzle-kit's pushSchema return value.
@@ -598,6 +603,9 @@ export class PushSchemaPipeline {
         success: true,
         statementsExecuted,
         renamesApplied: dispatchResult.confirmedRenames.length,
+        // F10 PR 6: surface the diff counts so the dispatcher can
+        // render an admin toast like "1 field added, 1 renamed".
+        summary,
       };
     } catch (err) {
       const code = this.classifyErrorCode(err);

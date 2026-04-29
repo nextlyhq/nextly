@@ -17,6 +17,16 @@
 import { classifyError, type SchemaApplyErrorCode } from "./errors.js";
 import type { DesiredSchema } from "./types.js";
 
+// F10 PR 6: per-change-kind counts mirrored from the pipeline's
+// post-resolution diff. Exposed on the ApplyResult so the dispatcher
+// can derive a `toastSummary` string for the admin save toast.
+export interface ApplySummary {
+  added: number;
+  removed: number;
+  renamed: number;
+  changed: number;
+}
+
 export type ApplyResult =
   | {
       success: true;
@@ -24,6 +34,11 @@ export type ApplyResult =
       statementsExecuted: number;
       renamesApplied: number;
       durationMs: number;
+      // F10 PR 6: optional because some pipeline implementations
+      // (test stubs, future fresh-push paths) may not compute a
+      // diff-based summary. Undefined → admin falls back to a
+      // generic "Schema updated" toast.
+      summary?: ApplySummary;
     }
   | {
       success: false;
@@ -45,6 +60,10 @@ export interface PipelineCallResult {
   renamesApplied: number;
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
+  // F10 PR 6: the pipeline already computes this for journal +
+  // notification fan-out; surfacing it here lets the dispatcher
+  // build a toast summary without recomputing the diff.
+  summary?: ApplySummary;
 }
 
 // What the pipeline asks of its environment. In production, callers
@@ -169,6 +188,10 @@ export function createApplyDesiredSchema(
       statementsExecuted: pipelineResult.statementsExecuted,
       renamesApplied: pipelineResult.renamesApplied,
       durationMs: Date.now() - start,
+      // F10 PR 6: forward the diff-derived counts so the dispatcher
+      // can build a contextual toast. Undefined when the underlying
+      // pipeline doesn't compute one.
+      summary: pipelineResult.summary,
     };
   };
 }

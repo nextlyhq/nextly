@@ -208,7 +208,22 @@ export default function CollectionBuilderEditPage({
           renameResolutions
         );
         if (result.success) {
-          stopRestart(true, "Schema changes applied successfully");
+          // F10 PR 6: build a contextual success message
+          // ("Posts schema updated. 1 field added, 1 renamed") and
+          // hand it to stopRestart, which owns the single
+          // toast.success emission. Falls back to a generic message
+          // when `toastSummary` is missing (older nextly versions)
+          // or equals the no-changes phrase.
+          const collectionLabel =
+            builder.form.getValues("singularName")?.trim() || slug;
+          const summarySuffix =
+            result.toastSummary && result.toastSummary !== "no changes"
+              ? `. ${result.toastSummary}`
+              : "";
+          stopRestart(
+            true,
+            `${collectionLabel} schema updated${summarySuffix}`
+          );
           setShowSchemaDialog(false);
           setPreviewData(null);
         } else {
@@ -229,7 +244,7 @@ export default function CollectionBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart]
+    [slug, startRestart, stopRestart, builder.form]
   );
 
   // Save non-schema settings (labels, icon, group, etc.) via existing mutation

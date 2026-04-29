@@ -83,10 +83,16 @@ export interface SchemaPreviewResponse {
 // F1 PR 3: dropped the `restarting` field (single-process model means
 // no child to restart). The dispatcher no longer emits it; this interface
 // matches the new server shape.
+//
+// F10 PR 6: optional `toastSummary` carries a per-change-kind phrase
+// like "1 field added, 1 renamed" so the Schema Builder save handler
+// can render a contextual toast. Optional because older Nextly servers
+// don't emit it; the admin falls back to a generic "Schema updated".
 export interface SchemaApplyResponse {
   success: boolean;
   message: string;
   newSchemaVersion: number;
+  toastSummary?: string;
 }
 
 // User resolution for an interactive field
