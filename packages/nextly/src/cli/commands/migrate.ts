@@ -529,6 +529,12 @@ function parseSqlSections(content: string): { upSql: string; downSql: string } {
 // runs FIRST in normal flow; this function is idempotent (`IF NOT EXISTS`).
 // The CHECK constraint enforces the F11 two-state lifecycle (`'applied'` /
 // `'failed'`); rows are inserted only after the apply attempt completes.
+//
+// MIRROR: keep this in sync with `migrate-status.ts:ensureMigrationsTable`
+// AND with `database/migrations/<dialect>/20260429_000000_000_initial_journal.sql`
+// AND with `migrate-fresh.ts:generateSqliteCreateStatements`. A future PR
+// extracts this into a shared helper; until then, a drift check would
+// silently break production migration apply.
 async function ensureMigrationsTable(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
@@ -575,7 +581,7 @@ async function ensureMigrationsTable(
           "id"           TEXT PRIMARY KEY,
           "filename"     TEXT NOT NULL UNIQUE,
           "sha256"       TEXT NOT NULL,
-          "applied_at"   INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
+          "applied_at"   INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
           "applied_by"   TEXT,
           "duration_ms"  INTEGER,
           "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
@@ -677,17 +683,45 @@ async function getAppliedMigrations(
 // any further DDL runs. Operators recover by either reverting the edit or
 // writing a NEW corrective migration. Same hard-fail for files referenced
 // in the journal but missing from disk (`MIGRATION_MISSING`).
+//
+// IMPORTANT: only rows with status='applied' count as "already applied"
+// for the pending-set computation. Rows with status='failed' are RETURNED
+// as pending so the operator can fix the SQL and re-run. The retry path
+// in `executeMigrationInTransaction` deletes the prior failed row inside
+// the same transaction so the unique(filename) constraint doesn't trip.
+//
+// Exported as `findPendingMigrationsForTest` so unit tests can exercise
+// the retry-of-failed-migration semantics without spinning up a DB.
+export function findPendingMigrationsForTest(
+  files: ParsedMigration[],
+  applied: MigrationRecord[],
+  logger: CommandContext["logger"]
+): ParsedMigration[] {
+  return findPendingMigrations(files, applied, logger);
+}
+
 function findPendingMigrations(
   files: ParsedMigration[],
   applied: MigrationRecord[],
   logger: CommandContext["logger"]
 ): ParsedMigration[] {
-  const appliedFilenames = new Set(applied.map(m => m.filename));
-  const appliedHashes = new Map(applied.map(m => [m.filename, m.sha256]));
+  // Only successfully-applied rows block re-application. Failed rows
+  // represent recoverable state — the operator typically iterates on the
+  // SQL and re-runs `nextly migrate`. Treating failed rows as "already
+  // applied" would silently skip the retry; the bug also breaks the spec
+  // §6.2 recovery loop. See PR 1 review issue #1.
+  const successfullyApplied = applied.filter(m => m.status === "applied");
+  const appliedFilenames = new Set(successfullyApplied.map(m => m.filename));
+  const appliedHashes = new Map(
+    successfullyApplied.map(m => [m.filename, m.sha256])
+  );
   const fileNames = new Set(files.map(f => f.name));
 
   // Check for files in the journal that no longer exist on disk.
-  for (const record of applied) {
+  // Only count successfully-applied rows here — a failed row pointing at
+  // a now-deleted file is just stale state from a prior failed run, not
+  // a missing applied migration.
+  for (const record of successfullyApplied) {
     if (!fileNames.has(record.filename)) {
       logger.error(
         `MIGRATION_MISSING: '${record.filename}' was applied previously but is no longer present in the migrations directory. ` +
@@ -721,13 +755,21 @@ function findPendingMigrations(
 
 // F11: resolve "who/what ran this migration" with a documented precedence
 // chain so prod debugging can answer "which CI job applied this row?".
+//
+// F11 PR 1 review fix #11: explicit `undefined` checks instead of `||`
+// so an unusual valid actor name like "0" or "false" doesn't silently
+// fall through to the next env var.
 function getAppliedBy(): string {
-  return (
-    process.env.NEXTLY_APPLIED_BY ||
-    process.env.GITHUB_ACTOR ||
-    process.env.USER ||
-    hostname()
-  );
+  if (
+    process.env.NEXTLY_APPLIED_BY !== undefined &&
+    process.env.NEXTLY_APPLIED_BY !== ""
+  )
+    return process.env.NEXTLY_APPLIED_BY;
+  if (process.env.GITHUB_ACTOR !== undefined && process.env.GITHUB_ACTOR !== "")
+    return process.env.GITHUB_ACTOR;
+  if (process.env.USER !== undefined && process.env.USER !== "")
+    return process.env.USER;
+  return hostname();
 }
 
 async function executeMigrations(
@@ -812,7 +854,12 @@ async function executeMigrations(
       // next `migrate:status` shows it as `failed`. If THIS write also
       // fails (e.g., DB unreachable), we just log and continue — the
       // surrounding `for` loop's `break` ensures we don't try the next.
+      //
+      // F11 PR 1 review fix #1: delete any prior failed row first so
+      // the unique(filename) constraint doesn't block this INSERT when
+      // the operator is on their second-or-later attempt.
       try {
+        await deleteFailedMigrationRow(adapter, dialect, migration.name);
         await recordMigration(adapter, dialect, {
           id: randomUUID(),
           filename: migration.name,
@@ -872,6 +919,13 @@ async function executeMigrationInTransaction(
   const startMs = Date.now();
 
   await executeTransaction(adapter, dialect, async () => {
+    // F11 PR 1 review fix #1: if a previous run failed, there's a
+    // status='failed' row for this filename. The unique(filename)
+    // constraint would block our INSERT. Delete the prior failed row
+    // INSIDE this transaction so the retry is atomic — either both
+    // the cleanup and the new row commit, or neither does.
+    await deleteFailedMigrationRow(adapter, dialect, migration.name);
+
     const statements = splitSqlStatements(migration.upSql);
 
     for (const statement of statements) {
@@ -949,6 +1003,23 @@ async function executeTransaction(
   }
 }
 
+// F11 PR 1 review fix #1: clear any prior failed-status row for a
+// filename before inserting a new row. The unique(filename) constraint
+// would otherwise block retries. Always safe — at most one failed row
+// can exist per filename, and deleting nothing is a no-op.
+async function deleteFailedMigrationRow(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  filename: string
+): Promise<void> {
+  const escaped = escapeSql(filename);
+  const sql =
+    dialect === "mysql"
+      ? `DELETE FROM \`nextly_migrations\` WHERE \`filename\` = '${escaped}' AND \`status\` = 'failed'`
+      : `DELETE FROM "nextly_migrations" WHERE "filename" = '${escaped}' AND "status" = 'failed'`;
+  await adapter.executeQuery(sql);
+}
+
 // F11: insert a row into `nextly_migrations` per the spec §7 schema.
 // SQLite stores `error_json` as TEXT so we JSON-encode it here; PG/MySQL
 // have native JSON column types and accept the same JSON literal.
@@ -1020,15 +1091,20 @@ async function recordMigration(
       `;
       break;
     case "sqlite":
-      // SQLite stores epoch-ms as INTEGER per the F11 schema (sub-second
-      // precision). `error_json` is TEXT (JSON.parse on read).
+      // SQLite stores epoch-ms as INTEGER per the F11 schema. F11 PR 1
+      // review fix #3: julianday() gives real sub-second precision.
+      // The earlier `strftime('%s','now') * 1000` formula was second-
+      // precision masquerading as ms — the `* 1000` just zero-pads.
+      // 2440587.5 is the Julian day for 1970-01-01T00:00:00Z; subtracting
+      // it gives days since the Unix epoch; * 86400000 converts to ms.
+      // `error_json` is TEXT (JSON.parse on read).
       insertSql = `
         INSERT INTO "nextly_migrations"
           ("id", "filename", "sha256", "status", "applied_by", "duration_ms", "error_json", "applied_at")
         VALUES
           ('${record.id}', '${escapeSql(record.filename)}', '${record.sha256}', '${record.status}',
            ${appliedByLiteral}, ${durationLiteral}, ${errorJsonLiteral},
-           CAST(strftime('%s','now') AS INTEGER) * 1000)
+           CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))
       `;
       break;
     default:

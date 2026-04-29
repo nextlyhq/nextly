@@ -954,15 +954,21 @@ function generateSqliteCreateStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    // Nextly migrations table (for tracking migrations)
+    // Nextly migrations table (for tracking migrations) — F11 schema.
+    // F11 PR 1 review fix #2: this branch is reachable when bundled
+    // SQLite migrations aren't shipped (e.g. monorepo edge cases). Keep
+    // it in sync with the F11 spec §7 schema and the bundled
+    // database/migrations/sqlite/20260429_000000_000_initial_journal.sql.
     `CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-      "id" TEXT PRIMARY KEY,
-      "name" TEXT NOT NULL UNIQUE,
-      "batch" INTEGER NOT NULL,
-      "checksum" TEXT NOT NULL,
-      "status" TEXT NOT NULL DEFAULT 'pending',
-      "error_message" TEXT,
-      "executed_at" INTEGER NOT NULL DEFAULT (unixepoch())
+      "id"           TEXT PRIMARY KEY,
+      "filename"     TEXT NOT NULL UNIQUE,
+      "sha256"       TEXT NOT NULL,
+      "applied_at"   INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+      "applied_by"   TEXT,
+      "duration_ms"  INTEGER,
+      "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
+      "error_json"   TEXT,
+      "rollback_sql" TEXT
     )`,
   ];
 }

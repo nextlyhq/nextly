@@ -3,6 +3,8 @@
 -- Dialect: MySQL
 -- Source: F11 (file-based migration ledger). Bundled with the nextly package
 -- so fresh production databases get the table on first `nextly migrate`.
+-- Synthetic 000000_000 time component so this bundled file sorts BEFORE
+-- any user-generated migration created on the same date.
 
 -- UP
 

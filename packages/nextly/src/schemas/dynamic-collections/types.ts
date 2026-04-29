@@ -543,7 +543,16 @@ export type MigrationRecordStatus = "applied" | "failed";
 export interface MigrationErrorJson {
   /** Database-specific error code (e.g. PG SQLSTATE `42703`). */
   sqlState?: string;
-  /** The SQL statement that triggered the error. */
+  /**
+   * The SQL statement that triggered the error.
+   *
+   * **Always undefined in F11.** PG/SQLite run all migration statements
+   * inside a single transaction so the driver only reports the bubbled-up
+   * error, not the specific failing statement. F15 will introduce
+   * per-statement journaling on MySQL (which has non-transactional DDL)
+   * and populate this field for that path. Until then, treat this as
+   * reserved.
+   */
   statement?: string;
   /** Human-readable error message from the driver. */
   message: string;

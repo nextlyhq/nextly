@@ -343,6 +343,10 @@ function parseMigrationFile(
 // This is a duplicated helper today; both call sites need the new schema
 // in lockstep. A shared helper extraction is a follow-up cleanup (out of
 // PR 1 scope to keep diff focused).
+//
+// MIRROR: keep this in sync with `migrate.ts:ensureMigrationsTable`
+// AND with `database/migrations/<dialect>/20260429_000000_000_initial_journal.sql`
+// AND with `migrate-fresh.ts:generateSqliteCreateStatements`.
 async function ensureMigrationsTable(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
@@ -389,7 +393,7 @@ async function ensureMigrationsTable(
           "id"           TEXT PRIMARY KEY,
           "filename"     TEXT NOT NULL UNIQUE,
           "sha256"       TEXT NOT NULL,
-          "applied_at"   INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
+          "applied_at"   INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
           "applied_by"   TEXT,
           "duration_ms"  INTEGER,
           "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),

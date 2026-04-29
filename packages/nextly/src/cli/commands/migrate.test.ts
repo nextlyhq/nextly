@@ -1,4 +1,5 @@
-// F11 PR 1: unit tests for the new `nextly_migrations` INSERT shape.
+// F11 PR 1: unit tests for the new `nextly_migrations` INSERT shape and
+// the retry-of-failed-migration semantics.
 //
 // Captures the SQL emitted by `recordMigrationForTest` against a stub
 // adapter and asserts it contains the F11 spec columns (filename, sha256,
@@ -7,11 +8,15 @@
 //
 // Drives one of the most load-bearing changes in PR 1: the column rename
 // touches every read/write of the table; missing one would silently break
-// production migration apply.
+// production migration apply. Also covers the regression caught by code
+// review where a failed migration would block its own retry.
 
 import { describe, expect, it, vi } from "vitest";
 
-import { recordMigrationForTest } from "./migrate.js";
+import {
+  findPendingMigrationsForTest,
+  recordMigrationForTest,
+} from "./migrate.js";
 
 interface StubAdapter {
   executeQuery: ReturnType<typeof vi.fn>;
@@ -125,7 +130,7 @@ describe("recordMigrationForTest (F11)", () => {
   });
 
   describe("SQLite", () => {
-    it("emits INSERT with F11 columns and epoch-ms applied_at", async () => {
+    it("emits INSERT with F11 columns and millisecond-precision applied_at", async () => {
       const adapter = makeAdapter();
 
       await recordMigrationForTest(
@@ -140,9 +145,11 @@ describe("recordMigrationForTest (F11)", () => {
       expect(sql).toContain('"filename"');
       expect(sql).toContain('"sha256"');
       expect(sql).toContain('"error_json"');
-      // SQLite stores applied_at as INTEGER (epoch ms).
-      expect(sql).toContain("strftime('%s','now')");
-      expect(sql).toContain("* 1000");
+      // F11 PR 1 review fix #3: SQLite applied_at is real ms-precision via
+      // julianday(). Code-review revealed that strftime('%s','now') * 1000
+      // is only second-precision — the *1000 just zero-pads.
+      expect(sql).toContain("julianday('now')");
+      expect(sql).toContain("86400000");
 
       // Dropped columns must NOT appear
       expect(sql).not.toMatch(/\bbatch\b/);
@@ -205,5 +212,179 @@ describe("recordMigrationForTest (F11)", () => {
     const sql = adapter.executeQuery.mock.calls[0][0] as string;
     expect(sql).toContain("weird''name.sql");
     expect(sql).toContain("actor''s-name");
+  });
+});
+
+describe("findPendingMigrationsForTest (F11 PR 1 review fix #1)", () => {
+  // Minimal logger stub. We don't expect MIGRATION_TAMPERED or _MISSING
+  // exits in these scenarios so error/warn shouldn't fire unless asserted.
+  function makeLogger() {
+    return {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      success: vi.fn(),
+      header: vi.fn(),
+      newline: vi.fn(),
+      divider: vi.fn(),
+      keyValue: vi.fn(),
+      item: vi.fn(),
+      table: vi.fn(),
+    };
+  }
+
+  const FILE_X = {
+    name: "20260429_154500_001_add_excerpt",
+    filePath: "/tmp/migrations/20260429_154500_001_add_excerpt.sql",
+    upSql: "ALTER TABLE posts ADD COLUMN excerpt TEXT;",
+    downSql: "",
+    checksum: "x".repeat(64),
+    collections: ["posts"],
+    singles: [],
+    components: [],
+    timestamp: "20260429_154500_001",
+    source: "app" as const,
+  };
+
+  it("treats a status='applied' row as already-applied (skips)", () => {
+    const logger = makeLogger();
+    const pending = findPendingMigrationsForTest(
+      [FILE_X],
+      [
+        {
+          id: "00000000-0000-4000-a000-000000000001",
+          filename: FILE_X.name,
+          sha256: FILE_X.checksum,
+          status: "applied",
+          appliedBy: "test",
+          durationMs: 10,
+          errorJson: null,
+          appliedAt: new Date(),
+        },
+      ],
+      logger as unknown as Parameters<typeof findPendingMigrationsForTest>[2]
+    );
+    expect(pending).toHaveLength(0);
+  });
+
+  it("treats a status='failed' row as PENDING so the retry runs", () => {
+    // The whole point of fix #1: a failed row should not block its own
+    // retry. Operator fixed the SQL or fixed the upstream issue and
+    // re-ran `nextly migrate`; the file should still be in the pending
+    // set.
+    const logger = makeLogger();
+    const pending = findPendingMigrationsForTest(
+      [FILE_X],
+      [
+        {
+          id: "00000000-0000-4000-a000-000000000002",
+          filename: FILE_X.name,
+          sha256: FILE_X.checksum,
+          status: "failed",
+          appliedBy: "test",
+          durationMs: 5,
+          errorJson: { message: "previous failure" },
+          appliedAt: new Date(),
+        },
+      ],
+      logger as unknown as Parameters<typeof findPendingMigrationsForTest>[2]
+    );
+    expect(pending).toHaveLength(1);
+    expect(pending[0].name).toBe(FILE_X.name);
+  });
+
+  it("does not fire MIGRATION_MISSING for a failed row pointing at a deleted file", () => {
+    // A failed row pointing at a now-deleted file is just stale state
+    // from a prior failed run — not a missing applied migration. We
+    // shouldn't process.exit(3) on this.
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const logger = makeLogger();
+
+    findPendingMigrationsForTest(
+      [], // No files on disk
+      [
+        {
+          id: "00000000-0000-4000-a000-000000000003",
+          filename: "20260101_000000_000_deleted.sql",
+          sha256: "y".repeat(64),
+          status: "failed",
+          appliedBy: "test",
+          durationMs: 5,
+          errorJson: null,
+          appliedAt: new Date(),
+        },
+      ],
+      logger as unknown as Parameters<typeof findPendingMigrationsForTest>[2]
+    );
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it("DOES fire MIGRATION_MISSING for an applied row pointing at a deleted file", () => {
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const logger = makeLogger();
+
+    findPendingMigrationsForTest(
+      [],
+      [
+        {
+          id: "00000000-0000-4000-a000-000000000004",
+          filename: "20260101_000000_000_was_applied.sql",
+          sha256: "z".repeat(64),
+          status: "applied",
+          appliedBy: "test",
+          durationMs: 5,
+          errorJson: null,
+          appliedAt: new Date(),
+        },
+      ],
+      logger as unknown as Parameters<typeof findPendingMigrationsForTest>[2]
+    );
+
+    expect(exitSpy).toHaveBeenCalledWith(3);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("MIGRATION_MISSING")
+    );
+    exitSpy.mockRestore();
+  });
+
+  it("DOES fire MIGRATION_TAMPERED when an applied file's hash differs", () => {
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const logger = makeLogger();
+    const tamperedFile = {
+      ...FILE_X,
+      checksum: "DIFFERENT".padEnd(64, "0"),
+    };
+
+    findPendingMigrationsForTest(
+      [tamperedFile],
+      [
+        {
+          id: "00000000-0000-4000-a000-000000000005",
+          filename: FILE_X.name,
+          sha256: FILE_X.checksum,
+          status: "applied",
+          appliedBy: "test",
+          durationMs: 5,
+          errorJson: null,
+          appliedAt: new Date(),
+        },
+      ],
+      logger as unknown as Parameters<typeof findPendingMigrationsForTest>[2]
+    );
+
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("MIGRATION_TAMPERED")
+    );
+    exitSpy.mockRestore();
   });
 });
