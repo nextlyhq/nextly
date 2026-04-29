@@ -155,7 +155,7 @@ DATABASE_URL=$PROD_URL pnpm exec nextly migrate
 
 For the recommended GitHub Actions workflow + Vercel build-step pattern + other-platform setups, see the [Production migrations guide](/docs/guides/production-migrations). It covers `nextly migrate:create`, `nextly migrate:check` (CI integrity gate), and the `nextly_migrations` ledger table.
 
-The deployed app never touches schema. All migrations run as a CLI step before deploy — see the production-migrations guide for why.
+The deployed app never touches schema. All migrations run as a CLI step before deploy. See the production-migrations guide for why.
 
 ## Storage Setup for Production
 

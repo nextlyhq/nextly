@@ -3,12 +3,12 @@
  *
  * Implements the `nextly migrate` command for running pending database migrations.
  *
- * **Runtime restriction (F11 PR 5):** This module is CLI-only. Do NOT
+ * **Runtime restriction (F11):** This module is CLI-only. Do NOT
  * import it from runtime code (init/, route-handler/, dispatcher/, api/,
- * actions/, direct-api/, routeHandler.ts) — the deployed Next.js app must
- * not perform schema migrations at boot. Enforced by ESLint
- * (`no-restricted-imports`); see docs/guides/production-migrations.mdx
- * for the deploy-time CLI patterns.
+ * actions/, direct-api/, routeHandler.ts, next.ts). The deployed
+ * Next.js app must not perform schema migrations at boot. Enforced by
+ * ESLint (`no-restricted-imports`); see
+ * docs/guides/production-migrations.mdx for the deploy-time CLI patterns.
  *
  * @module cli/commands/migrate
  * @since 1.0.0

@@ -118,9 +118,21 @@ Nextly's CLI is platform-agnostic. The pattern is the same on Railway, Render, F
 
 Specific examples:
 
-- **Railway:** Add a `release` command in `railway.json`: `"deploy": { "startCommand": "nextly migrate && next start" }`. Railway runs `release` once before scaling out.
+- **Railway:** Use `deploy.preDeployCommand` in `railway.json`. This runs once before the new revision takes traffic, so it does not race across replicas:
+  ```json
+  {
+    "deploy": {
+      "preDeployCommand": ["nextly migrate"]
+    }
+  }
+  ```
+  Do NOT put `nextly migrate` in `startCommand`. `startCommand` runs on every container start and would race across replicas, which is precisely the failure mode this guide is designed to avoid.
 - **Render:** Use a [pre-deploy command](https://render.com/docs/deploys#pre-deploy-commands).
-- **Fly.io:** Use a `release_command` in `fly.toml`: `[deploy] release_command = "nextly migrate"`.
+- **Fly.io:** Use a `release_command` in `fly.toml`. The `[deploy]` is a TOML section header:
+  ```toml
+  [deploy]
+  release_command = "nextly migrate"
+  ```
 - **AWS (ECS, etc.):** Add a one-shot task in your pipeline that runs `nextly migrate` before updating the service.
 
 ---
@@ -129,17 +141,17 @@ Specific examples:
 
 1. Connects to the database via `DATABASE_URL`.
 2. Reads the `nextly_migrations` table to see which `.sql` files have been applied.
-3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state — nothing else runs.
+3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
-5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL — see [database support](../database/support.mdx) for MySQL caveats).
+5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL; see [database support](../database/support.mdx) for MySQL caveats).
 6. Records each applied file in `nextly_migrations` with `applied_at`, `applied_by`, `duration_ms`, `sha256`.
 
 | Exit code | Meaning |
 |---|---|
 | 0 | All pending applied OR no pending |
 | 1 | A migration failed during execution |
-| 2 | `MIGRATION_TAMPERED` — abort before running any |
-| 3 | `MIGRATION_MISSING` — abort; file referenced in DB but missing from disk |
+| 2 | `MIGRATION_TAMPERED`. Abort before running any. |
+| 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
 
 ## What `nextly migrate:check` does (CI-friendly, no DB)
 
@@ -157,7 +169,7 @@ Run it in your PR CI to catch mistakes before they reach production.
 
 ## What you should never do
 
-- **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with an ESLint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`.
+- **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with an ESLint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
 - **Don't edit applied migration files.** The hash check catches this and aborts with `MIGRATION_TAMPERED`. To change something already applied, write a new corrective migration.
 - **Don't run `nextly migrate` concurrently** (e.g. two CI jobs racing). Nextly does not take an advisory lock; the `filename` UNIQUE constraint on `nextly_migrations` will catch double-insert, but the second instance will exit non-zero. Single-instance operator responsibility.
 

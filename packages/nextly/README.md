@@ -497,11 +497,11 @@ Nextly uses a CLI-driven migration workflow for production schema changes. Migra
 
 ```bash
 # Local: edit nextly.config.ts, then generate the migration
-nextly migrate:create --name=add_excerpt
+pnpm exec nextly migrate:create --name=add_excerpt
 
 # CI: verify integrity + apply
-nextly migrate:check
-nextly migrate                  # against $DATABASE_URL
+pnpm exec nextly migrate:check
+pnpm exec nextly migrate                  # against $DATABASE_URL
 
 # Then deploy your app
 ```
