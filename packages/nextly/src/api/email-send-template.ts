@@ -10,86 +10,35 @@
  * export { POST } from '@revnixhq/nextly/api/email-send-template';
  * ```
  *
+ * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
+ * returns the canonical `{ data: <result> }` envelope per spec §10.2.
+ * Auth uses the existing `requireAuthentication` middleware bridged to
+ * `NextlyError` via `toNextlyAuthError`. Validation flows through
+ * `nextlyValidationFromZod` (F11), and `EmailAttachmentError` through
+ * the shared `nextlyErrorFromEmailAttachment` helper.
+ *
  * @module api/email-send-template
  */
 
 import { z } from "zod";
 
-import {
-  createJsonErrorResponse,
-  isErrorResponse,
-  requireAuthentication,
-} from "../auth/middleware";
+import { isErrorResponse, requireAuthentication } from "../auth/middleware";
+import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { EmailAttachmentError, EmailErrorCode } from "../domains/email/errors";
-import { isServiceError } from "../errors";
+import { isEmailAttachmentError } from "../domains/email/errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
 
-// ============================================================
-// Helpers
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { nextlyErrorFromEmailAttachment } from "./email-attachment-to-nextly-error";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getEmailService(): Promise<EmailService> {
   await getNextly();
   return container.get<EmailService>("emailService");
 }
-
-function errorResponse(
-  message: string,
-  statusCode: number,
-  code?: string
-): Response {
-  return Response.json(
-    { error: { message, ...(code && { code }) } },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function handleError(error: unknown): Response {
-  console.error(`[Email Send Template API] error:`, error);
-
-  if (error instanceof EmailAttachmentError) {
-    const clientFacing: readonly EmailErrorCode[] = [
-      EmailErrorCode.ATTACHMENT_COUNT_EXCEEDED,
-      EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
-      EmailErrorCode.ATTACHMENT_MEDIA_NOT_FOUND,
-    ];
-    if (clientFacing.includes(error.code)) {
-      return errorResponse(error.message, 400, error.code);
-    }
-    return errorResponse(error.message, 500, error.code);
-  }
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof z.ZodError) {
-    const first = error.issues[0];
-    return errorResponse(
-      first?.message ?? "Validation error",
-      400,
-      "VALIDATION_ERROR"
-    );
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse("Failed to send email", 500);
-}
-
-// ============================================================
-// Validation
-// ============================================================
 
 const attachmentInputSchema = z.object({
   mediaId: z.string().min(1, "mediaId is required"),
@@ -106,10 +55,6 @@ const sendTemplateSchema = z.object({
   attachments: z.array(attachmentInputSchema).optional(),
 });
 
-// ============================================================
-// Route Handler
-// ============================================================
-
 /**
  * POST handler for sending an email using a template.
  *
@@ -122,49 +67,63 @@ const sendTemplateSchema = z.object({
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
  *
  * Response codes:
- * - 200 OK: `{ success, messageId? }`
+ * - 200 OK: `{ data: { success, messageId? } }`
  * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found
  * - 401 Unauthorized
  * - 500 Internal Server Error: storage read failed or provider error
- * - 503 Service Unavailable: services not initialized
  */
-export async function POST(request: Request): Promise<Response> {
-  try {
+export const POST = withErrorHandler(
+  async (request: Request): Promise<Response> => {
     const authResult = await requireAuthentication(request);
-    if (isErrorResponse(authResult)) {
-      return createJsonErrorResponse(authResult);
-    }
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
-    let raw: unknown = {};
+    let raw: unknown;
     try {
       raw = await request.json();
     } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      throw new NextlyError({
+        code: "VALIDATION_ERROR",
+        publicMessage: "Validation failed.",
+        publicData: {
+          errors: [
+            {
+              path: "",
+              code: "invalid_json",
+              message: "Request body is not valid JSON.",
+            },
+          ],
+        },
+        logContext: { reason: "invalid-json-body" },
+      });
     }
 
-    const args = sendTemplateSchema.parse(raw);
+    let args: z.infer<typeof sendTemplateSchema>;
+    try {
+      args = sendTemplateSchema.parse(raw);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
+
     const service = await getEmailService();
-
-    const result = await service.sendWithTemplate(
-      args.template,
-      args.to,
-      (args.variables ?? {}) as Record<string, unknown>,
-      {
-        providerId: args.providerId,
-        cc: args.cc,
-        bcc: args.bcc,
-        attachments: args.attachments,
+    try {
+      const result = await service.sendWithTemplate(
+        args.template,
+        args.to,
+        args.variables ?? {},
+        {
+          providerId: args.providerId,
+          cc: args.cc,
+          bcc: args.bcc,
+          attachments: args.attachments,
+        }
+      );
+      return createSuccessResponse(result);
+    } catch (err) {
+      if (isEmailAttachmentError(err)) {
+        throw nextlyErrorFromEmailAttachment(err);
       }
-    );
-
-    return Response.json(
-      { data: result },
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error);
+      throw err;
+    }
   }
-}
+);

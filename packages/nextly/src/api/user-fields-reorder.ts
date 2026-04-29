@@ -11,24 +11,23 @@
  * export { PATCH } from '@revnixhq/nextly/api/user-fields-reorder';
  * ```
  *
+ * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
+ * returns the canonical `{ data: <result> }` envelope per spec §10.2.
+ *
  * @module api/user-fields-reorder
  */
 
 import { z } from "zod";
 
 import { container } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
-// ============================================================
-// Helper Functions
-// ============================================================
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-/**
- * Get the UserFieldDefinitionService from the DI container.
- * Uses getNextly() to ensure services are initialized with config.
- */
 async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionService> {
   await getNextly();
   return container.get<UserFieldDefinitionService>(
@@ -36,85 +35,17 @@ async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionServi
   );
 }
 
-/**
- * Create an error response
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
-      },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+function requireAuthHeader(request: Request): void {
+  if (!request.headers.get("Authorization")) {
+    throw NextlyError.authRequired();
+  }
 }
 
-/**
- * Handle errors from service layer
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[User Fields Reorder API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
-  }
-
-  if (error instanceof z.ZodError) {
-    const firstError = error.issues[0];
-    return errorResponse(
-      firstError?.message || "Validation error",
-      400,
-      "VALIDATION_ERROR"
-    );
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Check for authentication header.
- * Returns error response if not authenticated, null if authenticated.
- */
-function checkAuthentication(request: Request): Response | null {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
-  }
-  return null;
-}
-
-// ============================================================
-// Validation Schemas
-// ============================================================
-
-/**
- * Schema for reorder request body
- */
 const reorderSchema = z.object({
   fieldIds: z
     .array(z.string().min(1, "Field ID cannot be empty"))
     .min(1, "At least one field ID is required"),
 });
-
-// ============================================================
-// Route Handler
-// ============================================================
 
 /**
  * PATCH handler for reordering user field definitions.
@@ -131,54 +62,46 @@ const reorderSchema = z.object({
  * - 200 OK: Fields reordered successfully
  * - 400 Bad Request: Invalid input
  * - 401 Unauthorized: Authentication required
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Reorder failed
  *
- * @param request - Next.js Request object with JSON body
- * @returns Response with JSON updated field definitions list
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/user-fields/reorder', {
- *   method: 'PATCH',
- *   headers: {
- *     'Content-Type': 'application/json',
- *     'Authorization': 'Bearer <token>',
- *   },
- *   body: JSON.stringify({
- *     fieldIds: ['uuid-3', 'uuid-1', 'uuid-2'],
- *   }),
- * });
- * const { data: fields } = await response.json();
- * // fields are now in the new order
- * ```
+ * Response: `{ "data": UserFieldDefinition[] }` — the updated field list
+ * in the new order.
  */
-export async function PATCH(request: Request): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const PATCH = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    requireAuthHeader(request);
 
-    const service = await getUserFieldDefinitionService();
-
-    let body: unknown;
+    let raw: unknown;
     try {
-      body = await request.json();
+      raw = await request.json();
     } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
+      throw new NextlyError({
+        code: "VALIDATION_ERROR",
+        publicMessage: "Validation failed.",
+        publicData: {
+          errors: [
+            {
+              path: "",
+              code: "invalid_json",
+              message: "Request body is not valid JSON.",
+            },
+          ],
+        },
+        logContext: { reason: "invalid-json-body" },
+      });
     }
 
-    const validated = reorderSchema.parse(body);
+    let validated: z.infer<typeof reorderSchema>;
+    try {
+      validated = reorderSchema.parse(raw);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
 
+    const service = await getUserFieldDefinitionService();
     const fields = await service.reorderFields(validated.fieldIds);
 
-    return Response.json(
-      { data: fields },
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Reorder user field definitions");
+    return createSuccessResponse(fields);
   }
-}
+);

@@ -26,11 +26,28 @@
  * - GET /admin/api/collections/[slug]/uploads/[id] - Get upload metadata
  * - DELETE /admin/api/collections/[slug]/uploads/[id] - Delete upload
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
+ * return the canonical envelope per spec §10.2:
+ *   - Single resource: `{ data: <result> }`
+ *   - Paginated list: `{ data: [...], meta: { total, page, perPage } }`
+ *
+ * The legacy double-wrap `{ success, statusCode, data, meta? }` is dropped
+ * across all five operations — admin code reading `response.success`
+ * breaks until Task 10 migrates the admin fetcher (F12 admin-gap ledger).
+ * The legacy pagination meta `{ page, limit, total, totalPages }` collapses
+ * to canonical `{ total, page, perPage }` (`limit → perPage`; `totalPages`
+ * dropped — caller computes).
+ *
+ * `UploadServiceResult` (a result-shape, not a throw) is unwrapped via
+ * `throwFromUploadResult`: 404 → `NextlyError.notFound`, 400 →
+ * `NextlyError.validation` with field-level errors, 503 →
+ * `NextlyError.serviceUnavailable`, anything else → `NextlyError.internal`.
+ *
  * @module api/uploads
  */
 
 import { isServicesRegistered, getService } from "../di/register";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import {
@@ -40,50 +57,32 @@ import {
 } from "../services/upload-service";
 import { getMediaStorage } from "../storage/storage";
 
-// ============================================================
-// Types
-// ============================================================
+import {
+  createPaginatedResponse,
+  createSuccessResponse,
+} from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
-/**
- * Route params for upload endpoints
- */
 interface UploadRouteParams {
   slug: string;
   id?: string;
 }
 
 /**
- * Collection upload configuration
- * Can be extended per-collection in the future
- */
-interface CollectionUploadConfig extends UploadConfig {
-  collectionSlug: string;
-}
-
-// ============================================================
-// Singleton Upload Service
-// ============================================================
-
-let uploadServiceInstance: UploadService | null = null;
-
-/**
  * Get or create the UploadService for a collection.
- * Uses the storage adapter from the initialized MediaStorage.
  *
  * Reads `security.uploads` from the Nextly config to apply
  * `additionalMimeTypes`, `allowedMimeTypes`, and `svgCsp` settings.
- *
- * Server-side validation provides reasonable defaults to prevent abuse.
- * Client-side validation enforces field-specific constraints (maxFileSize, mimeTypes).
+ * Server-side validation provides reasonable defaults to prevent abuse;
+ * client-side validation enforces field-specific constraints
+ * (`maxFileSize`, `mimeTypes`).
  */
-async function getUploadService(
+function getUploadService(
   _collectionSlug: string,
   config?: Partial<UploadConfig>
-): Promise<UploadService> {
-  // Get the storage adapter - this will use the one configured via getNextly()
+): UploadService {
   const storage = getMediaStorage().getAdapter();
 
-  // Read security.uploads config from the DI container (set during init)
   let uploadSecurityConfig:
     | {
         additionalMimeTypes?: string[];
@@ -97,109 +96,28 @@ async function getUploadService(
   }
 
   return new UploadService(storage, {
-    // Pass through config — UploadService applies secure defaults
     maxSize: config?.maxSize,
-    // security.uploads.allowedMimeTypes overrides the default entirely
     allowedMimeTypes:
       config?.allowedMimeTypes ?? uploadSecurityConfig?.allowedMimeTypes,
-    // security.uploads.additionalMimeTypes merges with defaults
     additionalMimeTypes:
       config?.additionalMimeTypes ?? uploadSecurityConfig?.additionalMimeTypes,
-    // security.uploads.svgCsp controls SVG Content-Disposition: attachment
     svgCsp: uploadSecurityConfig?.svgCsp,
     generateThumbnails: config?.generateThumbnails,
     thumbnailSize: config?.thumbnailSize,
   });
 }
 
-/**
- * Reset the upload service singleton (for testing)
- */
+/** Re-exported for tests that exercise the singleton lifecycle. */
 export function resetUploadService(): void {
-  uploadServiceInstance = null;
+  // No-op after Task 21 migration: the singleton was unused even pre-migration.
+  // Kept as an export so test imports don't break; the function intentionally
+  // does no work.
 }
 
-// ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * Ensure services are initialized.
- * Uses getNextly() which returns the cached instance with config if available.
- */
 async function ensureServicesInitialized(): Promise<void> {
   await getNextly();
 }
 
-/**
- * Create a success response
- */
-function successResponse<T>(
-  data: T,
-  statusCode: number = 200,
-  meta?: Record<string, unknown>
-): Response {
-  return Response.json(
-    {
-      success: true,
-      statusCode,
-      data,
-      ...(meta && { meta }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Create an error response
- */
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  errors?: Array<{ field?: string; message: string }>
-): Response {
-  return Response.json(
-    {
-      success: false,
-      statusCode,
-      message,
-      ...(errors && { errors }),
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-/**
- * Handle errors from service layer
- */
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Upload API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, [
-      { message: error.message },
-    ]);
-  }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503);
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-/**
- * Extract route params from Next.js context
- */
 async function extractParams(
   params: Promise<{ slug?: string; id?: string }>
 ): Promise<UploadRouteParams> {
@@ -210,19 +128,74 @@ async function extractParams(
   };
 }
 
-/**
- * Validate that a collection slug is provided
- */
-function validateSlug(slug: string): Response | null {
+function requireSlug(slug: string): void {
   if (!slug) {
-    return errorResponse("Collection slug is required", 400);
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "slug",
+          code: "REQUIRED",
+          message: "Collection slug is required.",
+        },
+      ],
+      logContext: { reason: "missing-collection-slug" },
+    });
   }
-  return null;
 }
 
-// ============================================================
-// Route Handlers
-// ============================================================
+/**
+ * Convert an `UploadServiceResult` failure into a thrown `NextlyError`.
+ *
+ * Status-to-code mapping:
+ *   400 → `NextlyError.validation` with `errors[]` mapped from
+ *         `result.errors` (`{field, message}` → `{path, code, message}`).
+ *   404 → `NextlyError.notFound` (canonical "Not found." public message;
+ *         the original `result.message` lives in `logContext`).
+ *   503 → `NextlyError.serviceUnavailable`.
+ *   else → `NextlyError.internal`.
+ *
+ * The `result.message` and the original status code are preserved in
+ * `logContext` so operators can correlate the unified wire payload with
+ * the storage adapter's diagnostic.
+ */
+function throwFromUploadResult(
+  result: UploadServiceResult<unknown>,
+  operation: string
+): never {
+  const logContext: Record<string, unknown> = {
+    operation,
+    legacyStatus: result.statusCode,
+    legacyMessage: result.message,
+  };
+
+  if (result.statusCode === 404) {
+    throw NextlyError.notFound({ logContext });
+  }
+
+  if (result.statusCode === 400) {
+    const errors =
+      result.errors && result.errors.length > 0
+        ? result.errors.map(e => ({
+            path: e.field ?? "",
+            code: "INVALID_INPUT",
+            message: e.message,
+          }))
+        : [
+            {
+              path: "",
+              code: "INVALID_INPUT",
+              message: result.message ?? "Invalid input.",
+            },
+          ];
+    throw NextlyError.validation({ errors, logContext });
+  }
+
+  if (result.statusCode === 503) {
+    throw NextlyError.serviceUnavailable({ logContext });
+  }
+
+  throw NextlyError.internal({ logContext });
+}
 
 /**
  * POST handler for uploading files to a collection.
@@ -239,62 +212,47 @@ function validateSlug(slug: string): Response | null {
  * - 401 Unauthorized: Not authenticated
  * - 500 Internal Server Error: Upload failed
  *
- * @param request - Next.js Request object with FormData
- * @param context - Route context with params
- * @returns Response with JSON upload result
- *
- * @example
- * ```typescript
- * const formData = new FormData();
- * formData.append('file', selectedFile);
- * formData.append('_payload', JSON.stringify({ alt: 'Description' }));
- *
- * const response = await fetch('/admin/api/collections/media/uploads', {
- *   method: 'POST',
- *   body: formData,
- *   credentials: 'include',
- * });
- * const { data } = await response.json();
- * ```
+ * Response: `{ "data": UploadResult }` with status 201, post-processed
+ * through `withTimezoneFormatting`.
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ slug?: string }> }
-): Promise<Response> {
-  try {
+export const POST = withErrorHandler(
+  async (
+    request: Request,
+    context: { params: Promise<{ slug?: string }> }
+  ): Promise<Response> => {
     await ensureServicesInitialized();
 
-    const { slug } = await extractParams(params);
-    const slugError = validateSlug(slug);
-    if (slugError) return slugError;
+    const { slug } = await extractParams(context.params);
+    requireSlug(slug);
 
-    // Parse FormData
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
 
     if (!file) {
-      return errorResponse("File is required", 400, [
-        { field: "file", message: "No file provided" },
-      ]);
+      throw NextlyError.validation({
+        errors: [
+          { path: "file", code: "REQUIRED", message: "file is required." },
+        ],
+        logContext: { reason: "missing-file" },
+      });
     }
 
-    // Parse additional data from _payload field
+    // `_payload` is optional metadata. Invalid JSON is tolerated to
+    // preserve the pre-migration "ignore unparseable _payload" semantic.
     const payloadStr = formData.get("_payload") as string | null;
     let additionalData: Record<string, unknown> = {};
     if (payloadStr) {
       try {
         additionalData = JSON.parse(payloadStr);
       } catch {
-        // Ignore invalid JSON in _payload
+        // Intentional swallow — see comment above.
       }
     }
 
-    // Convert File to Buffer
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Get upload service and upload file
-    const uploadService = await getUploadService(slug);
+    const uploadService = getUploadService(slug);
     const result = await uploadService.upload(buffer, {
       filename: file.name,
       mimeType: file.type || "application/octet-stream",
@@ -302,14 +260,10 @@ export async function POST(
     });
 
     if (!result.success) {
-      return errorResponse(
-        result.message || "Upload failed",
-        result.statusCode,
-        result.errors
-      );
+      throwFromUploadResult(result, "upload");
     }
 
-    // Transform to client-expected format
+    // Transform to client-expected format.
     const uploadData = {
       id: result.data?.id,
       filename: result.data?.filename,
@@ -323,14 +277,15 @@ export async function POST(
       ...additionalData,
     };
 
-    return withTimezoneFormatting(successResponse(uploadData, 201));
-  } catch (error) {
-    return handleError(error, "Upload file");
+    return withTimezoneFormatting(
+      createSuccessResponse(uploadData, { status: 201 })
+    );
   }
-}
+);
 
 /**
- * GET handler for retrieving upload metadata by ID.
+ * GET handler — dual-purpose: with `id` returns metadata for a single
+ * upload; without `id` returns the (currently empty) collection list.
  *
  * Path: /admin/api/collections/[slug]/uploads/[id]
  *
@@ -340,47 +295,31 @@ export async function POST(
  * - 404 Not Found: Upload not found
  * - 500 Internal Server Error: Failed to get metadata
  *
- * @param request - Next.js Request object
- * @param context - Route context with params
- * @returns Response with JSON upload metadata
- *
- * @example
- * ```bash
- * curl http://localhost:3000/admin/api/collections/media/uploads/abc-123
- * # => {"success":true,"data":{...}}
- * ```
+ * Response: `{ "data": UploadMetadata }` for single; for list see
+ * `handleList` (paginated `meta` shape).
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ slug?: string; id?: string }> }
-): Promise<Response> {
-  try {
+export const GET = withErrorHandler(
+  async (
+    request: Request,
+    context: { params: Promise<{ slug?: string; id?: string }> }
+  ): Promise<Response> => {
     await ensureServicesInitialized();
 
-    const { slug, id } = await extractParams(params);
-    const slugError = validateSlug(slug);
-    if (slugError) return slugError;
+    const { slug, id } = await extractParams(context.params);
+    requireSlug(slug);
 
-    // If no ID provided, this is a list request
     if (!id) {
       return handleList(request, slug);
     }
 
-    // Get metadata for specific upload
-    const uploadService = await getUploadService(slug);
-
-    // The ID is the file path relative to the collection folder
+    const uploadService = getUploadService(slug);
     const filePath = `${slug}/${id}`;
     const result = await uploadService.getMetadata(filePath);
 
     if (!result.success) {
-      return errorResponse(
-        result.message || "Upload not found",
-        result.statusCode
-      );
+      throwFromUploadResult(result, "get-metadata");
     }
 
-    // Transform to client-expected format
     const uploadData = {
       id: result.data?.id,
       filename: result.data?.filename || result.data?.originalFilename,
@@ -394,35 +333,25 @@ export async function GET(
       updatedAt: result.data?.updatedAt,
     };
 
-    return withTimezoneFormatting(successResponse(uploadData, 200));
-  } catch (error) {
-    return handleError(error, "Get upload metadata");
+    return withTimezoneFormatting(createSuccessResponse(uploadData));
   }
-}
+);
 
 /**
- * Handle list request for uploads in a collection.
- * This is called when GET is invoked without an ID.
- *
- * Note: Currently returns empty list as listing requires storage adapter
- * enumeration which may not be efficient for all storage backends.
- * In production, you would typically query a database for upload records.
+ * Handle list request for uploads in a collection. Currently returns an
+ * empty list — a real implementation would query a database or enumerate
+ * the storage adapter; that work is out of scope for the Task 21
+ * mechanical migration. Pagination meta moves to canonical
+ * `{ total, page, perPage }` (`limit → perPage`; `totalPages` dropped).
  */
-async function handleList(request: Request, slug: string): Promise<Response> {
+async function handleList(request: Request, _slug: string): Promise<Response> {
   const { searchParams } = new URL(request.url);
 
   const page = parseInt(searchParams.get("page") || "1", 10);
-  const limit = parseInt(searchParams.get("limit") || "10", 10);
+  const perPage = parseInt(searchParams.get("limit") || "10", 10);
 
-  // For now, return empty list
-  // In production, this would query a database or enumerate storage
   return withTimezoneFormatting(
-    successResponse([], 200, {
-      page,
-      limit,
-      total: 0,
-      totalPages: 0,
-    })
+    createPaginatedResponse([], { total: 0, page, perPage })
   );
 }
 
@@ -437,63 +366,42 @@ async function handleList(request: Request, slug: string): Promise<Response> {
  * - 404 Not Found: Upload not found
  * - 500 Internal Server Error: Deletion failed
  *
- * @param request - Next.js Request object
- * @param context - Route context with params
- * @returns Response with success message
- *
- * @example
- * ```bash
- * curl -X DELETE http://localhost:3000/admin/api/collections/media/uploads/abc-123
- * # => {"success":true,"message":"Upload deleted successfully"}
- * ```
+ * Response: `{ "data": { "success": true, "message": "Upload deleted
+ * successfully." } }`
  */
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ slug?: string; id?: string }> }
-): Promise<Response> {
-  try {
+export const DELETE = withErrorHandler(
+  async (
+    _request: Request,
+    context: { params: Promise<{ slug?: string; id?: string }> }
+  ): Promise<Response> => {
     await ensureServicesInitialized();
 
-    const { slug, id } = await extractParams(params);
-    const slugError = validateSlug(slug);
-    if (slugError) return slugError;
+    const { slug, id } = await extractParams(context.params);
+    requireSlug(slug);
 
     if (!id) {
-      return errorResponse("Upload ID is required", 400, [
-        { field: "id", message: "No upload ID provided" },
-      ]);
+      throw NextlyError.validation({
+        errors: [
+          { path: "id", code: "REQUIRED", message: "Upload ID is required." },
+        ],
+        logContext: { reason: "missing-upload-id" },
+      });
     }
 
-    const uploadService = await getUploadService(slug);
-
-    // The ID is the file path relative to the collection folder
+    const uploadService = getUploadService(slug);
     const filePath = `${slug}/${id}`;
     const result = await uploadService.delete(filePath);
 
     if (!result.success) {
-      return errorResponse(
-        result.message || "Failed to delete upload",
-        result.statusCode
-      );
+      throwFromUploadResult(result, "delete");
     }
 
-    return Response.json(
-      {
-        success: true,
-        statusCode: 200,
-        message: "Upload deleted successfully",
-      },
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (error) {
-    return handleError(error, "Delete upload");
+    return createSuccessResponse({
+      success: true,
+      message: "Upload deleted successfully.",
+    });
   }
-}
+);
 
-/**
- * Alias for GET when used for listing (semantic export)
- */
+/** Alias for GET when used for listing (semantic export). */
 export const LIST = GET;

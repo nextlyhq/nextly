@@ -14,18 +14,22 @@
  * export { GET, PATCH, DELETE } from '@revnixhq/nextly/api/email-providers-detail';
  * ```
  *
+ * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
+ * the canonical `{ data: <result> }` envelope per spec §10.2. The
+ * mechanical migration preserves the legacy header-only auth check; real
+ * verification lives downstream.
+ *
  * @module api/email-providers-detail
  */
 
 import { container } from "../di";
-import { isServiceError } from "../errors";
+import { NextlyError } from "../errors/nextly-error";
 import { getNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
-/**
- * Context object for dynamic route handlers.
- * Next.js 15+ requires params to be a Promise.
- */
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
+
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
@@ -35,58 +39,31 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
   return container.get<EmailProviderService>("emailProviderService");
 }
 
-function successResponse<T>(data: T, statusCode: number = 200): Response {
-  return Response.json(
-    { data },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+function requireAuthHeader(request: Request): void {
+  if (!request.headers.get("Authorization")) {
+    throw NextlyError.authRequired();
+  }
 }
 
-function errorResponse(
-  message: string,
-  statusCode: number = 500,
-  code?: string
-): Response {
-  return Response.json(
-    {
-      error: {
-        message,
-        ...(code && { code }),
+async function readJsonBody(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "invalid_json",
+            message: "Request body is not valid JSON.",
+          },
+        ],
       },
-    },
-    {
-      status: statusCode,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
-}
-
-function handleError(error: unknown, operation: string): Response {
-  console.error(`[Email Providers Detail API] ${operation} error:`, error);
-
-  if (isServiceError(error)) {
-    return errorResponse(error.message, error.httpStatus, error.code);
+      logContext: { reason: "invalid-json-body" },
+    });
   }
-
-  if (error instanceof Error) {
-    if (error.message.includes("Services not initialized")) {
-      return errorResponse(error.message, 503, "SERVICE_UNAVAILABLE");
-    }
-    return errorResponse(error.message, 500);
-  }
-
-  return errorResponse(`Failed to ${operation.toLowerCase()}`, 500);
-}
-
-function checkAuthentication(request: Request): Response | null {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) {
-    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
-  }
-  return null;
 }
 
 /**
@@ -98,37 +75,21 @@ function checkAuthentication(request: Request): Response | null {
  * - 200 OK: Provider retrieved successfully
  * - 401 Unauthorized: Authentication required
  * - 404 Not Found: Provider with ID does not exist
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Failed to fetch provider
  *
- * @param request - Next.js Request object
- * @param context - Route context with params Promise containing id
- * @returns Response with JSON provider data
- *
- * @example
- * ```bash
- * curl -H "Authorization: Bearer <token>" \
- *   "http://localhost:3000/api/email-providers/abc-123"
- * # => {"data":{"id":"abc-123","name":"SendLayer","type":"sendlayer",...}}
- * ```
+ * Response: `{ "data": EmailProvider }`
  */
-export async function GET(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const GET = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();
     const provider = await service.getProvider(id);
 
-    return successResponse(provider);
-  } catch (error) {
-    return handleError(error, "Get email provider");
+    return createSuccessResponse(provider);
   }
-}
+);
 
 /**
  * PATCH handler for updating an email provider.
@@ -148,47 +109,20 @@ export async function GET(
  * - 400 Bad Request: Invalid JSON body
  * - 401 Unauthorized: Authentication required
  * - 404 Not Found: Provider with ID does not exist
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Update failed
  *
- * @param request - Next.js Request object with JSON body
- * @param context - Route context with params Promise containing id
- * @returns Response with JSON updated provider (masked configuration)
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/email-providers/abc-123', {
- *   method: 'PATCH',
- *   headers: {
- *     'Content-Type': 'application/json',
- *     'Authorization': 'Bearer <token>',
- *   },
- *   body: JSON.stringify({
- *     name: 'Updated Provider Name',
- *     isActive: false,
- *   }),
- * });
- * const { data: updated } = await response.json();
- * ```
+ * Response: `{ "data": EmailProvider }` — updated provider with masked
+ * configuration.
  */
-export async function PATCH(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const PATCH = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
 
     const { id } = await context.params;
-    const service = await getEmailProviderService();
+    const body = (await readJsonBody(request)) as Record<string, unknown>;
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return errorResponse("Invalid JSON body", 400, "INVALID_JSON");
-    }
-
+    // Selective copy: only forward fields the legacy handler accepted, so
+    // unknown keys are silently ignored (matches the pre-migration contract).
     const updateData: Record<string, unknown> = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.type !== undefined) updateData.type = body.type;
@@ -198,13 +132,12 @@ export async function PATCH(
       updateData.configuration = body.configuration;
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
+    const service = await getEmailProviderService();
     const provider = await service.updateProvider(id, updateData);
 
-    return successResponse(provider);
-  } catch (error) {
-    return handleError(error, "Update email provider");
+    return createSuccessResponse(provider);
   }
-}
+);
 
 /**
  * DELETE handler for removing an email provider.
@@ -217,38 +150,19 @@ export async function PATCH(
  * - 401 Unauthorized: Authentication required
  * - 403 Forbidden: Cannot delete the default provider
  * - 404 Not Found: Provider with ID does not exist
- * - 503 Service Unavailable: Services not initialized
  * - 500 Internal Server Error: Deletion failed
  *
- * @param request - Next.js Request object
- * @param context - Route context with params Promise containing id
- * @returns Response with success confirmation
- *
- * @example
- * ```typescript
- * const response = await fetch('/api/email-providers/abc-123', {
- *   method: 'DELETE',
- *   headers: { 'Authorization': 'Bearer <token>' },
- * });
- * const { data } = await response.json();
- * // => { success: true }
- * ```
+ * Response: `{ "data": { "success": true } }`
  */
-export async function DELETE(
-  request: Request,
-  context: RouteContext
-): Promise<Response> {
-  try {
-    const authError = checkAuthentication(request);
-    if (authError) return authError;
+export const DELETE = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();
 
     await service.deleteProvider(id);
 
-    return successResponse({ success: true });
-  } catch (error) {
-    return handleError(error, "Delete email provider");
+    return createSuccessResponse({ success: true });
   }
-}
+);
