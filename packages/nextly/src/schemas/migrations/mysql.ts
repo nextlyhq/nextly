@@ -1,167 +1,102 @@
 /**
- * MySQL Schema for Migration Tracking
+ * MySQL Schema for Migration Tracking (F11)
  *
- * Defines the `nextly_migrations` table schema for MySQL databases
- * using Drizzle ORM. This table tracks all applied migrations for
- * collection schema changes, enabling rollback support and migration
- * status monitoring.
+ * Defines the `nextly_migrations` table for MySQL using Drizzle ORM.
+ * One row per `.sql` migration file applied via `nextly migrate`.
+ *
+ * NOTE: distinct from `nextly_migration_journal` (F8 PR 5) which logs
+ * runtime HMR/UI applies. See plans/specs/F11-migration-files-cli-design.md
+ * §3 for the two-table separation.
  *
  * @module schemas/migrations/mysql
  * @since 1.0.0
- *
- * @example
- * ```typescript
- * import {
- *   nextlyMigrationsMysql,
- *   type NextlyMigrationMysql,
- *   type NextlyMigrationInsertMysql,
- * } from '@nextly/schemas/migrations/mysql';
- *
- * // Record a new migration
- * await db.insert(nextlyMigrationsMysql).values({
- *   name: '20250119_120000_create_posts',
- *   batch: 1,
- *   checksum: 'sha256-abc123...',
- * });
- *
- * // Query applied migrations
- * const applied = await db
- *   .select()
- *   .from(nextlyMigrationsMysql)
- *   .where(eq(nextlyMigrationsMysql.status, 'applied'));
- * ```
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
+  char,
   int,
   datetime,
   text,
+  json,
   index,
+  check,
 } from "drizzle-orm/mysql-core";
 
 import type { MigrationRecordStatus } from "../dynamic-collections/types";
 
 // ============================================================
-// Nextly Migrations Table (MySQL)
+// Nextly Migrations Table (MySQL) — F11 schema
 // ============================================================
 
 /**
- * MySQL schema for the `nextly_migrations` table.
+ * MySQL `nextly_migrations` table.
  *
- * Tracks all database migrations for collection schemas, including:
- * - Migration identification (name, batch)
- * - Integrity verification (checksum)
- * - Execution status (pending, applied, failed)
- * - Error handling (errorMessage for failed migrations)
+ * Mirrors the PG schema with dialect-appropriate types:
+ * - `uuid` → `varchar(36)` with client-side `crypto.randomUUID()`.
+ * - `timestamptz` → `datetime` (MySQL stores in DB session timezone;
+ *   the app layer is responsible for UTC normalization).
+ * - `jsonb` → `json` (MySQL 5.7+ native JSON column).
  *
- * @example
- * ```typescript
- * // Get all migrations in a batch
- * const batch1 = await db
- *   .select()
- *   .from(nextlyMigrationsMysql)
- *   .where(eq(nextlyMigrationsMysql.batch, 1));
- *
- * // Find failed migrations
- * const failed = await db
- *   .select()
- *   .from(nextlyMigrationsMysql)
- *   .where(eq(nextlyMigrationsMysql.status, 'failed'));
- *
- * // Get latest migration
- * const latest = await db
- *   .select()
- *   .from(nextlyMigrationsMysql)
- *   .orderBy(desc(nextlyMigrationsMysql.executedAt))
- *   .limit(1);
- * ```
+ * MySQL 8.0.16+ supports CHECK constraints (per F17 minimum 8.0+).
  */
 export const nextlyMigrationsMysql = mysqlTable(
   "nextly_migrations",
   {
-    // --------------------------------------------------------
-    // Primary Key
-    // --------------------------------------------------------
-
-    /** Unique identifier (UUID v4, auto-generated) */
+    /** UUID v4, generated client-side for cross-dialect parity. */
     id: varchar("id", { length: 36 })
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
 
-    // --------------------------------------------------------
-    // Migration Identity
-    // --------------------------------------------------------
+    /**
+     * Migration filename (without directory). Unique.
+     *
+     * @example "20260429_154500_123_add_excerpt.sql"
+     */
+    filename: varchar("filename", { length: 512 }).notNull().unique(),
+
+    /** SHA-256 of the .sql file content. 64 hex chars. */
+    sha256: char("sha256", { length: 64 }).notNull(),
 
     /**
-     * Unique migration name following the pattern:
-     * `YYYYMMDD_HHMMSS_description`
-     * @example "20250119_120000_create_posts"
+     * When the migration was applied. Stored as DATETIME (UTC by app
+     * convention; MySQL has no native timestamptz).
      */
-    name: varchar("name", { length: 255 }).unique().notNull(),
-
-    /**
-     * Batch number for grouping migrations.
-     * Migrations in the same batch were applied together in a single run.
-     * Used for rollback operations (rollback by batch).
-     */
-    batch: int("batch").notNull(),
-
-    // --------------------------------------------------------
-    // Integrity & Status
-    // --------------------------------------------------------
-
-    /**
-     * SHA-256 checksum of the migration file content.
-     * Used to detect if a migration file was modified after creation.
-     * Should be 64 characters (hex-encoded SHA-256).
-     */
-    checksum: varchar("checksum", { length: 64 }).notNull(),
-
-    /**
-     * Current status of the migration.
-     * - 'pending': Migration queued but not yet executed
-     * - 'applied': Migration successfully applied
-     * - 'failed': Migration failed during execution
-     */
-    status: varchar("status", { length: 20 })
-      .$type<MigrationRecordStatus>()
-      .default("pending")
-      .notNull(),
-
-    /**
-     * Error message if the migration failed.
-     * Only populated when status is 'failed'.
-     * Contains the error message or stack trace for debugging.
-     */
-    errorMessage: text("error_message"),
-
-    // --------------------------------------------------------
-    // Timestamps
-    // --------------------------------------------------------
-
-    /**
-     * When the migration was executed.
-     * Set to current timestamp when the migration record is created.
-     */
-    executedAt: datetime("executed_at")
+    appliedAt: datetime("applied_at")
       .notNull()
       .$defaultFn(() => new Date()),
+
+    /** Resolved CLI actor (NEXTLY_APPLIED_BY / GITHUB_ACTOR / USER / host). */
+    appliedBy: varchar("applied_by", { length: 255 }),
+
+    /** Wall-clock apply duration in milliseconds. */
+    durationMs: int("duration_ms"),
+
+    /**
+     * Apply outcome. CHECK constraint enforces two-state lifecycle
+     * on MySQL 8.0.16+.
+     */
+    status: varchar("status", { length: 20 })
+      .notNull()
+      .$type<MigrationRecordStatus>(),
+
+    /**
+     * Structured error JSON on failure. Shape:
+     * `{ sqlState?: string; statement?: string; message: string }`.
+     */
+    errorJson: json("error_json"),
+
+    /** Reserved for v2 corrective-rollback feature. Always NULL in v1. */
+    rollbackSql: text("rollback_sql"),
   },
   table => [
-    // --------------------------------------------------------
-    // Indexes for Query Performance
-    // --------------------------------------------------------
-
-    /** Index for filtering migrations by batch number */
-    index("nextly_migrations_batch_idx").on(table.batch),
-
-    /** Index for filtering migrations by status */
-    index("nextly_migrations_status_idx").on(table.status),
-
-    /** Index for sorting by execution time */
-    index("nextly_migrations_executed_at_idx").on(table.executedAt),
+    index("nextly_migrations_applied_at_idx").on(table.appliedAt),
+    check(
+      "nextly_migrations_status_check",
+      sql`${table.status} IN ('applied', 'failed')`
+    ),
   ]
 );
 
@@ -169,41 +104,6 @@ export const nextlyMigrationsMysql = mysqlTable(
 // Type Exports (Drizzle Inference)
 // ============================================================
 
-/**
- * MySQL-specific select type for migration records.
- *
- * Inferred from the Drizzle schema, represents a full row
- * from the `nextly_migrations` table.
- *
- * @example
- * ```typescript
- * const migration: NextlyMigrationMysql = await db
- *   .select()
- *   .from(nextlyMigrationsMysql)
- *   .where(eq(nextlyMigrationsMysql.name, '20250119_120000_create_posts'))
- *   .limit(1)
- *   .then(rows => rows[0]);
- * ```
- */
 export type NextlyMigrationMysql = typeof nextlyMigrationsMysql.$inferSelect;
-
-/**
- * MySQL-specific insert type for migration records.
- *
- * Inferred from the Drizzle schema, represents the shape
- * required for inserting a new row. Fields with defaults
- * (id, status, executedAt) are optional.
- *
- * @example
- * ```typescript
- * const newMigration: NextlyMigrationInsertMysql = {
- *   name: '20250119_120000_create_posts',
- *   batch: 1,
- *   checksum: 'sha256-abc123...',
- * };
- *
- * await db.insert(nextlyMigrationsMysql).values(newMigration);
- * ```
- */
 export type NextlyMigrationInsertMysql =
   typeof nextlyMigrationsMysql.$inferInsert;

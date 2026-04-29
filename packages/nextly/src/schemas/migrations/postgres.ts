@@ -1,10 +1,12 @@
 /**
- * PostgreSQL Schema for Migration Tracking
+ * PostgreSQL Schema for Migration Tracking (F11)
  *
- * Defines the `nextly_migrations` table schema for PostgreSQL databases
- * using Drizzle ORM. This table tracks all applied migrations for
- * collection schema changes, enabling rollback support and migration
- * status monitoring.
+ * Defines the `nextly_migrations` table for PostgreSQL using Drizzle ORM.
+ * One row per `.sql` migration file applied via `nextly migrate`.
+ *
+ * NOTE: distinct from `nextly_migration_journal` (F8 PR 5) which logs
+ * runtime HMR/UI applies. See plans/specs/F11-migration-files-cli-design.md
+ * §3 for the two-table separation.
  *
  * @module schemas/migrations/postgres
  * @since 1.0.0
@@ -17,150 +19,112 @@
  *   type NextlyMigrationInsertPg,
  * } from '@nextly/schemas/migrations/postgres';
  *
- * // Record a new migration
  * await db.insert(nextlyMigrationsPg).values({
- *   name: '20250119_120000_create_posts',
- *   batch: 1,
- *   checksum: 'sha256-abc123...',
+ *   filename: '20260429_154500_123_add_excerpt.sql',
+ *   sha256: 'abc123…',
+ *   status: 'applied',
+ *   appliedBy: 'github-actions-12345',
+ *   durationMs: 42,
  * });
- *
- * // Query applied migrations
- * const applied = await db
- *   .select()
- *   .from(nextlyMigrationsPg)
- *   .where(eq(nextlyMigrationsPg.status, 'applied'));
  * ```
  */
 
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
-  varchar,
+  text,
+  char,
   integer,
   timestamp,
-  text,
+  jsonb,
   index,
+  check,
 } from "drizzle-orm/pg-core";
 
 import type { MigrationRecordStatus } from "../dynamic-collections/types";
 
 // ============================================================
-// Nextly Migrations Table (PostgreSQL)
+// Nextly Migrations Table (PostgreSQL) — F11 schema
 // ============================================================
 
 /**
- * PostgreSQL schema for the `nextly_migrations` table.
+ * PostgreSQL `nextly_migrations` table.
  *
- * Tracks all database migrations for collection schemas, including:
- * - Migration identification (name, batch)
- * - Integrity verification (checksum)
- * - Execution status (pending, applied, failed)
- * - Error handling (errorMessage for failed migrations)
+ * Per the F11 spec (§7), columns capture everything an operator needs
+ * to debug a production deploy: structured `errorJson`, `appliedBy`
+ * actor, `durationMs` for ops visibility, and a reserved `rollbackSql`
+ * column for the future v2 corrective-rollback feature.
  *
- * @example
- * ```typescript
- * // Get all migrations in a batch
- * const batch1 = await db
- *   .select()
- *   .from(nextlyMigrationsPg)
- *   .where(eq(nextlyMigrationsPg.batch, 1));
- *
- * // Find failed migrations
- * const failed = await db
- *   .select()
- *   .from(nextlyMigrationsPg)
- *   .where(eq(nextlyMigrationsPg.status, 'failed'));
- *
- * // Get latest migration
- * const latest = await db
- *   .select()
- *   .from(nextlyMigrationsPg)
- *   .orderBy(desc(nextlyMigrationsPg.executedAt))
- *   .limit(1);
- * ```
+ * `status` is constrained to `'applied' | 'failed'` only — the spec
+ * deliberately drops `'pending'` because rows are inserted ONLY after
+ * the apply attempt completes (no transient pending state on disk).
  */
 export const nextlyMigrationsPg = pgTable(
   "nextly_migrations",
   {
-    // --------------------------------------------------------
-    // Primary Key
-    // --------------------------------------------------------
-
-    /** Unique identifier (UUID v4, auto-generated) */
+    /** UUID v4, generated server-side. */
     id: uuid("id").primaryKey().defaultRandom(),
 
-    // --------------------------------------------------------
-    // Migration Identity
-    // --------------------------------------------------------
+    /**
+     * Migration filename (without directory). Unique.
+     *
+     * @example "20260429_154500_123_add_excerpt.sql"
+     */
+    filename: text("filename").notNull().unique(),
 
     /**
-     * Unique migration name following the pattern:
-     * `YYYYMMDD_HHMMSS_description`
-     * @example "20250119_120000_create_posts"
+     * SHA-256 of the .sql file content as written. 64 hex chars.
+     * Used by `nextly migrate` to detect tampering on subsequent runs
+     * and by `nextly migrate:check` (via the paired snapshot file).
      */
-    name: varchar("name", { length: 255 }).unique().notNull(),
+    sha256: char("sha256", { length: 64 }).notNull(),
 
     /**
-     * Batch number for grouping migrations.
-     * Migrations in the same batch were applied together in a single run.
-     * Used for rollback operations (rollback by batch).
+     * When the migration was applied to this database. Timezone-aware
+     * for cross-region operator clarity.
      */
-    batch: integer("batch").notNull(),
-
-    // --------------------------------------------------------
-    // Integrity & Status
-    // --------------------------------------------------------
+    appliedAt: timestamp("applied_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
 
     /**
-     * SHA-256 checksum of the migration file content.
-     * Used to detect if a migration file was modified after creation.
-     * Should be 64 characters (hex-encoded SHA-256).
+     * Who/what ran the migration. Resolved by the CLI from
+     * `NEXTLY_APPLIED_BY` → `GITHUB_ACTOR` → `USER` → hostname.
      */
-    checksum: varchar("checksum", { length: 64 }).notNull(),
+    appliedBy: text("applied_by"),
+
+    /** Wall-clock duration of the apply, in milliseconds. */
+    durationMs: integer("duration_ms"),
 
     /**
-     * Current status of the migration.
-     * - 'pending': Migration queued but not yet executed
-     * - 'applied': Migration successfully applied
-     * - 'failed': Migration failed during execution
+     * Apply outcome. Only `'applied'` or `'failed'`; rows are inserted
+     * only after the attempt completes. CHECK constraint enforces this.
      */
-    status: varchar("status", { length: 20 })
-      .$type<MigrationRecordStatus>()
-      .default("pending")
-      .notNull(),
+    status: text("status").notNull().$type<MigrationRecordStatus>(),
 
     /**
-     * Error message if the migration failed.
-     * Only populated when status is 'failed'.
-     * Contains the error message or stack trace for debugging.
+     * Structured error info on failure. Shape:
+     * `{ sqlState?: string; statement?: string; message: string }`.
+     * NULL on success.
      */
-    errorMessage: text("error_message"),
-
-    // --------------------------------------------------------
-    // Timestamps
-    // --------------------------------------------------------
+    errorJson: jsonb("error_json"),
 
     /**
-     * When the migration was executed.
-     * Set to current timestamp when the migration record is created.
+     * Reserved for v2 corrective-rollback feature. Always NULL in v1.
+     * Column exists so future ALTER TABLE ADDs from F15 don't conflict.
      */
-    executedAt: timestamp("executed_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
+    rollbackSql: text("rollback_sql"),
   },
   table => [
-    // --------------------------------------------------------
-    // Indexes for Query Performance
-    // --------------------------------------------------------
+    /** Most-recent-first queries on the operator dashboard. */
+    index("nextly_migrations_applied_at_idx").on(table.appliedAt),
 
-    /** Index for filtering migrations by batch number */
-    index("nextly_migrations_batch_idx").on(table.batch),
-
-    /** Index for filtering migrations by status */
-    index("nextly_migrations_status_idx").on(table.status),
-
-    /** Index for sorting by execution time */
-    index("nextly_migrations_executed_at_idx").on(table.executedAt),
+    /** Enforce the two-state lifecycle at the DB level. */
+    check(
+      "nextly_migrations_status_check",
+      sql`${table.status} IN ('applied', 'failed')`
+    ),
   ]
 );
 
@@ -168,40 +132,8 @@ export const nextlyMigrationsPg = pgTable(
 // Type Exports (Drizzle Inference)
 // ============================================================
 
-/**
- * PostgreSQL-specific select type for migration records.
- *
- * Inferred from the Drizzle schema, represents a full row
- * from the `nextly_migrations` table.
- *
- * @example
- * ```typescript
- * const migration: NextlyMigrationPg = await db
- *   .select()
- *   .from(nextlyMigrationsPg)
- *   .where(eq(nextlyMigrationsPg.name, '20250119_120000_create_posts'))
- *   .limit(1)
- *   .then(rows => rows[0]);
- * ```
- */
+/** Full row type for SELECT queries. */
 export type NextlyMigrationPg = typeof nextlyMigrationsPg.$inferSelect;
 
-/**
- * PostgreSQL-specific insert type for migration records.
- *
- * Inferred from the Drizzle schema, represents the shape
- * required for inserting a new row. Fields with defaults
- * (id, status, executedAt) are optional.
- *
- * @example
- * ```typescript
- * const newMigration: NextlyMigrationInsertPg = {
- *   name: '20250119_120000_create_posts',
- *   batch: 1,
- *   checksum: 'sha256-abc123...',
- * };
- *
- * await db.insert(nextlyMigrationsPg).values(newMigration);
- * ```
- */
+/** Insert shape for INSERT queries. `id` and `appliedAt` have defaults. */
 export type NextlyMigrationInsertPg = typeof nextlyMigrationsPg.$inferInsert;
