@@ -5,8 +5,8 @@
 // timestamp cursor (newer-first); fetching `limit + 1` rows lets us
 // compute `hasMore` cheaply without a second COUNT query.
 //
-// Powers F10 PR 4's `GET /api/admin/schema/journal` endpoint, which in
-// turn drives the F10 PR 5 NotificationBell + Dropdown.
+// Powers F10 PR 4's `GET /api/schema/journal` endpoint, which in turn
+// drives the F10 PR 5 NotificationBell + Dropdown.
 
 import { desc, lt } from "drizzle-orm";
 
