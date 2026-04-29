@@ -182,9 +182,12 @@ export async function previewTemplate(
   id: string,
   sampleData: Record<string, unknown>
 ): Promise<EmailTemplatePreviewResult> {
+  // The preview route's schema expects `{ data: <sampleData> }` (wrapped);
+  // sending the raw sampleData under the top-level body fails the zod parse
+  // with a 400 (handoff F14 — pre-existing wire mismatch picked up here).
   const result = await enhancedFetcher<EmailTemplatePreviewResult>(
     `/email-templates/${id}/preview`,
-    { method: "POST", body: JSON.stringify(sampleData) },
+    { method: "POST", body: JSON.stringify({ data: sampleData }) },
     true
   );
   return result.data;
