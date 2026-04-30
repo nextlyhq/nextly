@@ -9,7 +9,6 @@ import { formBuilder } from "@revnixhq/plugin-form-builder";
 import { vercelBlobStorage } from "@revnixhq/storage-vercel-blob";
 
 import ContentSettings from "./src/app/singles/content-settings";
-import TestSettings from "./src/app/singles/test-settings";
 
 // Initialize Form Builder plugin
 const formBuilderPlugin = formBuilder();
@@ -32,7 +31,7 @@ export default defineConfig({
   },
   // Include form builder collections so CLI can sync them to database
   collections: [...formBuilderPlugin.collections],
-  singles: [ContentSettings, TestSettings],
+  singles: [ContentSettings],
   plugins: [formBuilderPlugin.plugin],
 
   // Storage: Vercel Blob (configured via BLOB_READ_WRITE_TOKEN env var)
