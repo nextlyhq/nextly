@@ -9,8 +9,11 @@
  * request share a single DB fetch.
  */
 
-import { getNextly } from "@revnixhq/nextly";
 import { cache } from "react";
+
+// Use project-local wrapper so getNextly() bootstraps with the
+// nextly.config.ts collections list. See src/lib/nextly.ts.
+import { getNextly } from "@/lib/nextly";
 
 export interface NavLink {
   label: string;

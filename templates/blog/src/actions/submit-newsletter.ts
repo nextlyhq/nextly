@@ -14,7 +14,10 @@
  * a `form-submissions` `afterChange` hook instead of doing it here.
  */
 
-import { getNextly } from "@revnixhq/nextly";
+// Use project-local wrapper so getNextly() bootstraps with the
+// nextly.config.ts collections list (forms, form-submissions, etc.).
+// See src/lib/nextly.ts.
+import { getNextly } from "@/lib/nextly";
 
 export interface NewsletterResult {
   ok: boolean;

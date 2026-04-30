@@ -434,7 +434,7 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 6: Sync Code-First Singles
   // ----------------------------------------
-  await syncCodeFirstSingles(resolvedLogger, transformedConfig);
+  await syncCodeFirstSingles(adapter, resolvedLogger, transformedConfig);
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -463,7 +463,109 @@ export async function registerServices(
     resolvedLogger.info?.("Activity log hooks registered");
   }
 
+  // ----------------------------------------
+  // Layer 9 (Task 23): Auto-seed on first run
+  // ----------------------------------------
+  // Mirrors `cli/commands/dev-build.ts:autoSeedOnFirstRun` so the seed
+  // fires whether the user came in via `nextly db:sync` (CLI) or via
+  // `next dev` (which scaffolded blog templates use). Without this,
+  // demo content silently never appears even though `nextly.seed.ts`
+  // sits at the project root. Idempotent + dev-only — see the function
+  // body for the gating logic.
+  await autoSeedOnBoot(adapter, resolvedLogger, transformedConfig);
+
   globalForReg.__nextly_isRegistered = true;
+}
+
+// Task 23: boot-time auto-seed for `next dev` callers. Symmetric with
+// the CLI flow (`autoSeedOnFirstRun` in dev-build.ts) but takes the
+// runtime types from registerServices's scope (DrizzleAdapter, Logger,
+// NextlyServiceConfig) instead of the CLI's wrapper types. Best-effort:
+// any failure logs and continues so a broken seed doesn't crash boot.
+async function autoSeedOnBoot(
+  adapter: DrizzleAdapter,
+  logger: Logger,
+  transformedConfig: NextlyServiceConfig
+): Promise<void> {
+  // Skip in production. Seeds are dev/staging fixtures; running them
+  // on prod boot would risk inserting demo content into a real DB.
+  if (process.env.NODE_ENV === "production") return;
+
+  // Escape hatch for users who want to disable auto-seed (e.g. CI runs
+  // that want to control seed timing via `nextly db:sync --seed`).
+  if (process.env.NEXTLY_SKIP_AUTO_SEED === "true") return;
+
+  const collections = transformedConfig.collections ?? [];
+  if (collections.length === 0) return;
+
+  // Step 1: detect a user seed file at cwd.
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const cwd = process.cwd();
+  const seedCandidates = ["nextly.seed.ts", "nextly.seed.js", "nextly.seed.mjs"];
+  const hasSeedFile = seedCandidates.some(name =>
+    fs.existsSync(path.join(cwd, name))
+  );
+  if (!hasSeedFile) return;
+
+  // Step 2: skip if any code-first collection already has rows. The
+  // user seed itself is idempotent, but checking here avoids importing
+  // + running esbuild + transpiling the seed file on every boot.
+  try {
+    let hasExistingData = false;
+    for (const collection of collections) {
+      const tableName = `dc_${(collection.dbName ?? collection.slug).replace(/-/g, "_")}`;
+      try {
+        const rows = await adapter.select<unknown>(tableName, { limit: 1 });
+        if (Array.isArray(rows) && rows.length > 0) {
+          hasExistingData = true;
+          break;
+        }
+      } catch {
+        // Table may not exist yet (sync still in flight) or query may
+        // fail (driver quirk) — continue checking other collections.
+        continue;
+      }
+    }
+    if (hasExistingData) {
+      logger.debug?.(
+        "[seed] Auto-seed skipped: database already has content entries"
+      );
+      return;
+    }
+  } catch (err) {
+    logger.warn?.(
+      `[seed] Could not determine seed-needed state: ${err instanceof Error ? err.message : String(err)}. Skipping auto-seed.`
+    );
+    return;
+  }
+
+  // Step 3: run the seed pipeline. seedAll handles permissions + the
+  // user's nextly.seed.ts. skipSuperAdmin:true matches the CLI's
+  // performSeeding so the user creates the super-admin via
+  // /admin/setup (instead of getting a default Admin@123456 account
+  // baked into a fresh DB — that would be a security trap).
+  logger.info?.("[seed] First run detected — seeding demo content...");
+  try {
+    const { seedAll } = await import("../database/seeders/index.js");
+    const result = await seedAll(adapter, {
+      silent: false,
+      skipSuperAdmin: true,
+    });
+    if (result.success) {
+      logger.info?.(
+        `[seed] Demo content seeded: ${result.created} created, ${result.skipped} skipped`
+      );
+    } else {
+      logger.warn?.(
+        `[seed] Auto-seed completed with errors: ${result.errorMessages?.join("; ") ?? "no detail"}`
+      );
+    }
+  } catch (err) {
+    logger.warn?.(
+      `[seed] Auto-seed failed: ${err instanceof Error ? err.message : String(err)}. The dev server is still up; run \`nextly db:sync --seed\` manually if you want to retry.`
+    );
+  }
 }
 
 // ============================================================
@@ -1212,6 +1314,7 @@ async function syncCodeFirstComponents(
  * at Layer 4.
  */
 async function syncCodeFirstSingles(
+  adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig
 ): Promise<void> {
@@ -1249,6 +1352,151 @@ async function syncCodeFirstSingles(
     logger.warn?.(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
     );
+    return;
+  }
+
+  // Task 23: reconcile physical single_* tables. The registry rows (in
+  // dynamic_singles) only describe what SHOULD exist; the actual storage
+  // tables (e.g. single_site_settings) need DDL too. Without this, every
+  // boot that brings up a fresh code-first project leaves singles
+  // registered-but-unbacked, and the very first read from the frontend
+  // hits "no such table: single_site_settings". Mirrors the existing
+  // reconcileSingleTables call in cli/commands/dev-server.ts so the
+  // dev-server boot path and the `nextly db:sync` CLI converge on the
+  // same physical-table contract.
+  await reconcileSingleTablesForBoot(adapter, logger, transformedConfig);
+}
+
+// Task 23: shared helper used by `syncCodeFirstSingles` to make the
+// physical `single_*` tables match `dynamic_singles`. Lives next to the
+// caller because the dev-server has its own slightly richer flavour
+// (logger.success, reconciledSlugs aggregation) — the dev-server flow
+// can converge on this helper later as part of a tidier refactor; for
+// now the duplication is intentional + minimal.
+async function reconcileSingleTablesForBoot(
+  adapter: DrizzleAdapter,
+  logger: Logger,
+  transformedConfig: NextlyServiceConfig
+): Promise<void> {
+  try {
+    const { reconcileSingleTables } = await import(
+      "../domains/singles/services/reconcile-single-tables.js"
+    );
+    const { DynamicCollectionSchemaService } = await import(
+      "../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+    );
+    const schemaService = new DynamicCollectionSchemaService();
+    const singleRegistry = container.get<SingleRegistryService>(
+      "singleRegistryService"
+    );
+
+    let createdCount = 0;
+    await reconcileSingleTables({
+      registeredSingles: async () => {
+        const records = await singleRegistry.getAllSingles();
+        return records.map(r => ({ slug: r.slug, tableName: r.tableName }));
+      },
+      existingTableNames: async () => {
+        const tables = await adapter.listTables();
+        return new Set(tables);
+      },
+      createTable: async single => {
+        // Prefer code-first config fields (source of truth) but fall back
+        // to the registry's stored fields for UI-created singles.
+        const codeFirstConfig = transformedConfig.singles?.find(
+          s => s.slug === single.slug
+        );
+        let fields: FieldDefinition[];
+        if (codeFirstConfig) {
+          fields = codeFirstConfig.fields as unknown as FieldDefinition[];
+        } else {
+          const record = await singleRegistry.getSingleBySlug(single.slug);
+          if (!record) {
+            throw new Error(
+              `Cannot reconcile "${single.slug}": registry row disappeared between list and fetch`
+            );
+          }
+          fields = record.fields as unknown as FieldDefinition[];
+        }
+
+        const migrationSQL = schemaService.generateMigrationSQL(
+          single.tableName,
+          fields,
+          { isSingle: true }
+        );
+
+        const statements = migrationSQL
+          .split("--> statement-breakpoint")
+          .map((s: string) => s.trim())
+          .filter((s: string) => s.length > 0);
+
+        for (const statement of statements) {
+          const cleanStatement = statement
+            .split("\n")
+            .filter((line: string) => !line.trim().startsWith("--"))
+            .join("\n")
+            .trim();
+          if (cleanStatement) {
+            await adapter.executeQuery(cleanStatement);
+          }
+        }
+
+        const tableExists = await adapter.tableExists(single.tableName);
+        if (tableExists) {
+          // Register the freshly-created single in the live resolver so
+          // queries in this same boot (e.g. the user's nextly.seed.ts or
+          // the homepage's first render) find the table without waiting
+          // for a restart.
+          try {
+            const dialect = adapter.getCapabilities().dialect;
+            const { generateRuntimeSchema: genRt } = await import(
+              "../domains/schema/services/runtime-schema-generator.js"
+            );
+            const { table } = genRt(single.tableName, fields, dialect);
+            const resolver = (
+              adapter as unknown as {
+                tableResolver?: {
+                  registerDynamicSchema?: (
+                    name: string,
+                    t: unknown
+                  ) => void;
+                };
+              }
+            ).tableResolver;
+            if (
+              resolver &&
+              typeof resolver.registerDynamicSchema === "function"
+            ) {
+              resolver.registerDynamicSchema(single.tableName, table);
+            }
+          } catch {
+            // Resolver registration is best-effort; the table itself is
+            // committed and the next boot will pick it up either way.
+          }
+          await singleRegistry
+            .updateMigrationStatus(single.slug, "applied")
+            .catch(() => {});
+          createdCount++;
+          logger.info?.(
+            `Created single table ${single.tableName} for ${single.slug}`
+          );
+        } else {
+          await singleRegistry
+            .updateMigrationStatus(single.slug, "failed")
+            .catch(() => {});
+          throw new Error(
+            `Reconcile ran DDL for "${single.slug}" but table "${single.tableName}" still missing`
+          );
+        }
+      },
+    });
+
+    if (createdCount > 0) {
+      logger.info?.(`Reconciled ${createdCount} missing single table(s).`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn?.(`Single-table reconcile failed: ${msg}`);
   }
 }
 

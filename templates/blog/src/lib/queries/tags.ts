@@ -3,7 +3,9 @@
  * same collection shape and the same hasMany relationship storage.
  */
 
-import { getNextly } from "@revnixhq/nextly";
+// Use project-local wrapper so getNextly() bootstraps with the
+// nextly.config.ts collections list. See src/lib/nextly.ts.
+import { getNextly } from "@/lib/nextly";
 
 import type { Tag, TaxonomyWithCount } from "./types";
 

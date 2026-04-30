@@ -284,8 +284,20 @@ export class CollectionFileManager {
 
     const availableSchemas = Array.from(this.schemaRegistry.keys()).join(", ");
     console.log("[FileManager] Schema NOT found! Available:", availableSchemas);
+    // Most common cause when "Available: none" is that getNextly() was
+    // called without `{ config: nextlyConfig }`. The cached singleton
+    // then bootstraps with an empty collections list, no rows land in
+    // dynamic_collections, and runtime schema generation can't find
+    // metadata for any code-first collection. The fix is to forward
+    // the config — see templates/blog/src/lib/nextly.ts for the
+    // canonical project-local wrapper pattern. Fix-up note added in
+    // task-23 (post-F1–F14 testing).
+    const noneRegistered = availableSchemas.length === 0;
+    const guidance = noneRegistered
+      ? `Available schemas: none. The collections registry is empty — most likely getNextly() was called without { config: nextlyConfig } and the cached singleton bootstrapped without your code-first collections. Fix: import nextly.config and pass it through, e.g. \`getNextly({ config: nextlyConfig })\`, or use a project-local wrapper at src/lib/nextly.ts.`
+      : `Available schemas: ${availableSchemas}. Did you spell the collection slug right and call registerSchemas() during initialization?`;
     throw new Error(
-      `Schema for collection "${collectionName}" not found in registry. Available schemas: ${availableSchemas || "none"}. Did you call registerSchemas() during initialization?`
+      `Schema for collection "${collectionName}" not found in registry. ${guidance}`
     );
   }
 

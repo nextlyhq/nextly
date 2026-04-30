@@ -7,8 +7,11 @@
  * run before seed, or fresh project without the single populated).
  */
 
-import { getNextly } from "@revnixhq/nextly";
 import { cache } from "react";
+
+// Use project-local wrapper so getNextly() bootstraps with the
+// nextly.config.ts collections list. See src/lib/nextly.ts.
+import { getNextly } from "@/lib/nextly";
 
 import type { SiteSettings } from "./types";
 

@@ -168,7 +168,18 @@ async function runUserSeedFile(
       writeFileSync(importPath, result.code, "utf-8");
 
       try {
-        const mod = await import(pathToFileURL(importPath).href);
+        // Magic comments tell turbopack + webpack to skip static
+        // analysis on this import. Without them the bundler errors
+        // out with "Cannot find module as expression is too dynamic"
+        // when this seeder runs inside Next.js's dev server context
+        // (e.g. via the boot-time auto-seed step in di/register.ts).
+        // The runtime path resolution is intentional — the seed
+        // file lives in the user's project, not in our bundle.
+        const mod = await import(
+          /* webpackIgnore: true */
+          /* turbopackIgnore: true */
+          pathToFileURL(importPath).href
+        );
         const seedFn = mod.default ?? mod.seed;
         if (typeof seedFn === "function") {
           await seedFn();
@@ -191,7 +202,12 @@ async function runUserSeedFile(
   } else {
     // JS/MJS files can be imported directly
     try {
-      const mod = await import(pathToFileURL(importPath).href);
+      // Same bundler-bypass treatment as the .ts branch above.
+      const mod = await import(
+        /* webpackIgnore: true */
+        /* turbopackIgnore: true */
+        pathToFileURL(importPath).href
+      );
       const seedFn = mod.default ?? mod.seed;
       if (typeof seedFn === "function") {
         await seedFn();

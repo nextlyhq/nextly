@@ -11,7 +11,11 @@
  * to render the 404 page.
  */
 
-import { getNextly } from "@revnixhq/nextly";
+// Use the project-local wrapper so getNextly() bootstraps with the
+// `nextly.config.ts` collections list. Without this, the global
+// singleton initializes empty and find('posts') throws "Schema not
+// in registry". See src/lib/nextly.ts for the why.
+import { getNextly } from "@/lib/nextly";
 
 import type { Post } from "./types";
 
