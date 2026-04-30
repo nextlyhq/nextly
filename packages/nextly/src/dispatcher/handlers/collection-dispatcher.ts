@@ -58,6 +58,21 @@ import type { MethodHandler, Params } from "../types";
 
 type CollectionsHandlerType = CollectionsHandler;
 
+// F14 v1: decides whether the apply payload carries actionable rename
+// hints we should log a debug receipt for. Pulled out as a pure helper
+// so tests can pin the "non-empty renames map only" semantics without
+// mocking the entire applySchemaChanges path.
+//
+// v1 always returns false-or-logs; v2 will replace the body to feed
+// hints into the rename detector. Keeping the pure helper here means
+// the v2 swap is one-file.
+function shouldLogF14HintReceipt(hints: unknown): boolean {
+  if (!hints || typeof hints !== "object") return false;
+  const renames = (hints as { renames?: unknown }).renames;
+  if (!renames || typeof renames !== "object") return false;
+  return Object.keys(renames as Record<string, unknown>).length > 0;
+}
+
 // F10 PR 6: render a per-change-kind summary as a toast-friendly
 // phrase. The admin Save handler concatenates this with the
 // collection name like "Posts schema updated. 1 field added".
@@ -306,6 +321,7 @@ const COLLECTIONS_METHODS: Record<
         resolutions,
         renameResolutions,
         eventResolutions,
+        hints,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -319,11 +335,31 @@ const COLLECTIONS_METHODS: Record<
         // legacy `resolutions` map and the new pipeline emits no events
         // until the UI is updated to consume ClassifierEvents from preview.
         eventResolutions?: Resolution[];
+        // F14 v1 — RESERVED FIELD. v1 accepts and IGNORES this. v2 will
+        // implement client-side rename hint tracking + server-side
+        // auto-confirm so the SchemaChangeDialog stops asking the
+        // admin to re-confirm renames they already clicked once.
+        // Reserved here so v2 can ship as a pure additive change
+        // without breaking older admin clients.
+        // See plans/specs/F10-notifications-and-audit-design.md §6.6.
+        hints?: {
+          renames?: Record<string, string>;
+        };
       };
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
       }
       if (!fields) throw new Error("fields is required in request body");
+
+      // F14 v1: log a debug line when hints arrive so we can track
+      // adoption without surprising operators with errors. v1 ignores
+      // the field entirely; v2 will pipe it into the rename detector.
+      if (shouldLogF14HintReceipt(hints)) {
+        // eslint-disable-next-line no-console -- intentional debug log; v1 reservation only
+        console.debug?.(
+          `[F14] hints received but not processed (v1); see plans/specs/F10-notifications-and-audit-design.md §6.6`
+        );
+      }
 
       const currentVersion = collection.schemaVersion;
       const tableName = collection.tableName;
@@ -778,3 +814,8 @@ export function dispatchCollections(
 // re-exporting under a verbose name keeps the public surface honest
 // while letting unit tests pin its behaviour.
 export const formatToastSummaryForTest = formatToastSummary;
+
+// F14 v1: same test-seam pattern for the hint-receipt decision
+// helper. v1's only behavioural contract is "non-empty renames map →
+// log; everything else → silent"; the tests pin that.
+export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
