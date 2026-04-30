@@ -463,109 +463,16 @@ export async function registerServices(
     resolvedLogger.info?.("Activity log hooks registered");
   }
 
-  // ----------------------------------------
-  // Layer 9 (Task 23): Auto-seed on first run
-  // ----------------------------------------
-  // Mirrors `cli/commands/dev-build.ts:autoSeedOnFirstRun` so the seed
-  // fires whether the user came in via `nextly db:sync` (CLI) or via
-  // `next dev` (which scaffolded blog templates use). Without this,
-  // demo content silently never appears even though `nextly.seed.ts`
-  // sits at the project root. Idempotent + dev-only — see the function
-  // body for the gating logic.
-  await autoSeedOnBoot(adapter, resolvedLogger, transformedConfig);
+  // Task 24 phase 3: removed boot-time `autoSeedOnBoot`. Demo seeding is
+  // now Payload-style: an auth-gated POST route in the project's app
+  // (templates/blog/src/app/admin/api/seed/route.ts) imports the seed
+  // function directly and runs it on user action. This eliminates an
+  // ordering-fragile pre-init pathway that silently failed if the
+  // cached singleton was bootstrapped before the boot-time seed
+  // attempted to run. System bootstrap (permissions table) still
+  // happens automatically — see permission-seed-service.
 
   globalForReg.__nextly_isRegistered = true;
-}
-
-// Task 23: boot-time auto-seed for `next dev` callers. Symmetric with
-// the CLI flow (`autoSeedOnFirstRun` in dev-build.ts) but takes the
-// runtime types from registerServices's scope (DrizzleAdapter, Logger,
-// NextlyServiceConfig) instead of the CLI's wrapper types. Best-effort:
-// any failure logs and continues so a broken seed doesn't crash boot.
-async function autoSeedOnBoot(
-  adapter: DrizzleAdapter,
-  logger: Logger,
-  transformedConfig: NextlyServiceConfig
-): Promise<void> {
-  // Skip in production. Seeds are dev/staging fixtures; running them
-  // on prod boot would risk inserting demo content into a real DB.
-  if (process.env.NODE_ENV === "production") return;
-
-  // Escape hatch for users who want to disable auto-seed (e.g. CI runs
-  // that want to control seed timing via `nextly db:sync --seed`).
-  if (process.env.NEXTLY_SKIP_AUTO_SEED === "true") return;
-
-  const collections = transformedConfig.collections ?? [];
-  if (collections.length === 0) return;
-
-  // Step 1: detect a user seed file at cwd.
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const cwd = process.cwd();
-  const seedCandidates = ["nextly.seed.ts", "nextly.seed.js", "nextly.seed.mjs"];
-  const hasSeedFile = seedCandidates.some(name =>
-    fs.existsSync(path.join(cwd, name))
-  );
-  if (!hasSeedFile) return;
-
-  // Step 2: skip if any code-first collection already has rows. The
-  // user seed itself is idempotent, but checking here avoids importing
-  // + running esbuild + transpiling the seed file on every boot.
-  try {
-    let hasExistingData = false;
-    for (const collection of collections) {
-      const tableName = `dc_${(collection.dbName ?? collection.slug).replace(/-/g, "_")}`;
-      try {
-        const rows = await adapter.select<unknown>(tableName, { limit: 1 });
-        if (Array.isArray(rows) && rows.length > 0) {
-          hasExistingData = true;
-          break;
-        }
-      } catch {
-        // Table may not exist yet (sync still in flight) or query may
-        // fail (driver quirk) — continue checking other collections.
-        continue;
-      }
-    }
-    if (hasExistingData) {
-      logger.debug?.(
-        "[seed] Auto-seed skipped: database already has content entries"
-      );
-      return;
-    }
-  } catch (err) {
-    logger.warn?.(
-      `[seed] Could not determine seed-needed state: ${err instanceof Error ? err.message : String(err)}. Skipping auto-seed.`
-    );
-    return;
-  }
-
-  // Step 3: run the seed pipeline. seedAll handles permissions + the
-  // user's nextly.seed.ts. skipSuperAdmin:true matches the CLI's
-  // performSeeding so the user creates the super-admin via
-  // /admin/setup (instead of getting a default Admin@123456 account
-  // baked into a fresh DB — that would be a security trap).
-  logger.info?.("[seed] First run detected — seeding demo content...");
-  try {
-    const { seedAll } = await import("../database/seeders/index.js");
-    const result = await seedAll(adapter, {
-      silent: false,
-      skipSuperAdmin: true,
-    });
-    if (result.success) {
-      logger.info?.(
-        `[seed] Demo content seeded: ${result.created} created, ${result.skipped} skipped`
-      );
-    } else {
-      logger.warn?.(
-        `[seed] Auto-seed completed with errors: ${result.errorMessages?.join("; ") ?? "no detail"}`
-      );
-    }
-  } catch (err) {
-    logger.warn?.(
-      `[seed] Auto-seed failed: ${err instanceof Error ? err.message : String(err)}. The dev server is still up; run \`nextly db:sync --seed\` manually if you want to retry.`
-    );
-  }
 }
 
 // ============================================================

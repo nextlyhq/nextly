@@ -1,25 +1,26 @@
 /**
- * Blog Template Seed Script
+ * Blog Template Seed Script (Payload-style)
  *
- * Seeds demo content for the blog template on first run. Media files are
- * resolved local-first, then from a configurable GitHub base URL as fallback,
- * and any per-file failures are reported in an end-of-run summary.
+ * Exports a `seed({ nextly })` function that populates demo content
+ * (roles, posts, categories, tags, navigation, site-settings,
+ * homepage, newsletter form). Triggered from the auth-gated POST
+ * route at `src/app/admin/api/seed/route.ts` — the route validates
+ * the caller has a super-admin session, then constructs an
+ * authenticated Nextly instance and passes it here. Idempotent —
+ * safe to re-run.
  *
- * The {{approach}} placeholder is replaced by the CLI during scaffolding.
+ * Media files resolve local-first, then from a configurable GitHub
+ * base URL as fallback, with per-file failures captured in an
+ * end-of-run summary.
  *
- * This script is idempotent - safe to run multiple times.
+ * The {{approach}} placeholder is replaced by the CLI during
+ * scaffolding.
  */
 
 import fs from "fs";
 import path from "path";
 
-import { getNextly } from "@revnixhq/nextly";
-
-// Pass nextlyConfig (loaded via the @nextly-config path alias) so the
-// seed bootstraps with this project's collections list. Without it, the
-// global singleton would initialise empty and every nextly.create() in
-// the seed would fail with "Schema for collection X not found".
-import nextlyConfig from "@nextly-config";
+import type { Nextly } from "@revnixhq/nextly";
 
 // Role definitions for the three content roles the blog template seeds.
 // Inlined (rather than imported from a sibling file) because the CLI
@@ -73,7 +74,7 @@ const TEMPLATE_ROLES = [
  * in that case and the role will be skipped with a warning.
  */
 async function pickPermissionIdsForRoles(
-  nextly: Awaited<ReturnType<typeof getNextly>>
+  nextly: Nextly
 ): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
   try {
@@ -115,7 +116,7 @@ async function pickPermissionIdsForRoles(
 }
 
 async function seedRoles(
-  nextly: Awaited<ReturnType<typeof getNextly>>
+  nextly: Nextly
 ): Promise<Record<string, string>> {
   const roleIdBySlug: Record<string, string> = {};
 
@@ -308,8 +309,16 @@ async function resolveSeedMedia(
   | { buffer: Buffer; source: "local" | "remote" }
   | { error: "not-found" | "fetch-failed"; detail?: string }
 > {
-  // Local disk first
-  const localPath = path.join(process.cwd(), "seed", "media", filename);
+  // Local disk first. Co-located with this file under
+  // src/endpoints/seed/media after Task 24 phase 3.
+  const localPath = path.join(
+    process.cwd(),
+    "src",
+    "endpoints",
+    "seed",
+    "media",
+    filename
+  );
   if (fs.existsSync(localPath)) {
     return { buffer: fs.readFileSync(localPath), source: "local" };
   }
@@ -362,7 +371,7 @@ async function resolveSeedMedia(
  * can aggregate misses into an end-of-run summary.
  */
 async function uploadMediaFile(
-  nextly: Awaited<ReturnType<typeof getNextly>>,
+  nextly: Nextly,
   filename: string,
   altText: string,
   seedMedia?: SeedMediaConfig
@@ -397,7 +406,7 @@ async function uploadMediaFile(
  * Check if a collection already has entries (for idempotency).
  */
 async function collectionHasEntries(
-  nextly: Awaited<ReturnType<typeof getNextly>>,
+  nextly: Nextly,
   collection: string
 ): Promise<boolean> {
   try {
@@ -412,12 +421,23 @@ async function collectionHasEntries(
 }
 
 /**
- * Main seed function - called by Nextly on first run.
+ * Main seed function. Invoked from the auth-gated POST route at
+ * `src/app/admin/api/seed/route.ts`. Receives a Nextly instance the
+ * route has already initialised with `{ config }` and a verified
+ * super-admin session.
  */
-export default async function seed(): Promise<void> {
-  const nextly = await getNextly({ config: nextlyConfig });
-
-  const seedDataPath = path.join(process.cwd(), "seed", "seed-data.json");
+export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
+  // Both `seed-data.json` and `media/` ship colocated with this file.
+  // We read them at runtime (not via import) so the same code path
+  // works in dev (where Next.js doesn't bundle filesystem reads) and
+  // in production builds (where they're copied as static assets).
+  const seedDataPath = path.join(
+    process.cwd(),
+    "src",
+    "endpoints",
+    "seed",
+    "seed-data.json"
+  );
   if (!fs.existsSync(seedDataPath)) {
     console.log("  No seed-data.json found, skipping seed.");
     return;

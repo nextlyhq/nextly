@@ -492,17 +492,17 @@ export async function createNextly(
 
   // Template-specific notes
   if (projectType === "blog") {
-    if (demoData) {
-      lines.push(
-        `  Demo content (${pc.dim("posts, authors, categories")}) will be seeded automatically.`
-      );
-    }
     lines.push(`  Visit ${pc.cyan("http://localhost:3000")} to see your blog.`);
   }
 
   lines.push(
     `  Visit ${pc.cyan("http://localhost:3000/admin/setup")} to create your admin account.`
   );
+  if (projectType === "blog" && demoData) {
+    lines.push(
+      `  Then visit ${pc.cyan("http://localhost:3000/welcome")} to seed demo content.`
+    );
+  }
   lines.push("");
 
   // Storage note

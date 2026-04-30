@@ -19,6 +19,10 @@
       "types": "./dist/config.d.ts",
       "import": "./dist/config.mjs"
     },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.mjs"
+    },
     "./errors": {
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.mjs"

@@ -45,6 +45,10 @@ const serverEntries = [
   "src/observability/index.ts",
   "src/database/index.ts",
   "src/api/index.ts",
+  // Auth subpath: exposes session/getSession + role guards so user-facing
+  // route handlers (e.g. the template's seed POST route) can validate
+  // sessions without reaching into private internals (Task 24 phase 3).
+  "src/auth/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims
