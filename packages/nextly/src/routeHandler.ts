@@ -920,10 +920,13 @@ async function handleAdminMetaRequest(): Promise<Response> {
     console.error("[ADMIN-META] Error fetching settings from DB:", err);
   }
 
-  return new Response(
-    JSON.stringify({ data: { status: 200, success: true, data: payload } }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
-  );
+  // Canonical Task-21 envelope: { data: <payload> }. The dispatcher used to
+  // wrap an extra { status, success, data } envelope which the migrated
+  // fetcher no longer peels — see task 24 phase 1.
+  return new Response(JSON.stringify({ data: payload }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 /**
@@ -966,10 +969,11 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
     const svc = container.get<GeneralSettingsService>("generalSettingsService");
     const updated = await svc.updateCustomSidebarGroups(validated);
 
-    return new Response(
-      JSON.stringify({ data: { status: 200, success: true, data: updated } }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    // Canonical envelope: { data: <updated> } — see task 24 phase 1.
+    return new Response(JSON.stringify({ data: updated }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   } catch (error) {
     const message =
       error instanceof Error
