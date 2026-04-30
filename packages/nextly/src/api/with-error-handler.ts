@@ -1,16 +1,29 @@
-// `unstable_rethrow` is loaded lazily on first use. We can't use a
-// static `import { unstable_rethrow } from "next/navigation"` here:
-// the bare path fails Node's strict ESM resolution when this package
-// is loaded as an external via `serverExternalPackages`, and the `.js`
-// suffix variant makes Turbopack's bundler-side resolution unhappy
-// (it follows the path into Next.js internals that don't exist in
-// the file tree). Dynamic import works in both modes. We cache the
-// reference at module scope so the resolution cost is paid once.
+// `unstable_rethrow` is loaded lazily on first use via `createRequire`
+// (CommonJS-style resolution). Why not a regular static or dynamic
+// `import "next/navigation"`?
+//
+//   - Static `import { x } from "next/navigation"` chokes Node's strict
+//     ESM resolver when this package is loaded as an external via
+//     `serverExternalPackages` (Next.js 16 doesn't list `./navigation`
+//     in its package.json `exports` field).
+//   - The `.js`-suffix variant fixes Node ESM but makes Turbopack's
+//     bundler descend into Next.js internals that aren't on disk.
+//   - Plain `await import("next/navigation")` shifts the same Node ESM
+//     resolution failure from load time to call time — still crashes.
+//
+// `createRequire(import.meta.url)` falls back to Node's CommonJS
+// resolver, which finds `node_modules/next/navigation.js` directly.
+// Turbopack treats `createRequire` as opaque (it doesn't follow the
+// require path at build time), so neither side complains. References
+// cached at module scope so the resolution cost is paid once.
+import { createRequire } from "node:module";
+
 type UnstableRethrow = (err: unknown) => void;
 let cachedUnstableRethrow: UnstableRethrow | null = null;
-async function getUnstableRethrow(): Promise<UnstableRethrow> {
+function getUnstableRethrow(): UnstableRethrow {
   if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  const mod = (await import("next/navigation")) as {
+  const require = createRequire(import.meta.url);
+  const mod = require("next/navigation") as {
     unstable_rethrow: UnstableRethrow;
   };
   cachedUnstableRethrow = mod.unstable_rethrow;
@@ -78,10 +91,9 @@ export function withErrorHandler<TArgs extends unknown[]>(
     } catch (err) {
       // (1) Re-throw Next.js sentinels FIRST. Without this, `redirect()` /
       // `notFound()` inside a handler get silently converted to 500s.
-      // `getUnstableRethrow` is the dynamic-import version (see top of
-      // file). Awaiting here is fine because we're already async.
-      const unstable_rethrow = await getUnstableRethrow();
-      unstable_rethrow(err);
+      // `getUnstableRethrow` resolves via `createRequire` (see top of
+      // file for the dual-resolution rationale). Synchronous now.
+      getUnstableRethrow()(err);
 
       // (2) Classify.
       let nextlyErr: NextlyError;

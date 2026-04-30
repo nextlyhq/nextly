@@ -1,25 +1,25 @@
-// Next.js subpath imports are loaded lazily here. A static
-// `import "next/headers"` (or `next/navigation`) doesn't work in BOTH
-// resolution modes:
-//   - Without the `.js` suffix Node ESM (used when Next.js treats us as
-//     a `serverExternalPackages` external) can't find the subpath.
-//   - WITH the `.js` suffix Turbopack's bundler-side resolution
-//     descends into Next.js internals that don't exist on disk.
-// Dynamic import works in both modes. Cache the references at module
-// scope so we pay the resolution cost only once.
+// Next.js subpath imports use `createRequire` for dual-resolution
+// safety. See packages/nextly/src/api/with-error-handler.ts for the
+// full rationale — both Node ESM and Turbopack accept the
+// CommonJS-style resolution path while neither accepts a single
+// shared `import` statement.
+import { createRequire } from "node:module";
+
 type HeadersFn = () => Promise<{ get(name: string): string | null }>;
 type UnstableRethrow = (err: unknown) => void;
 let cachedHeaders: HeadersFn | null = null;
 let cachedUnstableRethrow: UnstableRethrow | null = null;
-async function getHeaders(): Promise<HeadersFn> {
+function getHeaders(): HeadersFn {
   if (cachedHeaders) return cachedHeaders;
-  const mod = (await import("next/headers")) as { headers: HeadersFn };
+  const require = createRequire(import.meta.url);
+  const mod = require("next/headers") as { headers: HeadersFn };
   cachedHeaders = mod.headers;
   return cachedHeaders;
 }
-async function getUnstableRethrow(): Promise<UnstableRethrow> {
+function getUnstableRethrow(): UnstableRethrow {
   if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  const mod = (await import("next/navigation")) as {
+  const require = createRequire(import.meta.url);
+  const mod = require("next/navigation") as {
     unstable_rethrow: UnstableRethrow;
   };
   cachedUnstableRethrow = mod.unstable_rethrow;
@@ -47,7 +47,7 @@ type WithActionOptions = {
  */
 async function readOrGenerateRequestIdFromHeaders(): Promise<string> {
   try {
-    const headers = await getHeaders();
+    const headers = getHeaders();
     const h = await headers();
     return (
       h.get("x-request-id") ??
@@ -84,10 +84,9 @@ export function withAction<TArgs extends unknown[], TResult>(
       return { ok: true, data };
     } catch (err) {
       // Re-throw Next.js sentinels FIRST so redirect()/notFound() inside an
-      // action behave as expected. `getUnstableRethrow` lazy-resolves the
-      // function (see top of file for why dynamic import is required).
-      const unstable_rethrow = await getUnstableRethrow();
-      unstable_rethrow(err);
+      // action behave as expected. `getUnstableRethrow` resolves via
+      // createRequire (see top of file for rationale).
+      getUnstableRethrow()(err);
 
       // Classify.
       let nextlyErr: NextlyError;

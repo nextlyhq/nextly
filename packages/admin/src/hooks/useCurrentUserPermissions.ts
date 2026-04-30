@@ -159,35 +159,23 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
  * ```
  */
 export function useCurrentUserPermissions() {
-  // Dispatcher routes (anything served by routeHandler.ts/dispatcher.ts) emit
-  // an extra ServiceResult envelope: wire shape is
-  //   { data: { success, status, data: <T>, message? } }
-  // The shared fetcher peels one `data` layer, so the value here is the
-  // ServiceResult envelope. We tolerate both shapes during the partial
-  // Task-21 migration: phase 4 of task 24 will collapse dispatcher routes
-  // to the canonical { data: <T> } and this fallback can drop.
-  type DispatcherResult<T> = T | { data: T };
-  const { data, isLoading, error } = useQuery<DispatcherResult<UserPermissionsResponse>>({
+  // Wire shape (post task-24 phase 4): `{ data: <UserPermissionsResponse> }`.
+  // The fetcher peels the single `data` layer, so `data` here IS the
+  // permissions payload directly.
+  const { data, isLoading, error } = useQuery<UserPermissionsResponse>({
     queryKey: ["currentUserPermissions"],
     queryFn: () =>
-      protectedApi.get<DispatcherResult<UserPermissionsResponse>>(
-        "/me/permissions"
-      ),
+      protectedApi.get<UserPermissionsResponse>("/me/permissions"),
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
 
-  // Tolerate either shape during migration.
-  const inner: UserPermissionsResponse | undefined =
-    data && "permissions" in data
-      ? data
-      : (data as { data?: UserPermissionsResponse } | undefined)?.data;
-  const permissions = inner?.permissions ?? [];
-  const isSuperAdmin = inner?.isSuperAdmin ?? false;
-  const roles = inner?.roles ?? [];
+  const permissions = data?.permissions ?? [];
+  const isSuperAdmin = data?.isSuperAdmin ?? false;
+  const roles = data?.roles ?? [];
 
-  const capabilities = inner
+  const capabilities = data
     ? buildCapabilities(permissions, isSuperAdmin)
     : EMPTY_CAPABILITIES;
 

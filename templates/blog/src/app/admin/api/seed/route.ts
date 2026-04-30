@@ -18,7 +18,7 @@
  */
 
 import { getNextly } from "@revnixhq/nextly";
-import { getSession, hasRole } from "@revnixhq/nextly/auth";
+import { getSession, isSuperAdmin } from "@revnixhq/nextly/auth";
 import config from "@nextly-config";
 
 import { seed } from "@/endpoints/seed";
@@ -45,16 +45,20 @@ export async function POST(request: Request): Promise<Response> {
   // Demo seeding is a destructive setup-time action, so we require the
   // canonical super-admin role rather than any custom role with broad
   // collection permissions. Roles seeded by the template (admin /
-  // editor / author) intentionally do NOT grant this.
-  if (!hasRole(session.user, "super-admin")) {
-    return Response.json(
-      { errors: [{ message: "You don't have permission to perform this action." }] },
-      { status: 403 }
-    );
-  }
-
+  // editor / author) intentionally do NOT grant this. We initialise
+  // Nextly first so `isSuperAdmin` can read from the live DB.
   try {
     const nextly = await getNextly({ config });
+    if (!(await isSuperAdmin(session.user.id))) {
+      return Response.json(
+        {
+          errors: [
+            { message: "You don't have permission to perform this action." },
+          ],
+        },
+        { status: 403 }
+      );
+    }
     await seed({ nextly });
     return Response.json({ success: true });
   } catch (err) {

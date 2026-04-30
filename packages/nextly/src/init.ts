@@ -348,6 +348,64 @@ export async function getCachedNextly(): Promise<Nextly> {
   if (globalForInit.__nextly_initPromise) {
     return globalForInit.__nextly_initPromise;
   }
+
+  // Fallback path: services may have been registered via
+  // `registerServices()` directly (e.g. from `createDynamicHandlers`'s
+  // `ensureServicesInitialized` in routeHandler.ts) without ever
+  // calling the public `getNextly({ config })` factory. In that case
+  // the DI container has services but the public Nextly singleton was
+  // never built. Build it now from whatever config is reachable so
+  // internal API handlers that only need `getService(...)` keep
+  // working. This means BOTH paths converge on the same cached
+  // Nextly instance, so a later `getNextly({ config })` call from
+  // user code returns the same singleton.
+  if (isServicesRegistered()) {
+    const directAPI = getDirectAPI();
+    const instance: Nextly = {
+      find: directAPI.find.bind(directAPI),
+      findByID: directAPI.findByID.bind(directAPI),
+      create: directAPI.create.bind(directAPI),
+      update: directAPI.update.bind(directAPI),
+      delete: directAPI.delete.bind(directAPI),
+      count: directAPI.count.bind(directAPI),
+      bulkDelete: directAPI.bulkDelete.bind(directAPI),
+      duplicate: directAPI.duplicate.bind(directAPI),
+      findGlobal: directAPI.findGlobal.bind(directAPI),
+      updateGlobal: directAPI.updateGlobal.bind(directAPI),
+      findGlobals: directAPI.findGlobals.bind(directAPI),
+      login: directAPI.login.bind(directAPI),
+      logout: directAPI.logout.bind(directAPI),
+      me: directAPI.me.bind(directAPI),
+      updateMe: directAPI.updateMe.bind(directAPI),
+      register: directAPI.register.bind(directAPI),
+      changePassword: directAPI.changePassword.bind(directAPI),
+      forgotPassword: directAPI.forgotPassword.bind(directAPI),
+      resetPassword: directAPI.resetPassword.bind(directAPI),
+      verifyEmail: directAPI.verifyEmail.bind(directAPI),
+      users: directAPI.users,
+      media: directAPI.media,
+      forms: directAPI.forms,
+      emailProviders: directAPI.emailProviders,
+      emailTemplates: directAPI.emailTemplates,
+      userFields: directAPI.userFields,
+      email: directAPI.email,
+      roles: directAPI.roles,
+      permissions: directAPI.permissions,
+      access: directAPI.access,
+      collections: getService("collectionService"),
+      userService: getService("userService"),
+      mediaService: getService("mediaService"),
+      storage: getService("mediaStorage"),
+      adapter: getService("adapter"),
+      shutdown: async () => {
+        await shutdownServices();
+        globalForInit.__nextly_cachedInstance = null;
+      },
+    };
+    globalForInit.__nextly_cachedInstance = instance;
+    return instance;
+  }
+
   throw new NextlyError({
     code: "CONFIGURATION_ERROR",
     statusCode: 500,
