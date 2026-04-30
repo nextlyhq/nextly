@@ -6,9 +6,23 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "nextly": ["../../packages/nextly/src"],
-      "@nextly/admin": ["../../packages/admin/src"],
-      "@admin/*": ["../../packages/admin/src/*"]
+      "@revnixhq/ui": ["../../packages/ui/src/index.ts"],
+      "@revnixhq/admin": ["../../packages/admin/src/index.ts"],
+      "@revnixhq/admin/lib/component-registry": [
+        "../../packages/admin/src/lib/plugins/component-registry.ts"
+      ],
+      "@revnixhq/admin/lib/plugin-components": [
+        "../../packages/admin/src/lib/plugins/plugin-components.ts"
+      ],
+      "@revnixhq/plugin-form-builder": [
+        "../../packages/plugin-form-builder/src/index.ts"
+      ],
+      "@revnixhq/plugin-form-builder/admin": [
+        "../../packages/plugin-form-builder/src/admin/index.ts"
+      ],
+      "@revnixhq/plugin-form-builder/components": [
+        "../../packages/plugin-form-builder/src/components/index.ts"
+      ]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
