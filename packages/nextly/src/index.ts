@@ -1,12 +1,18 @@
 // Release-pipeline test (0.0.136): verifies the consolidated v0.0.X
 // GitHub Release workflow introduced in #1243. No runtime impact.
-import {
-  createDynamicHandlers,
-  getCollectionsHandler,
-  getCollectionsService,
-} from "./routeHandler";
 
-export { createDynamicHandlers, getCollectionsHandler, getCollectionsService };
+// IMPORTANT (task 24 stage 1): this root entry is the Node-safe surface
+// of @revnixhq/nextly. Anything that statically imports `next/navigation`,
+// `next/cache`, `next/headers`, etc. lives behind the
+// `@revnixhq/nextly/runtime` subpath instead. Keeping the root clean is
+// what lets the CLI, plugin authors, and config loaders import from
+// the package without dragging Next.js into a Node-only context.
+//
+// If you find yourself wanting to add a re-export here that pulls
+// `routeHandler.ts`, `api/with-error-handler.ts`, `actions/with-action.ts`,
+// `actions/upload-media.ts`, or anything reachable from those files —
+// move it under `runtime.ts` (which is exported from the
+// `@revnixhq/nextly/runtime` subpath) and update consumers there.
 export {
   ServiceDispatcher,
   type ServiceType,
