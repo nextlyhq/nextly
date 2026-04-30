@@ -1,4 +1,21 @@
-import { unstable_rethrow } from "next/navigation";
+// `unstable_rethrow` is loaded lazily on first use. We can't use a
+// static `import { unstable_rethrow } from "next/navigation"` here:
+// the bare path fails Node's strict ESM resolution when this package
+// is loaded as an external via `serverExternalPackages`, and the `.js`
+// suffix variant makes Turbopack's bundler-side resolution unhappy
+// (it follows the path into Next.js internals that don't exist in
+// the file tree). Dynamic import works in both modes. We cache the
+// reference at module scope so the resolution cost is paid once.
+type UnstableRethrow = (err: unknown) => void;
+let cachedUnstableRethrow: UnstableRethrow | null = null;
+async function getUnstableRethrow(): Promise<UnstableRethrow> {
+  if (cachedUnstableRethrow) return cachedUnstableRethrow;
+  const mod = (await import("next/navigation")) as {
+    unstable_rethrow: UnstableRethrow;
+  };
+  cachedUnstableRethrow = mod.unstable_rethrow;
+  return cachedUnstableRethrow;
+}
 
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
@@ -61,6 +78,9 @@ export function withErrorHandler<TArgs extends unknown[]>(
     } catch (err) {
       // (1) Re-throw Next.js sentinels FIRST. Without this, `redirect()` /
       // `notFound()` inside a handler get silently converted to 500s.
+      // `getUnstableRethrow` is the dynamic-import version (see top of
+      // file). Awaiting here is fine because we're already async.
+      const unstable_rethrow = await getUnstableRethrow();
       unstable_rethrow(err);
 
       // (2) Classify.

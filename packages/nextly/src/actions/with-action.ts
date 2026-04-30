@@ -1,5 +1,30 @@
-import { headers } from "next/headers";
-import { unstable_rethrow } from "next/navigation";
+// Next.js subpath imports are loaded lazily here. A static
+// `import "next/headers"` (or `next/navigation`) doesn't work in BOTH
+// resolution modes:
+//   - Without the `.js` suffix Node ESM (used when Next.js treats us as
+//     a `serverExternalPackages` external) can't find the subpath.
+//   - WITH the `.js` suffix Turbopack's bundler-side resolution
+//     descends into Next.js internals that don't exist on disk.
+// Dynamic import works in both modes. Cache the references at module
+// scope so we pay the resolution cost only once.
+type HeadersFn = () => Promise<{ get(name: string): string | null }>;
+type UnstableRethrow = (err: unknown) => void;
+let cachedHeaders: HeadersFn | null = null;
+let cachedUnstableRethrow: UnstableRethrow | null = null;
+async function getHeaders(): Promise<HeadersFn> {
+  if (cachedHeaders) return cachedHeaders;
+  const mod = (await import("next/headers")) as { headers: HeadersFn };
+  cachedHeaders = mod.headers;
+  return cachedHeaders;
+}
+async function getUnstableRethrow(): Promise<UnstableRethrow> {
+  if (cachedUnstableRethrow) return cachedUnstableRethrow;
+  const mod = (await import("next/navigation")) as {
+    unstable_rethrow: UnstableRethrow;
+  };
+  cachedUnstableRethrow = mod.unstable_rethrow;
+  return cachedUnstableRethrow;
+}
 
 import { generateRequestId } from "../api/request-id";
 import { isDbError } from "../database/errors";
@@ -22,6 +47,7 @@ type WithActionOptions = {
  */
 async function readOrGenerateRequestIdFromHeaders(): Promise<string> {
   try {
+    const headers = await getHeaders();
     const h = await headers();
     return (
       h.get("x-request-id") ??
@@ -58,7 +84,9 @@ export function withAction<TArgs extends unknown[], TResult>(
       return { ok: true, data };
     } catch (err) {
       // Re-throw Next.js sentinels FIRST so redirect()/notFound() inside an
-      // action behave as expected.
+      // action behave as expected. `getUnstableRethrow` lazy-resolves the
+      // function (see top of file for why dynamic import is required).
+      const unstable_rethrow = await getUnstableRethrow();
       unstable_rethrow(err);
 
       // Classify.

@@ -73,7 +73,6 @@
 "use server";
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
-import { revalidatePath } from "next/cache";
 
 import { container } from "../di/container";
 import { ServiceContainer } from "../services";
@@ -192,9 +191,14 @@ export async function uploadMediaAction(
     const services = getServices();
     const result = await services.media.uploadMedia(parseResult.data);
 
-    // 6. Revalidate cache on success
+    // 6. Revalidate cache on success.
+    // `next/cache` is dynamically imported to dodge the bundler/Node-ESM
+    // resolution split (see with-error-handler.ts for the full rationale).
     if (result.success && result.data) {
       const pathToRevalidate = options.revalidatePath || "/admin/media";
+      const { revalidatePath } = (await import("next/cache")) as {
+        revalidatePath: (path: string) => void;
+      };
       revalidatePath(pathToRevalidate);
 
       return {
@@ -259,9 +263,12 @@ export async function deleteMediaAction(
     const services = getServices();
     const result = await services.media.deleteMedia(mediaId);
 
-    // 3. Revalidate cache on success
+    // 3. Revalidate cache on success (dynamic import — see above)
     if (result.success) {
       const pathToRevalidate = options?.revalidatePath || "/admin/media";
+      const { revalidatePath } = (await import("next/cache")) as {
+        revalidatePath: (path: string) => void;
+      };
       revalidatePath(pathToRevalidate);
 
       return {
@@ -339,9 +346,12 @@ export async function updateMediaAction(
     const services = getServices();
     const result = await services.media.updateMedia(mediaId, updates);
 
-    // 3. Revalidate cache on success
+    // 3. Revalidate cache on success (dynamic import — see above)
     if (result.success && result.data) {
       const pathToRevalidate = options?.revalidatePath || "/admin/media";
+      const { revalidatePath } = (await import("next/cache")) as {
+        revalidatePath: (path: string) => void;
+      };
       revalidatePath(pathToRevalidate);
 
       return {

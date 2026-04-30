@@ -55,14 +55,36 @@ export function setLoginRedirectPath(path: string): void {
 }
 
 /**
+ * Routes where a 401 on a protected query is EXPECTED (because the user
+ * isn't logged in yet, by design) and must NOT trigger a redirect to
+ * login. Without this guard the setup wizard ping-pongs forever:
+ *
+ *   1. /admin/setup mounts → GeneralSettingsSyncProvider fires
+ *      `useGeneralSettings` (protected) → 401 with AUTH_REQUIRED.
+ *   2. authFetch sees the code → redirectToLogin() → /admin/login.
+ *   3. /admin/login mounts → PublicRoute checks setup-status,
+ *      sees no users → navigateTo("/admin/setup"). Bounce.
+ *
+ * Task 24 phase 1 fix.
+ */
+const NO_REDIRECT_PUBLIC_PATHS = new Set([
+  "/admin/login",
+  "/admin/setup",
+  "/admin/register",
+  "/admin/forgot-password",
+  "/admin/reset-password",
+  "/admin/verify-email",
+]);
+
+/**
  * Navigate the browser to the configured login path unless we're already
- * there. The guard prevents layout-level background polls (e.g. a schema
- * banner's interval fetch) from triggering an infinite reload loop after
- * landing on `/admin/login`.
+ * on a public-auth route. The guard prevents layout-level background
+ * queries (admin-meta, general-settings, etc.) from triggering an
+ * infinite reload loop while the user is mid auth-flow.
  */
 export function redirectToLogin(): void {
   if (typeof window === "undefined") return;
-  if (window.location.pathname === loginRedirectPath) return;
+  if (NO_REDIRECT_PUBLIC_PATHS.has(window.location.pathname)) return;
   window.location.href = loginRedirectPath;
 }
 
