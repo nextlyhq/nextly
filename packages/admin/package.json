@@ -31,7 +31,8 @@
   "scripts": {
     "build": "tsup && node scripts/build-css.mjs",
     "build:css": "node scripts/build-css.mjs",
-    "dev": "tsup --watch",
+    "build:css:watch": "node scripts/build-css-watch.mjs",
+    "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
