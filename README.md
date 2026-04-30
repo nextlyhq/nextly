@@ -258,12 +258,14 @@ Nextly uses consistent script naming across all packages. Run these commands fro
 ### Development
 
 ```bash
-pnpm dev              # Start all packages in watch mode (sequential)
-pnpm dev:parallel     # Start all packages in parallel
-pnpm dev:core         # Start only nextly in watch mode
-pnpm dev:admin        # Start only @nextly/admin in watch mode
-pnpm dev:app          # Start only playground app (Next.js)
+pnpm dev              # Start all watchers in parallel (preferred — see below)
+pnpm dev:parallel     # Same, with parallel concurrency mode
+pnpm dev:core         # Only @revnixhq/nextly in watch mode
+pnpm dev:admin        # Only @revnixhq/admin (JS + CSS via scripts/dev.mjs)
+pnpm dev:app          # Only the playground app (no upstream watchers)
 ```
+
+`pnpm dev` from the **monorepo root** is the canonical dev loop. Turborepo runs every package's `dev` script in parallel, so edits to any workspace package's `src/` flow into the playground without a manual rebuild. Client packages (`@revnixhq/ui`, `@revnixhq/admin`, `@revnixhq/plugin-form-builder`) are aliased to source — Turbopack reads their `.ts/.tsx` directly. Server-side packages (`@revnixhq/nextly`, adapters, storage) keep producing `dist/` via their own `tsup --watch` because Node loads them via `serverExternalPackages`. See [CONTRIBUTING.md → Development Workflow](./CONTRIBUTING.md#development-workflow) for the full architecture.
 
 ### Building
 
