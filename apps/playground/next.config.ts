@@ -1,11 +1,20 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Note: We only transpile @revnixhq/admin here. The nextly package is consumed
-  // as a pre-built package from node_modules (linked via pnpm workspace).
-  // This avoids Turbopack transpiling nextly's source files which can cause
-  // issues with its URL polyfill handling server-side code.
-  transpilePackages: ["@revnixhq/admin", "@revnixhq/ui"],
+  // Source-mode is enabled for the client-side workspace packages
+  // (@revnixhq/ui, @revnixhq/admin, @revnixhq/plugin-form-builder) — see
+  // turbopack.resolveAlias below. transpilePackages tells Next.js to
+  // run these packages' .ts/.tsx through its own transpiler on the way
+  // in. Server-side packages (nextly + adapters + storage) stay in
+  // serverExternalPackages and continue to be loaded by Node from dist;
+  // their tsup --watch keeps dist fresh during dev. Node-only code in
+  // nextly's runtime path can't be safely transpiled by Turbopack, so
+  // this bimodal split is intentional.
+  transpilePackages: [
+    "@revnixhq/admin",
+    "@revnixhq/ui",
+    "@revnixhq/plugin-form-builder",
+  ],
   serverExternalPackages: [
     "@revnixhq/nextly",
     "@revnixhq/adapter-drizzle",
@@ -25,34 +34,55 @@ const nextConfig: NextConfig = {
   experimental: {
     esmExternals: true,
   },
-  // Enable Turbopack (default in Next.js 16)
   turbopack: {
     resolveAlias: {
-      // Path aliases for workspace packages (used when transpiling from source)
-      // Note: We only alias @admin/* here. The nextly package is consumed
-      // via node_modules (linked via pnpm workspace) which uses the built dist files.
-      // This prevents Turbopack from trying to transpile nextly source files
-      // which can cause issues with Node.js-specific code.
+      // @admin/* is admin's own internal source path alias (admin's
+      // source files use it for cross-cutting imports inside the
+      // package — see packages/admin/tsconfig.json paths).
       "@admin/*": ["../../packages/admin/src/*"],
-      // Source-mode for @revnixhq/ui: Turbopack reads .ts/.tsx directly so
-      // edits to packages/ui/src/... live-reload in the playground without
+      // Source-mode for the client packages: Turbopack reads .ts/.tsx
+      // directly so edits to their src/... live-reload via HMR without
       // waiting for tsup --watch to write dist.
+      //
+      // admin and plugin-form-builder MUST be aliased together: the plugin
+      // registers components into admin's component registry, which only
+      // works when both packages resolve to the same module instance.
+      // Aliasing one without the other reproduces the F21-era "module
+      // identity mismatch" that broke FormBuilder custom view registration.
       "@revnixhq/ui": ["../../packages/ui/src/index.ts"],
-      // Turbopack does not honour serverExternalPackages for optional peer deps
-      // that are dynamically imported inside @revnixhq/nextly dist. Alias them
-      // to the installed package so Turbopack can resolve them at build time.
+      "@revnixhq/admin": ["../../packages/admin/src/index.ts"],
+      "@revnixhq/admin/lib/component-registry": [
+        "../../packages/admin/src/lib/plugins/component-registry.ts",
+      ],
+      "@revnixhq/admin/lib/plugin-components": [
+        "../../packages/admin/src/lib/plugins/plugin-components.ts",
+      ],
+      "@revnixhq/plugin-form-builder": [
+        "../../packages/plugin-form-builder/src/index.ts",
+      ],
+      "@revnixhq/plugin-form-builder/admin": [
+        "../../packages/plugin-form-builder/src/admin/index.ts",
+      ],
+      "@revnixhq/plugin-form-builder/components": [
+        "../../packages/plugin-form-builder/src/components/index.ts",
+      ],
+      // Turbopack does not honour serverExternalPackages for optional peer
+      // deps that are dynamically imported inside @revnixhq/nextly dist.
+      // Alias them to the installed package so Turbopack can resolve them
+      // at build time.
       pg: "pg",
       "mysql2/promise": "./src/stubs/mysql2-stub.js",
       mysql2: "./src/stubs/mysql2-stub.js",
       "@revnixhq/adapter-postgres": "@revnixhq/adapter-postgres",
       "@revnixhq/adapter-mysql": "@revnixhq/adapter-mysql",
       "@revnixhq/adapter-sqlite": "@revnixhq/adapter-sqlite",
-      // NOTE: Do NOT alias @revnixhq/admin to source here.
-      // plugin-form-builder is pre-built against the admin dist, so aliasing
-      // admin to raw source causes a module identity mismatch and breaks
-      // the FormBuilder custom view registration.
-      // CSS files need to come from dist folder (built artifacts)
-      "@revnixhq/admin/styles.css": [
+      // CSS files come from dist (the build-css.mjs pipeline applies the
+      // .adminapp scoping post-process; Phase 2 added a watch loop so the
+      // dist file stays fresh during dev). With @revnixhq/admin aliased to
+      // src above, Turbopack stops consulting admin's package.json exports
+      // for subpaths — so the CSS alias is now load-bearing (not dead config
+      // as it was before this commit).
+      "@revnixhq/admin/style.css": [
         "../../packages/admin/dist/styles/globals.css",
       ],
       "@revnixhq/plugin-form-builder/styles/builder.css": [
