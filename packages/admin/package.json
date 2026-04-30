@@ -68,6 +68,7 @@
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
     "autoprefixer": "^10.4.21",
+    "chokidar": "^5.0.0",
     "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
     "postcss": "^8.5.6",
