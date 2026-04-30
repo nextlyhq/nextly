@@ -20,6 +20,14 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Database configuration
+
+Copy `.env.example` to `.env` for the full reference of supported variables. Three minimal `.env.<dialect>` templates are also provided for quick DB switching — copy the one you want to `.env`:
+
+- `.env.postgresql` — PostgreSQL
+- `.env.mysql` — MySQL
+- `.env.sqlite` — SQLite
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
