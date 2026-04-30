@@ -1,5 +1,3 @@
-import path from "path";
-
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
@@ -22,8 +20,7 @@ const nextConfig: NextConfig = {
     "sharp",
     "drizzle-orm",
     "esbuild",
-    'esbuild',
-      'bundle-require',
+    "bundle-require",
   ],
   experimental: {
     esmExternals: true,
@@ -61,49 +58,6 @@ const nextConfig: NextConfig = {
         "../../packages/plugin-form-builder/dist/styles/submissions-filter.css",
       ],
     },
-  },
-  webpack: (config, { dev }) => {
-    // Enable hot reloading for workspace packages
-    if (dev) {
-      config.watchOptions = {
-        ...config.watchOptions,
-        ignored: /node_modules([\\]+|\/)+(?!nextly|@nextly)/,
-      };
-    }
-
-    // Handle .js imports to .ts files for workspace packages
-    config.resolve.extensionAlias = {
-      ".js": [".js", ".ts"],
-      ".jsx": [".jsx", ".tsx"],
-    };
-
-    // Path aliases for workspace packages (used when transpiling from source)
-    // Note: We only alias @admin here. The nextly package is consumed via
-    // node_modules (linked via pnpm workspace) which uses the built dist files.
-    // NOTE: Do NOT alias @revnixhq/admin$ to source.
-    // plugin-form-builder is pre-built against the admin dist, so aliasing
-    // admin to raw source causes a module identity mismatch and breaks
-    // the FormBuilder custom view registration.
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      "@admin": path.resolve(__dirname, "../../packages/admin/src"),
-      // CSS files need to come from dist folder (built artifacts)
-      "@revnixhq/admin/styles.css": path.resolve(
-        __dirname,
-        "../../packages/admin/dist/styles/globals.css"
-      ),
-      "@revnixhq/plugin-form-builder/styles/builder.css": path.resolve(
-        __dirname,
-        "../../packages/plugin-form-builder/dist/styles/form-builder.css"
-      ),
-      "@revnixhq/plugin-form-builder/styles/submissions-filter.css":
-        path.resolve(
-          __dirname,
-          "../../packages/plugin-form-builder/dist/styles/submissions-filter.css"
-        ),
-    };
-
-    return config;
   },
 };
 
