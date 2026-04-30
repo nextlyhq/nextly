@@ -18,7 +18,7 @@
  */
 
 import { container } from "../di";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
 import { requireAuthHeader } from "./auth-header-only";
@@ -30,7 +30,7 @@ interface RouteContext {
 }
 
 async function getEmailProviderService(): Promise<EmailProviderService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<EmailProviderService>("emailProviderService");
 }
 

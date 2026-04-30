@@ -2,16 +2,17 @@
  * Category query helpers.
  */
 
-// Use project-local wrapper so getNextly() bootstraps with the
-// nextly.config.ts collections list. See src/lib/nextly.ts.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the -config path alias) so
+// getNextly() bootstraps with this project's collections list.
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 import type { Category, TaxonomyWithCount } from "./types";
 
 export async function getCategoryBySlug(
   slug: string
 ): Promise<Category | null> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "categories",
     where: { slug: { equals: slug } },
@@ -27,7 +28,7 @@ export async function getCategoryBySlug(
  * alongside each category, prefer `getAllCategoriesWithCounts` below.
  */
 export async function getAllCategories(): Promise<Category[]> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "categories",
     limit: 1000,
@@ -37,7 +38,7 @@ export async function getAllCategories(): Promise<Category[]> {
 }
 
 export async function getAllCategorySlugs(): Promise<string[]> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "categories",
     limit: 1000,
@@ -58,7 +59,7 @@ export async function getAllCategorySlugs(): Promise<string[]> {
 export async function getAllCategoriesWithCounts(): Promise<
   TaxonomyWithCount<Category>[]
 > {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const cats = await nextly.find({
     collection: "categories",
     limit: 1000,

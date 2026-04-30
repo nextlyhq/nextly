@@ -11,9 +11,10 @@
 
 import { cache } from "react";
 
-// Use project-local wrapper so getNextly() bootstraps with the
-// nextly.config.ts collections list. See src/lib/nextly.ts.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the -config path alias) so
+// getNextly() bootstraps with this project's collections list.
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 export interface Homepage {
   heroTitle: string;
@@ -45,7 +46,7 @@ const DEFAULTS: Homepage = {
 
 export const getHomepage = cache(async (): Promise<Homepage> => {
   try {
-    const nextly = await getNextly();
+    const nextly = await getNextly({ config: nextlyConfig });
     const hp = await nextly.findGlobal({ slug: "homepage", depth: 0 });
     if (!hp) return DEFAULTS;
     return {

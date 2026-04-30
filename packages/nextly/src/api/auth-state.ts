@@ -37,7 +37,7 @@ import { readAccessTokenCookie } from "../auth/cookies/access-token-cookie.js";
 import { verifyAccessToken } from "../auth/jwt/verify.js";
 import { getDialectTables } from "../database/index.js";
 import { NextlyError } from "../errors/nextly-error.js";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { env } from "../lib/env.js";
 
 import { createSuccessResponse } from "./create-success-response.js";
@@ -96,7 +96,7 @@ export const GET = withErrorHandler(async (request: NextRequest) => {
   // Read the live user row so the account state reflects the current DB,
   // not the JWT snapshot. A locked / disabled user with a still-valid JWT
   // still gets `locked: true` / `disabled: true` here.
-  const nextly = await getNextly();
+  const nextly = await getCachedNextly();
   // The adapter is typed as `unknown` from the public surface; narrow once
   // here with the minimum shape we need (a Drizzle-style select chain
   // returning rows with the user fields below).

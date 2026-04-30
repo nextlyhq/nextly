@@ -14,10 +14,11 @@
  * a `form-submissions` `afterChange` hook instead of doing it here.
  */
 
-// Use project-local wrapper so getNextly() bootstraps with the
-// nextly.config.ts collections list (forms, form-submissions, etc.).
-// See src/lib/nextly.ts.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the @nextly-config path alias) so
+// getNextly() bootstraps with this project's collections list
+// (forms, form-submissions, etc.).
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 export interface NewsletterResult {
   ok: boolean;
@@ -36,7 +37,7 @@ export async function submitNewsletter(
   }
 
   try {
-    const nextly = await getNextly();
+    const nextly = await getNextly({ config: nextlyConfig });
 
     // Look up the Newsletter form by slug. Missing form = seed didn't
     // run or the user removed it. Report a clear error.

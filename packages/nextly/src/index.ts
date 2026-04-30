@@ -92,6 +92,7 @@ export {
 // Main initialization API - recommended for most applications
 export {
   getNextly,
+  getCachedNextly,
   shutdownNextly,
   createRegister,
   type Nextly,

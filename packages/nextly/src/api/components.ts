@@ -27,7 +27,7 @@ import { z } from "zod";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 
 import {
@@ -38,7 +38,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getComponentRegistry(): Promise<ComponentRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("componentRegistryService");
 }
 

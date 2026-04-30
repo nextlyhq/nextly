@@ -11,9 +11,10 @@
 
 import { cache } from "react";
 
-// Use project-local wrapper so getNextly() bootstraps with the
-// nextly.config.ts collections list. See src/lib/nextly.ts.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the -config path alias) so
+// getNextly() bootstraps with this project's collections list.
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 export interface NavLink {
   label: string;
@@ -46,7 +47,7 @@ const DEFAULTS: Navigation = {
 
 export const getNavigation = cache(async (): Promise<Navigation> => {
   try {
-    const nextly = await getNextly();
+    const nextly = await getNextly({ config: nextlyConfig });
     const nav = await nextly.findGlobal({ slug: "navigation", depth: 0 });
     if (!nav) return DEFAULTS;
     return {

@@ -48,7 +48,7 @@
 
 import { isServicesRegistered, getService } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import {
   UploadService,
@@ -115,7 +115,7 @@ export function resetUploadService(): void {
 }
 
 async function ensureServicesInitialized(): Promise<void> {
-  await getNextly();
+  await getCachedNextly();
 }
 
 async function extractParams(

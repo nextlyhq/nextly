@@ -30,7 +30,7 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { CreateApiKeySchema, UpdateApiKeySchema } from "../schemas/api-keys";
 import type { ApiKeyService } from "../services/auth/api-key-service";
 import { isSuperAdmin } from "../services/lib/permissions";
@@ -41,7 +41,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getApiKeyService(): Promise<ApiKeyService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<ApiKeyService>("apiKeyService");
 }
 

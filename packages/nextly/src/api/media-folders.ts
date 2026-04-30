@@ -33,7 +33,7 @@ import type { NextRequest } from "next/server";
 
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 
@@ -42,7 +42,7 @@ import { readJsonBody } from "./read-json-body";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getMediaService(): Promise<MediaService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("mediaService");
 }
 

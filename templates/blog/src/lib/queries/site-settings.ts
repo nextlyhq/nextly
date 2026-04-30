@@ -9,9 +9,10 @@
 
 import { cache } from "react";
 
-// Use project-local wrapper so getNextly() bootstraps with the
-// nextly.config.ts collections list. See src/lib/nextly.ts.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the -config path alias) so
+// getNextly() bootstraps with this project's collections list.
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 import type { SiteSettings } from "./types";
 
@@ -25,7 +26,7 @@ const DEFAULTS: SiteSettings = {
 
 export const getSiteSettings = cache(async (): Promise<SiteSettings> => {
   try {
-    const nextly = await getNextly();
+    const nextly = await getNextly({ config: nextlyConfig });
     const settings = await nextly.findGlobal({
       slug: "site-settings",
       depth: 1,

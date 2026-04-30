@@ -24,7 +24,7 @@
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
 import {
@@ -41,12 +41,12 @@ const PRIVATE_NO_STORE_HEADERS = {
 } as const;
 
 async function getDashboardService(): Promise<DashboardService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<DashboardService>("dashboardService");
 }
 
 async function getActivityLogService(): Promise<ActivityLogService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<ActivityLogService>("activityLogService");
 }
 

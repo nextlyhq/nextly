@@ -11,11 +11,12 @@
  * to render the 404 page.
  */
 
-// Use the project-local wrapper so getNextly() bootstraps with the
-// `nextly.config.ts` collections list. Without this, the global
-// singleton initializes empty and find('posts') throws "Schema not
-// in registry". See src/lib/nextly.ts for the why.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the @nextly-config path alias) so
+// getNextly() bootstraps with this project's collections list.
+// Without this, the global singleton initializes empty and
+// find('posts') throws "Schema not in registry".
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 import type { Post } from "./types";
 
@@ -41,7 +42,7 @@ function coercePosts(docs: unknown[]): Post[] {
  * detail page, which serializes to HTML.
  */
 export async function getLatestPosts(limit = 3): Promise<Post[]> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: PUBLISHED,
@@ -59,7 +60,7 @@ export async function getLatestPosts(limit = 3): Promise<Post[]> {
  * the `featured` flag appear meaningless to template users.
  */
 export async function getFeaturedPost(): Promise<Post | null> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: {
@@ -92,7 +93,7 @@ export async function getPosts({
   page = 1,
   limit = 9,
 }: PostListOptions = {}): Promise<PostListResult> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: PUBLISHED,
@@ -117,7 +118,7 @@ export async function getPosts({
  * Returns null when the slug doesn't match or the post is not published.
  */
 export async function getPostBySlug(slug: string): Promise<Post | null> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: {
@@ -136,7 +137,7 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
  * Cap at 1000 — plenty for typical blogs; if you exceed this, paginate.
  */
 export async function getAllPostSlugs(): Promise<string[]> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: PUBLISHED,
@@ -160,7 +161,7 @@ export interface ArchiveEntry {
  * exceed this, paginate the archive.
  */
 export async function getAllPublishedForArchive(): Promise<ArchiveEntry[]> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: PUBLISHED,
@@ -184,7 +185,7 @@ export async function getPostsByAuthor(
   opts: PostListOptions = {}
 ): Promise<PostListResult> {
   const { page = 1, limit = 20 } = opts;
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: {
@@ -216,7 +217,7 @@ export async function getPostsByCategory(
   opts: PostListOptions = {}
 ): Promise<PostListResult> {
   const { page = 1, limit = 9 } = opts;
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: {
@@ -243,7 +244,7 @@ export async function getPostsByTag(
   opts: PostListOptions = {}
 ): Promise<PostListResult> {
   const { page = 1, limit = 9 } = opts;
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.find({
     collection: "posts",
     where: {
@@ -278,7 +279,7 @@ export async function getAdjacentPosts(
   next: { title: string; slug: string } | null;
 }> {
   if (!currentPublishedAt) return { previous: null, next: null };
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
 
   const [prev, next] = await Promise.all([
     nextly.find({
@@ -338,7 +339,7 @@ export async function getRelatedPosts(
   opts: RelatedPostsOptions = {}
 ): Promise<Post[]> {
   const { tagIds = [], categoryIds = [], authorId, limit = 2 } = opts;
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
 
   const excludeCurrent = { slug: { not_equals: currentSlug } };
 

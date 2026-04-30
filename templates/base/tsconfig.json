@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@nextly-config": ["./nextly.config.ts"]
     }
   },
   "include": [

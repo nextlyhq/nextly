@@ -15,6 +15,12 @@ import path from "path";
 
 import { getNextly } from "@revnixhq/nextly";
 
+// Pass nextlyConfig (loaded via the @nextly-config path alias) so the
+// seed bootstraps with this project's collections list. Without it, the
+// global singleton would initialise empty and every nextly.create() in
+// the seed would fail with "Schema for collection X not found".
+import nextlyConfig from "@nextly-config";
+
 // Role definitions for the three content roles the blog template seeds.
 // Inlined (rather than imported from a sibling file) because the CLI
 // only copies `seed-data.json` and `media/` from the template's seed/
@@ -409,7 +415,7 @@ async function collectionHasEntries(
  * Main seed function - called by Nextly on first run.
  */
 export default async function seed(): Promise<void> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
 
   const seedDataPath = path.join(process.cwd(), "seed", "seed-data.json");
   if (!fs.existsSync(seedDataPath)) {

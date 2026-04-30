@@ -13,9 +13,10 @@
  * the frontend mental model and the `/authors/[slug]` URL.
  */
 
-// Use project-local wrapper so getNextly() bootstraps with the
-// nextly.config.ts collections list. See src/lib/nextly.ts.
-import { getNextly } from "@/lib/nextly";
+// Pass nextlyConfig (loaded via the -config path alias) so
+// getNextly() bootstraps with this project's collections list.
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 import type { Author } from "./types";
 
@@ -38,7 +39,7 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
   // full-text `search`. For a slug (which must be exact) we list users
   // and filter client-side. Author counts on a blog template are small
   // (typically <50) so the full page fetch is cheap.
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.users.find({ limit: 1000 });
   const match = (result.docs as unknown as Record<string, unknown>[]).find(
     d => (d.slug as string | undefined) === slug
@@ -47,7 +48,7 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
 }
 
 export async function getAllAuthorSlugs(): Promise<string[]> {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.users.find({ limit: 1000 });
   return (result.docs as unknown as Record<string, unknown>[])
     .map(d => d.slug as string | undefined)
