@@ -31,7 +31,8 @@
   "scripts": {
     "build": "tsup && node scripts/build-css.mjs",
     "build:css": "node scripts/build-css.mjs",
-    "dev": "tsup --watch",
+    "build:css:watch": "node scripts/build-css-watch.mjs",
+    "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -68,6 +69,7 @@
     "@vitest/coverage-v8": "^4.0.8",
     "@vitest/ui": "^4.0.8",
     "autoprefixer": "^10.4.21",
+    "chokidar": "^5.0.0",
     "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
     "postcss": "^8.5.6",
