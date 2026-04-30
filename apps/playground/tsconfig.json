@@ -8,7 +8,8 @@
       "@/*": ["./src/*"],
       "nextly": ["../../packages/nextly/src"],
       "@nextly/admin": ["../../packages/admin/src"],
-      "@admin/*": ["../../packages/admin/src/*"]
+      "@admin/*": ["../../packages/admin/src/*"],
+      "@revnixhq/ui": ["../../packages/ui/src/index.ts"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   // as a pre-built package from node_modules (linked via pnpm workspace).
   // This avoids Turbopack transpiling nextly's source files which can cause
   // issues with its URL polyfill handling server-side code.
-  transpilePackages: ["@revnixhq/admin"],
+  transpilePackages: ["@revnixhq/admin", "@revnixhq/ui"],
   serverExternalPackages: [
     "@revnixhq/nextly",
     "@revnixhq/adapter-drizzle",
@@ -34,6 +34,10 @@ const nextConfig: NextConfig = {
       // This prevents Turbopack from trying to transpile nextly source files
       // which can cause issues with Node.js-specific code.
       "@admin/*": ["../../packages/admin/src/*"],
+      // Source-mode for @revnixhq/ui: Turbopack reads .ts/.tsx directly so
+      // edits to packages/ui/src/... live-reload in the playground without
+      // waiting for tsup --watch to write dist.
+      "@revnixhq/ui": ["../../packages/ui/src/index.ts"],
       // Turbopack does not honour serverExternalPackages for optional peer deps
       // that are dynamically imported inside @revnixhq/nextly dist. Alias them
       // to the installed package so Turbopack can resolve them at build time.
