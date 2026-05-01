@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 5    | 0         | 0       | 0       | 9       |
+| 1 — Pre-beta           | 6    | 0         | 0       | 0       | 8       |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -627,7 +627,7 @@ pnpm test
 - **Files:** [packages/storage-vercel-blob/src/adapter.ts:106-117](packages/storage-vercel-blob/src/adapter.ts#L106-L117)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:** Replace the one-time console warning with a thrown error for `image/svg+xml` and `text/html` uploads. Update the adapter README to explain the platform limitation and point to S3 as the alternative.
 

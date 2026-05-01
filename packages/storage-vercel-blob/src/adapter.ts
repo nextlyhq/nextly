@@ -55,7 +55,6 @@ import type {
  */
 export class VercelBlobStorageAdapter implements IStorageAdapter {
   private resolvedConfig: ResolvedVercelBlobConfig;
-  private svgWarningShown = false;
 
   /**
    * Create a new Vercel Blob storage adapter.
@@ -102,17 +101,34 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns Upload result with URL and storage path
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
-    // Warn once about SVG CSP limitation
+    // Audit H14 (T-013): hard-reject SVG and HTML uploads on Vercel
+    // Blob. The platform does not support per-object response headers
+    // (no Content-Disposition: attachment, no CSP), so an attacker who
+    // can persuade an admin to upload `evil.svg` (or `.html`) gets a
+    // stored XSS that fires on every viewer hit. S3 / R2 / similar
+    // adapters can enforce attachment-disposition; Vercel Blob cannot.
     const mimeType = (options.contentType || options.mimeType || "")
       .toLowerCase()
       .trim();
-    if (mimeType === "image/svg+xml" && !this.svgWarningShown) {
-      this.svgWarningShown = true;
-      console.warn(
-        "[nextly] Warning: SVG uploaded to Vercel Blob. Vercel Blob does not support " +
-          "custom response headers, so Content-Security-Policy cannot be applied to SVG " +
-          "responses. Consider configuring CSP headers via Vercel Edge Config or a " +
-          "middleware rewrite. See: https://vercel.com/docs/edge-network/headers"
+    const filename = (options.filename || "").toLowerCase();
+    const ext = filename.includes(".")
+      ? filename.slice(filename.lastIndexOf(".") + 1)
+      : "";
+    const isSvg =
+      mimeType === "image/svg+xml" || ext === "svg" || ext === "svgz";
+    const isHtml =
+      mimeType === "text/html" ||
+      mimeType === "application/xhtml+xml" ||
+      ext === "html" ||
+      ext === "htm" ||
+      ext === "xhtml";
+    if (isSvg || isHtml) {
+      const kind = isSvg ? "SVG" : "HTML";
+      throw new Error(
+        `[nextly/storage-vercel-blob] ${kind} uploads are rejected on Vercel ` +
+          `Blob — the platform cannot serve them with attachment-disposition ` +
+          `or a restrictive CSP, so they would be stored XSS. Use the S3 / R2 ` +
+          `adapter for ${kind} files, or convert to a raster format (PNG/WebP).`
       );
     }
 
