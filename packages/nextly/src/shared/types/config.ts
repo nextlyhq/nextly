@@ -265,6 +265,22 @@ export interface SecurityConfig {
   sanitization?: SanitizationConfigInput;
 
   /**
+   * Audit H13 (T-012): request body / multipart size caps. Each
+   * numeric field accepts either a byte count or a human-readable
+   * suffix (`"1mb"`, `"500kb"`). Defaults: json 1mb / multipart
+   * 50mb / fileSize 10mb / fileCount 10 / fieldCount 50 / fieldSize
+   * 100kb.
+   */
+  limits?: {
+    json?: string | number;
+    multipart?: string | number;
+    fileSize?: string | number;
+    fileCount?: number;
+    fieldCount?: number;
+    fieldSize?: string | number;
+  };
+
+  /**
    * Trust reverse-proxy headers when resolving the client IP.
    *
    * When `true`, `X-Forwarded-For` (filtered through the
