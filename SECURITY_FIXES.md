@@ -15,7 +15,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
 | 1 — Pre-beta           | 13   | 0         | 0       | 0       | 0       |
-| 2 — Pre-1.0            | 5    | 0         | 0       | 0       | 9       |
+| 2 — Pre-1.0            | 8    | 0         | 0       | 0       | 6       |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
 **Phase 1 note:** T-003 (default-deny on collection access) was implemented and then reverted per maintainer decision — default-allow is the framework's intended behavior. Audit C6 reclassified as accepted-risk; integrators are still advised to declare explicit `access` rules per-collection. Phase-1 task count is therefore 13 shipped + 1 explicitly-declined.
@@ -716,9 +716,9 @@ pnpm test
 | **T-017** | ReDoS-safe regex via `re2`                   | H5        | S      | —          | done (`2c89e5a`) | Replace `new RegExp(pattern)` validation with `safe-regex2`; use `re2` for runtime matching; cap pattern length ≤ 200.                                         |
 | **T-018** | DDL escaping for dynamic schema              | H9        | M      | —          | done (`cbb4c74`) | Regex CHECK: whitelist character set or parameterize via `~`/`REGEXP`. Column DEFAULT: literals + named-function allowlist only; reject free-form `sql` field. |
 | **T-019** | Per-encryption random salt                   | H12       | M      | —          | done (`4f50eeb`) | Random 16-byte salt per encryption. Format `salt.iv.authTag.ciphertext`. Migration: try new format, fall back to legacy salt, re-encrypt on next write.        |
-| **T-020** | CSP defaults that work                       | M3        | S      | —          | pending          | Replace `default-src 'none'` with admin-runnable defaults; document customization.                                                                             |
-| **T-021** | Zod schema on `/auth/register`               | M9        | S      | —          | pending          | Email format, password strength, name length checks at the route layer.                                                                                        |
-| **T-022** | Audit log subsystem                          | M10       | L      | —          | pending          | Log failed CSRF, failed login, password change, role assignment, user delete with timestamp/actor/IP/UA. Tamper-evident table or append-only file.             |
+| **T-020** | CSP defaults that work                       | M3        | S      | —          | done (`71bd6bf`) | Replace `default-src 'none'` with admin-runnable defaults; document customization.                                                                             |
+| **T-021** | Zod schema on `/auth/register`               | M9        | S      | —          | done (`deef8e6`) | Email format, password strength, name length checks at the route layer.                                                                                        |
+| **T-022** | Audit log subsystem                          | M10       | L      | —          | done (`6b8b5bd`) | Log failed CSRF, failed login, password change, role assignment, user delete with timestamp/actor/IP/UA. Tamper-evident table or append-only file.             |
 | **T-023** | Row-level ownership filter                   | M11       | M      | —          | pending          | Enforce `owner-only` rules via WHERE clauses, not post-retrieval filtering. Row-scoped only — field-scoped is intentionally out of scope (former H6).          |
 | **T-024** | Pre-commit secret scan                       | M13       | S      | —          | pending          | Add `gitleaks` or `detect-secrets` to husky pre-commit + GitHub Action.                                                                                        |
 | **T-025** | `Cache-Control: no-store` on auth            | M19       | S      | —          | pending          | Patch `jsonResponse()` to default `no-store` when path matches `/auth/*`.                                                                                      |
