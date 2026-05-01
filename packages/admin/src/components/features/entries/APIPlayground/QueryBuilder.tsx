@@ -259,7 +259,7 @@ export function QueryBuilder({
     <div className="space-y-6">
       {/* Common Parameters */}
       <div className="space-y-4">
-        <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/80 ml-1">
+        <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/80 ml-1">
           Common Parameters
         </Label>
         <div className="grid grid-cols-2 gap-4">
@@ -270,7 +270,7 @@ export function QueryBuilder({
               <div className="flex items-center gap-1.5 ml-1">
                 <Label
                   htmlFor={`param-${key}`}
-                  className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] uppercase font-bold tracking-widest text-muted-foreground/60"
+                  className="text-fluid-2xs uppercase font-bold tracking-widest text-muted-foreground/60"
                 >
                   {label}
                 </Label>
@@ -306,7 +306,7 @@ export function QueryBuilder({
       {!isSingle && (
         <div className="space-y-4 border-t border-border pt-6">
           <div className="flex items-center justify-between">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/80 ml-1">
+            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/80 ml-1">
               Where Conditions
             </Label>
             <Button
@@ -397,7 +397,7 @@ export function QueryBuilder({
           {/* Where JSON Preview */}
           {params.where && (
             <div className="space-y-2">
-              <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+              <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
                 Generated Where Clause
               </Label>
               <code className="block text-[10px] bg-muted/20 p-3 border border-border/40 rounded-none font-mono break-all text-muted-foreground">

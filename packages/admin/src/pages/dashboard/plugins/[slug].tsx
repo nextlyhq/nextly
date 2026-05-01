@@ -85,7 +85,7 @@ function PluginsContent({ activeSlug }: { activeSlug?: string }) {
           <Puzzle className="h-6 w-6 text-primary" />
         </div>
         <div className="space-y-1">
-          <h1 className="text-[clamp(1.5rem,5vw,2.5rem)] font-bold tracking-[-0.04em] text-foreground leading-tight">
+          <h1 className="text-fluid-3xl font-bold tracking-[-0.04em] text-foreground leading-tight">
             Plugins
           </h1>
           <p className="text-base text-muted-foreground">

@@ -9,6 +9,7 @@ import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import { useCollections, useSingles } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
@@ -30,6 +31,7 @@ interface DualSidebarProps {
 
 export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const { pathname, route } = useRouter();
+  const { folderViewMode } = useMediaContext();
   const {
     capabilities,
     permissions,
@@ -415,18 +417,22 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   // Determine if we should show the second sidebar
   const hasSubSidebar =
-    [
+    ([
       "collections",
       "singles",
       "plugins",
       "manage",
       "settings",
       ...(showBuilder ? ["builders" as const] : []),
-    ].includes(selectedMain) || selectedMain.startsWith("standalone-");
+    ].includes(selectedMain) ||
+      selectedMain.startsWith("standalone-") ||
+      (selectedMain === "media" && folderViewMode === "sidebar")) &&
+    !(selectedMain === "media" && folderViewMode === "grid");
 
   const CATEGORIES_WITH_SUB_SIDEBAR = [
     "collections",
     "singles",
+    "media",
     "plugins",
     "manage",
     "settings",
@@ -596,14 +602,16 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           <span className="font-bold text-base tracking-tight capitalize text-foreground">
             {selectedMain.startsWith("standalone-")
               ? standaloneLabel
-              : selectedMain === "builders"
-                ? "Builders"
-                : selectedMain}
+              : selectedMain === "media"
+                ? "Media Library"
+                : selectedMain === "builders"
+                  ? "Builders"
+                  : selectedMain}
           </span>
         </div>
 
         {/* Sub Sidebar Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="flex-1 overflow-y-auto">
           <SubSidebarContent
             selectedMain={selectedMain}
             standaloneLabel={standaloneLabel}

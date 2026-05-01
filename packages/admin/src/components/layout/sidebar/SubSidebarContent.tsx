@@ -1,10 +1,7 @@
-import type React from "react";
-
 import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
-import * as Icons from "@admin/components/icons";
 import {
   Layers,
   Settings,
@@ -22,6 +19,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
 import { SidebarSearch } from "./SidebarSearch";
 
@@ -61,9 +59,13 @@ export function SubSidebarContent({
   canAccessApiKeys,
   pluginCollectionsForSection,
 }: SubSidebarContentProps) {
+  if (selectedMain === "media") {
+    return <MediaSidebarContent />;
+  }
+
   if (selectedMain === "collections") {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 py-6">
         <SidebarSearch
           placeholder="Search collection types"
           value={collectionSearch}
@@ -86,7 +88,7 @@ export function SubSidebarContent({
 
   if (selectedMain === "singles") {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 py-6">
         <SidebarSearch
           placeholder="Search singles"
           value={singleSearch}
@@ -106,7 +108,7 @@ export function SubSidebarContent({
 
   if (selectedMain === "plugins") {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 py-6">
         <SidebarSearch
           placeholder="Search plugins"
           value={pluginSearch}
@@ -126,7 +128,7 @@ export function SubSidebarContent({
 
   if (selectedMain.startsWith("standalone-")) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
           <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/40 px-3 mb-2">
             {standaloneLabel}
@@ -171,7 +173,7 @@ export function SubSidebarContent({
 
   if (selectedMain === "manage") {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
           {(hasPermission("read-users") ||
             hasPermission("manage-settings") ||
@@ -234,7 +236,7 @@ export function SubSidebarContent({
 
   if (selectedMain === "settings") {
     return (
-      <div className="space-y-8">
+      <div className="space-y-8 px-4 py-6">
         {/* System Settings Group */}
         <div className="space-y-1">
           {(hasPermission("manage-settings") || canAccessApiKeys) && (
@@ -334,7 +336,7 @@ export function SubSidebarContent({
 
   if (selectedMain === "builders") {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
           <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/40 px-3 mb-2">
             Content Builders
