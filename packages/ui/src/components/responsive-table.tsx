@@ -314,7 +314,12 @@ function ResponsiveTableInner<T extends { id: string }>(
           <TableHeader>
             <TableRow>
               {columns.map(column => (
-                <TableHead key={String(column.key)}>{column.label}</TableHead>
+                <TableHead
+                  key={String(column.key)}
+                  className={column.headerClassName}
+                >
+                  {column.label}
+                </TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -341,9 +346,8 @@ function ResponsiveTableInner<T extends { id: string }>(
                 >
                   {columns.map(column => (
                     <TableCell
-                      key={String(
-                        column.key
-                      )} /* String() for consistent key type */
+                      key={String(column.key)}
+                      className={column.cellClassName}
                     >
                       {column.render
                         ? column.render(item[column.key], item)

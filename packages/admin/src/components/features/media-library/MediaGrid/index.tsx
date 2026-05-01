@@ -173,13 +173,11 @@ export function MediaGrid({
   if (!media || media.length === 0) {
     return (
       <div
-        className="flex flex-col items-center justify-center py-8 px-4 text-center"
+        className="flex flex-col items-center justify-center py-16 px-4 text-center"
         role="status"
         aria-label="No media files"
       >
-        <div className="w-16 h-16 rounded-full bg-accent flex items-center justify-center mb-4">
-          <Folder className="w-8 h-8 text-muted-foreground" />
-        </div>
+        <Folder className="w-16 h-16 text-muted-foreground/20 mb-6" />
         <h2 className="text-xl font-semibold text-foreground mb-2">
           No media files found
         </h2>

@@ -2027,10 +2027,9 @@ button[data-slot="radio-group-item"][data-state="checked"],
   @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
 
-.hover-unified:hover svg,
-[data-active="true"] svg {
-  color: hsl(var(--primary)) !important;
-}
+/* [data-active="true"] svg {
+  color: inherit !important;
+} */
 
 /**
  * SUBTLE ROW HOVER
@@ -2057,7 +2056,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 }
 
 .group:hover .group-hover-unified svg {
-  color: hsl(var(--primary)) !important;
+  color: inherit !important;
 }
 
 .group:hover .group-hover-subtle-row svg {

@@ -117,7 +117,7 @@ export function MediaLibrary({
   className,
 }: MediaLibraryProps = {}) {
   // State: Pagination
-  const [page, setPage] = React.useState(1);
+  const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(defaultPageSize);
 
   // State: Filters
@@ -157,7 +157,7 @@ export function MediaLibrary({
 
   // Reset page when folder changes
   React.useEffect(() => {
-    setPage(1);
+    setPage(0);
   }, [activeFolderId]);
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
@@ -208,7 +208,7 @@ export function MediaLibrary({
   React.useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
-      setPage(1); // Reset to page 1 when search changes
+      setPage(0); // Reset to page 1 when search changes
     }, 300);
 
     return () => clearTimeout(timer);
@@ -216,7 +216,7 @@ export function MediaLibrary({
 
   // Build query params
   const queryParams: MediaParams = {
-    page,
+    page: page + 1,
     pageSize,
     search: debouncedSearch || undefined,
     type: typeFilter === "all" ? undefined : typeFilter,
@@ -347,7 +347,7 @@ export function MediaLibrary({
 
   const handlePageSizeChange = React.useCallback((newPageSize: number) => {
     setPageSize(newPageSize);
-    setPage(1); // Reset to page 1 when page size changes
+    setPage(0); // Reset to page 1 when page size changes
   }, []);
 
   // Handlers: Filters
@@ -360,7 +360,7 @@ export function MediaLibrary({
 
   const handleTypeFilterChange = React.useCallback((value: string) => {
     setTypeFilter(value as MediaType | "all");
-    setPage(1); // Reset to page 1 when filter changes
+    setPage(0); // Reset to page 1 when filter changes
   }, []);
 
   const handleSortByChange = React.useCallback((value: string) => {
@@ -376,7 +376,7 @@ export function MediaLibrary({
   const handleDeleteFolderSuccess = React.useCallback(() => {
     if (deleteFolderId === activeFolderId) {
       setActiveFolderId(null);
-      setPage(1);
+      setPage(0);
     }
   }, [deleteFolderId, activeFolderId, setActiveFolderId]);
 
@@ -385,8 +385,28 @@ export function MediaLibrary({
     setIsMoveToFolderDialogOpen(true);
   }, [selectedIds]);
 
-  // Render
-  const totalPages = data?.meta?.totalPages || 0;
+  const handleToggleAll = React.useCallback(
+    (selected: boolean) => {
+      if (selected) {
+        const allIdsOnPage = data?.data.map(m => m.id) || [];
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          allIdsOnPage.forEach(id => next.add(id));
+          return next;
+        });
+      } else {
+        const allIdsOnPage = data?.data.map(m => m.id) || [];
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          allIdsOnPage.forEach(id => next.delete(id));
+          return next;
+        });
+      }
+    },
+    [data?.data]
+  );
+  const totalPages =
+    data?.meta?.totalPages || (data?.data && data.data.length > 0 ? 1 : 0);
   const total = data?.meta?.total || 0;
   const hasSelection = selectedIds.size > 0;
 
@@ -424,15 +444,15 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-muted/50 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
                   "h-8 w-8 rounded-md transition-all duration-200",
                   folderViewMode === "sidebar"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground"
+                    : "text-muted-foreground hover:bg-primary hover:text-primary-foreground"
                 )}
                 onClick={() => setFolderViewMode("sidebar")}
                 title="Show Sidebar"
@@ -445,8 +465,8 @@ export function MediaLibrary({
                 className={cn(
                   "h-8 w-8 rounded-md transition-all duration-200",
                   folderViewMode === "grid"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground"
+                    : "text-muted-foreground hover:bg-primary hover:text-primary-foreground"
                 )}
                 onClick={() => setFolderViewMode("grid")}
                 title="Hide Sidebar"
@@ -455,15 +475,15 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-muted/50 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
                   "h-8 w-8 rounded-md transition-all duration-200",
                   viewMode === "grid"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground"
+                    : "text-muted-foreground hover:bg-primary hover:text-primary-foreground"
                 )}
                 onClick={() => setViewMode("grid")}
                 title="Grid View"
@@ -476,8 +496,8 @@ export function MediaLibrary({
                 className={cn(
                   "h-8 w-8 rounded-md transition-all duration-200",
                   viewMode === "list"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground"
+                    : "text-muted-foreground hover:bg-primary hover:text-primary-foreground"
                 )}
                 onClick={() => setViewMode("list")}
                 title="List View"
@@ -492,8 +512,8 @@ export function MediaLibrary({
               className={cn(
                 "flex items-center gap-2 px-5 h-10 shrink-0 transition-all duration-200 font-bold tracking-tight rounded-xl",
                 !isUploadCollapsed
-                  ? "bg-primary/80 text-primary-foreground"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground shadow-sm"
+                  ? "bg-primary/90 text-primary-foreground hover:bg-primary"
+                  : "bg-primary text-primary-foreground hover:opacity-90 shadow-sm"
               )}
             >
               <Upload className="h-4 w-4" />
@@ -526,13 +546,13 @@ export function MediaLibrary({
               placeholder="Search media files..."
               value={search}
               onChange={handleSearchChange}
-              className="pl-9"
+              className="pl-9 bg-white dark:bg-slate-950"
             />
           </div>
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white dark:bg-slate-950">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -557,7 +577,7 @@ export function MediaLibrary({
 
           {/* Sort By */}
           <Select value={sortBy} onValueChange={handleSortByChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white dark:bg-slate-950">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -573,6 +593,7 @@ export function MediaLibrary({
             size="icon"
             onClick={handleSortOrderToggle}
             aria-label={`Sort ${sortOrder === "asc" ? "ascending" : "descending"}`}
+            className="bg-white dark:bg-slate-950"
           >
             {sortOrder === "asc" ? "↑" : "↓"}
           </Button>
@@ -674,58 +695,67 @@ export function MediaLibrary({
         )}
 
         {/* Media Content - Grid or List view */}
-        {viewMode === "grid" ? (
-          <MediaGrid
-            media={data?.data || []}
-            isLoading={isLoading}
-            error={error}
-            selectedIds={selectedIds}
-            onSelectionChange={handleSelectionChange}
-            onItemClick={(media: Media) =>
-              console.log("[MediaLibrary] Item clicked:", media)
-            }
-            onEdit={handleEditMedia}
-            onDelete={(media: Media) => handleDeleteItem(media)}
-            onCopyUrl={(url: string) => {
-              void navigator.clipboard.writeText(url);
-            }}
-            onDownload={(media: Media) => {
-              const a = document.createElement("a");
-              a.href = media.url;
-              a.download = media.filename;
-              a.click();
-            }}
-            onRetry={() => {
-              void refetch();
-            }}
-          />
-        ) : (
-          <MediaListView
-            media={data?.data || []}
-            isLoading={isLoading}
-            error={error}
-            selectedIds={selectedIds}
-            onSelectionChange={handleSelectionChange}
-            onEdit={handleEditMedia}
-            onDelete={(media: Media) => handleDeleteItem(media)}
-            onRetry={() => {
-              void refetch();
-            }}
-          />
-        )}
+        <div className="rounded-md border border-border bg-card overflow-hidden">
+          {viewMode === "grid" ? (
+            <div className="p-6">
+              <MediaGrid
+                media={data?.data || []}
+                isLoading={isLoading}
+                error={error}
+                selectedIds={selectedIds}
+                onSelectionChange={handleSelectionChange}
+                onItemClick={(media: Media) =>
+                  console.log("[MediaLibrary] Item clicked:", media)
+                }
+                onEdit={handleEditMedia}
+                onDelete={(media: Media) => handleDeleteItem(media)}
+                onCopyUrl={(url: string) => {
+                  void navigator.clipboard.writeText(url);
+                }}
+                onDownload={(media: Media) => {
+                  const a = document.createElement("a");
+                  a.href = media.url;
+                  a.download = media.filename;
+                  a.click();
+                }}
+                onRetry={() => {
+                  void refetch();
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              <MediaListView
+                media={data?.data || []}
+                isLoading={isLoading}
+                error={error}
+                selectedIds={selectedIds}
+                onSelectionChange={handleSelectionChange}
+                onToggleAll={handleToggleAll}
+                onEdit={handleEditMedia}
+                onDelete={(media: Media) => handleDeleteItem(media)}
+                onRetry={() => {
+                  void refetch();
+                }}
+              />
 
-        {/* Pagination */}
-        {!isLoading && !error && data && totalPages > 1 && (
-          <Pagination
-            currentPage={page}
-            totalPages={totalPages}
-            pageSize={pageSize}
-            pageSizeOptions={[12, 24, 48, 96]}
-            showPageSizeSelector
-            onPageChange={handlePageChange}
-            onPageSizeChange={handlePageSizeChange}
-          />
-        )}
+              {/* Pagination for List View - Inside Boxed Container */}
+              {!isLoading && !error && data && data.data.length > 0 && (
+                <div className="border-t border-border bg-[hsl(var(--table-header-bg))] p-4">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    pageSize={pageSize}
+                    pageSizeOptions={[12, 24, 48, 96]}
+                    showPageSizeSelector
+                    onPageChange={handlePageChange}
+                    onPageSizeChange={handlePageSizeChange}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
         {/* Media Delete Dialog (single item) */}
         <MediaDeleteDialog
