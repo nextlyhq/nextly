@@ -111,11 +111,11 @@ export function PageErrorFallback({
             <AlertCircle className="h-8 w-8 text-foreground" />
           </div>
 
-          <h1 className="text-[clamp(1.5rem,5vw,2.25rem)] font-bold tracking-[-0.03em] text-foreground leading-tight mb-4">
+          <h1 className="text-fluid-2xl font-bold tracking-[-0.03em] text-foreground leading-tight mb-4">
             {title}
           </h1>
 
-          <p className="text-[clamp(1rem,2vw,1.125rem)] text-muted-foreground leading-relaxed max-w-md mb-10">
+          <p className="text-fluid-lg text-muted-foreground leading-relaxed max-w-md mb-10">
             {description || defaultDescription}
           </p>
 

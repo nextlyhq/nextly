@@ -1,3 +1,5 @@
+"use client";
+
 import type { Column, TableParams } from "@revnixhq/ui";
 import {
   Alert,

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * API Playground Component
  *
@@ -441,7 +443,7 @@ export function APIPlayground({
       <Card className="lg:col-span-5 flex flex-col rounded-none border-border shadow-none bg-background">
         <CardHeader className="pb-3 border-b border-border">
           <div className="flex items-center justify-between h-8">
-            <CardTitle className="text-[clamp(0.875rem,0.8rem+0.2vw,1rem)] font-bold uppercase tracking-[-0.02em] text-foreground/90">
+            <CardTitle className="text-fluid-base font-bold uppercase tracking-[-0.02em] text-foreground/90">
               Request
             </CardTitle>
             <Button
@@ -458,7 +460,7 @@ export function APIPlayground({
         <CardContent className="flex-1 space-y-6 pt-6">
           {/* Base Path (read-only) */}
           <div className="space-y-2 group">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
               Base Endpoint
             </Label>
             <div className="flex items-center gap-2 p-3 bg-muted/30 border border-border/40 rounded-none font-mono text-xs transition-colors group-hover-unified">
@@ -476,7 +478,7 @@ export function APIPlayground({
 
           {/* Action Selector */}
           <div className="space-y-2">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
               Action
             </Label>
             <Select
@@ -516,7 +518,7 @@ export function APIPlayground({
           {/* Entry ID Input (conditional) */}
           {!isSingle && currentAction.requiresEntryId && (
             <div className="space-y-2">
-              <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+              <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
                 Entry ID <span className="text-destructive">*</span>
               </Label>
               <Input
@@ -561,7 +563,7 @@ export function APIPlayground({
 
             <TabsContent value="body" className="mt-6">
               <div className="space-y-3">
-                <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+                <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
                   Request Body (JSON)
                 </Label>
                 <textarea
@@ -582,7 +584,7 @@ export function APIPlayground({
 
           {/* Request URL Display */}
           <div className="pt-6 border-t border-border">
-            <Label className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
               Full Request URL
             </Label>
             <div className="flex items-center gap-2 mt-2 group">
@@ -593,7 +595,9 @@ export function APIPlayground({
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => { void handleCopyUrl(); }}
+                onClick={() => {
+                  void handleCopyUrl();
+                }}
                 className="shrink-0 h-10 w-10 rounded-none border-border"
               >
                 {copied ? (
@@ -615,9 +619,11 @@ export function APIPlayground({
 
           {/* Execute Button */}
           <Button
-            onClick={() => { void executeRequest(); }}
+            onClick={() => {
+              void executeRequest();
+            }}
             disabled={isLoading || entryIdMissing}
-            className="w-full gap-2 h-11 rounded-none text-xs font-bold uppercase tracking-widest active:scale-[0.98] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px]"
+            className="w-full gap-2 h-11 rounded-none text-xs font-bold uppercase tracking-widest active:scale-[0.98] transition-all shadow-neo hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px]"
           >
             {isLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -633,26 +639,26 @@ export function APIPlayground({
       <Card className="lg:col-span-7 flex flex-col rounded-none border-border shadow-none bg-background">
         <CardHeader className="pb-3 border-b border-border">
           <div className="flex items-center justify-between h-8">
-            <CardTitle className="text-[clamp(0.875rem,0.8rem+0.2vw,1rem)] font-bold uppercase tracking-[-0.02em] text-foreground/90">
+            <CardTitle className="text-fluid-base font-bold uppercase tracking-[-0.02em] text-foreground/90">
               Response
             </CardTitle>
             {response && (
               <div className="flex items-center gap-6 text-[10px] font-bold tracking-wider">
                 <div className="flex items-center gap-2">
-                  <span className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] uppercase font-bold tracking-widest text-muted-foreground/40">
+                  <span className="text-fluid-2xs uppercase font-bold tracking-widest text-muted-foreground/40">
                     Status:
                   </span>
                   <span
-                    className={`${getStatusColor(response.status)} font-mono text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)]`}
+                    className={`${getStatusColor(response.status)} font-mono text-fluid-xs`}
                   >
                     {response.status} {response.statusText}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] uppercase font-bold tracking-widest text-muted-foreground/40">
+                  <span className="text-fluid-2xs uppercase font-bold tracking-widest text-muted-foreground/40">
                     Time:
                   </span>
-                  <span className="text-foreground font-mono text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)]">
+                  <span className="text-foreground font-mono text-fluid-xs">
                     {response.time}ms
                   </span>
                 </div>

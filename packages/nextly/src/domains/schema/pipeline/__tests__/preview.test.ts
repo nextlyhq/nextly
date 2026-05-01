@@ -11,11 +11,11 @@ import { describe, it, expect, vi } from "vitest";
 import type {
   Classifier,
   ClassificationLevel,
-} from "../pushschema-pipeline-interfaces.js";
-import type { ClassifierEvent } from "../resolution/types.js";
+} from "../pushschema-pipeline-interfaces";
+import type { ClassifierEvent } from "../resolution/types";
 
-import { previewDesiredSchema } from "../preview.js";
-import type { DesiredSchema } from "../types.js";
+import { previewDesiredSchema } from "../preview";
+import type { DesiredSchema } from "../types";
 
 const noopRenameDetector = {
   detect: vi.fn().mockReturnValue([]),

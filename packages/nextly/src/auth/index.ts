@@ -13,13 +13,13 @@
  * Handlers: HTTP request handlers for auth endpoints
  */
 
-export { signAccessToken, secretToKey } from "./jwt/sign.js";
-export { verifyAccessToken, type VerifyResult } from "./jwt/verify.js";
+export { signAccessToken, secretToKey } from "./jwt/sign";
+export { verifyAccessToken, type VerifyResult } from "./jwt/verify";
 export {
   buildClaims,
   type NextlyJwtPayload,
   type BuildClaimsInput,
-} from "./jwt/claims.js";
+} from "./jwt/claims";
 
 export {
   getSession,
@@ -27,46 +27,46 @@ export {
   hasAnyRole,
   hasAllRoles,
   type GetSessionResult,
-} from "./session/get-session.js";
+} from "./session/get-session";
 export type {
   SessionUser,
   AuthContext,
   RefreshTokenRecord,
-} from "./session/session-types.js";
-export { generateRefreshToken, hashRefreshToken } from "./session/refresh.js";
+} from "./session/session-types";
+export { generateRefreshToken, hashRefreshToken } from "./session/refresh";
 
 // PR 5 (unified-error-system): AuthenticationError and AuthorizationError
 // classes were deleted. Throw `NextlyError.authRequired()` /
 // `NextlyError.forbidden()` instead — they carry the same semantics with
 // generic public messages and rich logContext for operators.
-export { requireAuth } from "./guards/require-auth.js";
+export { requireAuth } from "./guards/require-auth";
 export {
   requireRole,
   requireAnyRole,
   requireAllRoles,
-} from "./guards/require-role.js";
+} from "./guards/require-role";
 export {
   checkPermission,
   createErrorResponse,
   createJsonErrorResponse,
   isErrorResponse,
   type ErrorResponse,
-} from "./guards/require-permission.js";
-export { authenticateApiKey } from "./guards/require-api-key.js";
+} from "./guards/require-permission";
+export { authenticateApiKey } from "./guards/require-api-key";
 
 // Re-export the canonical "is the user a super-admin" check so user-facing
 // route handlers (e.g. the template's seed POST route) can gate destructive
 // actions without rolling their own permission lookup. The check goes
 // through the same in-memory cache the rest of the framework uses.
-export { isSuperAdmin } from "../services/lib/permissions.js";
-export { checkCollectionAccess } from "./guards/require-collection-access.js";
+export { isSuperAdmin } from "../services/lib/permissions";
+export { checkCollectionAccess } from "./guards/require-collection-access";
 
 export {
   hashPassword,
   verifyPassword,
   validatePasswordStrength,
   type PasswordStrengthResult,
-} from "./password/index.js";
+} from "./password/index";
 
-export { routeAuthRequest } from "./handlers/router.js";
-export type { AuthRouterDeps } from "./handlers/router.js";
+export { routeAuthRequest } from "./handlers/router";
+export type { AuthRouterDeps } from "./handlers/router";

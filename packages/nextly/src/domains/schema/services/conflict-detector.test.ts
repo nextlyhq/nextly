@@ -5,7 +5,7 @@ import {
   ConflictDetector,
   formatConflictError,
   type Conflict,
-} from "./conflict-detector.js";
+} from "./conflict-detector";
 
 describe("ConflictDetector", () => {
   it("detects same slug in both sources", () => {

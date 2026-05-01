@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { buildPerDialectWarning } from "../type-warnings.js";
+import { buildPerDialectWarning } from "../type-warnings";
 
 describe("buildPerDialectWarning", () => {
   it("text -> int produces a warning for each dialect", () => {

@@ -17,22 +17,44 @@ cd nextly
 # Install dependencies
 pnpm install
 
-# Build all packages
-pnpm build
-
-# Start the playground app
-pnpm dev:app
+# Start the development loop (no `pnpm build` first — see "Development Workflow" below)
+pnpm dev
 ```
 
-### Development Commands
+### Development Workflow
+
+Run `pnpm dev` from the **monorepo root** (not from `apps/playground/`). Turborepo orchestrates every workspace package's `dev` script in parallel, so a single command starts everything. Edits to any package's source flow into the playground without a manual rebuild.
+
+The workspace is intentionally bimodal:
+
+| Side             | Packages                                                           | How they're loaded in dev                                                                                                                                         |
+| ---------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client (browser) | `@revnixhq/ui`, `@revnixhq/admin`, `@revnixhq/plugin-form-builder` | Turbopack reads `src/` directly — see [`apps/playground/next.config.ts`](apps/playground/next.config.ts) `turbopack.resolveAlias`. Edits HMR through immediately. |
+| Server (Node)    | `@revnixhq/nextly`, all 4 adapters, all 3 storage packages         | `serverExternalPackages` + each package's `tsup --watch` keeps `dist/` fresh. Edits round-trip through dist (~1–2 s rebuild).                                     |
+
+This split exists because `serverExternalPackages` means Node loads the package via `require()` at runtime; bundler aliases don't apply to that path, so server-side packages need to keep producing dist. Client-side packages have no such constraint and benefit from Turbopack-direct reads.
+
+The admin's CSS pipeline runs alongside under the same `pnpm dev` (in-process Tailwind compile + `.adminapp` scoping post-process; see [`packages/admin/scripts/dev.mjs`](packages/admin/scripts/dev.mjs)). Hot rebuilds are sub-second.
+
+If you only want a subset of watchers running, the targeted scripts still work:
 
 ```bash
-# Start playground app (http://localhost:3000)
-pnpm dev:app
+pnpm dev:core    # only nextly in watch mode
+pnpm dev:admin   # only @revnixhq/admin (JS + CSS via scripts/dev.mjs)
+pnpm dev:app     # only the playground (no upstream watchers)
+```
 
-# Build all packages
-pnpm build
+### When to use `pnpm build`
 
+Not for routine development — `pnpm dev` covers the dev loop. Use `pnpm build` when you need to:
+
+- Verify the production build path before opening a PR (`pnpm build` → 14 turbo tasks)
+- Reproduce a `next start` issue against built artifacts
+- Prepare a release (changesets workflow runs build internally)
+
+### Other Common Commands
+
+```bash
 # Type check all packages
 pnpm check-types
 

@@ -58,7 +58,7 @@ export function WelcomeHeader() {
             <Button
               variant="primary"
               size="sm"
-              className="h-10 px-6 rounded-md font-bold uppercase tracking-[0.1em] text-[11px] shadow-[0_8px_20px_-8px_rgb(var(--primary-rgb),0.4)]"
+              className="h-10 px-6 rounded-md font-bold uppercase tracking-[0.1em] text-[11px] shadow-elevation-primary"
             >
               <Plus className="mr-2 h-3.5 w-3.5" />
               Create Collection

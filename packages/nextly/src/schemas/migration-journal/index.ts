@@ -9,22 +9,22 @@ export type {
   MigrationJournalSource,
   MigrationJournalStatus,
   MigrationJournalScopeKind,
-} from "./types.js";
+} from "./types";
 
 export {
   nextlyMigrationJournalPg,
   type NextlyMigrationJournalPg,
   type NextlyMigrationJournalInsertPg,
-} from "./postgres.js";
+} from "./postgres";
 
 export {
   nextlyMigrationJournalMysql,
   type NextlyMigrationJournalMysql,
   type NextlyMigrationJournalInsertMysql,
-} from "./mysql.js";
+} from "./mysql";
 
 export {
   nextlyMigrationJournalSqlite,
   type NextlyMigrationJournalSqlite,
   type NextlyMigrationJournalInsertSqlite,
-} from "./sqlite.js";
+} from "./sqlite";

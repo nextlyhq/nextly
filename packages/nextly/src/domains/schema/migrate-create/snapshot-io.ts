@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types.js";
+import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 export interface SnapshotFile {
   version: 1;

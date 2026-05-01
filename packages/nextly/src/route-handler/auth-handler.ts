@@ -7,8 +7,8 @@
 
 import { ServiceDispatcher } from "@nextly/services/dispatcher";
 
-import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge.js";
-import { routeAuthRequest } from "../auth/handlers/router.js";
+import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
+import { routeAuthRequest } from "../auth/handlers/router";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { isServicesRegistered, registerServices, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";

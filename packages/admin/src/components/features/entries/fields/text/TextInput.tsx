@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Text Input Component
  *

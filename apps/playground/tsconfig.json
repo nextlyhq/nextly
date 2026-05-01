@@ -6,9 +6,82 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "nextly": ["../../packages/nextly/src"],
-      "@nextly/admin": ["../../packages/admin/src"],
-      "@admin/*": ["../../packages/admin/src/*"]
+      // admin's internal path alias — needed for tsc when it walks admin's
+      // source files (which import `@admin/components/...` etc.) via the
+      // `@revnixhq/admin` source mapping below. Mirrors the entry in
+      // `apps/playground/next.config.ts` `turbopack.resolveAlias`.
+      "@admin/*": ["../../packages/admin/src/*"],
+      // Source aliases for client-side workspace packages.
+      "@revnixhq/ui": ["../../packages/ui/src/index.ts"],
+      "@revnixhq/admin": ["../../packages/admin/src/index.ts"],
+      "@revnixhq/admin/lib/component-registry": [
+        "../../packages/admin/src/lib/plugins/component-registry.ts"
+      ],
+      "@revnixhq/admin/lib/plugin-components": [
+        "../../packages/admin/src/lib/plugins/plugin-components.ts"
+      ],
+      "@revnixhq/plugin-form-builder": [
+        "../../packages/plugin-form-builder/src/index.ts"
+      ],
+      "@revnixhq/plugin-form-builder/admin": [
+        "../../packages/plugin-form-builder/src/admin/index.ts"
+      ],
+      "@revnixhq/plugin-form-builder/components": [
+        "../../packages/plugin-form-builder/src/components/index.ts"
+      ],
+      // Server-side workspace packages — source aliases match next.config.ts
+      // so tsc resolves the same paths Turbopack does in dev. In prod build
+      // tsc reads source while Next.js bundles dist (per
+      // serverExternalPackages flip), but tsc's source view is correct
+      // either way because the source IS what gets shipped to dist anyway.
+      "@revnixhq/nextly": ["../../packages/nextly/src/index.ts"],
+      "@revnixhq/nextly/*": ["../../packages/nextly/src/*"],
+      "@revnixhq/adapter-drizzle": [
+        "../../packages/adapter-drizzle/src/index.ts"
+      ],
+      "@revnixhq/adapter-postgres": [
+        "../../packages/adapter-postgres/src/index.ts"
+      ],
+      "@revnixhq/adapter-mysql": [
+        "../../packages/adapter-mysql/src/index.ts"
+      ],
+      "@revnixhq/adapter-sqlite": [
+        "../../packages/adapter-sqlite/src/index.ts"
+      ],
+      "@revnixhq/storage-s3": ["../../packages/storage-s3/src/index.ts"],
+      "@revnixhq/storage-vercel-blob": [
+        "../../packages/storage-vercel-blob/src/index.ts"
+      ],
+      "@revnixhq/storage-uploadthing": [
+        "../../packages/storage-uploadthing/src/index.ts"
+      ],
+      // Internal aliases used inside nextly's source (mirror of the
+      // "paths" block in packages/nextly/tsconfig.json). When tsc walks
+      // nextly source via the @revnixhq/nextly mapping above and hits a
+      // `@nextly/auth/password` import, it needs to know where that
+      // resolves.
+      "@nextly/actions": ["../../packages/nextly/src/actions/index.ts"],
+      "@nextly/api/*": ["../../packages/nextly/src/api/*"],
+      "@nextly/auth/*": ["../../packages/nextly/src/auth/*"],
+      "@nextly/collections": [
+        "../../packages/nextly/src/collections/index.ts"
+      ],
+      "@nextly/collections/*": ["../../packages/nextly/src/collections/*"],
+      "@nextly/database/*": ["../../packages/nextly/src/database/*"],
+      "@nextly/di/*": ["../../packages/nextly/src/di/*"],
+      "@nextly/errors": ["../../packages/nextly/src/errors/index.ts"],
+      "@nextly/hooks/*": ["../../packages/nextly/src/hooks/*"],
+      "@nextly/lib/*": ["../../packages/nextly/src/lib/*"],
+      "@nextly/schemas/*": ["../../packages/nextly/src/schemas/*"],
+      "@nextly/scripts/*": ["../../packages/nextly/src/scripts/*"],
+      "@nextly/services/*": ["../../packages/nextly/src/services/*"],
+      "@nextly/storage": ["../../packages/nextly/src/storage/index.ts"],
+      "@nextly/storage/*": ["../../packages/nextly/src/storage/*"],
+      "@nextly/types/*": ["../../packages/nextly/src/types/*"],
+      "@nextly/validation": [
+        "../../packages/nextly/src/validation/index.ts"
+      ],
+      "@nextly/validation/*": ["../../packages/nextly/src/validation/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

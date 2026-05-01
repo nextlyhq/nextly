@@ -1,3 +1,5 @@
+"use client";
+
 // Confirmation dialog for schema changes in the visual schema builder.
 // Shows a preview of added/removed/changed fields with row-count impact
 // and interactive prompts for fields that need user input.

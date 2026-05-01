@@ -1,3 +1,5 @@
+"use client";
+
 import type { Media } from "../media";
 
 /**

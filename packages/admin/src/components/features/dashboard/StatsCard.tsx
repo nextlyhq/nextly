@@ -43,7 +43,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
           "group relative overflow-hidden transition-all duration-500",
           "border-border/60 bg-card/60 backdrop-blur-sm",
           href &&
-            "hover:border-primary/40 hover:shadow-[0_8px_30px_rgb(var(--primary-rgb),0.06)] active:scale-[0.985] active:translate-y-0.5",
+            "hover:border-primary/40 hover:shadow-soft-primary active:scale-[0.985] active:translate-y-0.5",
           className
         )}
       >
@@ -84,7 +84,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                       {title}
                     </span>
                   </div>
-                  <p className="text-[clamp(1.75rem,5vw,2.5rem)] font-bold tracking-[-0.05em] text-foreground leading-[0.9] transition-transform duration-500 group-hover:translate-x-0.5">
+                  <p className="text-fluid-4xl font-bold tracking-[-0.05em] text-foreground leading-[0.9] transition-transform duration-500 group-hover:translate-x-0.5">
                     {typeof value === "number" ? value.toLocaleString() : value}
                   </p>
                 </div>

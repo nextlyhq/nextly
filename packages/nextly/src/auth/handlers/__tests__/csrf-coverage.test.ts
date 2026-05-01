@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { routeAuthRequest, type AuthRouterDeps } from "../router.js";
+import { routeAuthRequest, type AuthRouterDeps } from "../router";
 
 // Minimal deps stub. CSRF is checked before any of these fire for the
 // protected routes, so a throwing function proves the guard ran first.

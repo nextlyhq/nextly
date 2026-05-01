@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Component Builder — Create Page
  *

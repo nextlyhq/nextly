@@ -11,57 +11,57 @@
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import type { FieldConfig } from "../../collections/fields/types/index.js";
-import { getDialectTables } from "../../database/index.js";
-import { SchemaRegistry } from "../../database/schema-registry.js";
-import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables.js";
+import type { FieldConfig } from "../../collections/fields/types/index";
+import { getDialectTables } from "../../database/index";
+import { SchemaRegistry } from "../../database/schema-registry";
+import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
 // F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
 // MySQL `databaseName` can be threaded through to drizzle-kit.pushSchema.
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
-import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier.js";
-import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
+import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
+import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 // F8 PR 2: ensureCoreTables now uses the freshPushSchema helper for
 // the static-tables push. The legacy DrizzlePushService import is gone.
-import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push.js";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
-import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
-import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
+import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
+import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
+import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
+import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
+import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
   DesiredSchema,
-} from "../../domains/schema/pipeline/types.js";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor.js";
-import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator.js";
+} from "../../domains/schema/pipeline/types";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 // F8 PR 1: SchemaPushService dropped from this module. The env check
 // (was getEnvironment().isProduction) is now an inline NODE_ENV read.
 // The legacy fallback sync path is deleted (dead code post-Option E).
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
-import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns.js";
-import { getProductionNotifier } from "../../runtime/notifications/index.js";
-import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables.js";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
-import type { FieldDefinition } from "../../schemas/dynamic-collections.js";
-import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service.js";
+import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
+import { getProductionNotifier } from "../../runtime/notifications/index";
+import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
   type ComponentRegistryService,
   type SyncComponentResult,
-} from "../../services/components/component-registry-service.js";
-import type { Logger as ServiceLogger } from "../../services/shared/types.js";
+} from "../../services/components/component-registry-service";
+import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
   type SingleRegistryService,
   type SyncSingleResult,
-} from "../../services/singles/single-registry-service.js";
-import type { CommandContext } from "../program.js";
-import type { CLIDatabaseAdapter } from "../utils/adapter.js";
-import type { LoadConfigResult } from "../utils/config-loader.js";
-import { formatDuration } from "../utils/logger.js";
+} from "../../services/singles/single-registry-service";
+import type { CommandContext } from "../program";
+import type { CLIDatabaseAdapter } from "../utils/adapter";
+import type { LoadConfigResult } from "../utils/config-loader";
+import { formatDuration } from "../utils/logger";
 
-import type { ResolvedDevOptions } from "./db-sync.js";
+import type { ResolvedDevOptions } from "./db-sync";
 
 // ============================================================================
 // Core Table Creation
@@ -142,7 +142,7 @@ export async function ensureCoreTables(
       // Also create system tables (dynamic_collections, etc.)
       try {
         const { SystemTableService } = await import(
-          "../../services/system/system-table-service.js"
+          "../../services/system/system-table-service"
         );
         const serviceLogger: ServiceLogger = {
           info: (m: string) => logger.debug(m),
@@ -289,7 +289,7 @@ export async function performAutoSync(
   // directly to nextly_migration_journal once that table exists
   // (created earlier by ensureCoreTables).
   const { DrizzleMigrationJournal } = await import(
-    "../../domains/schema/journal/migration-journal.js"
+    "../../domains/schema/journal/migration-journal"
   );
   const cliMigrationJournal = new DrizzleMigrationJournal({
     db,
@@ -478,7 +478,7 @@ export async function performSinglesAutoSync(
 
   // Import the schema service for generating migration SQL
   const { DynamicCollectionSchemaService } = await import(
-    "../../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+    "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
   const schemaService = new DynamicCollectionSchemaService();
 
@@ -660,7 +660,7 @@ export async function performSinglesReconcile(
   // Load the schema service lazily so the import cost is paid only when
   // we have work to do.
   const { DynamicCollectionSchemaService } = await import(
-    "../../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+    "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
   const schemaService = new DynamicCollectionSchemaService();
 
@@ -775,7 +775,7 @@ export async function performComponentsAutoSync(
 
   // Import the component schema service for generating migration SQL
   const { ComponentSchemaService } = await import(
-    "../../services/components/component-schema-service.js"
+    "../../services/components/component-schema-service"
   );
   const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
     .dialect;

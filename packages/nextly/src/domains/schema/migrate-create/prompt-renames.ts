@@ -11,7 +11,7 @@
 
 import * as p from "@clack/prompts";
 
-import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces.js";
+import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 
 export interface RenameDecision {
   candidate: RenameCandidate;

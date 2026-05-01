@@ -15,7 +15,7 @@ import {
   verifyMigrationHash,
   writeSnapshot,
   type SnapshotFile,
-} from "../snapshot-io.js";
+} from "../snapshot-io";
 
 describe("snapshot-io", () => {
   let metaDir: string;

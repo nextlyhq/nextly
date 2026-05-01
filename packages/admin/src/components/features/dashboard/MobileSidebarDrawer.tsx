@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Sheet,
   SheetContent,
@@ -126,8 +128,8 @@ export function MobileSidebarDrawer({
               />
             ) : (
               <>
-                <div className="flex items-center justify-center rounded-lg bg-primary p-2.5">
-                  <Laptop className="h-6 w-6 text-primary-foreground transition-colors duration-200" />
+                <div className="flex items-center justify-center">
+                  <Laptop className="h-6 w-6 text-primary transition-colors duration-200" />
                 </div>
                 <span className="text-base font-semibold tracking-wide text-sidebar-foreground">
                   {branding.logoText ?? "Nextly"}

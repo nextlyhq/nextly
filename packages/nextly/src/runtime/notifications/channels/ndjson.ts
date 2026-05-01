@@ -12,7 +12,7 @@ import { dirname } from "node:path";
 import type {
   MigrationNotificationEvent,
   NotificationChannel,
-} from "../types.js";
+} from "../types";
 
 interface NDJSONChannelOpts {
   filePath: string;

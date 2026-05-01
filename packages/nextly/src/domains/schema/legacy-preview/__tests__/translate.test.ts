@@ -7,11 +7,11 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import type { ClassifierEvent } from "../../pipeline/resolution/types.js";
-import type { PipelinePreviewResult } from "../../pipeline/preview.js";
-import type { FieldDefinition } from "../../../../schemas/dynamic-collections.js";
+import type { ClassifierEvent } from "../../pipeline/resolution/types";
+import type { PipelinePreviewResult } from "../../pipeline/preview";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 
-import { translatePipelinePreviewToLegacy } from "../translate.js";
+import { translatePipelinePreviewToLegacy } from "../translate";
 
 const emptyPreview: PipelinePreviewResult = {
   operations: [],

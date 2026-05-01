@@ -77,7 +77,7 @@ export function MediaBulkActionBar({
       className={cn(
         "fixed bottom-0 right-0 z-40 transition-[left] duration-200 ease-linear",
         "left-0 md:group-data-[state=expanded]/sidebar-wrapper:left-[var(--sidebar-width)] md:group-data-[state=collapsed]/sidebar-wrapper:left-[var(--sidebar-width-icon)]",
-        "border-t border-border bg-background shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] backdrop-blur supports-[backdrop-filter]:bg-background/80",
+        "border-t border-border bg-background shadow-inner-subtle backdrop-blur supports-[backdrop-filter]:bg-background/80",
         "animate-in slide-in-from-bottom duration-300",
         className
       )}

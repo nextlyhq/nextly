@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache.js";
-import type { NextlySchemaSnapshot, Operation } from "../diff/types.js";
+import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
+import type { NextlySchemaSnapshot, Operation } from "../diff/types";
 import {
   noopClassifier,
   noopMigrationJournal,
@@ -23,7 +23,7 @@ import {
   noopPreRenameExecutor,
   noopPromptDispatcher,
   noopRenameDetector,
-} from "../pushschema-pipeline-stubs.js";
+} from "../pushschema-pipeline-stubs";
 import type {
   Classifier,
   DrizzleStatementExecutor,
@@ -32,10 +32,10 @@ import type {
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
-} from "../pushschema-pipeline-interfaces.js";
+} from "../pushschema-pipeline-interfaces";
 
-import { PushSchemaPipeline } from "../pushschema-pipeline.js";
-import type { DesiredSchema } from "../types.js";
+import { PushSchemaPipeline } from "../pushschema-pipeline";
+import type { DesiredSchema } from "../types";
 
 // =============================================================================
 // Test harness

@@ -18,7 +18,7 @@ import type {
   PreRenameExecutor,
   PromptDispatcher,
   RenameDetector,
-} from "./pushschema-pipeline-interfaces.js";
+} from "./pushschema-pipeline-interfaces";
 
 // Updated for F4 Option E: detect() reads Operation[] instead of SQL strings.
 // The noop body is unchanged; the type signature shift comes from the

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Relationship Input Component
  *

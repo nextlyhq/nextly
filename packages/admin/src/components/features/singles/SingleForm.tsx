@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Single Form Component
  *

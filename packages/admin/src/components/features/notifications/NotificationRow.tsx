@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * F10 PR 5 — single row in the notification dropdown.
  *

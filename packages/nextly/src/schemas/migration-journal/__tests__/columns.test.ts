@@ -4,7 +4,7 @@ import {
   nextlyMigrationJournalMysql,
   nextlyMigrationJournalPg,
   nextlyMigrationJournalSqlite,
-} from "../index.js";
+} from "../index";
 
 // F10 PR 1: assert all three dialect tables expose the 6 new columns.
 // Property-existence checks (Drizzle table objects) keep the test

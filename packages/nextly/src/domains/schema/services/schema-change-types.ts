@@ -10,7 +10,7 @@
 // retires these legacy types once the admin dialog is upgraded to
 // consume ClassifierEvent[] directly.
 
-import type { FieldDefinition } from "../../../schemas/dynamic-collections.js";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 
 // Classification of a single field change
 export type ChangeClassification = "safe" | "destructive" | "interactive";

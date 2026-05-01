@@ -1,3 +1,5 @@
+"use client";
+
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
 import { Search } from "lucide-react";
@@ -314,7 +316,7 @@ const CommandItem = forwardRef<
       // Visual
       "rounded-none text-base sm:text-sm outline-none",
       // Transitions
-      "transition-all duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
+      "transition-all duration-200 ease-(--ease-premium)",
       // Hover state - shared dashboard hover treatment
       "hover-unified",
       // Selected/focused state (keyboard navigation)

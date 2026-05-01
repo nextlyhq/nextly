@@ -1,3 +1,5 @@
+"use client";
+
 import type { Column } from "@revnixhq/ui";
 import {
   Badge,

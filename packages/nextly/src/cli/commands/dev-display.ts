@@ -7,14 +7,14 @@
  * @module cli/commands/dev-display
  */
 
-import type { SeederResult } from "../../database/seeders/index.js";
-import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service.js";
-import type { SyncComponentResult } from "../../services/components/component-registry-service.js";
-import type { SyncSingleResult } from "../../services/singles/single-registry-service.js";
-import type { CommandContext } from "../program.js";
-import { formatCount, formatDuration } from "../utils/logger.js";
+import type { SeederResult } from "../../database/seeders/index";
+import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
+import type { SyncComponentResult } from "../../services/components/component-registry-service";
+import type { SyncSingleResult } from "../../services/singles/single-registry-service";
+import type { CommandContext } from "../program";
+import { formatCount, formatDuration } from "../utils/logger";
 
-import type { ResolvedDevOptions } from "./db-sync.js";
+import type { ResolvedDevOptions } from "./db-sync";
 
 /**
  * Display singles sync results to the user

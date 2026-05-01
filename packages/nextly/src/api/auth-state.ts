@@ -33,15 +33,15 @@
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
-import { readAccessTokenCookie } from "../auth/cookies/access-token-cookie.js";
-import { verifyAccessToken } from "../auth/jwt/verify.js";
-import { getDialectTables } from "../database/index.js";
-import { NextlyError } from "../errors/nextly-error.js";
+import { readAccessTokenCookie } from "../auth/cookies/access-token-cookie";
+import { verifyAccessToken } from "../auth/jwt/verify";
+import { getDialectTables } from "../database/index";
+import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import { env } from "../lib/env.js";
+import { env } from "../lib/env";
 
-import { createSuccessResponse } from "./create-success-response.js";
-import { withErrorHandler } from "./with-error-handler.js";
+import { createSuccessResponse } from "./create-success-response";
+import { withErrorHandler } from "./with-error-handler";
 
 type AuthStateAccount = {
   verified: boolean;

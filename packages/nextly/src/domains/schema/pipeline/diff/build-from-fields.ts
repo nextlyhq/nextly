@@ -30,9 +30,9 @@ import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
-} from "../../services/field-column-descriptor.js";
+} from "../../services/field-column-descriptor";
 
-import type { ColumnSpec, TableSpec } from "./types.js";
+import type { ColumnSpec, TableSpec } from "./types";
 
 // Minimal field shape we read. The real FieldDefinition type has many more
 // attributes; we only need name + type + required + hasMany + relationTo for

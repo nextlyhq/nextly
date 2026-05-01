@@ -30,8 +30,8 @@ import { bundleRequire } from "bundle-require";
 import {
   defineConfig,
   type SanitizedNextlyConfig,
-} from "../../collections/config/define-config.js";
-import { NextlyError } from "../../errors/index.js";
+} from "../../collections/config/define-config";
+import { NextlyError } from "../../errors/index";
 
 /**
  * Options for loading the config file.

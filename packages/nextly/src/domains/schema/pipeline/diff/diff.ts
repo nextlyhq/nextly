@@ -38,7 +38,7 @@ import type {
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
-} from "./types.js";
+} from "./types";
 
 export function diffSnapshots(
   prev: NextlySchemaSnapshot,

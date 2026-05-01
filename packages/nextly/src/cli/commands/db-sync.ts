@@ -62,26 +62,26 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { getDialectTables } from "../../database/index.js";
-import { SchemaRegistry } from "../../database/schema-registry.js";
+import { getDialectTables } from "../../database/index";
+import { SchemaRegistry } from "../../database/schema-registry";
 import {
   createContext,
   type CommandContext,
   type GlobalOptions,
-} from "../program.js";
+} from "../program";
 import {
   createAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
-} from "../utils/adapter.js";
+} from "../utils/adapter";
 import {
   loadConfig,
   watchConfig,
   clearConfigCache,
   type LoadConfigResult,
-} from "../utils/config-loader.js";
-import { formatDuration } from "../utils/logger.js";
+} from "../utils/config-loader";
+import { formatDuration } from "../utils/logger";
 
 import {
   performPermissionSeeding,
@@ -89,9 +89,9 @@ import {
   syncComponents,
   syncSingles,
   syncUserFields,
-} from "./dev-build.js";
-import { ensureCoreTables } from "./dev-server.js";
-import { createDebouncedSync } from "./dev-watcher.js";
+} from "./dev-build";
+import { ensureCoreTables } from "./dev-server";
+import { createDebouncedSync } from "./dev-watcher";
 
 // ============================================================================
 // Types
@@ -419,7 +419,7 @@ export function registerDbSyncCommand(program: Command): void {
         // multi-collection sync pipeline.
         if (cmdOptions.promote) {
           try {
-            const { runPromote } = await import("./db-sync-promote.js");
+            const { runPromote } = await import("./db-sync-promote");
             await runPromote(cmdOptions.promote, context);
             return;
           } catch (error) {
@@ -432,7 +432,7 @@ export function registerDbSyncCommand(program: Command): void {
 
         if (cmdOptions.demote) {
           try {
-            const { runDemote } = await import("./db-sync-demote.js");
+            const { runDemote } = await import("./db-sync-demote");
             await runDemote(cmdOptions.demote, context);
             return;
           } catch (error) {

@@ -10,19 +10,19 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types.js";
+import type { Operation } from "../diff/types";
 import type {
   Classifier,
   ClassificationLevel,
-} from "../pushschema-pipeline-interfaces.js";
+} from "../pushschema-pipeline-interfaces";
 import {
   formatEventId,
   type ClassificationResult,
   type ClassifierEvent,
-} from "../resolution/types.js";
+} from "../resolution/types";
 
-import { buildPerDialectWarning } from "./type-warnings.js";
-import { isWideningChange } from "./type-widening.js";
+import { buildPerDialectWarning } from "./type-warnings";
+import { isWideningChange } from "./type-widening";
 
 export class RealClassifier implements Classifier {
   async classify(args: {

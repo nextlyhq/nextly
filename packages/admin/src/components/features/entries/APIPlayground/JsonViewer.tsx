@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * JSON Viewer Component
  *

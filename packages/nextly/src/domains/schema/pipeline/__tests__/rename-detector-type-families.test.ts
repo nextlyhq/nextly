@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isTypesCompatible,
   typeFamilyOf,
-} from "../rename-detector-type-families.js";
+} from "../rename-detector-type-families";
 
 describe("typeFamilyOf - leading-token extraction", () => {
   it("strips parenthesized size suffix", () => {

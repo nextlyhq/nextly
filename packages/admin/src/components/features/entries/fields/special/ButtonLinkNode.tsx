@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Lexical Button Link Node
  *

@@ -23,12 +23,12 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import { isPreResolutionOp, type Operation } from "../diff/types.js";
+import { isPreResolutionOp, type Operation } from "../diff/types";
 // F11 PR 3: SQL-template generation moved to the shared sql-templates/
 // module (pipeline/sql-templates/) so both the apply pipeline (renames +
 // drops) and migrate:create (all op types) consume the same per-dialect
 // templates. Eliminates the byte-identical-SQL drift risk.
-import { generateSQL } from "../sql-templates/index.js";
+import { generateSQL } from "../sql-templates/index";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;

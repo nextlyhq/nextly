@@ -62,9 +62,9 @@ if (existsSync(envPath)) {
  * module body, which would cause env validation to fire before dotenv runs.
  */
 async function main(): Promise<void> {
-  const { createProgram } = await import("./program.js");
-  const { createLogger } = await import("./utils/logger.js");
-  const { NextlyError } = await import("../errors/index.js");
+  const { createProgram } = await import("./program");
+  const { createLogger } = await import("./utils/logger");
+  const { NextlyError } = await import("../errors/index");
   const telemetry = await import("@nextly/telemetry");
 
   const program = createProgram();

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { quoteIdent } from "../identifier-quoting.js";
+import { quoteIdent } from "../identifier-quoting";
 
 describe("quoteIdent", () => {
   it("PG quotes with double-quotes", () => {

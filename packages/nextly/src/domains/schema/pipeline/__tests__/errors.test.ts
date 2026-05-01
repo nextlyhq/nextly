@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { UnsupportedDialectVersionError } from "@revnixhq/adapter-drizzle/version-check";
 
-import { classifyError } from "../errors.js";
+import { classifyError } from "../errors";
 
 describe("classifyError", () => {
   it("maps UnsupportedDialectVersionError to UNSUPPORTED_DIALECT_VERSION", () => {

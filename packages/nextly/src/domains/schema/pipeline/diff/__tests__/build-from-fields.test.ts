@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildDesiredTableFromFields } from "../build-from-fields.js";
-import type { ColumnSpec } from "../types.js";
+import { buildDesiredTableFromFields } from "../build-from-fields";
+import type { ColumnSpec } from "../types";
 
 // Minimal FieldConfig shape used by the helper. The real type lives in
 // schemas/dynamic-collections/types.ts; we only need name + type + required.

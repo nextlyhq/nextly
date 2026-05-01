@@ -27,9 +27,9 @@ import type {
   RenameCandidate,
   Resolution,
   ResolutionKind,
-} from "../pushschema-pipeline-interfaces.js";
+} from "../pushschema-pipeline-interfaces";
 
-import { PromptCancelledError, TTYRequiredError } from "./errors.js";
+import { PromptCancelledError, TTYRequiredError } from "./errors";
 
 // Re-export so callers that want to catch these errors can import from the
 // dispatcher module they already depend on.

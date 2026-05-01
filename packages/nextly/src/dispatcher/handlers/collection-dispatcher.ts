@@ -8,29 +8,29 @@
  * collections they can actually read.
  */
 
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate.js";
-import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply.js";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier.js";
-import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url.js";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor.js";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview.js";
+import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
+import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
+import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
+import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser.js";
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline.js";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector.js";
-import { getProductionNotifier } from "../../runtime/notifications/index.js";
-import type { Resolution } from "../../domains/schema/pipeline/resolution/types.js";
+} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
+import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import { getProductionNotifier } from "../../runtime/notifications/index";
+import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type {
   DesiredCollection,
   DesiredSchema,
-} from "../../domains/schema/pipeline/types.js";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor.js";
+} from "../../domains/schema/pipeline/types";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
@@ -564,7 +564,7 @@ const COLLECTIONS_METHODS: Record<
       // applies (sets the X-Schema-Version response header so admin
       // tabs know to refetch); HMR + boot paths don't need it.
       try {
-        const { bumpSchemaVersion } = await import("../../routeHandler.js");
+        const { bumpSchemaVersion } = await import("../../routeHandler");
         bumpSchemaVersion();
       } catch {
         // routeHandler may be unavailable in non-server contexts (tests).

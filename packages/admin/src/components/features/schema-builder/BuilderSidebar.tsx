@@ -1,3 +1,5 @@
+"use client";
+
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@revnixhq/ui";
 import type React from "react";
 import { useRef, useEffect } from "react";
@@ -102,7 +104,7 @@ export function BuilderSidebar({
             <button
               type="button"
               onClick={() => onTabChange("")}
-              className="lg:hidden absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full z-[60] flex items-end justify-center w-12 h-6 rounded-t-xl bg-background border border-b-0 border-border shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] text-muted-foreground hover:text-foreground transition-all duration-200"
+              className="lg:hidden absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full z-[60] flex items-end justify-center w-12 h-6 rounded-t-xl bg-background border border-b-0 border-border shadow-inner-subtle text-muted-foreground hover:text-foreground transition-all duration-200"
               aria-label="Close panel"
             >
               <Icons.X className="h-4 w-4 mb-0.5" />

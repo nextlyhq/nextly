@@ -24,7 +24,7 @@ import type {
   DropColumnOp,
   Operation,
   RenameColumnOp,
-} from "../diff/types.js";
+} from "../diff/types";
 
 export interface RenameResolution {
   tableName: string;

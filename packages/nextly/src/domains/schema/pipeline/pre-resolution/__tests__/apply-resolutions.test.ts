@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { AddColumnOp, DropColumnOp, Operation } from "../../diff/types.js";
+import type { AddColumnOp, DropColumnOp, Operation } from "../../diff/types";
 import {
   applyResolutionsToOperations,
   type RenameResolution,
-} from "../apply-resolutions.js";
+} from "../apply-resolutions";
 
 const drop = (
   tableName: string,

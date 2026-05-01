@@ -4,14 +4,14 @@
  * No database hit -- purely stateless JWT verification.
  * Handles backward compatibility for old Auth.js cookies.
  */
-import { clearAccessTokenCookie } from "../cookies/access-token-cookie.js";
+import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
   LEGACY_COOKIE_NAMES,
   serializeClearCookie,
-} from "../cookies/cookie-config.js";
-import { getSession } from "../session/get-session.js";
+} from "../cookies/cookie-config";
+import { getSession } from "../session/get-session";
 
-import { jsonResponse, buildCookieHeaders } from "./handler-utils.js";
+import { jsonResponse, buildCookieHeaders } from "./handler-utils";
 
 export interface SessionHandlerDeps {
   secret: string;

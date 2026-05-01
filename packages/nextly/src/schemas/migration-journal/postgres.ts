@@ -16,7 +16,7 @@ import type {
   MigrationJournalScopeKind,
   MigrationJournalSource,
   MigrationJournalStatus,
-} from "./types.js";
+} from "./types";
 
 export const nextlyMigrationJournalPg = pgTable(
   "nextly_migration_journal",

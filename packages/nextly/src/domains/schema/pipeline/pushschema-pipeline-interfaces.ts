@@ -7,12 +7,12 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { NextlySchemaSnapshot, Operation } from "./diff/types.js";
+import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import type {
   ClassificationResult,
   ClassifierEvent,
   Resolution,
-} from "./resolution/types.js";
+} from "./resolution/types";
 
 export interface RenameCandidate {
   tableName: string;
@@ -166,7 +166,7 @@ export interface DrizzleStatementExecutor {
 // F10 PR 3: re-export the Notifier interface so the pipeline's deps
 // list can declare it without a deeper import path. Concrete
 // implementations live under runtime/notifications/.
-export type { Notifier } from "../../../runtime/notifications/types.js";
+export type { Notifier } from "../../../runtime/notifications/types";
 
 // Re-export resolution types so consumers can import everything from one place.
 export type {
@@ -174,4 +174,4 @@ export type {
   ClassifierEvent,
   Resolution,
   ResolutionKind,
-} from "./resolution/types.js";
+} from "./resolution/types";

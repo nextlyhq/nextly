@@ -18,15 +18,15 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types.js";
+import type { Operation } from "../diff/types";
 
-import { generateMysqlSQL } from "./mysql.js";
-import { generatePgSQL } from "./postgres.js";
-import { generateSqliteSQL } from "./sqlite.js";
+import { generateMysqlSQL } from "./mysql";
+import { generatePgSQL } from "./postgres";
+import { generateSqliteSQL } from "./sqlite";
 
-export { quoteIdent } from "./identifier-quoting.js";
-export { MysqlUnsupportedOperationError } from "./mysql.js";
-export { SqliteUnsupportedOperationError } from "./sqlite.js";
+export { quoteIdent } from "./identifier-quoting";
+export { MysqlUnsupportedOperationError } from "./mysql";
+export { SqliteUnsupportedOperationError } from "./sqlite";
 
 export function generateSQL(op: Operation, dialect: SupportedDialect): string {
   switch (dialect) {

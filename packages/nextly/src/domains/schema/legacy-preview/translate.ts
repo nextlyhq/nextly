@@ -20,20 +20,20 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { FieldDefinition } from "../../../schemas/dynamic-collections.js";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
-} from "../pipeline/classifier/count-helpers.js";
-import type { PipelinePreviewResult } from "../pipeline/preview.js";
-import { computeFieldDiff } from "../services/field-diff.js";
+} from "../pipeline/classifier/count-helpers";
+import type { PipelinePreviewResult } from "../pipeline/preview";
+import { computeFieldDiff } from "../services/field-diff";
 import type {
   AddedField,
   ChangedField,
   InteractiveField,
   RemovedField,
   SchemaPreviewResult,
-} from "../services/schema-change-types.js";
+} from "../services/schema-change-types";
 
 export interface TranslateContext {
   tableName: string;

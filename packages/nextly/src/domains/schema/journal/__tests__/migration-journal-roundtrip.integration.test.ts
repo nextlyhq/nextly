@@ -12,9 +12,9 @@ import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db.js";
-import { nextlyMigrationJournalPg } from "../../../../schemas/migration-journal/index.js";
-import { DrizzleMigrationJournal } from "../migration-journal.js";
+import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
+import { nextlyMigrationJournalPg } from "../../../../schemas/migration-journal/index";
+import { DrizzleMigrationJournal } from "../migration-journal";
 
 const ctx = makeTestContext("postgresql");
 

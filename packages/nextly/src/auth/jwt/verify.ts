@@ -1,7 +1,7 @@
 import { jwtVerify, errors as joseErrors } from "jose";
 
-import type { NextlyJwtPayload } from "./claims.js";
-import { secretToKey } from "./sign.js";
+import type { NextlyJwtPayload } from "./claims";
+import { secretToKey } from "./sign";
 
 export type VerifyResult =
   | { valid: true; payload: NextlyJwtPayload }

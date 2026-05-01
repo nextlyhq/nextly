@@ -16,14 +16,14 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import { runStatement } from "../_internal/run-statement.js";
-import type { NextlySchemaSnapshot } from "../diff/types.js";
-import { PromptCancelledError } from "../prompt-dispatcher/errors.js";
-import type { PreCleanupExecutor } from "../pushschema-pipeline-interfaces.js";
-import type { ClassifierEvent, Resolution } from "../resolution/types.js";
+import { runStatement } from "../_internal/run-statement";
+import type { NextlySchemaSnapshot } from "../diff/types";
+import { PromptCancelledError } from "../prompt-dispatcher/errors";
+import type { PreCleanupExecutor } from "../pushschema-pipeline-interfaces";
+import type { ClassifierEvent, Resolution } from "../resolution/types";
 
-import { applyMakeOptionalToSnapshot } from "./snapshot-patch.js";
-import { validateDefaultValue } from "./validate-default.js";
+import { applyMakeOptionalToSnapshot } from "./snapshot-patch";
+import { validateDefaultValue } from "./validate-default";
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

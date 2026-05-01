@@ -15,7 +15,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it } from "vitest";
 
-import { DrizzleStatementExecutor } from "./drizzle-statement-executor.js";
+import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 
 // Spin up an in-memory better-sqlite3 db wrapped with drizzle().
 // Production callers pass adapter.getDrizzle() which is the same shape.

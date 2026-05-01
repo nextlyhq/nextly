@@ -1,3 +1,5 @@
+"use client";
+
 import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
 import type React from "react";
 import { useState, useEffect, useMemo } from "react";
@@ -9,6 +11,7 @@ import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import { useCollections, useSingles } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
@@ -30,6 +33,7 @@ interface DualSidebarProps {
 
 export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const { pathname, route } = useRouter();
+  const { folderViewMode } = useMediaContext();
   const {
     capabilities,
     permissions,
@@ -415,18 +419,22 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   // Determine if we should show the second sidebar
   const hasSubSidebar =
-    [
+    ([
       "collections",
       "singles",
       "plugins",
       "manage",
       "settings",
       ...(showBuilder ? ["builders" as const] : []),
-    ].includes(selectedMain) || selectedMain.startsWith("standalone-");
+    ].includes(selectedMain) ||
+      selectedMain.startsWith("standalone-") ||
+      (selectedMain === "media" && folderViewMode === "sidebar")) &&
+    !(selectedMain === "media" && folderViewMode === "grid");
 
   const CATEGORIES_WITH_SUB_SIDEBAR = [
     "collections",
     "singles",
+    "media",
     "plugins",
     "manage",
     "settings",
@@ -514,12 +522,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         {/* Logo */}
         <Link
           href={ROUTES.DASHBOARD}
-          className="mb-8 flex items-center justify-center h-10 w-10 bg-black rounded-none overflow-hidden group"
+          className="mb-8 flex items-center justify-center h-10 w-10 group"
         >
           <ThemeAwareLogo
             className="w-6 h-6 object-contain"
             alt={branding.logoText ?? "Logo"}
-            forceTheme="dark"
           />
         </Link>
 
@@ -535,16 +542,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-primary text-primary-foreground"
-                : "text-sidebar-foreground/60 hover-unified"
+                ? "bg-primary/5 text-primary"
+                : "text-primary/50 hover-unified"
             );
 
             const iconContent = (
               <>
                 <Icon className="h-5 w-5" />
-                {isSelected && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-primary rounded-r-full" />
-                )}
               </>
             );
 
@@ -556,6 +560,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                       href={href}
                       onClick={() => setSelectedMain(item.id)}
                       className={className}
+                      data-active={isSelected}
                     >
                       {iconContent}
                     </Link>
@@ -563,6 +568,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                     <button
                       onClick={() => setSelectedMain(item.id)}
                       className={className}
+                      data-active={isSelected}
                     >
                       {iconContent}
                     </button>
@@ -583,7 +589,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       {/* 2. Sub Sidebar (Detail Menu) */}
       <aside
         className={cn(
-          "flex flex-col bg-background overflow-hidden shrink-0 transition-all duration-300",
+          "flex flex-col bg-background overflow-hidden shrink-0",
           isMobile
             ? "relative flex border-l border-border"
             : "border-r border-border fixed inset-y-0 left-[72px] z-45 lg:static lg:flex lg:border-r", // Absolute on tablet, static on desktop
@@ -598,14 +604,16 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           <span className="font-bold text-base tracking-tight capitalize text-foreground">
             {selectedMain.startsWith("standalone-")
               ? standaloneLabel
-              : selectedMain === "builders"
-                ? "Builders"
-                : selectedMain}
+              : selectedMain === "media"
+                ? "Media Library"
+                : selectedMain === "builders"
+                  ? "Builders"
+                  : selectedMain}
           </span>
         </div>
 
         {/* Sub Sidebar Content */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="flex-1 overflow-y-auto">
           <SubSidebarContent
             selectedMain={selectedMain}
             standaloneLabel={standaloneLabel}

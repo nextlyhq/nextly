@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Array Input Component
  *
