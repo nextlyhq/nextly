@@ -24,10 +24,30 @@
  *     If every hop in the chain is in the trust list, return `null`
  *     rather than picking a trusted proxy as "the client".
  *
+ * Implementation note: this module deliberately avoids `node:net` so
+ * downstream packages that bundle for the browser (e.g. `@revnixhq/admin`)
+ * don't fail at build time. IP-family classification is done with
+ * regex.
+ *
  * @module utils/get-trusted-client-ip
  */
 
-import net from "node:net";
+const IPV4_RE =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+const IPV6_CHAR_RE = /^[0-9a-fA-F:.]+$/;
+
+/** Returns 4 / 6 / 0 (mirrors `net.isIP()` without the Node import). */
+function classifyIp(addr: string): 0 | 4 | 6 {
+  if (IPV4_RE.test(addr)) return 4;
+  if (
+    addr.includes(":") &&
+    IPV6_CHAR_RE.test(addr) &&
+    addr.length <= 45 // RFC4291 max textual length
+  ) {
+    return 6;
+  }
+  return 0;
+}
 
 export interface TrustedClientIpOptions {
   /**
@@ -85,7 +105,7 @@ export function getTrustedClientIp(
       .filter(Boolean);
     for (let i = hops.length - 1; i >= 0; i--) {
       const hop = stripIpv6Brackets(hops[i]);
-      if (!net.isIP(hop)) continue;
+      if (!classifyIp(hop)) continue;
       if (!isIpInAnyCidr(hop, trustedCidrs)) {
         return hop;
       }
@@ -94,11 +114,11 @@ export function getTrustedClientIp(
   }
 
   const cfIp = request.headers.get("cf-connecting-ip")?.trim();
-  if (cfIp && net.isIP(cfIp)) {
+  if (cfIp && classifyIp(cfIp)) {
     return cfIp;
   }
   const realIp = request.headers.get("x-real-ip")?.trim();
-  if (realIp && net.isIP(realIp)) {
+  if (realIp && classifyIp(realIp)) {
     return realIp;
   }
 
@@ -124,7 +144,7 @@ function stripIpv6Brackets(ip: string): string {
 function parseCidr(entry: string): ParsedCidr | null {
   const [addr, prefixRaw] = entry.split("/");
   const stripped = stripIpv6Brackets(addr);
-  const family = net.isIP(stripped);
+  const family = classifyIp(stripped);
   if (family === 4) {
     const prefix = prefixRaw === undefined ? 32 : Number(prefixRaw);
     if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
@@ -157,7 +177,7 @@ function ipv4ToInt(ip: string): number | null {
 
 function isIpInAnyCidr(ip: string, cidrs: readonly ParsedCidr[]): boolean {
   if (cidrs.length === 0) return false;
-  const family = net.isIP(ip);
+  const family = classifyIp(ip);
   if (family === 4) {
     const intIp = ipv4ToInt(ip);
     if (intIp === null) return false;
