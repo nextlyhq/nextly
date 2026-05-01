@@ -688,14 +688,22 @@ pnpm test
 - T-008 (validateExternalUrl helper) commit on `dev` — already covers C3.
 - **Phase branch `security/phase-2` created from `dev` and pushed** (see [Phase kickoff](#phase-kickoff-first-dev-once-per-phase)).
 
+> **Dev baseline note (recorded 2026-05-01 at kickoff of `security/phase-2`):**
+> The `dev` baseline is **not green**. Pre-existing failures introduced by PR #113 (`feat(chore): Dev workflow improvement`) and not addressed by Phase 1:
+>
+> - `pnpm check-types` → **42 errors** in `packages/admin` (~30 `_underscore` rename bugs + ~12 real type bugs: missing `JSX` namespace in `notifications/`, `RoleFilters`/`FetchRolesParams` divergence, `Icons` undefined in `SubSidebarContent.tsx`, `RepeaterFieldConfig` mismatch in `FieldRenderer.tsx`).
+> - `pnpm lint` → **343 errors / 84 warnings** in `packages/nextly` (mostly mechanical: 185 `no-unnecessary-type-assertion`, 41 `no-explicit-any`, 33 `consistent-type-imports`, 25 `no-unused-vars`, 23 `restrict-template-expressions`, 23 `no-base-to-string`, 20 `require-await`, etc.).
+>
+> **Phase 2 verification rule (revised):** Per-task gates are scoped to **no NEW errors introduced by Phase-2 commits.** Compare counts against the baseline above before each commit. Baseline restoration is tracked **outside this prompt** as a separate `chore/dev-baseline-cleanup` workstream owned by the maintainer.
+
 ### Phase 2 exit criteria
 
 - All 14 Phase-2 task commits landed on `security/phase-2` (each with `security(T-NNN):` subject; each task's `**Status:**` updated to `done (<sha>)`).
-- `security/phase-2` rebased on latest `dev`; full verification green on the integrated branch.
+- `security/phase-2` rebased on latest `dev`; **`pnpm test` green and `pnpm audit` clean** on the integrated branch.
+- `pnpm check-types` and `pnpm lint` show **no NEW errors** beyond the recorded dev baseline above (counts ≤ baseline). Baseline-cleanup PR may land independently and reduce the recorded numbers — that is fine.
 - All remaining Highs closed.
 - The 9 high-leverage Mediums (M3, M9, M10, M11, M13, M19, M21, M22, M23) closed.
 - **Phase PR (`security/phase-2` → `dev`) merged with `--merge`**.
-- `pnpm audit` clean on `dev`.
 
 ### Tasks
 
