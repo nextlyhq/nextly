@@ -126,11 +126,44 @@ export async function reloadNextlyConfig(opts?: {
     newConfig = (result as { config?: { collections?: CollectionDef[] } })
       .config;
   } catch (err) {
+    // NextlyError wraps the underlying loader/bundler error in
+    // `cause` (and surfaces a generic public message like "Failed to
+    // load Nextly configuration."). Surface BOTH the public message
+    // and the cause so an operator can actually diagnose the
+    // problem instead of seeing the bare wrapper text.
     const msg = err instanceof Error ? err.message : String(err);
+    const cause =
+      err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : err instanceof Error && typeof err.cause === "string"
+          ? err.cause
+          : undefined;
+    const logContext =
+      err && typeof err === "object" && "logContext" in err
+        ? JSON.stringify((err as { logContext: unknown }).logContext)
+        : undefined;
+    const detail = cause
+      ? `${msg} (cause: ${cause})`
+      : logContext
+        ? `${msg} (context: ${logContext})`
+        : msg;
+
+    // The "expression is too dynamic" failure is Turbopack's static
+    // analyzer rejecting `bundle-require`'s internal `import(file)`
+    // call. Existing scaffolds (created before bundle-require was
+    // added to the scaffolder's serverExternalPackages list) hit this
+    // on every code-first HMR / boot-time apply. The fix is a one-line
+    // edit to `next.config.ts`. New scaffolds (create-nextly-app
+    // 0.0.141+) include it automatically.
+    const isTurbopackDynamicImport =
+      typeof cause === "string" &&
+      /Cannot find module as expression is too dynamic/.test(cause);
+    const guidance = isTurbopackDynamicImport
+      ? `Add "bundle-require" to your next.config.ts serverExternalPackages array. Example:\n\n  serverExternalPackages: [\n    "@revnixhq/nextly",\n    ...,\n    "bundle-require",\n  ],\n\nThen restart the dev server.`
+      : `Keeping the previously-loaded config. Fix the syntax error and save again to retry.`;
+
     console.warn(
-      `[Nextly HMR] Could not reload nextly.config.ts: ${msg}. ` +
-        `Keeping the previously-loaded config. Fix the syntax error and ` +
-        `save again to retry.`
+      `[Nextly HMR] Could not reload nextly.config.ts: ${detail}. ${guidance}`
     );
     return;
   }
