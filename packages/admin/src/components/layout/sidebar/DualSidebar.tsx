@@ -1,3 +1,5 @@
+"use client";
+
 import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
 import type React from "react";
 import { useState, useEffect, useMemo } from "react";

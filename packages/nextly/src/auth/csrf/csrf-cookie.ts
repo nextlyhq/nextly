@@ -8,7 +8,7 @@ import {
   serializeCookie,
   serializeClearCookie,
   parseCookie,
-} from "../cookies/cookie-config.js";
+} from "../cookies/cookie-config";
 
 /**
  * Create a Set-Cookie header for the CSRF token.

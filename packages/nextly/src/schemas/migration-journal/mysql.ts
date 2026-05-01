@@ -15,7 +15,7 @@ import type {
   MigrationJournalScopeKind,
   MigrationJournalSource,
   MigrationJournalStatus,
-} from "./types.js";
+} from "./types";
 
 export const nextlyMigrationJournalMysql = mysqlTable(
   "nextly_migration_journal",

@@ -15,46 +15,46 @@ export {
   registerDbSyncCommand,
   runDbSync,
   type DbSyncCommandOptions,
-} from "./db-sync.js";
+} from "./db-sync";
 
 // Build commands
 export {
   registerBuildCommand,
   runBuild,
   type BuildCommandOptions,
-} from "./build.js";
+} from "./build";
 
 // Type generation commands
 export {
   registerGenerateTypesCommand,
   runGenerateTypes,
   type GenerateTypesCommandOptions,
-} from "./generate-types.js";
+} from "./generate-types";
 
 // Migration commands
 export {
   registerMigrateCommand,
   runMigrate,
   type MigrateCommandOptions,
-} from "./migrate.js";
+} from "./migrate";
 
 export {
   registerMigrateCreateCommand,
   runMigrateCreate,
   type MigrateCreateCommandOptions,
-} from "./migrate-create.js";
+} from "./migrate-create";
 
 export {
   registerMigrateStatusCommand,
   runMigrateStatus,
   type MigrateStatusCommandOptions,
-} from "./migrate-status.js";
+} from "./migrate-status";
 
 export {
   registerMigrateFreshCommand,
   runMigrateFresh,
   type MigrateFreshCommandOptions,
-} from "./migrate-fresh.js";
+} from "./migrate-fresh";
 
 // F11 PR 2 (Q4=A): migrate:reset removed (forward-only model). Operators
 // who relied on rollback should write a new corrective migration instead.
@@ -66,7 +66,7 @@ export {
   registerInitCommand,
   runInit,
   type InitCommandOptions,
-} from "./init.js";
+} from "./init";
 
 // Permissions commands
-export { createPermissionsCleanupCommand } from "./permissions-cleanup.js";
+export { createPermissionsCleanupCommand } from "./permissions-cleanup";

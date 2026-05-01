@@ -1,3 +1,5 @@
+"use client";
+
 import { Checkbox, Input, Label } from "@revnixhq/ui";
 import { useState } from "react";
 import type {

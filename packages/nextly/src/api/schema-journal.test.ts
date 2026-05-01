@@ -32,13 +32,13 @@ vi.mock("../services/lib/permissions", () => ({
   isSuperAdmin: vi.fn(),
 }));
 
-vi.mock("../domains/schema/journal/read-journal.js", () => ({
+vi.mock("../domains/schema/journal/read-journal", () => ({
   readJournal: vi.fn(),
 }));
 
 import { requireAuthentication, isErrorResponse } from "../auth/middleware";
 import { container } from "../di";
-import { readJournal } from "../domains/schema/journal/read-journal.js";
+import { readJournal } from "../domains/schema/journal/read-journal";
 import { isSuperAdmin } from "../services/lib/permissions";
 
 import { getSchemaJournal } from "./schema-journal";

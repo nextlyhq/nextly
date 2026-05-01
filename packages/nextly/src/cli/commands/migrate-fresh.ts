@@ -39,24 +39,24 @@ import { fileURLToPath } from "node:url";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { getDialectTables } from "../../database/index.js";
-import { seedAll, type SeederResult } from "../../database/seeders/index.js";
+import { getDialectTables } from "../../database/index";
+import { seedAll, type SeederResult } from "../../database/seeders/index";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
-import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push.js";
-import type { SupportedDialect } from "../../services/schema/schema-generator.js";
-import { createContext, type CommandContext } from "../program.js";
+import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
+import type { SupportedDialect } from "../../services/schema/schema-generator";
+import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
-} from "../utils/adapter.js";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
-import { formatDuration, formatCount } from "../utils/logger.js";
+} from "../utils/adapter";
+import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { formatDuration, formatCount } from "../utils/logger";
 
-import { runMigrate } from "./migrate.js";
+import { runMigrate } from "./migrate";
 
 // ============================================================================
 // Types

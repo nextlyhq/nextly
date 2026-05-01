@@ -11,40 +11,40 @@
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import { PermissionSeedService } from "../../services/auth/permission-seed-service.js";
-import { CollectionRegistryService } from "../../services/collections/collection-registry-service.js";
-import { CollectionSyncService } from "../../services/collections/collection-sync-service.js";
-import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service.js";
+import { PermissionSeedService } from "../../services/auth/permission-seed-service";
+import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { CollectionSyncService } from "../../services/collections/collection-sync-service";
+import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
   ComponentRegistryService,
   type CodeFirstComponentConfig,
   type SyncComponentResult,
-} from "../../services/components/component-registry-service.js";
-import type { Logger as ServiceLogger } from "../../services/shared/types.js";
+} from "../../services/components/component-registry-service";
+import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
   SingleRegistryService,
   type CodeFirstSingleConfig,
   type SyncSingleResult,
-} from "../../services/singles/single-registry-service.js";
-import { UserExtSchemaService } from "../../services/users/user-ext-schema-service.js";
-import { UserFieldDefinitionService } from "../../services/users/user-field-definition-service.js";
-import type { CommandContext } from "../program.js";
-import type { CLIDatabaseAdapter } from "../utils/adapter.js";
-import type { LoadConfigResult } from "../utils/config-loader.js";
-import { formatCount } from "../utils/logger.js";
+} from "../../services/singles/single-registry-service";
+import { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
+import { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
+import type { CommandContext } from "../program";
+import type { CLIDatabaseAdapter } from "../utils/adapter";
+import type { LoadConfigResult } from "../utils/config-loader";
+import { formatCount } from "../utils/logger";
 
-import type { ResolvedDevOptions } from "./db-sync.js";
+import type { ResolvedDevOptions } from "./db-sync";
 import {
   displayComponentsSyncResults,
   displaySinglesSyncResults,
   displaySyncResults,
-} from "./dev-display.js";
+} from "./dev-display";
 import {
   performAutoSync,
   performComponentsAutoSync,
   performSinglesAutoSync,
   performSinglesReconcile,
-} from "./dev-server.js";
+} from "./dev-server";
 
 // ============================================================================
 // Orphan Record Type

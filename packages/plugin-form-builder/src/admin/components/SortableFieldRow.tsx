@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Sortable Field Row Component
  *

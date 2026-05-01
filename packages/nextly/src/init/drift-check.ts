@@ -29,7 +29,7 @@
 import type {
   DesiredCollection,
   DesiredSchema,
-} from "../domains/schema/pipeline/types.js";
+} from "../domains/schema/pipeline/types";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -142,7 +142,7 @@ async function resolveDeps(
     return injected as RunDriftCheckDeps;
   }
   const { previewDesiredSchema } = await import(
-    "../domains/schema/pipeline/preview.js"
+    "../domains/schema/pipeline/preview"
   );
   return {
     previewDesiredSchema:

@@ -1,9 +1,9 @@
 import { jwtVerify } from "jose";
 import { describe, it, expect } from "vitest";
 
-import { buildClaims } from "../claims.js";
-import { signAccessToken, secretToKey } from "../sign.js";
-import { verifyAccessToken } from "../verify.js";
+import { buildClaims } from "../claims";
+import { signAccessToken, secretToKey } from "../sign";
+import { verifyAccessToken } from "../verify";
 
 const TEST_SECRET = "test-secret-must-be-at-least-32-characters-long!!";
 

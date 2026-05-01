@@ -5,11 +5,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createNotifier } from "../dispatcher.js";
+import { createNotifier } from "../dispatcher";
 import type {
   MigrationNotificationEvent,
   NotificationChannel,
-} from "../types.js";
+} from "../types";
 
 const event: MigrationNotificationEvent = {
   ts: "2026-04-29T18:00:00.000Z",

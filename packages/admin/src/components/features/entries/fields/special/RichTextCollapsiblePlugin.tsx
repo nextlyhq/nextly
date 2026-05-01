@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Rich Text Collapsible Plugin
  *

@@ -14,8 +14,8 @@
 //     of truth)
 //   - timing + ApplyResult discriminated-union shape
 
-import { classifyError, type SchemaApplyErrorCode } from "./errors.js";
-import type { DesiredSchema } from "./types.js";
+import { classifyError, type SchemaApplyErrorCode } from "./errors";
+import type { DesiredSchema } from "./types";
 
 // F10 PR 6: per-change-kind counts mirrored from the pipeline's
 // post-resolution diff. Exposed on the ApplyResult so the dispatcher

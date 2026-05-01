@@ -1,6 +1,6 @@
-import type { AuthContext } from "../session/session-types.js";
+import type { AuthContext } from "../session/session-types";
 
-import { checkPermission } from "./require-permission.js";
+import { checkPermission } from "./require-permission";
 
 export type CollectionOperation = "create" | "read" | "update" | "delete";
 

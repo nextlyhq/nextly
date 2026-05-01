@@ -24,10 +24,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io.js";
-import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types.js";
+import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
-import { runChecks } from "./migrate-check.js";
+import { runChecks } from "./migrate-check";
 
 function makeLogger() {
   return {

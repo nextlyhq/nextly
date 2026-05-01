@@ -14,8 +14,8 @@ import {
   nextlyMigrationJournalMysql,
   nextlyMigrationJournalPg,
   nextlyMigrationJournalSqlite,
-} from "../../../schemas/migration-journal/index.js";
-import type { MigrationJournalScopeKind } from "../../../schemas/migration-journal/types.js";
+} from "../../../schemas/migration-journal/index";
+import type { MigrationJournalScopeKind } from "../../../schemas/migration-journal/types";
 
 export type Dialect = "postgresql" | "mysql" | "sqlite";
 

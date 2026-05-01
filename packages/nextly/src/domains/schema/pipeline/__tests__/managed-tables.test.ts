@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MANAGED_TABLE_PREFIXES_REGEX,
   isManagedTable,
-} from "../managed-tables.js";
+} from "../managed-tables";
 
 describe("MANAGED_TABLE_PREFIXES_REGEX", () => {
   it("matches dynamic-collection tables", () => {

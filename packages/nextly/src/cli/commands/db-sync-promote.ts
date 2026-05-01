@@ -11,10 +11,10 @@ import { appendFileSync, existsSync } from "node:fs";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import { serializeCollection } from "../../domains/schema/services/code-generator.js";
-import { CollectionRegistryService } from "../../services/collections/collection-registry-service.js";
-import type { CommandContext } from "../program.js";
-import { createAdapter, validateDatabaseEnv } from "../utils/adapter.js";
+import { serializeCollection } from "../../domains/schema/services/code-generator";
+import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import type { CommandContext } from "../program";
+import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
 
 export async function runPromote(
   slug: string,

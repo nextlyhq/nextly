@@ -30,7 +30,7 @@ import {
   getMySQLDrizzleKit,
   getPgDrizzleKit,
   getSQLiteDrizzleKit,
-} from "../../../database/drizzle-kit-lazy.js";
+} from "../../../database/drizzle-kit-lazy";
 
 export type FreshPushDialect = "postgresql" | "mysql" | "sqlite";
 

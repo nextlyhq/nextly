@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { queryLiveColumnTypes } from "../live-column-types.js";
+import { queryLiveColumnTypes } from "../live-column-types";
 
 describe("queryLiveColumnTypes - postgresql", () => {
   it("queries information_schema.columns and builds the map", async () => {

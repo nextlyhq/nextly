@@ -62,7 +62,7 @@ vi.mock("../../../../database/drizzle-kit-lazy", () => ({
 }));
 
 // Imported AFTER mock setup so the mock applies.
-import { freshPushSchema } from "../fresh-push.js";
+import { freshPushSchema } from "../fresh-push";
 
 describe("freshPushSchema", () => {
   beforeEach(() => {

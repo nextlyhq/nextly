@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Column Visibility Hook
  *

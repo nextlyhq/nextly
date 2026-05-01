@@ -6,13 +6,13 @@
 // CSRF double-submit cookie + origin check. This endpoint is the highest-
 // value target for account takeover, so CSRF is non-negotiable here.
 // See docs/auth/csrf.md.
-import { clearAccessTokenCookie } from "../cookies/access-token-cookie.js";
-import { clearRefreshTokenCookie } from "../cookies/refresh-token-cookie.js";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
-import { getSession } from "../session/get-session.js";
+import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
+import { clearRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
+import { getSession } from "../session/get-session";
 
-import { jsonResponse, buildCookieHeaders } from "./handler-utils.js";
+import { jsonResponse, buildCookieHeaders } from "./handler-utils";
 
 export interface ChangePasswordHandlerDeps {
   secret: string;

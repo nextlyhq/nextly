@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Relationship Quick Edit Component
  *

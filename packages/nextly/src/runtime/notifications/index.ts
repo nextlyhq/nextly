@@ -6,13 +6,13 @@ export type {
   MigrationSummary,
   NotificationChannel,
   Notifier,
-} from "./types.js";
-export { createNotifier } from "./dispatcher.js";
-export type { CreateNotifierOptions } from "./dispatcher.js";
-export { buildNotificationEvent } from "./build-event.js";
-export { TerminalChannel } from "./channels/terminal.js";
-export { NDJSONChannel } from "./channels/ndjson.js";
+} from "./types";
+export { createNotifier } from "./dispatcher";
+export type { CreateNotifierOptions } from "./dispatcher";
+export { buildNotificationEvent } from "./build-event";
+export { TerminalChannel } from "./channels/terminal";
+export { NDJSONChannel } from "./channels/ndjson";
 export {
   getProductionNotifier,
   _resetProductionNotifierForTests,
-} from "./production.js";
+} from "./production";

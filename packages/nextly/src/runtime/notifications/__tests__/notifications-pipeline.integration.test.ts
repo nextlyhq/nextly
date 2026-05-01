@@ -13,23 +13,23 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { makeTestContext } from "../../../database/__tests__/integration/helpers/test-db.js";
-import { RealClassifier } from "../../../domains/schema/pipeline/classifier/classifier.js";
-import { RealPreCleanupExecutor } from "../../../domains/schema/pipeline/pre-cleanup/executor.js";
+import { makeTestContext } from "../../../database/__tests__/integration/helpers/test-db";
+import { RealClassifier } from "../../../domains/schema/pipeline/classifier/classifier";
+import { RealPreCleanupExecutor } from "../../../domains/schema/pipeline/pre-cleanup/executor";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
   noopPromptDispatcher,
   noopRenameDetector,
-} from "../../../domains/schema/pipeline/pushschema-pipeline-stubs.js";
-import { PushSchemaPipeline } from "../../../domains/schema/pipeline/pushschema-pipeline.js";
-import { DrizzleStatementExecutor } from "../../../domains/schema/services/drizzle-statement-executor.js";
-import type { DesiredSchema } from "../../../domains/schema/pipeline/types.js";
-import { createNotifier } from "../dispatcher.js";
+} from "../../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "../../../domains/schema/pipeline/pushschema-pipeline";
+import { DrizzleStatementExecutor } from "../../../domains/schema/services/drizzle-statement-executor";
+import type { DesiredSchema } from "../../../domains/schema/pipeline/types";
+import { createNotifier } from "../dispatcher";
 import type {
   MigrationNotificationEvent,
   NotificationChannel,
-} from "../types.js";
+} from "../types";
 
 const ctx = makeTestContext("postgresql");
 

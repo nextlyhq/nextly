@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Collection Query Hooks
  *

@@ -53,20 +53,20 @@ import {
   formatBlankFile,
   formatTimestamp,
   slugify,
-} from "../../domains/schema/migrate-create/format-file.js";
+} from "../../domains/schema/migrate-create/format-file";
 import {
   generateMigration,
   type MinimalConfigEntity,
-} from "../../domains/schema/migrate-create/generate.js";
-import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames.js";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
-import { createContext, type CommandContext } from "../program.js";
+} from "../../domains/schema/migrate-create/generate";
+import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
+import { createContext, type CommandContext } from "../program";
 import {
   getDialectDisplayName,
   validateDatabaseEnv,
-} from "../utils/adapter.js";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
-import { formatDuration } from "../utils/logger.js";
+} from "../utils/adapter";
+import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { formatDuration } from "../utils/logger";
 
 // ============================================================================
 // Types

@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { validateDefaultValue } from "../validate-default.js";
+import { validateDefaultValue } from "../validate-default";
 
 describe("validateDefaultValue", () => {
   it("accepts a valid string for text field", () => {

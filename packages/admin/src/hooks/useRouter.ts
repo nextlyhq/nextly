@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect } from "react";
 
 import { resolveRoute, type RouteResult } from "@admin/lib/routing";

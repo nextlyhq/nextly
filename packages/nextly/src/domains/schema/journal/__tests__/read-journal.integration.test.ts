@@ -15,8 +15,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db.js";
-import { readJournal } from "../read-journal.js";
+import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
+import { readJournal } from "../read-journal";
 
 const ctx = makeTestContext("postgresql");
 

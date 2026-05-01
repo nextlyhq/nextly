@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * useFieldBuilder — Shared state management hook for all builder pages.
  *

@@ -13,27 +13,27 @@ import * as telemetry from "@nextly/telemetry";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
-import { registerBuildCommand } from "./commands/build.js";
+import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
 // Why: Task 11 renamed `nextly dev` (utility) to `nextly db:sync` so the
 // `nextly dev` name can be reused by the wrapper CLI in Sub-task 3.
-import { registerDbSyncCommand } from "./commands/db-sync.js";
-import { registerGenerateTypesCommand } from "./commands/generate-types.js";
-import { registerInitCommand } from "./commands/init.js";
-import { registerMigrateCheckCommand } from "./commands/migrate-check.js";
-import { registerMigrateCreateCommand } from "./commands/migrate-create.js";
-import { registerMigrateFreshCommand } from "./commands/migrate-fresh.js";
+import { registerDbSyncCommand } from "./commands/db-sync";
+import { registerGenerateTypesCommand } from "./commands/generate-types";
+import { registerInitCommand } from "./commands/init";
+import { registerMigrateCheckCommand } from "./commands/migrate-check";
+import { registerMigrateCreateCommand } from "./commands/migrate-create";
+import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
 // F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
 // is "write a new corrective migration", not "run DOWN sections."
-import { registerMigrateStatusCommand } from "./commands/migrate-status.js";
-import { registerMigrateCommand } from "./commands/migrate.js";
-import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup.js";
-import { registerTelemetryCommand } from "./commands/telemetry.js";
+import { registerMigrateStatusCommand } from "./commands/migrate-status";
+import { registerMigrateCommand } from "./commands/migrate";
+import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
+import { registerTelemetryCommand } from "./commands/telemetry";
 import {
   createLogger,
   type Logger,
   type LoggerOptions,
-} from "./utils/logger.js";
+} from "./utils/logger";
 
 // ============================================================================
 // Version

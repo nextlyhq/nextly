@@ -6,22 +6,22 @@
 import {
   setAccessTokenCookie,
   clearAccessTokenCookie,
-} from "../cookies/access-token-cookie.js";
+} from "../cookies/access-token-cookie";
 import {
   setRefreshTokenCookie,
   readRefreshTokenCookie,
   clearRefreshTokenCookie,
-} from "../cookies/refresh-token-cookie.js";
-import { clearCsrfCookie } from "../csrf/csrf-cookie.js";
-import { buildClaims } from "../jwt/claims.js";
-import { signAccessToken } from "../jwt/sign.js";
+} from "../cookies/refresh-token-cookie";
+import { clearCsrfCookie } from "../csrf/csrf-cookie";
+import { buildClaims } from "../jwt/claims";
+import { signAccessToken } from "../jwt/sign";
 import {
   hashRefreshToken,
   generateRefreshToken,
   generateRefreshTokenId,
-} from "../session/refresh.js";
+} from "../session/refresh";
 
-import { buildCookieHeaders, getClientIp } from "./handler-utils.js";
+import { buildCookieHeaders, getClientIp } from "./handler-utils";
 
 export interface RefreshHandlerDeps {
   secret: string;

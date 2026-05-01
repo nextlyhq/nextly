@@ -8,7 +8,7 @@
  * @since 1.0.0
  */
 
-import type { Logger } from "./logger.js";
+import type { Logger } from "./logger";
 
 /**
  * Supported database dialects
@@ -168,7 +168,7 @@ export async function createAdapter(
 
   logger?.debug(`Creating ${dialect} adapter...`);
 
-  const { createAdapterFromEnv } = await import("../../database/factory.js");
+  const { createAdapterFromEnv } = await import("../../database/factory");
 
   const originalDialect = process.env.DB_DIALECT;
   const originalUrl = process.env.DATABASE_URL;

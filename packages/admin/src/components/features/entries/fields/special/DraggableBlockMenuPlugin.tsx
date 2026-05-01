@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Draggable Block Menu Plugin
  *

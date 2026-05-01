@@ -11,9 +11,9 @@
  * so route handlers that need to distinguish the two should expose state
  * via `/api/auth/state` rather than peek at the failure code.
  */
-import { NextlyError } from "../../errors/nextly-error.js";
-import { getSession, type GetSessionResult } from "../session/get-session.js";
-import type { SessionUser } from "../session/session-types.js";
+import { NextlyError } from "../../errors/nextly-error";
+import { getSession, type GetSessionResult } from "../session/get-session";
+import type { SessionUser } from "../session/session-types";
 
 /**
  * Require a valid session. Returns the session user or throws

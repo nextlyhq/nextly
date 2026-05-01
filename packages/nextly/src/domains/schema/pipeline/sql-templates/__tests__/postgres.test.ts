@@ -2,8 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { Operation } from "../../diff/types.js";
-import { generateSQL } from "../index.js";
+import type { Operation } from "../../diff/types";
+import { generateSQL } from "../index";
 
 const pg = (op: Operation) => generateSQL(op, "postgresql");
 

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Submission Detail Component
  *

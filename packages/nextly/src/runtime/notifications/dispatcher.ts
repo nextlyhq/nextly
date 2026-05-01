@@ -12,7 +12,7 @@ import type {
   MigrationNotificationEvent,
   NotificationChannel,
   Notifier,
-} from "./types.js";
+} from "./types";
 
 interface LoggerLike {
   warn?: (msg: string) => void;

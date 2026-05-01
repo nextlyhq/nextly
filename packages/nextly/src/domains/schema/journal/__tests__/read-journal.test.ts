@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { readJournal } from "../read-journal.js";
+import { readJournal } from "../read-journal";
 
 interface CapturedSelect {
   from: unknown;

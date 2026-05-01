@@ -1,4 +1,4 @@
-import type { AuthContext } from "../session/session-types.js";
+import type { AuthContext } from "../session/session-types";
 
 export interface ErrorResponse {
   success: false;

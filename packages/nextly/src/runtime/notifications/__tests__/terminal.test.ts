@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { TerminalChannel } from "../channels/terminal.js";
-import type { MigrationNotificationEvent } from "../types.js";
+import { TerminalChannel } from "../channels/terminal";
+import type { MigrationNotificationEvent } from "../types";
 
 const success: MigrationNotificationEvent = {
   ts: "2026-04-29T18:00:00.000Z",

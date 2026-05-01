@@ -21,14 +21,14 @@ import { join } from "node:path";
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { describe, expect, it } from "vitest";
 
-import { diffSnapshots } from "../diff.js";
+import { diffSnapshots } from "../diff";
 import type {
   AddColumnOp,
   ChangeColumnTypeOp,
   DropColumnOp,
   NextlySchemaSnapshot,
   Operation,
-} from "../types.js";
+} from "../types";
 
 interface DiffFixture {
   name: string;
