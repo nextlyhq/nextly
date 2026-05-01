@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import type { NextlyServiceConfig } from "../di/register";
+import { defineConfig } from "../collections/config/define-config";
 import { getNextly, shutdownNextly, type Nextly } from "../init";
 
 // Mock console.log to avoid noise in tests
@@ -25,7 +25,10 @@ describe("init - Nextly API", () => {
   describe("getNextly()", () => {
     it("should return a Nextly instance with all services", async () => {
       // Mock config (minimal for testing)
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -37,7 +40,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       const nextly = await getNextly(config);
 
@@ -52,7 +55,10 @@ describe("init - Nextly API", () => {
     });
 
     it("should return the same instance on subsequent calls (singleton)", async () => {
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -64,7 +70,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       const nextly1 = await getNextly(config);
       const nextly2 = await getNextly(config);
@@ -78,7 +84,10 @@ describe("init - Nextly API", () => {
       const mockLog = vi.fn();
       console.log = mockLog;
 
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -90,7 +99,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       await getNextly(config);
 
@@ -104,7 +113,10 @@ describe("init - Nextly API", () => {
     });
 
     it("should not log on subsequent calls (cached)", async () => {
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -116,7 +128,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       // First call
       await getNextly(config);
@@ -134,7 +146,10 @@ describe("init - Nextly API", () => {
 
   describe("shutdownNextly()", () => {
     it("should shutdown the instance and clear cache", async () => {
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -146,7 +161,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       const nextly1 = await getNextly(config);
       await shutdownNextly();
@@ -159,7 +174,10 @@ describe("init - Nextly API", () => {
     });
 
     it("should log shutdown message", async () => {
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -171,7 +189,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       await getNextly(config);
 
@@ -193,7 +211,10 @@ describe("init - Nextly API", () => {
 
   describe("Nextly instance methods", () => {
     it("should allow shutdown via instance method", async () => {
-      const config: NextlyServiceConfig = {
+      // Plan B (task 24): config is now required on getNextly. We pass a
+      // sanitized empty config plus the original mock service primitives.
+      const config = {
+        config: defineConfig({}),
         storage: {
           upload: vi.fn(),
           delete: vi.fn(),
@@ -205,7 +226,7 @@ describe("init - Nextly API", () => {
           resize: vi.fn(),
           optimize: vi.fn(),
         } as any,
-      };
+      } satisfies Parameters<typeof getNextly>[0];
 
       const nextly = await getNextly(config);
 

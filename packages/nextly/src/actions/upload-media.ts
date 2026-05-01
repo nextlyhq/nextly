@@ -72,13 +72,27 @@
 
 "use server";
 
+import { createRequire } from "node:module";
+
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
-import { revalidatePath } from "next/cache";
 
 import { container } from "../di/container";
 import { ServiceContainer } from "../services";
 import type { Media } from "../types/media";
 import { UploadMediaInputSchema } from "../types/media";
+
+// `next/cache` resolved via createRequire — see api/with-error-handler.ts
+// for the dual-resolution rationale (Node ESM vs Turbopack). Cached at
+// module scope; resolution happens on first call only.
+type RevalidatePath = (path: string) => void;
+let cachedRevalidatePath: RevalidatePath | null = null;
+function getRevalidatePath(): RevalidatePath {
+  if (cachedRevalidatePath) return cachedRevalidatePath;
+  const require = createRequire(import.meta.url);
+  const mod = require("next/cache") as { revalidatePath: RevalidatePath };
+  cachedRevalidatePath = mod.revalidatePath;
+  return cachedRevalidatePath;
+}
 
 function getServices(): ServiceContainer {
   const adapter = container.get("adapter") as DrizzleAdapter;
@@ -192,10 +206,10 @@ export async function uploadMediaAction(
     const services = getServices();
     const result = await services.media.uploadMedia(parseResult.data);
 
-    // 6. Revalidate cache on success
+    // 6. Revalidate cache via createRequire-resolved next/cache.
     if (result.success && result.data) {
       const pathToRevalidate = options.revalidatePath || "/admin/media";
-      revalidatePath(pathToRevalidate);
+      getRevalidatePath()(pathToRevalidate);
 
       return {
         success: true,
@@ -259,10 +273,10 @@ export async function deleteMediaAction(
     const services = getServices();
     const result = await services.media.deleteMedia(mediaId);
 
-    // 3. Revalidate cache on success
+    // 3. Revalidate cache via createRequire-resolved next/cache.
     if (result.success) {
       const pathToRevalidate = options?.revalidatePath || "/admin/media";
-      revalidatePath(pathToRevalidate);
+      getRevalidatePath()(pathToRevalidate);
 
       return {
         success: true,
@@ -339,10 +353,10 @@ export async function updateMediaAction(
     const services = getServices();
     const result = await services.media.updateMedia(mediaId, updates);
 
-    // 3. Revalidate cache on success
+    // 3. Revalidate cache via createRequire-resolved next/cache.
     if (result.success && result.data) {
       const pathToRevalidate = options?.revalidatePath || "/admin/media";
-      revalidatePath(pathToRevalidate);
+      getRevalidatePath()(pathToRevalidate);
 
       return {
         success: true,

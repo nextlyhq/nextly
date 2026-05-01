@@ -48,7 +48,10 @@ export default function AdminPage() {
 `;
 
   // Updated route.ts with auto-initialization
-  const routeContent = `import { createDynamicHandlers } from "@revnixhq/nextly";
+  const routeContent = `// Imported from \`@revnixhq/nextly/runtime\` so the Next.js-coupled
+// handler factory doesn't leak into Node-only code paths. See task 24
+// stage 1.
+import { createDynamicHandlers } from "@revnixhq/nextly/runtime";
 import { getOrInitializeDatabase } from "@admin/lib/db-init";
 
 // Initialize database on first request (cached after first run)

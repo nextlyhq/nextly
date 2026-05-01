@@ -24,7 +24,7 @@
 import { getService } from "../di";
 import type { SingleResult } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import { transformRichTextFields } from "../lib/field-transform";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
@@ -45,12 +45,12 @@ interface RouteContext {
 }
 
 async function getSingleEntryService(): Promise<SingleEntryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("singleEntryService");
 }
 
 async function getSingleRegistry(): Promise<SingleRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("singleRegistryService");
 }
 

@@ -434,7 +434,7 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 6: Sync Code-First Singles
   // ----------------------------------------
-  await syncCodeFirstSingles(resolvedLogger, transformedConfig);
+  await syncCodeFirstSingles(adapter, resolvedLogger, transformedConfig);
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -462,6 +462,15 @@ export async function registerServices(
     registerActivityLogHooks(hookRegistry);
     resolvedLogger.info?.("Activity log hooks registered");
   }
+
+  // Task 24 phase 3: removed boot-time `autoSeedOnBoot`. Demo seeding is
+  // now Payload-style: an auth-gated POST route in the project's app
+  // (templates/blog/src/app/admin/api/seed/route.ts) imports the seed
+  // function directly and runs it on user action. This eliminates an
+  // ordering-fragile pre-init pathway that silently failed if the
+  // cached singleton was bootstrapped before the boot-time seed
+  // attempted to run. System bootstrap (permissions table) still
+  // happens automatically — see permission-seed-service.
 
   globalForReg.__nextly_isRegistered = true;
 }
@@ -1212,6 +1221,7 @@ async function syncCodeFirstComponents(
  * at Layer 4.
  */
 async function syncCodeFirstSingles(
+  adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig
 ): Promise<void> {
@@ -1249,6 +1259,151 @@ async function syncCodeFirstSingles(
     logger.warn?.(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
     );
+    return;
+  }
+
+  // Task 23: reconcile physical single_* tables. The registry rows (in
+  // dynamic_singles) only describe what SHOULD exist; the actual storage
+  // tables (e.g. single_site_settings) need DDL too. Without this, every
+  // boot that brings up a fresh code-first project leaves singles
+  // registered-but-unbacked, and the very first read from the frontend
+  // hits "no such table: single_site_settings". Mirrors the existing
+  // reconcileSingleTables call in cli/commands/dev-server.ts so the
+  // dev-server boot path and the `nextly db:sync` CLI converge on the
+  // same physical-table contract.
+  await reconcileSingleTablesForBoot(adapter, logger, transformedConfig);
+}
+
+// Task 23: shared helper used by `syncCodeFirstSingles` to make the
+// physical `single_*` tables match `dynamic_singles`. Lives next to the
+// caller because the dev-server has its own slightly richer flavour
+// (logger.success, reconciledSlugs aggregation) — the dev-server flow
+// can converge on this helper later as part of a tidier refactor; for
+// now the duplication is intentional + minimal.
+async function reconcileSingleTablesForBoot(
+  adapter: DrizzleAdapter,
+  logger: Logger,
+  transformedConfig: NextlyServiceConfig
+): Promise<void> {
+  try {
+    const { reconcileSingleTables } = await import(
+      "../domains/singles/services/reconcile-single-tables.js"
+    );
+    const { DynamicCollectionSchemaService } = await import(
+      "../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+    );
+    const schemaService = new DynamicCollectionSchemaService();
+    const singleRegistry = container.get<SingleRegistryService>(
+      "singleRegistryService"
+    );
+
+    let createdCount = 0;
+    await reconcileSingleTables({
+      registeredSingles: async () => {
+        const records = await singleRegistry.getAllSingles();
+        return records.map(r => ({ slug: r.slug, tableName: r.tableName }));
+      },
+      existingTableNames: async () => {
+        const tables = await adapter.listTables();
+        return new Set(tables);
+      },
+      createTable: async single => {
+        // Prefer code-first config fields (source of truth) but fall back
+        // to the registry's stored fields for UI-created singles.
+        const codeFirstConfig = transformedConfig.singles?.find(
+          s => s.slug === single.slug
+        );
+        let fields: FieldDefinition[];
+        if (codeFirstConfig) {
+          fields = codeFirstConfig.fields as unknown as FieldDefinition[];
+        } else {
+          const record = await singleRegistry.getSingleBySlug(single.slug);
+          if (!record) {
+            throw new Error(
+              `Cannot reconcile "${single.slug}": registry row disappeared between list and fetch`
+            );
+          }
+          fields = record.fields as unknown as FieldDefinition[];
+        }
+
+        const migrationSQL = schemaService.generateMigrationSQL(
+          single.tableName,
+          fields,
+          { isSingle: true }
+        );
+
+        const statements = migrationSQL
+          .split("--> statement-breakpoint")
+          .map((s: string) => s.trim())
+          .filter((s: string) => s.length > 0);
+
+        for (const statement of statements) {
+          const cleanStatement = statement
+            .split("\n")
+            .filter((line: string) => !line.trim().startsWith("--"))
+            .join("\n")
+            .trim();
+          if (cleanStatement) {
+            await adapter.executeQuery(cleanStatement);
+          }
+        }
+
+        const tableExists = await adapter.tableExists(single.tableName);
+        if (tableExists) {
+          // Register the freshly-created single in the live resolver so
+          // queries in this same boot (e.g. the user's nextly.seed.ts or
+          // the homepage's first render) find the table without waiting
+          // for a restart.
+          try {
+            const dialect = adapter.getCapabilities().dialect;
+            const { generateRuntimeSchema: genRt } = await import(
+              "../domains/schema/services/runtime-schema-generator.js"
+            );
+            const { table } = genRt(single.tableName, fields, dialect);
+            const resolver = (
+              adapter as unknown as {
+                tableResolver?: {
+                  registerDynamicSchema?: (
+                    name: string,
+                    t: unknown
+                  ) => void;
+                };
+              }
+            ).tableResolver;
+            if (
+              resolver &&
+              typeof resolver.registerDynamicSchema === "function"
+            ) {
+              resolver.registerDynamicSchema(single.tableName, table);
+            }
+          } catch {
+            // Resolver registration is best-effort; the table itself is
+            // committed and the next boot will pick it up either way.
+          }
+          await singleRegistry
+            .updateMigrationStatus(single.slug, "applied")
+            .catch(() => {});
+          createdCount++;
+          logger.info?.(
+            `Created single table ${single.tableName} for ${single.slug}`
+          );
+        } else {
+          await singleRegistry
+            .updateMigrationStatus(single.slug, "failed")
+            .catch(() => {});
+          throw new Error(
+            `Reconcile ran DDL for "${single.slug}" but table "${single.tableName}" still missing`
+          );
+        }
+      },
+    });
+
+    if (createdCount > 0) {
+      logger.info?.(`Reconciled ${createdCount} missing single table(s).`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn?.(`Single-table reconcile failed: ${msg}`);
   }
 }
 

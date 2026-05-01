@@ -8,7 +8,7 @@
  * name is now reserved for the wrapper CLI (Sub-task 3) that spawns next dev
  * and handles schema change prompts. This one-shot utility handles:
  *
- * - First-time setup (`--seed` seeds permissions and super admin user)
+ * - First-time setup (permissions seeded automatically; demo content via admin UI)
  * - Config-file watching (`--watch` re-syncs on nextly.config.ts changes)
  * - Type generation (`--types` emits payload-types.ts)
  *
@@ -54,9 +54,6 @@
  * # Force auto-sync without warnings
  * nextly db:sync --force
  *
- * # Run with database seeders (fresh database setup)
- * nextly db:sync --seed
- *
  * # Custom config path
  * nextly db:sync --config ./custom/nextly.config.ts
  * ```
@@ -87,9 +84,7 @@ import {
 import { formatDuration } from "../utils/logger.js";
 
 import {
-  autoSeedOnFirstRun,
   performPermissionSeeding,
-  performSeeding,
   syncCollections,
   syncComponents,
   syncSingles,
@@ -298,33 +293,11 @@ export async function runDbSync(
     // Step 5.6: Sync user_ext table (always — handles both code and UI fields)
     await syncUserFields(configResult, adapter, options, context);
 
-    // Step 5.7: Seed permissions for collections and singles (always, idempotent)
+    // Step 5.7: Seed permissions for collections and singles (always, idempotent).
+    // After task 24 phase 3 this is the only seeding `db:sync` performs:
+    // demo content seeding moved to a Payload-style admin-triggered POST
+    // route in the project itself (src/app/admin/api/seed/route.ts).
     await performPermissionSeeding(adapter, options, context);
-
-    // Step 5.8: Auto-seed on first run if user seed file exists
-    // Detects empty database + seed file presence, runs idempotent seed.
-    // Skipped if --seed was explicitly passed (manual seeding handled below).
-    // Skipped in production for safety.
-    const collectionSlugs = configResult.config.collections.map(c => c.slug);
-    await autoSeedOnFirstRun(
-      adapter,
-      options,
-      context,
-      collectionSlugs,
-      configResult
-    );
-
-    // Step 6: Run seeders if explicitly requested via --seed flag.
-    // Runs unconditionally when seed=true after every sync step (collections,
-    // singles, components, user fields, permissions) has created its physical
-    // tables. Previously seeding lived inside syncCollections, which caused
-    // user seeds that touched singles to fail with "no such table:
-    // single_<slug>" on first run — the single's physical table had not been
-    // created yet because syncSingles ran later. Centralizing the call here
-    // guarantees the orchestration order: sync-all-schemas → seed-content.
-    if (options.seed) {
-      await performSeeding(adapter, options, context, configResult);
-    }
 
     // Step 7: Watch mode (only makes sense with collections or singles)
     if (options.watch && (collectionCount > 0 || singleCount > 0)) {
@@ -377,16 +350,14 @@ export async function runDbSync(
 // What: registers `nextly db:sync` (with `nextly sync` as a shorter alias).
 // Why: this command used to be `nextly dev`. Task 11 renamed it so the
 // `nextly dev` name can be reused in Sub-task 3 for the new wrapper CLI
-// that spawns `next dev` and owns schema change prompts. Existing users
-// running `pnpm exec nextly dev --seed` must now use
-// `pnpm exec nextly db:sync --seed` (see CHANGELOG for migration notes).
+// that spawns `next dev` and owns schema change prompts. Task 24 phase 3
+// also dropped the `--seed` flag — demo seeding is now Payload-style and
+// runs from the project's auth-gated POST route.
 export function registerDbSyncCommand(program: Command): void {
   program
     .command("db:sync")
     .alias("sync")
-    .description(
-      "Sync database schema with nextly.config.ts. Use --seed for first-time setup."
-    )
+    .description("Sync database schema with nextly.config.ts.")
     .option("-w, --watch", "Watch for config file changes", false)
     .option("--types", "Generate TypeScript types (payload-types.ts)", false)
     .option(
@@ -399,11 +370,6 @@ export function registerDbSyncCommand(program: Command): void {
       "Disable auto-sync of schema changes (use migrations instead)"
     )
     .option("-f, --force", "Force auto-sync without data loss warnings", false)
-    .option(
-      "-s, --seed",
-      "Run database seeders (idempotent - skips if already seeded)",
-      false
-    )
     .option(
       "--remove-orphaned",
       "Remove code-first collections/singles/components that no longer exist in config",

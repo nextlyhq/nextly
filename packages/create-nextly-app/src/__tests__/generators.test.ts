@@ -104,7 +104,7 @@ describe("generateRoutes", () => {
     const [path, content] = mockWriteFile.mock.calls[0];
     expect(path).toContain("src/app/admin/api/[[...params]]/route.ts");
     expect(content).toContain(
-      'import { createDynamicHandlers } from "@revnixhq/nextly"'
+      'import { createDynamicHandlers } from "@revnixhq/nextly/runtime"'
     );
     expect(content).toContain("export const GET = handlers.GET");
     expect(content).toContain("export const POST = handlers.POST");

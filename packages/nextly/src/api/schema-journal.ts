@@ -26,7 +26,7 @@
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { readJournal } from "../domains/schema/journal/read-journal.js";
 import { NextlyError } from "../errors/nextly-error";
 import { isSuperAdmin } from "../services/lib/permissions";
@@ -49,7 +49,7 @@ interface AdapterLike {
 }
 
 async function getAdapter(): Promise<AdapterLike> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<AdapterLike>("adapter");
 }
 

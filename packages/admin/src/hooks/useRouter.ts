@@ -52,31 +52,42 @@ export function useRouter() {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const originalReplaceState = window.history.replaceState;
 
+    // Defer the locationchange dispatch one microtask so the consequent
+    // setState in `handleLocationChange` doesn't fire inside a caller's
+    // `useInsertionEffect`. Style-injection libraries (Sonner, Radix,
+    // CSS-in-JS) call replaceState during their insertion phase; React
+    // forbids state updates there. The URL is already updated by the
+    // time the microtask runs, so route resolution still sees the
+    // correct pathname. See task 24 phase 1.
     window.history.pushState = function (
       data: unknown,
       unused: string,
-      url?: string | URL | null  
+      url?: string | URL | null
     ) {
       const result = originalPushState.apply(this, [
         data as Parameters<History["pushState"]>[0],
         unused,
         url,
       ]);
-      window.dispatchEvent(new Event("locationchange"));
+      queueMicrotask(() =>
+        window.dispatchEvent(new Event("locationchange"))
+      );
       return result;
     };
 
     window.history.replaceState = function (
       data: unknown,
       unused: string,
-      url?: string | URL | null  
+      url?: string | URL | null
     ) {
       const result = originalReplaceState.apply(this, [
         data as Parameters<History["replaceState"]>[0],
         unused,
         url,
       ]);
-      window.dispatchEvent(new Event("locationchange"));
+      queueMicrotask(() =>
+        window.dispatchEvent(new Event("locationchange"))
+      );
       return result;
     };
 

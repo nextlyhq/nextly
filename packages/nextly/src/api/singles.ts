@@ -23,7 +23,7 @@
  */
 
 import { getService } from "../di";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
@@ -31,7 +31,7 @@ import { createPaginatedResponse } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getSingleRegistry(): Promise<SingleRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("singleRegistryService");
 }
 

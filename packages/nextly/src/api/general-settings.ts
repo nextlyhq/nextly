@@ -24,7 +24,7 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 
@@ -33,7 +33,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getGeneralSettingsService(): Promise<GeneralSettingsService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<GeneralSettingsService>("generalSettingsService");
 }
 

@@ -28,7 +28,7 @@ import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
@@ -42,7 +42,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getCollectionRegistry(): Promise<CollectionRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("collectionRegistryService");
 }
 

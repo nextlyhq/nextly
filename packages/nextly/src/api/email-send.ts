@@ -29,7 +29,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
 
 import { createSuccessResponse } from "./create-success-response";
@@ -37,7 +37,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getEmailService(): Promise<EmailService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<EmailService>("emailService");
 }
 

@@ -29,7 +29,7 @@ import type { FieldConfig } from "@nextly/collections";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
@@ -47,12 +47,12 @@ interface RouteContext {
 }
 
 async function getSingleRegistry(): Promise<SingleRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("singleRegistryService");
 }
 
 async function getComponentRegistry(): Promise<ComponentRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("componentRegistryService");
 }
 

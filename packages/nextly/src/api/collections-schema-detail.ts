@@ -30,7 +30,7 @@ import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import { getNextlyLogger } from "../observability/logger";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
@@ -50,12 +50,12 @@ interface RouteContext {
 }
 
 async function getCollectionRegistry(): Promise<CollectionRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("collectionRegistryService");
 }
 
 async function getComponentRegistry(): Promise<ComponentRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("componentRegistryService");
 }
 

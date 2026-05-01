@@ -11,8 +11,6 @@
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import { seedAll, type SeederResult } from "../../database/seeders/index.js";
-import type { FieldDefinition } from "../../schemas/dynamic-collections.js";
 import { PermissionSeedService } from "../../services/auth/permission-seed-service.js";
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service.js";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service.js";
@@ -38,7 +36,6 @@ import { formatCount } from "../utils/logger.js";
 import type { ResolvedDevOptions } from "./db-sync.js";
 import {
   displayComponentsSyncResults,
-  displaySeedingResults,
   displaySinglesSyncResults,
   displaySyncResults,
 } from "./dev-display.js";
@@ -604,7 +601,7 @@ export async function performPermissionSeeding(
       errorMsg.includes("doesn't exist")
     ) {
       logger.debug(
-        "Skipping permission seeding (tables may not exist yet — run with --seed first)"
+        "Skipping permission seeding (tables may not exist yet)"
       );
     } else {
       logger.warn(`Permission seeding failed: ${errorMsg}`);
@@ -612,285 +609,12 @@ export async function performPermissionSeeding(
   }
 }
 
-// ============================================================================
-// Database Seeding
-// ============================================================================
-
-/**
- * Run database seeders
- *
- * Seeds permissions and super admin user for fresh databases.
- */
-export async function performSeeding(
-  adapter: CLIDatabaseAdapter,
-  options: ResolvedDevOptions,
-  context: CommandContext,
-  configResult: LoadConfigResult
-): Promise<void> {
-  const { logger } = context;
-
-  logger.newline();
-  logger.info("Running database seeders...");
-
-  // Pre-initialize Nextly with the loaded config so the user's seed script,
-  // which calls `getNextly()` with no args, receives a cached instance whose
-  // storage plugins (local disk / S3 / Vercel Blob) are already registered.
-  // Without this, `nextly.media.upload()` inside a user seed fails because
-  // the media service was initialized with no adapters.
-  try {
-    const { getNextly } = await import("../../init.js");
-    await getNextly({
-      config: configResult.config,
-      adapter: adapter as unknown as DrizzleAdapter,
-    });
-    logger.debug("Nextly pre-initialized for user seed script");
-  } catch (err) {
-    logger.error(
-      `Failed to pre-initialize Nextly for seed: ${err instanceof Error ? err.message : String(err)}`
-    );
-    throw err;
-  }
-
-  // Register services in DI container so user seed files can access them
-  // via `container.get("collectionRegistryService")`.
-  const { container } = await import("../../di/index.js");
-  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-  const serviceLogger: ServiceLogger = {
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-  };
-  if (!container.has("collectionRegistryService")) {
-    container.register("collectionRegistryService", () => {
-      return new CollectionRegistryService(drizzleAdapter, serviceLogger);
-    });
-  }
-  if (!container.has("singleRegistryService")) {
-    const { SingleRegistryService: SRSReg } = await import(
-      "../../services/singles/single-registry-service.js"
-    );
-    container.register("singleRegistryService", () => {
-      return new SRSReg(drizzleAdapter, serviceLogger);
-    });
-  }
-
-  let result: SeederResult;
-  try {
-    result = await seedAll(adapter as unknown as DrizzleAdapter, {
-      silent: true, // We'll handle logging ourselves
-      skipSuperAdmin: true,
-    });
-  } catch (error) {
-    logger.error(
-      `Seeding failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-    throw error;
-  }
-
-  // Push schemas for any collections/singles created by user seed file
-  // (they're registered with migration_status="pending" and need table creation)
-  try {
-    const { DynamicCollectionSchemaService } = await import(
-      "../../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
-    );
-    const schemaService = new DynamicCollectionSchemaService();
-
-    const collectionRegistry = new CollectionRegistryService(
-      drizzleAdapter,
-      serviceLogger
-    );
-    const pendingCollections = await collectionRegistry.listCollections({
-      source: "ui",
-      migrationStatus: "pending",
-    });
-
-    for (const col of pendingCollections.data) {
-      try {
-        const fields = Array.isArray(col.fields) ? col.fields : [];
-        const migrationSQL = schemaService.generateMigrationSQL(
-          col.tableName,
-          fields as unknown as FieldDefinition[],
-          { isSingle: false }
-        );
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-        for (const stmt of statements) {
-          const clean = stmt
-            .split("\n")
-            .filter((l: string) => !l.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-          if (clean) await drizzleAdapter.executeQuery(clean);
-        }
-        await collectionRegistry.updateMigrationStatus(col.slug, "applied");
-        logger.debug(`Schema pushed for collection: ${col.slug}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("already exists")) {
-          await collectionRegistry.updateMigrationStatus(col.slug, "applied");
-        } else {
-          logger.debug(`Schema push failed for ${col.slug}: ${msg}`);
-        }
-      }
-    }
-
-    const { SingleRegistryService: SRS } = await import(
-      "../../services/singles/single-registry-service.js"
-    );
-    const singleRegistry = new SRS(drizzleAdapter, serviceLogger);
-    const pendingSingles = await singleRegistry.listSingles({
-      source: "ui",
-      migrationStatus: "pending",
-    });
-
-    for (const single of pendingSingles.data) {
-      try {
-        const fields = Array.isArray(single.fields) ? single.fields : [];
-        const migrationSQL = schemaService.generateMigrationSQL(
-          single.tableName,
-          fields as unknown as FieldDefinition[],
-          { isSingle: true }
-        );
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-        for (const stmt of statements) {
-          const clean = stmt
-            .split("\n")
-            .filter((l: string) => !l.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-          if (clean) await drizzleAdapter.executeQuery(clean);
-        }
-        await singleRegistry.updateMigrationStatus(single.slug, "applied");
-        logger.debug(`Schema pushed for single: ${single.slug}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("already exists")) {
-          await singleRegistry.updateMigrationStatus(single.slug, "applied");
-        } else {
-          logger.debug(`Schema push failed for ${single.slug}: ${msg}`);
-        }
-      }
-    }
-  } catch (err) {
-    // Non-fatal — collections/singles can be pushed manually via admin UI
-    logger.debug(
-      `Post-seed schema push: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-
-  // Display seeding results
-  displaySeedingResults(result, options, context);
-}
-
-// ============================================================================
-// Auto-Seed on First Run
-// ============================================================================
-
-/**
- * Detect first run and automatically execute user seed file if present.
- *
- * Auto-seed triggers when ALL of these conditions are met:
- * 1. A user seed file exists (nextly.seed.ts/js/mjs)
- * 2. The --seed flag was NOT explicitly passed (manual seed handles itself)
- * 3. The database has no content entries in any collection
- * 4. The environment is not production (safety check)
- *
- * This follows the same pattern as Strapi's bootstrap auto-seed and Payload's
- * onInit hooks. The seed script itself is expected to be idempotent, but we
- * add the empty-database check as an extra safety layer.
- */
-export async function autoSeedOnFirstRun(
-  adapter: CLIDatabaseAdapter,
-  options: ResolvedDevOptions,
-  context: CommandContext,
-  collectionSlugs: string[],
-  configResult: LoadConfigResult
-): Promise<void> {
-  const { logger } = context;
-
-  // Skip if --seed was explicitly used (manual seeding already happened)
-  if (options.seed) return;
-
-  // Safety: never auto-seed in production
-  if (process.env.NODE_ENV === "production") return;
-
-  // Check if a user seed file exists. Lazy import via namespace to avoid
-  // the `unbound-method` lint rule that fires when methods are destructured
-  // from a dynamically-imported module.
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const cwd = options.cwd || process.cwd();
-  const seedCandidates = [
-    "nextly.seed.ts",
-    "nextly.seed.js",
-    "nextly.seed.mjs",
-  ];
-  const hasSeedFile = seedCandidates.some(name =>
-    fs.existsSync(path.join(cwd, name))
-  );
-
-  if (!hasSeedFile) return;
-
-  // Check if any user collection has entries (skip if data already exists)
-  // Only check user-defined collections, not system tables
-  if (collectionSlugs.length > 0) {
-    const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-    const serviceLogger: ServiceLogger = {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
-    };
-    const registryService = new CollectionRegistryService(
-      drizzleAdapter,
-      serviceLogger
-    );
-
-    let hasExistingData = false;
-
-    // Look up collection table names from the registry once, then check
-    // each table for rows using the adapter's Drizzle-based select().
-    const collections = await registryService.listCollections({
-      source: undefined,
-    });
-
-    for (const slug of collectionSlugs) {
-      try {
-        const collection = collections.data.find(c => c.slug === slug);
-        if (!collection?.tableName) continue;
-
-        // Use adapter.select() which goes through Drizzle's query builder
-        // (not raw SQL) when a table resolver is set.
-        const rows = await drizzleAdapter.select(collection.tableName, {
-          limit: 1,
-        });
-        if (Array.isArray(rows) && rows.length > 0) {
-          hasExistingData = true;
-          break;
-        }
-      } catch {
-        // Table may not exist yet or query may fail - continue checking
-        continue;
-      }
-    }
-
-    if (hasExistingData) {
-      logger.debug("Auto-seed skipped: database already has content entries");
-      return;
-    }
-  }
-
-  // All conditions met - run auto-seed
-  logger.newline();
-  logger.info("First run detected - seeding demo content...");
-  await performSeeding(adapter, options, context, configResult);
-}
+// Task 24 phase 3: removed `performSeeding` + `autoSeedOnFirstRun` from the
+// CLI. Demo content seeding is now Payload-style: an auth-gated POST route
+// in the user's project at `src/app/admin/api/seed/route.ts` invokes the
+// seed function (under `src/endpoints/seed/`) on user action from the
+// admin UI. Eliminates the boot-/CLI-time esbuild + dynamic-import dance
+// and the silent-failure mode it introduced.
 
 // ============================================================================
 // Utilities

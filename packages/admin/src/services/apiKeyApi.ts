@@ -4,11 +4,11 @@
  * API client for managing API keys. Supports listing, creating, updating,
  * and revoking keys.
  *
- * Note: The API key backend returns single-wrapped responses
- * (`{ data: ... }` / `{ doc, key }` / `{ success }`) rather than the
- * double-wrapped shape (`{ data: { data: ... } }`) expected by
- * `enhancedFetcher`. This service uses a raw internal fetch helper so
- * every response shape is read precisely as the backend sends it.
+ * The internal `apiKeyFetch` helper returns the parsed JSON unchanged so each
+ * endpoint can pick the exact field shape it emits (`{ data, meta? }` for
+ * paginated lists, `{ doc, key }` for create, etc.). This will be folded into
+ * the shared fetcher once the full Payload-style envelope migration lands
+ * (see task 24 phase 4).
  *
  * @example
  * ```ts

@@ -159,9 +159,13 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
  * ```
  */
 export function useCurrentUserPermissions() {
+  // Wire shape (post task-24 phase 4): `{ data: <UserPermissionsResponse> }`.
+  // The fetcher peels the single `data` layer, so `data` here IS the
+  // permissions payload directly.
   const { data, isLoading, error } = useQuery<UserPermissionsResponse>({
     queryKey: ["currentUserPermissions"],
-    queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),
+    queryFn: () =>
+      protectedApi.get<UserPermissionsResponse>("/me/permissions"),
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,

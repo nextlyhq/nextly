@@ -53,6 +53,12 @@ export {
   type ErrorResponse,
 } from "./guards/require-permission.js";
 export { authenticateApiKey } from "./guards/require-api-key.js";
+
+// Re-export the canonical "is the user a super-admin" check so user-facing
+// route handlers (e.g. the template's seed POST route) can gate destructive
+// actions without rolling their own permission lookup. The check goes
+// through the same in-memory cache the rest of the framework uses.
+export { isSuperAdmin } from "../services/lib/permissions.js";
 export { checkCollectionAccess } from "./guards/require-collection-access.js";
 
 export {

@@ -41,6 +41,7 @@ import {
 } from "./di/register";
 import { getNextly as getDirectAPI } from "./direct-api/nextly";
 import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
+import { NextlyError } from "./errors/nextly-error";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
@@ -101,69 +102,48 @@ const globalForInit = globalThis as unknown as {
 /**
  * Get or initialize the Nextly instance.
  *
- * This function is cached - subsequent calls return the same instance.
- * This is the recommended way to access Nextly in your application.
+ * Cached: subsequent calls return the same instance. The cache survives
+ * Next.js HMR via `globalThis`.
  *
- * **Configuration Loading:**
- * If no config is provided, or if storage plugins are not specified,
- * Nextly will automatically load `nextly.config.ts` from your project root
- * and use the storage plugins defined there.
- *
- * **Environment Variables Used:**
- * - `DB_DIALECT`: Database dialect ("postgresql" | "mysql" | "sqlite")
- * - `DATABASE_URL`: Database connection string
- *
- * **Behavior:**
- * - First call: Initializes services, connects to database, logs capabilities
- * - Subsequent calls: Returns cached instance immediately (no overhead)
- *
- * @param options - Optional configuration for Nextly services. If not provided,
- *                 configuration will be loaded from nextly.config.ts
- * @returns Nextly instance with access to all services
+ * `config` is REQUIRED on every call (Task 24 phase 2). The cache check
+ * happens after validation, so even cached lookups must pass config —
+ * this matches Payload's `getPayload({ config })` contract and keeps
+ * the call site self-documenting. Internal handlers that just need the
+ * cached singleton (post-init) should use `getCachedNextly()` instead.
  *
  * @example
  * ```typescript
+ * // Recommended — using the @nextly-config path alias
  * import { getNextly } from '@revnixhq/nextly';
+ * import config from '@nextly-config';
  *
- * // Simplest usage - config loaded from nextly.config.ts
- * export async function GET(req: Request) {
- *   const nextly = await getNextly();
- *   const posts = await nextly.collections.find('posts', {}, context);
- *   return Response.json({ posts });
+ * export async function GET() {
+ *   const nextly = await getNextly({ config });
+ *   const posts = await nextly.find({ collection: 'posts' });
+ *   return Response.json(posts);
  * }
  * ```
- *
- * @example
- * ```typescript
- * // With explicit config (overrides nextly.config.ts)
- * import { getNextly } from '@revnixhq/nextly';
- * import { s3Storage } from '@revnixhq/storage-s3';
- *
- * const nextly = await getNextly({
- *   storagePlugins: [
- *     s3Storage({
- *       bucket: process.env.S3_BUCKET!,
- *       region: process.env.AWS_REGION!,
- *       collections: { media: true }
- *     })
- *   ]
- * });
- * ```
- *
- * @example
- * ```typescript
- * // With custom adapter
- * import { createAdapter, getNextly } from '@revnixhq/nextly';
- *
- * const adapter = await createAdapter({
- *   type: 'postgresql',
- *   url: 'postgres://localhost/mydb'
- * });
- *
- * const nextly = await getNextly({ adapter });
- * ```
  */
-export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
+export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
+  // Plan B contract: config is required on every call. We surface this
+  // through NextlyError so it flows through the unified error system
+  // (Task 21) and presents a stable code (`CONFIGURATION_ERROR`) plus
+  // structured log context for operators. The publicMessage is kept
+  // generic per spec §13.8; the precise call-site fix lives in the
+  // logMessage so it shows up in the dev console without leaking to
+  // wire responses if this surfaces inside withErrorHandler.
+  if (!options?.config) {
+    throw new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      statusCode: 500,
+      publicMessage: "Server configuration error.",
+      logMessage:
+        "getNextly() requires a `config` parameter. Import your config " +
+        "and pass it: `getNextly({ config })`. If you are inside a " +
+        "Nextly internal handler that just needs the cached singleton, " +
+        "use `getCachedNextly()` instead.",
+    });
+  }
   // Fast path: return already-initialised instance immediately.
   if (globalForInit.__nextly_cachedInstance) {
     // F1 PR 2: drain HMR reload flag before returning cached instance.
@@ -345,6 +325,97 @@ export async function getNextly(options?: GetNextlyOptions): Promise<Nextly> {
   globalForInit.__nextly_initPromise = initPromise;
 
   return initPromise;
+}
+
+/**
+ * Return the already-initialised Nextly instance from the singleton cache.
+ *
+ * Use this inside Nextly's own internal API handlers (anywhere under
+ * `packages/nextly/src/api/*`) where the user-provided config is not in
+ * scope. Throws a clear error if the singleton has not been initialised
+ * yet — the typical fix is to ensure the project ships an
+ * `instrumentation.ts` that calls `createRegister(config)` so init runs
+ * once per worker before the first request.
+ *
+ * Do NOT use this in user code. User code should always call
+ * `getNextly({ config })` directly.
+ */
+export async function getCachedNextly(): Promise<Nextly> {
+  if (globalForInit.__nextly_cachedInstance) {
+    return globalForInit.__nextly_cachedInstance;
+  }
+  // Concurrent first-call: another caller is mid-init; share their Promise.
+  if (globalForInit.__nextly_initPromise) {
+    return globalForInit.__nextly_initPromise;
+  }
+
+  // Fallback path: services may have been registered via
+  // `registerServices()` directly (e.g. from `createDynamicHandlers`'s
+  // `ensureServicesInitialized` in routeHandler.ts) without ever
+  // calling the public `getNextly({ config })` factory. In that case
+  // the DI container has services but the public Nextly singleton was
+  // never built. Build it now from whatever config is reachable so
+  // internal API handlers that only need `getService(...)` keep
+  // working. This means BOTH paths converge on the same cached
+  // Nextly instance, so a later `getNextly({ config })` call from
+  // user code returns the same singleton.
+  if (isServicesRegistered()) {
+    const directAPI = getDirectAPI();
+    const instance: Nextly = {
+      find: directAPI.find.bind(directAPI),
+      findByID: directAPI.findByID.bind(directAPI),
+      create: directAPI.create.bind(directAPI),
+      update: directAPI.update.bind(directAPI),
+      delete: directAPI.delete.bind(directAPI),
+      count: directAPI.count.bind(directAPI),
+      bulkDelete: directAPI.bulkDelete.bind(directAPI),
+      duplicate: directAPI.duplicate.bind(directAPI),
+      findGlobal: directAPI.findGlobal.bind(directAPI),
+      updateGlobal: directAPI.updateGlobal.bind(directAPI),
+      findGlobals: directAPI.findGlobals.bind(directAPI),
+      login: directAPI.login.bind(directAPI),
+      logout: directAPI.logout.bind(directAPI),
+      me: directAPI.me.bind(directAPI),
+      updateMe: directAPI.updateMe.bind(directAPI),
+      register: directAPI.register.bind(directAPI),
+      changePassword: directAPI.changePassword.bind(directAPI),
+      forgotPassword: directAPI.forgotPassword.bind(directAPI),
+      resetPassword: directAPI.resetPassword.bind(directAPI),
+      verifyEmail: directAPI.verifyEmail.bind(directAPI),
+      users: directAPI.users,
+      media: directAPI.media,
+      forms: directAPI.forms,
+      emailProviders: directAPI.emailProviders,
+      emailTemplates: directAPI.emailTemplates,
+      userFields: directAPI.userFields,
+      email: directAPI.email,
+      roles: directAPI.roles,
+      permissions: directAPI.permissions,
+      access: directAPI.access,
+      collections: getService("collectionService"),
+      userService: getService("userService"),
+      mediaService: getService("mediaService"),
+      storage: getService("mediaStorage"),
+      adapter: getService("adapter"),
+      shutdown: async () => {
+        await shutdownServices();
+        globalForInit.__nextly_cachedInstance = null;
+      },
+    };
+    globalForInit.__nextly_cachedInstance = instance;
+    return instance;
+  }
+
+  throw new NextlyError({
+    code: "CONFIGURATION_ERROR",
+    statusCode: 500,
+    publicMessage: "Server configuration error.",
+    logMessage:
+      "getCachedNextly() called before initialization. Ensure " +
+      "`getNextly({ config })` (or `createRegister(config)` from " +
+      "instrumentation.ts) has run at least once before any internal " +
+      "handler executes. See https://nextlyhq.com/docs/getting-started.",
+  });
 }
 
 /**
