@@ -269,7 +269,7 @@ Tasks within a lane are roughly serial; tasks across lanes are parallel-safe.
 - **Files:** [packages/adapter-postgres/src/index.ts:774](packages/adapter-postgres/src/index.ts#L774)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<short-sha-pending>`)
+- **Status:** done (`10e4d90`)
 
 **Fix:** Remove the silent `ssl = { rejectUnauthorized: false }` fallback. When provider auto-detection requires SSL but no user config exists, default to `{ rejectUnauthorized: true }`. Keep an explicit opt-out path (`ssl: { rejectUnauthorized: false }` in user config) but emit a `console.warn` when it's used.
 
