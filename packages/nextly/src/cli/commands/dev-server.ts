@@ -142,7 +142,7 @@ export async function ensureCoreTables(
       // Also create system tables (dynamic_collections, etc.)
       try {
         const { SystemTableService } = await import(
-          "../../services/system/system-table-service.js"
+          "../../services/system/system-table-service"
         );
         const serviceLogger: ServiceLogger = {
           info: (m: string) => logger.debug(m),
@@ -289,7 +289,7 @@ export async function performAutoSync(
   // directly to nextly_migration_journal once that table exists
   // (created earlier by ensureCoreTables).
   const { DrizzleMigrationJournal } = await import(
-    "../../domains/schema/journal/migration-journal.js"
+    "../../domains/schema/journal/migration-journal"
   );
   const cliMigrationJournal = new DrizzleMigrationJournal({
     db,
@@ -478,7 +478,7 @@ export async function performSinglesAutoSync(
 
   // Import the schema service for generating migration SQL
   const { DynamicCollectionSchemaService } = await import(
-    "../../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+    "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
   const schemaService = new DynamicCollectionSchemaService();
 
@@ -660,7 +660,7 @@ export async function performSinglesReconcile(
   // Load the schema service lazily so the import cost is paid only when
   // we have work to do.
   const { DynamicCollectionSchemaService } = await import(
-    "../../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+    "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
   const schemaService = new DynamicCollectionSchemaService();
 
@@ -775,7 +775,7 @@ export async function performComponentsAutoSync(
 
   // Import the component schema service for generating migration SQL
   const { ComponentSchemaService } = await import(
-    "../../services/components/component-schema-service.js"
+    "../../services/components/component-schema-service"
   );
   const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
     .dialect;

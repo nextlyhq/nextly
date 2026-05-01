@@ -216,7 +216,7 @@ export class CollectionMetadataService extends BaseService {
   ): Promise<void> {
     try {
       const { generateRuntimeSchema } = await import(
-        "../../../services/schema/runtime-schema-generator.js"
+        "../../../services/schema/runtime-schema-generator"
       );
       const dialect = this.adapter.getCapabilities().dialect;
       const { table } = generateRuntimeSchema(tableName, fields, dialect);

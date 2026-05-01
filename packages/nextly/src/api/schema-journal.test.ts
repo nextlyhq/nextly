@@ -32,7 +32,7 @@ vi.mock("../services/lib/permissions", () => ({
   isSuperAdmin: vi.fn(),
 }));
 
-vi.mock("../domains/schema/journal/read-journal.js", () => ({
+vi.mock("../domains/schema/journal/read-journal", () => ({
   readJournal: vi.fn(),
 }));
 

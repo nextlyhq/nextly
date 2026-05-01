@@ -345,7 +345,7 @@ export async function registerServices(
   try {
     const dialect = adapter.getCapabilities().dialect;
     const { DrizzleMigrationJournal } = await import(
-      "../domains/schema/journal/migration-journal.js"
+      "../domains/schema/journal/migration-journal"
     );
     const journal = new DrizzleMigrationJournal({
       db: adapter.getDrizzle(),
@@ -590,7 +590,7 @@ async function initializeSchemaRegistry(
       "dynamic_collections",
       async (tableName, fields) => {
         const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator.js"
+          "../domains/schema/services/runtime-schema-generator"
         );
         const { table } = generateRuntimeSchema(
           tableName,
@@ -607,7 +607,7 @@ async function initializeSchemaRegistry(
       "dynamic_singles",
       async (tableName, fields) => {
         const { generateRuntimeSchema } = await import(
-          "../domains/schema/services/runtime-schema-generator.js"
+          "../domains/schema/services/runtime-schema-generator"
         );
         const { table } = generateRuntimeSchema(
           tableName,
@@ -624,7 +624,7 @@ async function initializeSchemaRegistry(
       "dynamic_components",
       async (tableName, fields) => {
         const { ComponentSchemaService } = await import(
-          "../services/components/component-schema-service.js"
+          "../services/components/component-schema-service"
         );
         const compSchemaService = new ComponentSchemaService(dialect);
         const runtimeTable = compSchemaService.generateRuntimeSchema(
@@ -678,7 +678,7 @@ async function registerConfigTablesInResolver(
         ? baseTableName
         : `dc_${baseTableName}`;
       const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator.js"
+        "../domains/schema/services/runtime-schema-generator"
       );
       const { table } = generateRuntimeSchema(
         tableName,
@@ -697,7 +697,7 @@ async function registerConfigTablesInResolver(
   // Routes through the canonical resolver helper added in Task 17 Sub-1
   // so every code path agrees on the physical table name.
   const { resolveSingleTableName } = await import(
-    "../domains/singles/services/resolve-single-table-name.js"
+    "../domains/singles/services/resolve-single-table-name"
   );
   for (const single of config.singles ?? []) {
     try {
@@ -707,7 +707,7 @@ async function registerConfigTablesInResolver(
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
       const tableName = resolveSingleTableName({ slug, dbName });
       const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator.js"
+        "../domains/schema/services/runtime-schema-generator"
       );
       const { table } = generateRuntimeSchema(
         tableName,
@@ -907,10 +907,10 @@ async function syncCodeFirstCollections(
   //   entry points (those have a TTY and accept prompts).
   try {
     const { applyDesiredSchema } = await import(
-      "../domains/schema/pipeline/index.js"
+      "../domains/schema/pipeline/index"
     );
     const { generateRuntimeSchema } = await import(
-      "../domains/schema/services/runtime-schema-generator.js"
+      "../domains/schema/services/runtime-schema-generator"
     );
     type DesiredCollection =
       import("../domains/schema/pipeline/types").DesiredCollection;
@@ -1120,7 +1120,7 @@ async function syncCodeFirstComponents(
 
   try {
     const { ComponentSchemaService: CompSchemaService } = await import(
-      "../services/components/component-schema-service.js"
+      "../services/components/component-schema-service"
     );
     const dialect = adapter.getCapabilities().dialect;
     const compSchemaService = new CompSchemaService(dialect);
@@ -1287,10 +1287,10 @@ async function reconcileSingleTablesForBoot(
 ): Promise<void> {
   try {
     const { reconcileSingleTables } = await import(
-      "../domains/singles/services/reconcile-single-tables.js"
+      "../domains/singles/services/reconcile-single-tables"
     );
     const { DynamicCollectionSchemaService } = await import(
-      "../domains/dynamic-collections/services/dynamic-collection-schema-service.js"
+      "../domains/dynamic-collections/services/dynamic-collection-schema-service"
     );
     const schemaService = new DynamicCollectionSchemaService();
     const singleRegistry = container.get<SingleRegistryService>(
@@ -1357,7 +1357,7 @@ async function reconcileSingleTablesForBoot(
           try {
             const dialect = adapter.getCapabilities().dialect;
             const { generateRuntimeSchema: genRt } = await import(
-              "../domains/schema/services/runtime-schema-generator.js"
+              "../domains/schema/services/runtime-schema-generator"
             );
             const { table } = genRt(single.tableName, fields, dialect);
             const resolver = (

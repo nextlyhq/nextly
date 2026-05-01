@@ -142,7 +142,7 @@ async function resolveDeps(
     return injected as RunDriftCheckDeps;
   }
   const { previewDesiredSchema } = await import(
-    "../domains/schema/pipeline/preview.js"
+    "../domains/schema/pipeline/preview"
   );
   return {
     previewDesiredSchema:

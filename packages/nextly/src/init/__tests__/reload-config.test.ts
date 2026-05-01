@@ -33,7 +33,7 @@ const {
   errorSpy: vi.fn(),
 }));
 
-vi.mock("../../cli/utils/config-loader.js", () => ({
+vi.mock("../../cli/utils/config-loader", () => ({
   loadConfig: loadConfigSpy,
   clearConfigCache: clearConfigCacheSpy,
 }));
@@ -41,7 +41,7 @@ vi.mock("../../cli/utils/config-loader.js", () => ({
 // Mock PushSchemaPipeline. The constructor records the deps object so
 // tests can assert wiring (e.g., that the injected dispatcher actually
 // arrives). apply() routes to its own spy.
-vi.mock("../../domains/schema/pipeline/pushschema-pipeline.js", () => ({
+vi.mock("../../domains/schema/pipeline/pushschema-pipeline", () => ({
   PushSchemaPipeline: class {
     constructor(deps: unknown) {
       pipelineCtorSpy(deps);
@@ -54,7 +54,7 @@ vi.mock("../../domains/schema/pipeline/pushschema-pipeline.js", () => ({
 
 // Mock the executor — constructor only needed (no method calls in this
 // test path, since the pipeline mock above swallows the apply call).
-vi.mock("../../domains/schema/services/drizzle-statement-executor.js", () => ({
+vi.mock("../../domains/schema/services/drizzle-statement-executor", () => ({
   DrizzleStatementExecutor: class {
     executeStatements() {
       return Promise.resolve();
@@ -64,7 +64,7 @@ vi.mock("../../domains/schema/services/drizzle-statement-executor.js", () => ({
 
 // Pin live-DB introspection. Real buildDesiredTableFromFields and
 // diffSnapshots run on top of whatever snapshot the test sets here.
-vi.mock("../../domains/schema/pipeline/diff/introspect-live.js", () => ({
+vi.mock("../../domains/schema/pipeline/diff/introspect-live", () => ({
   introspectLiveSnapshot: introspectSpy,
 }));
 

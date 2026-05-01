@@ -119,7 +119,7 @@ export async function reloadNextlyConfig(opts?: {
   let newConfig: { collections?: CollectionDef[] } | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
-      "../cli/utils/config-loader.js"
+      "../cli/utils/config-loader"
     );
     clearConfigCache();
     const result = await loadConfig();
