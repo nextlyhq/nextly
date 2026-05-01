@@ -147,7 +147,9 @@ describe("generatePackageJson", () => {
   it("should include Next.js scripts", async () => {
     const result = JSON.parse(await generatePackageJson("test", pgDatabase));
     expect(result.scripts.dev).toBe("next dev --turbopack");
-    expect(result.scripts.build).toBe("nextly migrate && next build");
+    expect(result.scripts.build).toBe(
+      "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)"
+    );
     expect(result.scripts.start).toBe("next start");
     expect(result.scripts.lint).toBe("next lint");
   });
