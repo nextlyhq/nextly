@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, gt, lt, sql } from "drizzle-orm";
 
 import { getAuthLogger } from "@nextly/lib/logger";
 
@@ -220,7 +220,14 @@ export class PermissionCacheService extends BaseService {
         .where(
           and(
             eq(userPermissionCache.id, cacheKey),
-            sql`${userPermissionCache.expiresAt} > ${now}`
+            // gt() lets Drizzle convert `now` (Date) to the column's typed
+            // representation (epoch seconds for SQLite mode:"timestamp",
+            // native timestamp for PG/MySQL). Raw `sql\`${col} > ${now}\``
+            // bypassed that conversion and SQLite drivers refused to bind
+            // a Date object — `TypeError: SQLite3 can only bind numbers,
+            // strings, bigints, buffers, and null` on every authed request.
+            // Mirrors the same-file `cleanupExpired` pattern at line 481.
+            gt(userPermissionCache.expiresAt, now)
           )
         )
         .limit(1);
