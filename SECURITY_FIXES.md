@@ -10,11 +10,11 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 ## Status overview
 
-> **Last updated:** 2026-04-28 — keep this block in sync when any task status changes.
+> **Last updated:** 2026-05-01 — keep this block in sync when any task status changes.
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 0    | 0         | 0       | 0       | 14      |
+| 1 — Pre-beta           | 1    | 0         | 0       | 0       | 13      |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -269,7 +269,7 @@ Tasks within a lane are roughly serial; tasks across lanes are parallel-safe.
 - **Files:** [packages/adapter-postgres/src/index.ts:774](packages/adapter-postgres/src/index.ts#L774)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<short-sha-pending>`)
 
 **Fix:** Remove the silent `ssl = { rejectUnauthorized: false }` fallback. When provider auto-detection requires SSL but no user config exists, default to `{ rejectUnauthorized: true }`. Keep an explicit opt-out path (`ssl: { rejectUnauthorized: false }` in user config) but emit a `console.warn` when it's used.
 
