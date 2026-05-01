@@ -28,36 +28,39 @@ describe("Direct API - Forms Operations", () => {
   });
 
   describe("forms.find()", () => {
+    // Phase 4 (Task 13): canonical `ListResult<T>` envelope.
     it("should return paginated forms", async () => {
-      const mockData = {
-        docs: [
-          {
-            id: "f1",
-            name: "Contact Form",
-            slug: "contact",
-            status: "published",
-          },
-        ],
-        totalDocs: 1,
-        limit: 10,
-        page: 1,
-        totalPages: 1,
-        hasNextPage: false,
-        hasPrevPage: false,
-        nextPage: null,
-        prevPage: null,
-        pagingCounter: 1,
-      };
+      const mockDocs = [
+        {
+          id: "f1",
+          name: "Contact Form",
+          slug: "contact",
+          status: "published",
+        },
+      ];
       mocks.collectionsHandler.listEntries.mockResolvedValue({
         success: true,
         statusCode: 200,
         message: "OK",
-        data: mockData,
+        data: {
+          docs: mockDocs,
+          totalDocs: 1,
+          limit: 10,
+          page: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPrevPage: false,
+          nextPage: null,
+          prevPage: null,
+          pagingCounter: 1,
+        },
       });
 
       const result = await nextly.forms.find();
 
-      expect(result).toEqual(mockData);
+      expect(result.items).toEqual(mockDocs);
+      expect(result.meta.total).toBe(1);
+      expect(result.meta.page).toBe(1);
       expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "forms",
@@ -352,24 +355,27 @@ describe("Direct API - Forms Operations", () => {
   });
 
   describe("forms.submissions()", () => {
+    // Phase 4 (Task 13): canonical `ListResult<T>` envelope.
     it("should return paginated submissions for form ID", async () => {
-      const mockData = {
-        docs: [{ id: "sub-1", form: "form-uuid", data: { name: "John" } }],
-        totalDocs: 1,
-        limit: 10,
-        page: 1,
-        totalPages: 1,
-        hasNextPage: false,
-        hasPrevPage: false,
-        nextPage: null,
-        prevPage: null,
-        pagingCounter: 1,
-      };
+      const mockDocs = [
+        { id: "sub-1", form: "form-uuid", data: { name: "John" } },
+      ];
       mocks.collectionsHandler.listEntries.mockResolvedValue({
         success: true,
         statusCode: 200,
         message: "OK",
-        data: mockData,
+        data: {
+          docs: mockDocs,
+          totalDocs: 1,
+          limit: 10,
+          page: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPrevPage: false,
+          nextPage: null,
+          prevPage: null,
+          pagingCounter: 1,
+        },
       });
 
       // Use a UUID-like value so looksLikeId returns true
@@ -377,7 +383,8 @@ describe("Direct API - Forms Operations", () => {
         form: "550e8400-e29b-41d4-a716-446655440000",
       });
 
-      expect(result).toEqual(mockData);
+      expect(result.items).toEqual(mockDocs);
+      expect(result.meta.total).toBe(1);
       expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "form-submissions",

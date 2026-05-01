@@ -28,6 +28,10 @@ describe("Direct API - Users Operations", () => {
   });
 
   describe("users.find()", () => {
+    // Phase 4 (Task 13): Direct API now returns the canonical
+    // `ListResult<T>` envelope (`{ items, meta }`). Tests that read
+    // pagination metadata read it from `result.meta.*` (not from the
+    // top-level legacy `totalDocs`/`hasNextPage`/`hasPrevPage` fields).
     it("should return paginated users", async () => {
       const mockUsers = [
         { id: "u1", email: "a@test.com", name: "Alice" },
@@ -40,10 +44,10 @@ describe("Direct API - Users Operations", () => {
 
       const result = await nextly.users.find();
 
-      expect(result.docs).toEqual(mockUsers);
-      expect(result.totalDocs).toBe(2);
-      expect(result.limit).toBe(10);
-      expect(result.page).toBe(1);
+      expect(result.items).toEqual(mockUsers);
+      expect(result.meta.total).toBe(2);
+      expect(result.meta.limit).toBe(10);
+      expect(result.meta.page).toBe(1);
     });
 
     it("should use provided limit and page", async () => {
@@ -54,11 +58,11 @@ describe("Direct API - Users Operations", () => {
 
       const result = await nextly.users.find({ limit: 5, page: 2 });
 
-      expect(result.limit).toBe(5);
-      expect(result.page).toBe(2);
-      expect(result.totalDocs).toBe(50);
-      expect(result.hasNextPage).toBe(true);
-      expect(result.hasPrevPage).toBe(true);
+      expect(result.meta.limit).toBe(5);
+      expect(result.meta.page).toBe(2);
+      expect(result.meta.total).toBe(50);
+      expect(result.meta.hasNext).toBe(true);
+      expect(result.meta.hasPrev).toBe(true);
       expect(mocks.userService.listUsers).toHaveBeenCalledWith(
         expect.objectContaining({
           pagination: { limit: 5, page: 2 },
@@ -75,12 +79,9 @@ describe("Direct API - Users Operations", () => {
 
       const result = await nextly.users.find({ limit: 10, page: 1 });
 
-      expect(result.totalPages).toBe(3); // ceil(25/10)
-      expect(result.hasNextPage).toBe(true);
-      expect(result.hasPrevPage).toBe(false);
-      expect(result.nextPage).toBe(2);
-      expect(result.prevPage).toBeNull();
-      expect(result.pagingCounter).toBe(1);
+      expect(result.meta.totalPages).toBe(3); // ceil(25/10)
+      expect(result.meta.hasNext).toBe(true);
+      expect(result.meta.hasPrev).toBe(false);
     });
 
     it("should pass search filter to listUsers", async () => {
@@ -310,6 +311,7 @@ describe("Direct API - Users Operations", () => {
   });
 
   describe("users.create()", () => {
+    // Phase 4 (Task 13): create() now returns `{ message, item }`.
     it("should return created user", async () => {
       const mockUser = { id: "new-1", email: "new@test.com", name: "New User" };
       mocks.userService.create.mockResolvedValue(mockUser);
@@ -320,7 +322,8 @@ describe("Direct API - Users Operations", () => {
         data: { name: "New User" },
       });
 
-      expect(result).toEqual(mockUser);
+      expect(result.item).toEqual(mockUser);
+      expect(result.message).toBe("User created.");
       expect(mocks.userService.create).toHaveBeenCalledWith(
         expect.objectContaining({
           email: "new@test.com",
@@ -343,7 +346,9 @@ describe("Direct API - Users Operations", () => {
         password: "pass123!",
       });
 
-      expect(result).toBeDefined();
+      // Phase 4 (Task 13): result is `{ message, item }`; item carries the user.
+      expect(result.item).toBeDefined();
+      expect(result.message).toBe("User created.");
     });
 
     it("should throw on service error", async () => {
@@ -367,6 +372,7 @@ describe("Direct API - Users Operations", () => {
   });
 
   describe("users.update()", () => {
+    // Phase 4 (Task 13): update() now returns `{ message, item }`.
     it("should return updated user", async () => {
       const mockUser = {
         id: "user-1",
@@ -380,7 +386,8 @@ describe("Direct API - Users Operations", () => {
         data: { name: "Updated" },
       });
 
-      expect(result).toEqual(mockUser);
+      expect(result.item).toEqual(mockUser);
+      expect(result.message).toBe("User updated.");
       expect(mocks.userService.update).toHaveBeenCalledWith(
         "user-1",
         expect.objectContaining({ name: "Updated" }),
@@ -421,12 +428,16 @@ describe("Direct API - Users Operations", () => {
   });
 
   describe("users.delete()", () => {
-    it("should return DeleteResult on success", async () => {
+    // Phase 4 (Task 13): delete() now returns `{ message, item: { id } }`.
+    it("should return MutationResult on success", async () => {
       mocks.userService.delete.mockResolvedValue(undefined);
 
       const result = await nextly.users.delete({ id: "user-1" });
 
-      expect(result).toEqual({ deleted: true, ids: ["user-1"] });
+      expect(result).toEqual({
+        message: "User deleted.",
+        item: { id: "user-1" },
+      });
       expect(mocks.userService.delete).toHaveBeenCalledWith(
         "user-1",
         expect.any(Object)

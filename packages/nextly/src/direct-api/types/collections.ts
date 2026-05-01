@@ -21,7 +21,7 @@ import type {
  * ```typescript
  * // With generated types - slug and return type are inferred:
  * const posts = await nextly.find({ collection: 'posts' });
- * // posts.docs is typed as Post[]
+ * // posts.items is typed as Post[]
  *
  * // Without generated types - accepts any string:
  * const posts = await nextly.find({
@@ -307,7 +307,8 @@ export interface DeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
  *
  * @example
  * ```typescript
- * const { totalDocs } = await nextly.count({
+ * // Phase 4 (Task 13): count() now returns `{ total }` (was `{ totalDocs }`).
+ * const { total } = await nextly.count({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  * });
@@ -372,14 +373,22 @@ export interface DuplicateArgs<TSlug extends CollectionSlug = CollectionSlug>
 
 /**
  * Result of a count operation.
+ *
+ * Phase 4 (Task 13): renamed `totalDocs` to `total` so the Direct API and
+ * the wire API's `respondCount` envelope both speak the same key.
  */
 export interface CountResult {
   /** Total number of documents matching the query */
-  totalDocs: number;
+  total: number;
 }
 
 /**
- * Result of a delete operation.
+ * Result of a delete-by-id or delete-by-where operation.
+ *
+ * Phase 4 (Task 13): the top-level `nextly.delete(...)` and per-namespace
+ * `delete()` calls return `{ message, item }` (`MutationResult`) so they
+ * match the wire API's `respondMutation` envelope. `DeleteResult` is still
+ * used for the bulk-by-where path where multiple IDs may be returned.
  */
 export interface DeleteResult {
   /** Whether the delete was successful */

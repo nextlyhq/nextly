@@ -22,7 +22,6 @@ import type {
   ApiKeyMeta,
   ApiKeyService,
 } from "../../services/auth/api-key-service";
-import type { PaginatedResponse } from "../../types/pagination";
 import type {
   CheckAccessArgs,
   CheckApiKeyArgs,
@@ -31,7 +30,6 @@ import type {
   CreatePermissionArgs,
   CreateRoleArgs,
   DeletePermissionArgs,
-  DeleteResult,
   DeleteRoleArgs,
   FindApiKeyByIDArgs,
   FindPermissionByIDArgs,
@@ -40,6 +38,8 @@ import type {
   FindRolesArgs,
   GetRolePermissionsArgs,
   ListApiKeysArgs,
+  ListResult,
+  MutationResult,
   Permission,
   RevokeApiKeyArgs,
   Role,
@@ -53,13 +53,16 @@ import { mapPermission, mapRole } from "./helpers";
 
 /**
  * `nextly.roles.*` namespace — role CRUD and permission assignment.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use canonical envelopes
+ * (`ListResult<T>`, `MutationResult<T>`).
  */
 export interface RolesNamespace {
-  find(args?: FindRolesArgs): Promise<PaginatedResponse<Role>>;
+  find(args?: FindRolesArgs): Promise<ListResult<Role>>;
   findByID(args: FindRoleByIDArgs): Promise<Role>;
-  create(args: CreateRoleArgs): Promise<Role>;
-  update(args: UpdateRoleArgs): Promise<Role>;
-  delete(args: DeleteRoleArgs): Promise<DeleteResult>;
+  create(args: CreateRoleArgs): Promise<MutationResult<Role>>;
+  update(args: UpdateRoleArgs): Promise<MutationResult<Role>>;
+  delete(args: DeleteRoleArgs): Promise<MutationResult<{ id: string }>>;
   getPermissions(args: GetRolePermissionsArgs): Promise<Permission[]>;
   setPermissions(args: SetRolePermissionsArgs): Promise<Permission[]>;
 }
@@ -69,7 +72,7 @@ export interface RolesNamespace {
  */
 export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
   return {
-    async find(args: FindRolesArgs = {}): Promise<PaginatedResponse<Role>> {
+    async find(args: FindRolesArgs = {}): Promise<ListResult<Role>> {
       // PR 4 (unified-error-system): listRoles returns `{ data, meta }`
       // directly and throws NextlyError on failure.
       const result = await ctx.rbacRoleService.listRoles({
@@ -89,23 +92,24 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         level: number;
         isSystem: boolean;
       }>;
-      const docs = data.map(r => mapRole(r));
-      const totalDocs = result.meta?.total ?? docs.length;
+      const items = data.map(r => mapRole(r));
+      const total = result.meta?.total ?? items.length;
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
-      const totalPages = Math.ceil(totalDocs / limit) || 1;
+      // Clamp totalPages to 1 minimum so empty result sets still produce a
+      // sensible page count (parity with `respondList` on the wire side).
+      const totalPages = Math.max(1, Math.ceil(total / limit));
 
       return {
-        docs,
-        totalDocs,
-        limit,
-        page,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-        nextPage: page < totalPages ? page + 1 : null,
-        prevPage: page > 1 ? page - 1 : null,
-        pagingCounter: (page - 1) * limit + 1,
+        items,
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNext: page < totalPages,
+          hasPrev: page > 1,
+        },
       };
     },
 
@@ -115,7 +119,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
       return mapRole(role);
     },
 
-    async create(args: CreateRoleArgs): Promise<Role> {
+    async create(args: CreateRoleArgs): Promise<MutationResult<Role>> {
       // Pass through caller-provided permissionIds and childRoleIds.
       // Previously these were hardcoded to empty arrays, which made
       // every create call fail against the service's validation
@@ -133,10 +137,14 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         permissionIds: args.data.permissionIds ?? [],
         childRoleIds: args.data.childRoleIds ?? [],
       });
-      return mapRole(role);
+      // Phase 4 (Task 13): mutation envelope.
+      return {
+        message: "Role created.",
+        item: mapRole(role),
+      };
     },
 
-    async update(args: UpdateRoleArgs): Promise<Role> {
+    async update(args: UpdateRoleArgs): Promise<MutationResult<Role>> {
       // PR 4: updateRole returns void; getRoleById returns the role
       // directly. Both throw on failure.
       await ctx.rbacRoleService.updateRole(args.id, {
@@ -146,13 +154,21 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         level: args.data.level,
       });
       const updated = await ctx.rbacRoleService.getRoleById(args.id);
-      return mapRole(updated);
+      return {
+        message: "Role updated.",
+        item: mapRole(updated),
+      };
     },
 
-    async delete(args: DeleteRoleArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteRoleArgs
+    ): Promise<MutationResult<{ id: string }>> {
       // PR 4: deleteRole returns void; throws on failure.
       await ctx.rbacRoleService.deleteRole(args.id);
-      return { deleted: true, ids: [args.id] };
+      return {
+        message: "Role deleted.",
+        item: { id: args.id },
+      };
     },
 
     async getPermissions(args: GetRolePermissionsArgs): Promise<Permission[]> {
@@ -209,12 +225,16 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
 /**
  * `nextly.permissions.*` namespace — permission CRUD.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
  */
 export interface PermissionsNamespace {
-  find(args?: FindPermissionsArgs): Promise<PaginatedResponse<Permission>>;
+  find(args?: FindPermissionsArgs): Promise<ListResult<Permission>>;
   findByID(args: FindPermissionByIDArgs): Promise<Permission | null>;
-  create(args: CreatePermissionArgs): Promise<Permission>;
-  delete(args: DeletePermissionArgs): Promise<void>;
+  create(args: CreatePermissionArgs): Promise<MutationResult<Permission>>;
+  delete(
+    args: DeletePermissionArgs
+  ): Promise<MutationResult<{ id: string }>>;
 }
 
 /**
@@ -226,7 +246,7 @@ export function createPermissionsNamespace(
   return {
     async find(
       args: FindPermissionsArgs = {}
-    ): Promise<PaginatedResponse<Permission>> {
+    ): Promise<ListResult<Permission>> {
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -241,20 +261,21 @@ export function createPermissionsNamespace(
       });
 
       const total = result.meta?.total ?? result.data.length;
-      const totalPages = Math.ceil(total / limit);
-      const docs: Permission[] = result.data.map(p => mapPermission(p));
+      // Clamp totalPages to 1 minimum so empty result sets still produce a
+      // sensible page count (parity with `respondList` on the wire side).
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const items: Permission[] = result.data.map(p => mapPermission(p));
 
       return {
-        docs,
-        totalDocs: total,
-        limit,
-        page,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-        nextPage: page < totalPages ? page + 1 : null,
-        prevPage: page > 1 ? page - 1 : null,
-        pagingCounter: (page - 1) * limit + 1,
+        items,
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNext: page < totalPages,
+          hasPrev: page > 1,
+        },
       };
     },
 
@@ -274,7 +295,9 @@ export function createPermissionsNamespace(
       }
     },
 
-    async create(args: CreatePermissionArgs): Promise<Permission> {
+    async create(
+      args: CreatePermissionArgs
+    ): Promise<MutationResult<Permission>> {
       const { name, slug, action, resource, description } = args.data;
 
       // PR 4: ensurePermission returns `{ id, created }` directly and
@@ -291,12 +314,24 @@ export function createPermissionsNamespace(
       const fetched = await ctx.rbacPermissionService.getPermissionById(
         ensured.id
       );
-      return mapPermission(fetched);
+      // Phase 4 (Task 13): canonical mutation envelope.
+      return {
+        message: "Permission created.",
+        item: mapPermission(fetched),
+      };
     },
 
-    async delete(args: DeletePermissionArgs): Promise<void> {
+    async delete(
+      args: DeletePermissionArgs
+    ): Promise<MutationResult<{ id: string }>> {
       // PR 4: deletePermissionById returns void; throws on failure.
       await ctx.rbacPermissionService.deletePermissionById(args.id);
+      // Phase 4 (Task 13): delete now returns the canonical mutation
+      // envelope so callers can surface a server-authored toast.
+      return {
+        message: "Permission deleted.",
+        item: { id: args.id },
+      };
     },
   };
 }

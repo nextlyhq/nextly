@@ -111,6 +111,7 @@ describe("Direct API - Media Operations", () => {
   });
 
   describe("media.find()", () => {
+    // Phase 4 (Task 13): canonical `ListResult<T>` envelope.
     it("should return paginated media files", async () => {
       const mockFiles = [
         { id: "m1", filename: "a.jpg", url: "/a.jpg" },
@@ -123,9 +124,9 @@ describe("Direct API - Media Operations", () => {
 
       const result = await nextly.media.find();
 
-      expect(result.docs).toEqual(mockFiles);
-      expect(result.totalDocs).toBe(2);
-      expect(result.limit).toBe(24); // default limit
+      expect(result.items).toEqual(mockFiles);
+      expect(result.meta.total).toBe(2);
+      expect(result.meta.limit).toBe(24); // default limit
     });
 
     it("should pass search, mimeType, folder, pagination, sorting", async () => {
@@ -166,9 +167,9 @@ describe("Direct API - Media Operations", () => {
 
       const result = await nextly.media.find({ limit: 24, page: 1 });
 
-      expect(result.totalPages).toBe(5); // ceil(100/24) = 5
-      expect(result.hasNextPage).toBe(true);
-      expect(result.hasPrevPage).toBe(false);
+      expect(result.meta.totalPages).toBe(5); // ceil(100/24) = 5
+      expect(result.meta.hasNext).toBe(true);
+      expect(result.meta.hasPrev).toBe(false);
     });
   });
 
@@ -211,6 +212,7 @@ describe("Direct API - Media Operations", () => {
   });
 
   describe("media.update()", () => {
+    // Phase 4 (Task 13): update() now returns `{ message, item }`.
     it("should return updated media file", async () => {
       const mockFile = { id: "m1", filename: "photo.jpg", altText: "Updated" };
       mocks.mediaService.update.mockResolvedValue(mockFile);
@@ -220,7 +222,8 @@ describe("Direct API - Media Operations", () => {
         data: { altText: "Updated", caption: "A photo" },
       });
 
-      expect(result).toEqual(mockFile);
+      expect(result.item).toEqual(mockFile);
+      expect(result.message).toBe("Media updated.");
       expect(mocks.mediaService.update).toHaveBeenCalledWith(
         "m1",
         expect.objectContaining({
@@ -266,12 +269,16 @@ describe("Direct API - Media Operations", () => {
   });
 
   describe("media.delete()", () => {
-    it("should return DeleteResult", async () => {
+    // Phase 4 (Task 13): delete() now returns `{ message, item: { id } }`.
+    it("should return MutationResult", async () => {
       mocks.mediaService.delete.mockResolvedValue(undefined);
 
       const result = await nextly.media.delete({ id: "m1" });
 
-      expect(result).toEqual({ deleted: true, ids: ["m1"] });
+      expect(result).toEqual({
+        message: "Media deleted.",
+        item: { id: "m1" },
+      });
     });
 
     it("should throw when id is missing", async () => {

@@ -70,7 +70,9 @@ import type {
   GetEmailLayoutArgs,
   GetRolePermissionsArgs,
   ListFoldersArgs,
+  ListResult,
   LoginArgs,
+  MutationResult,
   Permission,
   PreviewEmailTemplateArgs,
   RegisterArgs,
@@ -105,8 +107,6 @@ import type { EmailTemplateRecord } from "../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../schemas/user-field-definitions/types";
 import type { MediaFile, MediaFolder } from "../services/media/media-service";
 import type { User } from "../services/users/user-service";
-import type { PaginatedResponse } from "../types/pagination";
-
 /**
  * Nextly instance - provides access to all services and APIs.
  *
@@ -142,9 +142,10 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): canonical `ListResult<T>` envelope.
   find: <TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ) => Promise<PaginatedResponse<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<ListResult<DataFromCollectionSlug<TSlug>>>;
 
   /**
    * Find a single document by ID.
@@ -172,9 +173,10 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): canonical `MutationResult<T>` envelope.
   create: <TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
-  ) => Promise<DataFromCollectionSlug<TSlug>>;
+  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
 
   /**
    * Update a document by ID.
@@ -188,12 +190,17 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): canonical `MutationResult<T>` envelope.
   update: <TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
-  ) => Promise<DataFromCollectionSlug<TSlug>>;
+  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
 
   /**
-   * Delete a document by ID.
+   * Delete a document by ID or by where clause.
+   *
+   * Phase 4 (Task 13): the by-id path returns `{ message, item: { id } }`;
+   * the by-where path keeps the legacy `DeleteResult` because it can
+   * affect multiple rows.
    *
    * @example
    * ```typescript
@@ -203,14 +210,17 @@ export interface Nextly {
    * });
    * ```
    */
-  delete: (args: DeleteArgs) => Promise<DeleteResult>;
+  delete: <TSlug extends CollectionSlug = CollectionSlug>(
+    args: DeleteArgs<TSlug>
+  ) => Promise<MutationResult<{ id: string }> | DeleteResult>;
 
   /**
    * Count documents matching a query.
    *
    * @example
    * ```typescript
-   * const { totalDocs } = await nextly.count({
+   * // Phase 4 (Task 13): returns { total } (was { totalDocs }).
+   * const { total } = await nextly.count({
    *   collection: 'posts',
    *   where: { status: { equals: 'published' } },
    * });
@@ -242,9 +252,10 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): canonical `MutationResult<T>` envelope.
   duplicate: <TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
-  ) => Promise<DataFromCollectionSlug<TSlug>>;
+  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
 
   /**
    * Get a Single/Global document.
@@ -480,12 +491,13 @@ export interface Nextly {
    * await nextly.users.delete({ id: 'user-123' });
    * ```
    */
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   users: {
-    find: (args?: FindUsersArgs) => Promise<PaginatedResponse<User>>;
+    find: (args?: FindUsersArgs) => Promise<ListResult<User>>;
     findByID: (args: FindUserByIDArgs) => Promise<User | null>;
-    create: (args: CreateUserArgs) => Promise<User>;
-    update: (args: UpdateUserArgs) => Promise<User>;
-    delete: (args: DeleteUserArgs) => Promise<DeleteResult>;
+    create: (args: CreateUserArgs) => Promise<MutationResult<User>>;
+    update: (args: UpdateUserArgs) => Promise<MutationResult<User>>;
+    delete: (args: DeleteUserArgs) => Promise<MutationResult<{ id: string }>>;
   };
 
   /**
@@ -540,12 +552,15 @@ export interface Nextly {
    * const folders = await nextly.media.folders.list();
    * ```
    */
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   media: {
     upload: (args: UploadMediaArgs) => Promise<MediaFile>;
-    find: (args?: FindMediaArgs) => Promise<PaginatedResponse<MediaFile>>;
+    find: (args?: FindMediaArgs) => Promise<ListResult<MediaFile>>;
     findByID: (args: FindMediaByIDArgs) => Promise<MediaFile | null>;
-    update: (args: UpdateMediaArgs) => Promise<MediaFile>;
-    delete: (args: DeleteMediaArgs) => Promise<DeleteResult>;
+    update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
+    delete: (
+      args: DeleteMediaArgs
+    ) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;
     folders: {
       list: (args?: ListFoldersArgs) => Promise<MediaFolder[]>;
@@ -582,17 +597,18 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): list surfaces use canonical envelopes.
   forms: {
     find: (
       args?: FindFormsArgs
-    ) => Promise<PaginatedResponse<Record<string, unknown>>>;
+    ) => Promise<ListResult<Record<string, unknown>>>;
     findBySlug: (
       args: FindFormBySlugArgs
     ) => Promise<Record<string, unknown> | null>;
     submit: (args: SubmitFormArgs) => Promise<SubmitFormResult>;
     submissions: (
       args: FormSubmissionsArgs
-    ) => Promise<PaginatedResponse<Record<string, unknown>>>;
+    ) => Promise<ListResult<Record<string, unknown>>>;
   };
 
   /**
@@ -677,16 +693,23 @@ export interface Nextly {
   // Email Provider Namespace
   // ==========================================================================
 
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   emailProviders: {
     find: (
       args?: FindEmailProvidersArgs
-    ) => Promise<PaginatedResponse<EmailProviderRecord>>;
+    ) => Promise<ListResult<EmailProviderRecord>>;
     findByID: (
       args: FindEmailProviderByIDArgs
     ) => Promise<EmailProviderRecord | null>;
-    create: (args: CreateEmailProviderArgs) => Promise<EmailProviderRecord>;
-    update: (args: UpdateEmailProviderArgs) => Promise<EmailProviderRecord>;
-    delete: (args: DeleteEmailProviderArgs) => Promise<DeleteResult>;
+    create: (
+      args: CreateEmailProviderArgs
+    ) => Promise<MutationResult<EmailProviderRecord>>;
+    update: (
+      args: UpdateEmailProviderArgs
+    ) => Promise<MutationResult<EmailProviderRecord>>;
+    delete: (
+      args: DeleteEmailProviderArgs
+    ) => Promise<MutationResult<{ id: string }>>;
     setDefault: (args: SetDefaultProviderArgs) => Promise<EmailProviderRecord>;
     test: (
       args: TestEmailProviderArgs
@@ -697,19 +720,26 @@ export interface Nextly {
   // Email Template Namespace
   // ==========================================================================
 
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   emailTemplates: {
     find: (
       args?: FindEmailTemplatesArgs
-    ) => Promise<PaginatedResponse<EmailTemplateRecord>>;
+    ) => Promise<ListResult<EmailTemplateRecord>>;
     findByID: (
       args: FindEmailTemplateByIDArgs
     ) => Promise<EmailTemplateRecord | null>;
     findBySlug: (
       args: FindEmailTemplateBySlugArgs
     ) => Promise<EmailTemplateRecord | null>;
-    create: (args: CreateEmailTemplateArgs) => Promise<EmailTemplateRecord>;
-    update: (args: UpdateEmailTemplateArgs) => Promise<EmailTemplateRecord>;
-    delete: (args: DeleteEmailTemplateArgs) => Promise<DeleteResult>;
+    create: (
+      args: CreateEmailTemplateArgs
+    ) => Promise<MutationResult<EmailTemplateRecord>>;
+    update: (
+      args: UpdateEmailTemplateArgs
+    ) => Promise<MutationResult<EmailTemplateRecord>>;
+    delete: (
+      args: DeleteEmailTemplateArgs
+    ) => Promise<MutationResult<{ id: string }>>;
     preview: (
       args: PreviewEmailTemplateArgs
     ) => Promise<{ subject: string; html: string }>;
@@ -723,16 +753,23 @@ export interface Nextly {
   // User Field Definition Namespace
   // ==========================================================================
 
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   userFields: {
     find: (
       args?: FindUserFieldsArgs
-    ) => Promise<PaginatedResponse<UserFieldDefinitionRecord>>;
+    ) => Promise<ListResult<UserFieldDefinitionRecord>>;
     findByID: (
       args: FindUserFieldByIDArgs
     ) => Promise<UserFieldDefinitionRecord | null>;
-    create: (args: CreateUserFieldArgs) => Promise<UserFieldDefinitionRecord>;
-    update: (args: UpdateUserFieldArgs) => Promise<UserFieldDefinitionRecord>;
-    delete: (args: DeleteUserFieldArgs) => Promise<DeleteResult>;
+    create: (
+      args: CreateUserFieldArgs
+    ) => Promise<MutationResult<UserFieldDefinitionRecord>>;
+    update: (
+      args: UpdateUserFieldArgs
+    ) => Promise<MutationResult<UserFieldDefinitionRecord>>;
+    delete: (
+      args: DeleteUserFieldArgs
+    ) => Promise<MutationResult<{ id: string }>>;
     reorder: (
       args: ReorderUserFieldsArgs
     ) => Promise<UserFieldDefinitionRecord[]>;
@@ -776,12 +813,15 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   roles: {
-    find: (args?: FindRolesArgs) => Promise<PaginatedResponse<Role>>;
+    find: (args?: FindRolesArgs) => Promise<ListResult<Role>>;
     findByID: (args: FindRoleByIDArgs) => Promise<Role>;
-    create: (args: CreateRoleArgs) => Promise<Role>;
-    update: (args: UpdateRoleArgs) => Promise<Role>;
-    delete: (args: DeleteRoleArgs) => Promise<DeleteResult>;
+    create: (args: CreateRoleArgs) => Promise<MutationResult<Role>>;
+    update: (args: UpdateRoleArgs) => Promise<MutationResult<Role>>;
+    delete: (
+      args: DeleteRoleArgs
+    ) => Promise<MutationResult<{ id: string }>>;
     getPermissions: (args: GetRolePermissionsArgs) => Promise<Permission[]>;
     setPermissions: (args: SetRolePermissionsArgs) => Promise<Permission[]>;
   };
@@ -806,13 +846,16 @@ export interface Nextly {
    * });
    * ```
    */
+  // Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
   permissions: {
-    find: (
-      args?: FindPermissionsArgs
-    ) => Promise<PaginatedResponse<Permission>>;
+    find: (args?: FindPermissionsArgs) => Promise<ListResult<Permission>>;
     findByID: (args: FindPermissionByIDArgs) => Promise<Permission | null>;
-    create: (args: CreatePermissionArgs) => Promise<Permission>;
-    delete: (args: DeletePermissionArgs) => Promise<void>;
+    create: (
+      args: CreatePermissionArgs
+    ) => Promise<MutationResult<Permission>>;
+    delete: (
+      args: DeletePermissionArgs
+    ) => Promise<MutationResult<{ id: string }>>;
   };
 
   // ==========================================================================

@@ -361,64 +361,81 @@ export interface PaginatedServiceResult<T> {
 }
 
 /**
- * Map a service-layer `{ data, pagination }` tuple into the Direct API
- * `PaginatedResponse` shape.
+ * Map a service-layer `{ data, pagination }` tuple into the canonical
+ * Direct API `ListResult<T>` shape (`{ items, meta }`).
  *
- * Extracted to eliminate the duplicated hand-rolled mapping across the users,
- * media, emailProviders, emailTemplates, and userFields namespaces.
+ * Phase 4 (Task 13): replaces the previous `toPaginatedResponse` helper
+ * that returned Payload's `{ docs, totalDocs, ... }` shape. The service
+ * layer's `pagination.total` maps to `meta.total`; `meta.limit` is the
+ * caller-supplied page size, and `meta.totalPages` is recomputed here so
+ * we never hand back `0` (clamps to 1 minimum, matching the wire-side
+ * `respondList` calculation).
  */
-export function toPaginatedResponse<T>(
+export function toListResult<T>(
   result: PaginatedServiceResult<T>,
   limit: number,
   page: number
-): import("../types/index").PaginatedResponse<T> {
-  const totalDocs = result.pagination.total;
-  const totalPages = Math.ceil(totalDocs / limit);
+): import("../types/index").ListResult<T> {
+  const total = result.pagination.total;
+  // Clamp totalPages to 1 minimum so an empty page-1 result still has a
+  // sensible page count (matches wire-side `respondList` behavior).
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   return {
-    docs: result.data,
-    totalDocs,
-    limit,
-    page,
-    totalPages,
-    hasNextPage: page < totalPages,
-    hasPrevPage: page > 1,
-    nextPage: page < totalPages ? page + 1 : null,
-    prevPage: page > 1 ? page - 1 : null,
-    pagingCounter: (page - 1) * limit + 1,
+    items: result.data,
+    meta: {
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    },
   };
 }
 
 /**
- * Map an in-memory array into a Direct API `PaginatedResponse`, slicing
- * according to the requested `limit` / `page`.
+ * Map an in-memory array into a canonical `ListResult<T>` envelope,
+ * slicing the array according to the requested `limit` / `page`.
  *
  * Used by namespaces whose service layer does not natively paginate
  * (emailProviders, emailTemplates, userFields).
  */
-export function slicePaginatedResponse<T>(
+export function sliceListResult<T>(
   items: T[],
   limit: number | undefined,
   page: number | undefined
-): import("../types/index").PaginatedResponse<T> {
+): import("../types/index").ListResult<T> {
   const effectiveLimit = limit ?? items.length;
   const effectivePage = page ?? 1;
   const start = (effectivePage - 1) * effectiveLimit;
   const paged = items.slice(start, start + effectiveLimit);
-  const totalDocs = items.length;
+  const total = items.length;
   const totalPages =
-    effectiveLimit > 0 ? Math.ceil(totalDocs / effectiveLimit) : 1;
+    effectiveLimit > 0 ? Math.max(1, Math.ceil(total / effectiveLimit)) : 1;
 
   return {
-    docs: paged,
-    totalDocs,
-    limit: effectiveLimit,
-    page: effectivePage,
-    totalPages,
-    hasNextPage: effectivePage < totalPages,
-    hasPrevPage: effectivePage > 1,
-    nextPage: effectivePage < totalPages ? effectivePage + 1 : null,
-    prevPage: effectivePage > 1 ? effectivePage - 1 : null,
-    pagingCounter: start + 1,
+    items: paged,
+    meta: {
+      total,
+      page: effectivePage,
+      limit: effectiveLimit,
+      totalPages,
+      hasNext: effectivePage < totalPages,
+      hasPrev: effectivePage > 1,
+    },
   };
+}
+
+/**
+ * Build a per-collection mutation message string (e.g. `"Posts created."`).
+ * Centralized so every namespace that returns `MutationResult` produces a
+ * consistent, capitalized, full-sentence value.
+ */
+export function buildMutationMessage(
+  collection: string,
+  verb: "created" | "updated" | "deleted" | "duplicated"
+): string {
+  const noun = collection.charAt(0).toUpperCase() + collection.slice(1);
+  return `${noun} ${verb}.`;
 }

@@ -7,13 +7,73 @@
  * @packageDocumentation
  */
 
+// Phase 4 (Task 13): Direct API uses the canonical `ListResult<T>` shape
+// (`{ items, meta }`) so the in-process Direct API speaks the same envelope
+// as the wire API. The legacy `PaginatedResponse` (Payload's `{ docs,
+// totalDocs, ... }`) is still re-exported for callers that have not yet
+// migrated, but the Direct API itself no longer returns that shape.
 export type { PaginatedResponse } from "../../types/pagination";
+// PaginationMeta is the canonical pagination metadata object used by both
+// the wire API (`respondList`) and the Direct API after Task 13. Re-export
+// here so consumers can `import { PaginationMeta } from "@revnixhq/nextly"`
+// without reaching into `api/response-shapes`.
+export type { PaginationMeta } from "../../api/response-shapes";
 export type {
   WhereFilter,
   QueryOperator,
   FieldCondition,
 } from "../../services/collections/query-operators";
 export type { RichTextOutputFormat } from "../../lib/rich-text-html";
+
+import type { PaginationMeta } from "../../api/response-shapes";
+
+/**
+ * Canonical Direct API list-response shape.
+ *
+ * Phase 4 alignment: in-process find() / namespace.find() calls return
+ * `{ items, meta }` (matching the wire API's `respondList` envelope) so
+ * callers see the same shape regardless of transport.
+ *
+ * Migrate from the legacy `{ docs, totalDocs, ... }` shape:
+ * - `result.docs`         -> `result.items`
+ * - `result.totalDocs`    -> `result.meta.total`
+ * - `result.hasNextPage`  -> `result.meta.hasNext`
+ * - `result.hasPrevPage`  -> `result.meta.hasPrev`
+ *
+ * @typeParam T - Element type for each item in the list
+ */
+export interface ListResult<T> {
+  /** Page of items for the current query slice. */
+  items: T[];
+  /** Pagination metadata. */
+  meta: PaginationMeta;
+}
+
+/**
+ * Canonical Direct API mutation-response shape.
+ *
+ * Phase 4 alignment: create/update/delete return `{ message, item }`
+ * (matching the wire API's `respondMutation` envelope). The `message` is a
+ * server-authored toast string callers can surface verbatim; `item` is the
+ * affected document (or a minimal `{ id }` shape for deletes).
+ *
+ * @typeParam T - Item type returned by the mutation
+ */
+export interface MutationResult<T> {
+  /** Human-readable status message (e.g. "Post created."). */
+  message: string;
+  /** The affected item. */
+  item: T;
+}
+
+/**
+ * @deprecated Phase 4 (Task 13): use `ListResult<T>` instead. This alias
+ * is removed in Task 23 cleanup. The body has been re-pointed to
+ * `ListResult<T>` so types remain valid during the migration window, but
+ * the runtime shape has changed: callers must now read `.items` / `.meta`
+ * (not `.docs` / `.totalDocs`).
+ */
+export type PaginatedDocs<T> = ListResult<T>;
 
 /**
  * Interface augmented by generated types.
@@ -256,14 +316,14 @@ export interface DirectAPIConfig {
    *   collection: 'posts',
    *   richTextFormat: 'both',
    * });
-   * // posts.docs[0].content => { json: {...}, html: "<p>...</p>" }
+   * // posts.items[0].content => { json: {...}, html: "<p>...</p>" }
    *
    * // Get rich text as HTML only
    * const posts = await nextly.find({
    *   collection: 'posts',
    *   richTextFormat: 'html',
    * });
-   * // posts.docs[0].content => "<p>...</p>"
+   * // posts.items[0].content => "<p>...</p>"
    * ```
    */
   richTextFormat?: import("../../lib/rich-text-html").RichTextOutputFormat;

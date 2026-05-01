@@ -146,6 +146,15 @@ export type {
   CountResult,
   DeleteResult,
   BulkOperationResult as DirectAPIBulkOperationResult,
+  // Phase 4 (Task 13): canonical envelope shapes shared with the wire API.
+  // Templates and downstream consumers import these to type Direct API
+  // results without reaching into internal modules.
+  ListResult,
+  MutationResult,
+  PaginationMeta,
+  // @deprecated alias of ListResult retained for one release of transitional
+  // code; will be removed in Task 23 cleanup.
+  PaginatedDocs,
   // Auth types
   LoginArgs,
   RegisterArgs,
