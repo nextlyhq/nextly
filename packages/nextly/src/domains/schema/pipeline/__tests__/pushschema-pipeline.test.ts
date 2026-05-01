@@ -9,10 +9,11 @@
 // We mock all dependencies + test hooks so each test exercises the
 // orchestrator in isolation without a real DB.
 
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
+import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache.js";
 import type { NextlySchemaSnapshot, Operation } from "../diff/types.js";
 import {
   noopClassifier,
@@ -231,6 +232,18 @@ const emptyDesired: DesiredSchema = {
   singles: {},
   components: {},
 };
+
+// Phase 5: clear the globalThis-backed snapshot cache between tests so
+// the dequal short-circuit doesn't carry over a snapshot from a prior
+// test. Otherwise a successful apply in one test would short-circuit
+// the next test unexpectedly.
+beforeEach(() => {
+  clearCachedSnapshot();
+});
+
+afterEach(() => {
+  clearCachedSnapshot();
+});
 
 const onePostsCollection: DesiredSchema = {
   collections: {
@@ -590,6 +603,129 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     const [, , tablesFilter] = pushSchemaImpl.mock.calls[0]!;
     expect(Array.isArray(tablesFilter)).toBe(true);
     expect(tablesFilter).toContain("dc_posts");
+  });
+
+  it("Phase 5: dequal short-circuit skips pushSchema when desired is unchanged since last apply", async () => {
+    // Run pipeline once to populate the snapshot cache; then run again
+    // with the SAME desired and assert pushSchema is not called the
+    // second time. Journal recordStart should also be skipped on the
+    // second call.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { pipeline, mocks } = makePipeline({ pushSchemaImpl });
+
+    // First run — populates the cache.
+    const first = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(first.success).toBe(true);
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+    const recordStartCallsAfterFirst =
+      mocks.migrationJournal.recordStart.mock.calls.length;
+
+    // Second run — same desired, dequal cache hit, should skip the
+    // entire pipeline including journal recordStart.
+    const second = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(second.success).toBe(true);
+    expect(second.statementsExecuted).toBe(0);
+    expect(second.renamesApplied).toBe(0);
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1); // unchanged
+    expect(
+      mocks.migrationJournal.recordStart.mock.calls.length
+    ).toBe(recordStartCallsAfterFirst); // no new journal entry
+
+    // Operator-visible signal that the pipeline short-circuited.
+    expect(
+      consoleSpy.mock.calls.some(call =>
+        String(call[0] ?? "").includes("No changes detected")
+      )
+    ).toBe(true);
+
+    consoleSpy.mockRestore();
+  });
+
+  it("Phase 5: cache miss when desired actually changed — pipeline runs again", async () => {
+    // Run with desired A, then with desired B — different shape — and
+    // assert pushSchema is called both times.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline } = makePipeline({ pushSchemaImpl });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+
+    // Different desired — extra collection added.
+    const changedDesired: DesiredSchema = {
+      collections: {
+        ...onePostsCollection.collections,
+        tags: {
+          slug: "tags",
+          tableName: "dc_tags",
+          fields: [{ name: "label", type: "text" }] as never,
+        },
+      },
+      singles: {},
+      components: {},
+    };
+
+    await pipeline.apply({
+      desired: changedDesired,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(2);
   });
 });
 

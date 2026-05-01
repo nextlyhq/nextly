@@ -22,7 +22,12 @@
 // foreign_keys = OFF/ON wrapping per F3 PR-4.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
+import { dequal } from "dequal";
 
+import {
+  getCachedSnapshot,
+  setCachedSnapshot,
+} from "../../../init/schema-snapshot-cache.js";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator.js";
 
 import {
@@ -43,6 +48,7 @@ import {
   PromptCancelledError,
   TTYRequiredError,
 } from "./prompt-dispatcher/errors.js";
+import { withCapturedStdout } from "./stdout-capture.js";
 import type {
   Classifier,
   DrizzleStatementExecutor,
@@ -370,10 +376,62 @@ export class PushSchemaPipeline {
     // the notification event surfaces duration even when the journal
     // write best-effort-fails. Cheap (one Date.now()).
     const startMs = Date.now();
+
+    // Phase 5 (2026-05-01) — dequal short-circuit.
+    //
+    // If the desired-schema snapshot is byte-for-byte equal to the last
+    // successfully-applied one, skip the entire pipeline. Avoids the
+    // work + TTY exposure of re-introspecting + re-diffing when nothing
+    // changed. Particularly valuable on Next.js HMR where any
+    // server-side file save triggers `serverComponentChanges` (not just
+    // nextly.config.ts), which previously made the pipeline run on
+    // every route-handler save.
+    //
+    // Cache key: the entire `desired` object. dequal walks deeply, so
+    // any nested change (a new field, a renamed table, a tweaked
+    // required flag) bypasses the short-circuit. Cosmetic-only
+    // properties (admin-display labels, hooks, etc.) WOULD also bypass
+    // — accepted false-positive cost vs. risking a missed real change.
+    //
+    // Skipping recordStart means no-op cycles don't pollute the
+    // migration journal. The successful PipelineResult below mimics
+    // the full-success shape with statementsExecuted=0.
+    //
+    // Reference: Payload's pushDevSchema pattern in
+    // packages/drizzle/src/utilities/pushDevSchema.ts.
+    const cachedSnapshot = getCachedSnapshot();
+    if (cachedSnapshot !== undefined && dequal(desired, cachedSnapshot)) {
+      // eslint-disable-next-line no-console -- intentionally surfacing
+      // to operators so they understand why the pipeline didn't run.
+      console.log(
+        "[Nextly schema] No changes detected since last apply; skipping push (dequal cache hit)."
+      );
+      return {
+        success: true,
+        statementsExecuted: 0,
+        renamesApplied: 0,
+        // Zero-count summary — same shape as the full-success branch,
+        // so the dispatcher's notification rendering doesn't have to
+        // distinguish "no-op" from "real-success-with-no-ops".
+        summary: {
+          added: 0,
+          removed: 0,
+          renamed: 0,
+          changed: 0,
+        },
+      };
+    }
+
+    // Phase 5: pass `batch: -1` for HMR/dev pushes so audit queries
+    // can filter them out (`WHERE batch >= 0` shows production
+    // migrations only). UI-driven pushes count as "intentional"
+    // changes a user committed via the admin and don't need the
+    // sentinel; they default to 0.
     const journalId = await this.deps.migrationJournal.recordStart({
       source,
       statementsPlanned: 0,
       scope,
+      batch: source === "code" ? -1 : undefined,
     });
 
     try {
@@ -545,13 +603,26 @@ export class PushSchemaPipeline {
         // as `tablesFilter` so its introspection is scoped to just our
         // managed tables. SQLite/MySQL discard this; their data-loss
         // safety relies entirely on `filterUnsafeStatements` below.
+        //
+        // Phase 5 (2026-05-01): wrap the call in `withCapturedStdout`
+        // so any chatter drizzle-kit writes to process.stdout / stderr
+        // during introspection gets rerouted to logger.debug instead
+        // of leaking into the dev console. See stdout-capture.ts for
+        // the scope-caveat (we use the sync-return path, not .apply()).
         const desiredTableNames = Object.keys(drizzleSchema);
         let pushResult: PushSchemaPassResult;
         try {
-          pushResult = await kit.pushSchema(
-            drizzleSchema,
-            tx,
-            desiredTableNames
+          // Phase 5: PushSchemaPipelineDeps doesn't currently include a
+          // logger field — drop captured output silently. Operators
+          // wanting drizzle-kit's chatter set DEBUG_SCHEMA=1 (planned
+          // follow-up) or wire a console.debug shim here. Adding a
+          // logger to deps is a contract change; keep it for a separate
+          // PR if real demand surfaces.
+          pushResult = await withCapturedStdout(
+            () => kit.pushSchema(drizzleSchema, tx, desiredTableNames),
+            process.env.DEBUG_SCHEMA === "1"
+              ? { debug: (msg: string) => console.debug(msg) }
+              : undefined
           );
         } catch (err) {
           throw new PushSchemaError(
@@ -599,6 +670,13 @@ export class PushSchemaPipeline {
       // post-resolution ops so the journal row carries audit-friendly
       // counts ("1 added, 1 renamed") for the admin NotificationCenter.
       const summary = computeJournalSummaryFromOperations(resolvedOps);
+
+      // Phase 5: cache the desired snapshot now that the apply succeeded.
+      // Future apply() calls with an unchanged desired short-circuit at
+      // the top of this method. We only set the cache on the success
+      // path — failed applies leave the cache untouched so the next
+      // call retries the full pipeline.
+      setCachedSnapshot(desired);
 
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: true,
