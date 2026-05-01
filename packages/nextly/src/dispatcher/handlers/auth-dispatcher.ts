@@ -108,8 +108,19 @@ const AUTH_METHODS: Record<string, MethodHandler<AuthService>> = {
 const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
   // Role operations
   listRoles: {
-    execute: (c, p) =>
-      c.roles.listRoles({
+    // Same root cause + fix as `user-dispatcher.ts:listUsers` (see PR
+    // #125): the underlying RoleQueryService.listRoles returns the
+    // raw `{ data, meta }` shape with no `statusCode` field, so the
+    // dispatcher's smart-extraction path (dispatcher.ts:180) skipped
+    // it and the dumb fallback wrapped the whole object as `data`,
+    // producing the double-nested `{ data: { data, meta } }` shape
+    // the admin "Roles" dropdown chokes on. Wrapping the result with
+    // `{ statusCode: 200, data, meta }` triggers the smart path and
+    // yields the canonical single-envelope `{ data, meta }`.
+    // Phase 4 will replace this with a consistent `PaginatedDocs<T>`
+    // migration across all endpoints.
+    execute: async (c, p) => {
+      const result = await c.roles.listRoles({
         page: toNumber(p.page),
         pageSize: toNumber(p.pageSize),
         search: p.search,
@@ -119,7 +130,14 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
         sortBy: p.sortBy as "name" | "level" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
         includePermissions: toBoolean(p.includePermissions),
-      }),
+      });
+      return {
+        success: true,
+        statusCode: 200,
+        data: result.data,
+        meta: result.meta,
+      };
+    },
   },
   getRoleById: {
     execute: (c, p) => c.roles.getRoleById(requireParam(p, "roleId", "RoleId")),

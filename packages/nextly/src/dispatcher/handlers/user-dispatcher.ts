@@ -26,8 +26,29 @@ type UsersService = ServiceContainer["users"];
 
 const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   listUsers: {
-    execute: (svc, p) =>
-      svc.listUsers({
+    // UserQueryService.listUsers returns the raw shape
+    // `{ data: MinimalUser[], meta: {...} }`. The dispatcher's
+    // smart-extraction path (dispatcher.ts:180) only triggers when
+    // the result has a `statusCode` or `status` field. Without one,
+    // the dumb fallback wraps the WHOLE return as `data`, producing
+    // the double-nested `{ data: { data: [...], meta: {...} } }`
+    // shape the admin Users page hits.
+    //
+    // Wrapping the result with `statusCode: 200` here triggers the
+    // smart path so `data` and `meta` are extracted correctly into
+    // the response envelope. Mirrors the shape `form-dispatcher.ts`
+    // uses for `listForms` and the `CollectionServiceResult<T>`
+    // shape collection services already return.
+    //
+    // Phase 4 (deferred from Task 24, see
+    // `tasks/nextly-dev-tasks/24-payload-alignment-and-fixes.md`)
+    // will migrate user endpoints to Payload's `PaginatedDocs<T>`
+    // shape (`{ docs, totalDocs, totalPages, page, limit }`) and
+    // make this wrapping unnecessary. Until then, this surgical
+    // fix unblocks the admin UI without changing the public
+    // response contract.
+    execute: async (svc, p) => {
+      const result = await svc.listUsers({
         page: toNumber(p.page),
         pageSize: toNumber(p.pageSize),
         search: p.search,
@@ -37,7 +58,14 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         createdAtTo: toDate(p.createdAtTo),
         sortBy: p.sortBy as "createdAt" | "name" | "email" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
-      }),
+      });
+      return {
+        success: true,
+        statusCode: 200,
+        data: result.data,
+        meta: result.meta,
+      };
+    },
   },
   getUserById: {
     execute: (svc, p) => svc.getUserById(requireParam(p, "userId", "UserId")),
