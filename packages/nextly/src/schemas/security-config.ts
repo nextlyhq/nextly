@@ -22,7 +22,11 @@ import { z } from "zod";
  * Omitted headers use their secure defaults (see `security-headers.ts`).
  */
 export const SecurityHeadersConfigSchema = z.object({
-  /** @default "default-src 'none'; frame-ancestors 'none'" */
+  /**
+   * Audit M3 (T-020). Default is a restrictive policy that still lets
+   * a self-hosted admin SPA run. See `SecurityHeadersConfig.contentSecurityPolicy`
+   * in `middleware/security-headers.ts` for the full default + override docs.
+   */
   contentSecurityPolicy: z.union([z.string(), z.literal(false)]).optional(),
   /** @default "nosniff" */
   xContentTypeOptions: z.union([z.string(), z.literal(false)]).optional(),
