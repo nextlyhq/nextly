@@ -552,6 +552,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                       href={href}
                       onClick={() => setSelectedMain(item.id)}
                       className={className}
+                      data-active={isSelected}
                     >
                       {iconContent}
                     </Link>
@@ -559,6 +560,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                     <button
                       onClick={() => setSelectedMain(item.id)}
                       className={className}
+                      data-active={isSelected}
                     >
                       {iconContent}
                     </button>

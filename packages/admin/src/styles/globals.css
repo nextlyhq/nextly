@@ -1219,24 +1219,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   transition: none !important;
 }
 
-/* Explicitly force Active State styles to resolve non-implementation */
-[data-sidebar="menu-button"][data-active="true"],
-[data-sidebar="menu-sub-button"][data-active="true"],
-[data-sidebar="menu-item"][data-active="true"] .peer\/menu-button,
-[data-sidebar="menu-item"][data-active="true"] [data-sidebar="menu-button"] {
-  background-color: #000000 !important;
-  color: #ffffff !important;
-}
-
-[data-sidebar="menu-button"][data-active="true"] svg,
-[data-sidebar="menu-sub-button"][data-active="true"] svg,
-[data-sidebar="menu-item"][data-active="true"] .peer\/menu-button svg,
-[data-sidebar="menu-item"][data-active="true"]
-  [data-sidebar="menu-button"]
-  svg {
-  color: #ffffff !important;
-}
-
 [data-sidebar="group"] {
   padding: 0.375rem;
 }
@@ -2019,7 +2001,8 @@ button[data-slot="radio-group-item"][data-state="checked"],
   @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
 
-.hover-unified:hover svg {
+.hover-unified:hover svg,
+[data-active="true"] svg {
   color: hsl(var(--primary)) !important;
 }
 
