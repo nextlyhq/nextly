@@ -116,7 +116,19 @@ export async function introspectLiveSnapshot(
       columns: rows.map(
         (r): ColumnSpec => ({
           name: r.name,
-          type: r.type,
+          // SQLite's PRAGMA table_info auto-uppercases the type name
+          // ("text" becomes "TEXT"), even though Drizzle emits lowercase
+          // declarations in CREATE TABLE. The
+          // `field-column-descriptor` (the desired-side source of
+          // truth) renders lowercase tokens to match drizzle-orm's
+          // own introspection convention. Without this lowercase
+          // pass, every boot/HMR diff sees fake `TEXT -> text`
+          // type-change events on every column and classifies the
+          // collection as "needs review", which silently blocks
+          // legitimate code-first applies (rename, add, drop) from
+          // ever running. Lowercasing here is safe because SQLite
+          // type names are case-insensitive at the engine level.
+          type: r.type.toLowerCase(),
           // SQLite stores notnull as 0/1 integer.
           nullable: r.notnull === 0,
           // dflt_value can be string, number, null, or undefined.

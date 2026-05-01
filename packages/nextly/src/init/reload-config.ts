@@ -149,7 +149,14 @@ export async function reloadNextlyConfig(opts?: {
   let migrationJournal: MigrationJournal | undefined;
   try {
     logger = (await resolve("logger")) as LoggerLike;
-    adapter = (await resolve("databaseAdapter")) as AdapterLike;
+    // The adapter is registered under the key "adapter" in
+    // packages/nextly/src/di/register.ts. A stale "databaseAdapter"
+    // key here used to silently throw, which the catch below swallowed,
+    // so reloadNextlyConfig returned without doing anything. End result:
+    // code-first HMR + boot-time auto-apply silently never fired,
+    // and renames/drops in `nextly.config.ts` never propagated to the
+    // DB until the user manually ran `nextly db:sync`.
+    adapter = (await resolve("adapter")) as AdapterLike;
     migrationJournal = (await resolve("migrationJournal")) as
       | MigrationJournal
       | undefined;
