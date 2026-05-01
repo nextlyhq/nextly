@@ -6,8 +6,27 @@
  * collections service). `listCollections` filters the results by the
  * caller's effective read permissions so non-super-admin users only see
  * collections they can actually read.
+ *
+ * Phase 4 Task 8: every non-bulk handler returns a Response built via
+ * the respondX helpers in `../../api/response-shapes.ts`. The
+ * dispatcher passes the Response through unchanged. See spec §5.1 for
+ * the canonical shape contract.
+ *
+ * Bulk operations (`bulkDeleteEntries`, `bulkUpdateEntries`,
+ * `bulkUpdateByQuery`) are deferred to Phase 4.5 and intentionally
+ * keep their legacy `CollectionServiceResult` shape, and the dispatcher's
+ * smart-extract path still handles them until that follow-up lands.
  */
 
+import {
+  respondAction,
+  respondCount,
+  respondData,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "../../api/response-shapes";
+import { NextlyError } from "../../errors";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -58,6 +77,95 @@ import type { MethodHandler, Params } from "../types";
 
 type CollectionsHandlerType = CollectionsHandler;
 
+/**
+ * Translate the legacy `{ total, page, pageSize, totalPages }` shape
+ * (used by the metadata service) into the canonical `PaginationMeta`
+ * shape that `respondList` expects. Mirrors the helper in
+ * `user-dispatcher.ts` and `auth-dispatcher.ts`; we keep it local for
+ * now and dedupe in a follow-up once every dispatcher uses it.
+ */
+function toPaginationMeta(meta: {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}) {
+  return {
+    total: meta.total,
+    page: meta.page,
+    limit: meta.pageSize,
+    totalPages: meta.totalPages,
+    hasNext: meta.page < meta.totalPages,
+    hasPrev: meta.page > 1,
+  };
+}
+
+/**
+ * Translate a `PaginatedResponse<T>` from the entry-query service into
+ * the canonical `PaginationMeta`. The query service uses a different
+ * field set (`docs`, `totalDocs`, `limit`, `page`, `totalPages`,
+ * `hasNextPage`, `hasPrevPage`) than the metadata service, so we have
+ * a second small translator instead of forcing one shape to bend.
+ */
+function paginatedResponseToMeta(p: {
+  totalDocs: number;
+  limit: number;
+  page: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+}) {
+  return {
+    total: p.totalDocs,
+    page: p.page,
+    limit: p.limit,
+    totalPages: p.totalPages,
+    hasNext: p.hasNextPage,
+    hasPrev: p.hasPrevPage,
+  };
+}
+
+/**
+ * Unwrap a legacy `{ success, statusCode, message, data, meta? }`
+ * envelope and throw a NextlyError on failure. The migrated handlers
+ * use this so that the wire path matches the canonical shape contract:
+ * success branches reach respondX with bare data, failures throw and
+ * the dispatcher's NextlyError catch block builds the error response.
+ *
+ * We pass the legacy `message` through as `logMessage` (operator-facing
+ * only, never serialised to the wire per §13.8). The wire sees the
+ * canonical publicMessage from NextlyError.notFound / .internal.
+ */
+function unwrapServiceResult<T>(
+  result: {
+    success: boolean;
+    statusCode?: number;
+    message?: string;
+    data?: T | null;
+  },
+  logContext?: Record<string, unknown>
+): T {
+  if (result.success) {
+    // Casting through unknown is safe here: success === true contract
+    // guarantees `data` is the T value (the metadata + entry services
+    // never set data to null on success).
+    return result.data as T;
+  }
+  // Map known status codes to specific NextlyError factories so the
+  // wire response carries the right code + statusCode. Unknown status
+  // codes fall through to internal so we never mask an unexpected
+  // failure as a 200/404.
+  const status = result.statusCode ?? 500;
+  const ctx = { legacyMessage: result.message, ...logContext };
+  if (status === 404) throw NextlyError.notFound({ logContext: ctx });
+  if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
+  if (status === 409) throw NextlyError.conflict({ logContext: ctx });
+  // 400 + 500 + everything else: internal-shaped public message keeps
+  // the §13.8 rubric (no driver text, no identifier echo). Log line
+  // gets the legacy service message so operators can still diagnose.
+  throw NextlyError.internal({ logContext: ctx });
+}
+
 // F14 v1: decides whether the apply payload carries actionable rename
 // hints we should log a debug receipt for. Pulled out as a pure helper
 // so tests can pin the "non-empty renames map only" semantics without
@@ -104,10 +212,29 @@ const COLLECTIONS_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   createCollection: {
-    execute: (svc, _, body) =>
-      svc.createCollection(requireBody(body, "Collection data is required")),
+    // Phase 4: respondMutation 201. The metadata service still returns
+    // the legacy CollectionServiceResult envelope; we unwrap it and
+    // pass the legacy success message through as the toast string so
+    // existing admin UIs see the same copy ("Collection created!
+    // Restart the app...").
+    execute: async (svc, _, body) => {
+      const result = await svc.createCollection(
+        requireBody(body, "Collection data is required")
+      );
+      const collection = unwrapServiceResult(result);
+      return respondMutation(
+        result.message ?? "Collection created.",
+        collection,
+        { status: 201 }
+      );
+    },
   },
   listCollections: {
+    // Phase 4: respondList. Translates the legacy CollectionServiceResult
+    // `{ data, meta }` envelope to the canonical `{ items, meta }` body.
+    // Permission filtering (non-super-admins only see collections they
+    // can read) runs after unwrap so the meta we ship reflects the
+    // FILTERED counts, not the pre-filter totals.
     execute: async (svc, p) => {
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -116,15 +243,48 @@ const COLLECTIONS_METHODS: Record<
         sortBy: p.sortBy as "slug" | "createdAt" | "updatedAt" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
       });
+      // Service returns legacy { success, data, meta }. Unwrap throws on
+      // failure (which the dispatcher converts to a NextlyError response).
+      const data = unwrapServiceResult<unknown>(result);
+      const items = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+
+      // Legacy meta uses pageSize/total/totalPages, translate to the
+      // canonical PaginationMeta shape via toPaginationMeta below.
+      const legacyMeta = result.meta as
+        | {
+            total?: number;
+            page?: number;
+            pageSize?: number;
+            totalPages?: number;
+          }
+        | undefined;
+      const baseMeta = {
+        total: typeof legacyMeta?.total === "number" ? legacyMeta.total : items.length,
+        page: typeof legacyMeta?.page === "number" ? legacyMeta.page : 1,
+        pageSize:
+          typeof legacyMeta?.pageSize === "number"
+            ? legacyMeta.pageSize
+            : items.length,
+        totalPages:
+          typeof legacyMeta?.totalPages === "number" ? legacyMeta.totalPages : 1,
+      };
 
       const userId = p._authenticatedUserId
         ? String(p._authenticatedUserId)
         : undefined;
-      if (!userId) return result;
+      if (!userId) {
+        return respondList(items, toPaginationMeta(baseMeta));
+      }
 
       const superAdmin = await isSuperAdmin(userId);
-      if (superAdmin) return result;
+      if (superAdmin) {
+        return respondList(items, toPaginationMeta(baseMeta));
+      }
 
+      // Non-super-admin: filter the page to collections this user can
+      // actually read. We rebuild total + totalPages on the filtered
+      // array so the admin's pagination footer matches what the user
+      // actually sees.
       const permissionPairs = await listEffectivePermissions(userId);
       const readableResources = new Set(
         permissionPairs
@@ -132,69 +292,70 @@ const COLLECTIONS_METHODS: Record<
           .map(pair => pair.split(":")[0])
       );
 
-      type ListResult = {
-        data?: unknown;
-        meta?: Record<string, unknown>;
-      } & Record<string, unknown>;
-
-      const typedResult = result as unknown as ListResult;
-      if (
-        !typedResult ||
-        typeof typedResult !== "object" ||
-        !("data" in typedResult)
-      ) {
-        return result;
-      }
-
       type CollectionItem = { slug?: string; name?: string };
-      const data = Array.isArray(typedResult.data)
-        ? (typedResult.data as CollectionItem[])
-        : [];
-
-      const filtered = data.filter(collection => {
+      const filtered = (items as CollectionItem[]).filter(collection => {
         const slug = collection?.slug ?? collection?.name;
         return slug ? readableResources.has(String(slug)) : false;
       });
 
-      const meta =
-        typedResult.meta && typeof typedResult.meta === "object"
-          ? { ...typedResult.meta }
-          : undefined;
-
-      if (meta) {
-        meta.total = filtered.length;
-        if (typeof meta.pageSize === "number" && meta.pageSize > 0) {
-          meta.totalPages = Math.max(
-            1,
-            Math.ceil(filtered.length / meta.pageSize)
-          );
-        }
-      }
-
-      return {
-        ...typedResult,
-        data: filtered,
-        ...(meta && { meta }),
+      const filteredMeta = {
+        total: filtered.length,
+        page: baseMeta.page,
+        pageSize: baseMeta.pageSize,
+        totalPages:
+          baseMeta.pageSize > 0
+            ? Math.max(1, Math.ceil(filtered.length / baseMeta.pageSize))
+            : 1,
       };
+
+      return respondList(filtered, toPaginationMeta(filteredMeta));
     },
   },
   getCollection: {
-    execute: (svc, p) => {
+    // Phase 4: respondDoc. Bare doc body (no { data } wrapper).
+    execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      return svc.getCollection({ collectionName: p.collectionName });
+      const result = await svc.getCollection({ collectionName: p.collectionName });
+      const collection = unwrapServiceResult(result, {
+        slug: p.collectionName,
+      });
+      return respondDoc(collection);
     },
   },
   updateCollection: {
-    execute: (svc, p, body) => {
+    // Phase 4: respondMutation 200. Pass the legacy success message
+    // through so existing toast copy ("Collection updated successfully")
+    // is preserved.
+    execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and update data are required");
-      return svc.updateCollection({ collectionName: p.collectionName }, body);
+      const result = await svc.updateCollection(
+        { collectionName: p.collectionName },
+        body
+      );
+      const collection = unwrapServiceResult(result, {
+        slug: p.collectionName,
+      });
+      return respondMutation(
+        result.message ?? "Collection updated.",
+        collection
+      );
     },
   },
   deleteCollection: {
-    execute: (svc, p) => {
+    // Phase 4: respondMutation 200. The deleted record is the `item`.
+    execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      return svc.deleteCollection({ collectionName: p.collectionName });
+      const result = await svc.deleteCollection({
+        collectionName: p.collectionName,
+      });
+      const collection = unwrapServiceResult(result, {
+        slug: p.collectionName,
+      });
+      return respondMutation(
+        result.message ?? "Collection deleted.",
+        collection
+      );
     },
   },
   // Preview schema changes (dry-run diff with row-count impact)
@@ -279,11 +440,20 @@ const COLLECTIONS_METHODS: Record<
         defaultSuggestion: c.defaultSuggestion,
       }));
 
-      return {
-        ...legacyShape,
+      // Phase 4: respondData. previewSchemaChanges returns a custom
+      // preview payload (legacyShape + renamed + schemaVersion) with no
+      // CRUD analog (respondData ships the bare object as the body).
+      // We spread legacyShape into a new object so the resulting body
+      // has at least the renamed/schemaVersion fields, never empty.
+      // Cast through `unknown` because SchemaPreviewResult is a sealed
+      // shape with no string index signature; respondData's generic
+      // requires a Record<string, unknown> for spread compatibility.
+      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
+      return respondData({
+        ...legacyAsRecord,
         renamed,
         schemaVersion: collection.schemaVersion,
-      };
+      });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
@@ -594,27 +764,29 @@ const COLLECTIONS_METHODS: Record<
         // routeHandler may be unavailable in non-server contexts (tests).
       }
 
-      return {
-        success: true,
-        message: `Schema applied for '${p.collectionName}'`,
-        // Pipeline result's bumped version; fall back to inferred bump
-        // if the readNewSchemaVersionsForSlugs callback didn't surface
-        // the slug (e.g., registry cache missed).
+      // Phase 4: respondAction. applySchemaChanges is a non-CRUD
+      // mutation: there's no "item" to surface. The action result
+      // carries the new schema version (so the admin can update its
+      // X-Schema-Version header probe) and a toast summary string.
+      // toastSummary may be undefined when the pipeline didn't emit
+      // diff counts; respondAction silently drops undefined fields
+      // because we use a conditional spread.
+      return respondAction(`Schema applied for '${p.collectionName}'`, {
         newSchemaVersion:
           result.newSchemaVersions[p.collectionName] ?? currentVersion + 1,
-        // F10 PR 6: a contextual toast summary for the admin Save flow.
-        // The pipeline already computed the diff counts for the journal;
-        // we render them as "1 field added" / "1 field added, 1 renamed"
-        // here so the admin doesn't need to recompute. Undefined-safe:
-        // older clients will fall through to a generic toast string.
-        toastSummary: result.summary
-          ? formatToastSummary(result.summary)
-          : undefined,
-      };
+        ...(result.summary
+          ? { toastSummary: formatToastSummary(result.summary) }
+          : {}),
+      });
     },
   },
   listEntries: {
-    execute: (svc, p) => {
+    // Phase 4: respondList. The entry-query service wraps a
+    // PaginatedResponse (`{ docs, totalDocs, limit, page, totalPages,
+    // hasNextPage, hasPrevPage, ... }`) in CollectionServiceResult; we
+    // unwrap it and translate to canonical PaginationMeta via
+    // paginatedResponseToMeta.
+    execute: async (svc, p) => {
       requireParam(p, "collectionName");
 
       // Build sort parameter from sortBy and sortOrder.
@@ -629,7 +801,7 @@ const COLLECTIONS_METHODS: Record<
       // Accept both `limit` (standard API param) and `pageSize` (legacy/admin).
       const rawLimit = p.limit ?? p.pageSize;
 
-      return svc.listEntries({
+      const result = await svc.listEntries({
         collectionName: p.collectionName,
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
@@ -642,9 +814,26 @@ const COLLECTIONS_METHODS: Record<
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         sort,
       });
+
+      type PaginatedShape = {
+        docs: unknown[];
+        totalDocs: number;
+        limit: number;
+        page: number;
+        totalPages: number;
+        hasNextPage: boolean;
+        hasPrevPage: boolean;
+      };
+      const paginated = unwrapServiceResult<PaginatedShape>(result, {
+        collectionName: p.collectionName,
+      });
+      return respondList(paginated.docs, paginatedResponseToMeta(paginated));
     },
   },
   countEntries: {
+    // Phase 4: respondCount. Wire shape canonicalises on `{ total }`
+    // (legacy services returned `{ totalDocs }`, and frontend code that
+    // reads `body.totalDocs` is being migrated alongside this task).
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
       const result = await svc.countEntries({
@@ -652,19 +841,18 @@ const COLLECTIONS_METHODS: Record<
         search: p.search,
         where: parseWhereParam(p.where),
       });
-      // Return simple { totalDocs } format expected by the frontend.
-      // The entryApi.count() frontend method expects this format.
-      if (result.success && result.data) {
-        return result.data;
-      }
-      throw new Error(result.message || "Failed to count entries");
+      const data = unwrapServiceResult<{ totalDocs: number }>(result, {
+        collectionName: p.collectionName,
+      });
+      return respondCount(data.totalDocs);
     },
   },
   createEntry: {
-    execute: (svc, p, body) => {
+    // Phase 4: respondMutation 201.
+    execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and entry data are required");
-      return svc.createEntry(
+      const result = await svc.createEntry(
         {
           collectionName: p.collectionName,
           depth:
@@ -681,14 +869,21 @@ const COLLECTIONS_METHODS: Record<
         },
         body as Record<string, unknown>
       );
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+      });
+      return respondMutation(result.message ?? "Entry created.", entry, {
+        status: 201,
+      });
     },
   },
   getEntry: {
-    execute: (svc, p) => {
+    // Phase 4: respondDoc.
+    execute: async (svc, p) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
-      return svc.getEntry({
+      const result = await svc.getEntry({
         collectionName: p.collectionName,
         entryId: p.entryId,
         depth:
@@ -696,16 +891,22 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
       });
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+      });
+      return respondDoc(entry);
     },
   },
   updateEntry: {
-    execute: (svc, p, body) => {
+    // Phase 4: respondMutation 200.
+    execute: async (svc, p, body) => {
       if (!p.collectionName || !p.entryId || !body) {
         throw new Error(
           "collectionName, entryId, and update data are required"
         );
       }
-      return svc.updateEntry(
+      const result = await svc.updateEntry(
         {
           collectionName: p.collectionName,
           entryId: p.entryId,
@@ -723,14 +924,20 @@ const COLLECTIONS_METHODS: Record<
         },
         body as Record<string, unknown>
       );
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+      });
+      return respondMutation(result.message ?? "Entry updated.", entry);
     },
   },
   deleteEntry: {
-    execute: (svc, p) => {
+    // Phase 4: respondMutation 200. The deleted record is the `item`.
+    execute: async (svc, p) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
-      return svc.deleteEntry({
+      const result = await svc.deleteEntry({
         collectionName: p.collectionName,
         entryId: p.entryId,
         userId: p._authenticatedUserId
@@ -743,8 +950,19 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
       });
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        entryId: p.entryId,
+      });
+      return respondMutation(result.message ?? "Entry deleted.", entry);
     },
   },
+  // PHASE 4.5: bulk operations migrate in a follow-up. Their current
+  // shape is intentionally unchanged (they still return the legacy
+  // CollectionServiceResult envelope which the dispatcher's
+  // smart-extract path handles). Do NOT migrate to respondX helpers
+  // here: the bulk wire shape needs its own design pass (partial
+  // success + per-id error surface) that's outside Task 8's scope.
   bulkDeleteEntries: {
     execute: (svc, p, body) => {
       const b = body as { ids?: string[] } | undefined;
@@ -769,6 +987,7 @@ const COLLECTIONS_METHODS: Record<
       });
     },
   },
+  // PHASE 4.5: see bulkDeleteEntries comment above.
   bulkUpdateEntries: {
     execute: (svc, p, body) => {
       const b = body as
@@ -799,6 +1018,7 @@ const COLLECTIONS_METHODS: Record<
       });
     },
   },
+  // PHASE 4.5: see bulkDeleteEntries comment above.
   bulkUpdateByQuery: {
     execute: (svc, p, body) => {
       const b = body as
@@ -828,12 +1048,16 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   duplicateEntry: {
-    execute: (svc, p, body) => {
+    // Phase 4: respondMutation 201. duplicateEntry is fundamentally a
+    // create: it produces a new row. The bulk-service implementation
+    // delegates to mutationService.createEntry which already returns
+    // statusCode 201, so the wire status matches end-to-end.
+    execute: async (svc, p, body) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
       const b = body as { overrides?: Record<string, unknown> } | undefined;
-      return svc.duplicateEntry({
+      const result = await svc.duplicateEntry({
         collectionName: p.collectionName,
         entryId: p.entryId,
         overrides: b?.overrides,
@@ -846,6 +1070,13 @@ const COLLECTIONS_METHODS: Record<
         userEmail: p._authenticatedUserEmail
           ? String(p._authenticatedUserEmail)
           : undefined,
+      });
+      const entry = unwrapServiceResult(result, {
+        collectionName: p.collectionName,
+        sourceEntryId: p.entryId,
+      });
+      return respondMutation(result.message ?? "Entry duplicated.", entry, {
+        status: 201,
       });
     },
   },
