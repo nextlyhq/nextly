@@ -1,4 +1,4 @@
-import { createDynamicHandlers } from "@revnixhq/nextly";
+import { createDynamicHandlers } from "@revnixhq/nextly/runtime";
 
 import nextlyConfig from "../../../../../nextly.config";
 

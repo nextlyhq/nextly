@@ -1,9 +1,30 @@
 // What: lazy accessor for drizzle-kit/api. Used only by domains/schema/services/.
 // Why: drizzle-kit/api pulls @libsql native binaries that fail to resolve
-// during `next build`. The webpackIgnore + turbopackIgnore magic comments
-// tell the bundler to leave the import as a runtime-only call. The lazy
-// accessor pattern matches Nextly's existing init.ts singleton convention
-// (globalThis-backed cache survives Turbopack HMR module re-execution).
+// during `next build`. We need the import to (a) survive bundling without
+// pulling drizzle-kit's full dep tree into the client bundle and (b)
+// resolve correctly at runtime regardless of where the bundler placed
+// the importing chunk.
+//
+// Resolution mechanism: `createRequire(import.meta.url)("drizzle-kit/api")`.
+// Same pattern as `next/navigation` resolution in `api/with-error-handler.ts`
+// and `actions/with-action.ts` (Phase 4 step 1, 2026-04-30). createRequire
+// anchors to the calling source file's URL; Turbopack treats createRequire
+// as opaque and leaves it untouched. Falls back to Node's CJS resolver
+// which finds drizzle-kit/api.js wherever pnpm hoisted it.
+//
+// Why this matters here specifically: when Turbopack rebundles nextly's
+// dist into a chunk under `apps/<consumer>/.next/dev/server/chunks/...`
+// (despite serverExternalPackages), a dynamic `import("drizzle-kit/api")`
+// resolves relative to the chunk's location — and drizzle-kit lives at
+// `packages/nextly/node_modules/drizzle-kit/`, unreachable from `.next/`.
+// createRequire's resolution is anchored to `import.meta.url`, which the
+// Turbopack runtime keeps pointing at the original module identity rather
+// than the chunk file. End-users no longer have to install drizzle-kit
+// in their consumer projects to make this work.
+//
+// Lazy + globalThis-backed cache: matches Nextly's existing init.ts
+// singleton convention so HMR module re-execution doesn't re-resolve
+// the module on every save.
 
 // Result returned by drizzle-kit's pushSchema before apply() runs.
 export interface PushSchemaResult {
@@ -93,17 +114,22 @@ type DrizzleKitCache = {
 
 const g = globalThis as DrizzleKitCache;
 
-// Loads drizzle-kit/api once per process. The webpackIgnore + turbopackIgnore
-// magic comments are documented Next.js features that prevent the bundler
-// from tracing through this dynamic import (Next.js 16.2 docs:
-// https://nextjs.org/docs/app/guides/lazy-loading#skip-bundling-with-webpackignore-and-turbopackignore-magic-comments).
+// Loads drizzle-kit/api once per process via createRequire. The accessor
+// stays async even though `require()` is sync — callers (getPgDrizzleKit
+// etc.) already `await loadModule()` and changing them to sync would be
+// a needless API churn for callers that have to await the rest of the
+// pipeline anyway.
+//
+// Why CJS-via-createRequire instead of dynamic import("drizzle-kit/api"):
+// see header comment. drizzle-kit ships both api.js (CJS) and api.mjs
+// (ESM); createRequire grabs api.js (CJS). The exported names are
+// identical between the two builds — same shape as DrizzleKitRawModule.
+import { createRequire } from "node:module";
+
 async function loadModule(): Promise<DrizzleKitRawModule> {
   if (g.__nextly_drizzleKitModule) return g.__nextly_drizzleKitModule;
-  const mod = (await import(
-    /* webpackIgnore: true */
-    /* turbopackIgnore: true */
-    "drizzle-kit/api"
-  )) as DrizzleKitRawModule;
+  const require = createRequire(import.meta.url);
+  const mod = require("drizzle-kit/api") as DrizzleKitRawModule;
   g.__nextly_drizzleKitModule = mod;
   return mod;
 }

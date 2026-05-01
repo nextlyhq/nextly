@@ -50,6 +50,15 @@ export const nextlyMigrationJournalSqlite = sqliteTable(
     summaryRemoved: integer("summary_removed"),
     summaryRenamed: integer("summary_renamed"),
     summaryChanged: integer("summary_changed"),
+
+    // Phase 5 (2026-05-01): batch sentinel for distinguishing dev-time
+    // pushes from production migrations. -1 = HMR/dev push (the
+    // pipeline sets this when source=="code"); 0+ = production migration
+    // batch numbers (incremented by the migration runner — currently
+    // unused but reserved for symmetry with Payload's pattern). Default
+    // 0 keeps existing audit queries simple: `WHERE batch >= 0` returns
+    // production migrations, `WHERE batch < 0` returns dev pushes.
+    batch: integer("batch").notNull().default(0),
   },
   table => [
     index("nextly_migration_journal_status_idx").on(table.status),

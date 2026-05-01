@@ -4,6 +4,12 @@
  * Generates Drizzle ORM table schemas at runtime from field definitions.
  * This is used for UI-created collections that don't have pre-compiled TypeScript schemas.
  *
+ * Phase 5 (2026-05-01): per-field type mapping is delegated to
+ * `field-column-descriptor.ts` so that this generator and the diff
+ * engine's `build-from-fields.ts` stay in lockstep. Adding a new field
+ * type means updating the descriptor module; this file just translates
+ * the descriptor's `kind` to the right Drizzle column builder.
+ *
  * @module services/schema/runtime-schema-generator
  */
 
@@ -33,27 +39,21 @@ import {
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 
-export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
+import {
+  type ColumnDescriptor,
+  type ColumnKind,
+  type SupportedDialect as DescriptorDialect,
+  getColumnDescriptor,
+  getSystemColumnDescriptors,
+} from "./field-column-descriptor";
+
+export type SupportedDialect = DescriptorDialect;
 
 // Return type for generateRuntimeSchema - provides the Drizzle table object
 // and a schemaRecord keyed by table name for pushSchema() consumption.
 export interface RuntimeSchemaResult {
   table: unknown; // PgTable | MySqlTable | SqliteTable
   schemaRecord: Record<string, unknown>; // { [tableName]: table } for pushSchema()
-}
-
-// Layout-only field types that don't create database columns
-const LAYOUT_FIELD_TYPES = new Set(["tabs", "collapsible", "row"]);
-
-/**
- * Convert a camelCase field name to snake_case for database column names.
- * Matches the conversion used in schema-generator.ts.
- */
-function toSnakeCase(name: string): string {
-  return name
-    .replace(/([A-Z])/g, "_$1")
-    .toLowerCase()
-    .replace(/^_/, "");
 }
 
 /**
@@ -93,33 +93,7 @@ function generatePostgresSchema(
   tableName: string,
   fields: FieldDefinition[]
 ): unknown {
-  // Check if fields define their own reserved columns (to avoid duplicates)
-  const hasSlugField = fields.some(f => f.name === "slug");
-  const hasTitleField = fields.some(f => f.name === "title");
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle ORM requires dialect-specific column builders
-  const columns: Record<string, any> = {
-    // Standard system columns mirrored by buildDesiredTableFromFields
-    // so the diff engine sees the same desired shape this generator
-    // produces at runtime. Match those two paths if you change this list.
-    id: pgText("id").primaryKey(),
-    // Title column added unless explicitly defined in fields
-    ...(hasTitleField ? {} : { title: pgText("title").notNull() }),
-    // Slug column added only if not defined as a collection field
-    ...(hasSlugField ? {} : { slug: pgText("slug").notNull() }),
-    created_at: pgTimestamp("created_at").defaultNow(),
-    updated_at: pgTimestamp("updated_at").defaultNow(),
-  };
-
-  // Add columns for each field
-  for (const field of fields) {
-    const columnName = field.name;
-    const column = mapFieldToPostgresColumn(field);
-    if (column) {
-      columns[columnName] = column;
-    }
-  }
-
+  const columns = buildDrizzleColumnRecord(fields, "postgresql");
   return pgTable(tableName, columns);
 }
 
@@ -127,35 +101,7 @@ function generateMySQLSchema(
   tableName: string,
   fields: FieldDefinition[]
 ): unknown {
-  const hasSlugField = fields.some(f => f.name === "slug");
-  const hasTitleField = fields.some(f => f.name === "title");
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle ORM requires dialect-specific column builders
-  const columns: Record<string, any> = {
-    // Standard system columns mirrored by buildDesiredTableFromFields
-    // so the diff engine sees the same desired shape this generator
-    // produces at runtime. Match those two paths if you change this list.
-    id: mysqlVarchar("id", { length: 36 }).primaryKey(),
-    // Title column added unless explicitly defined in fields
-    ...(hasTitleField
-      ? {}
-      : { title: mysqlVarchar("title", { length: 255 }).notNull() }),
-    ...(hasSlugField
-      ? {}
-      : { slug: mysqlVarchar("slug", { length: 255 }).notNull() }),
-    created_at: mysqlTimestamp("created_at").defaultNow(),
-    updated_at: mysqlTimestamp("updated_at").defaultNow(),
-  };
-
-  // Add columns for each field
-  for (const field of fields) {
-    const columnName = field.name;
-    const column = mapFieldToMySQLColumn(field);
-    if (column) {
-      columns[columnName] = column;
-    }
-  }
-
+  const columns = buildDrizzleColumnRecord(fields, "mysql");
   return mysqlTable(tableName, columns);
 }
 
@@ -163,224 +109,203 @@ function generateSQLiteSchema(
   tableName: string,
   fields: FieldDefinition[]
 ): unknown {
-  const hasSlugField = fields.some(f => f.name === "slug");
-  const hasTitleField = fields.some(f => f.name === "title");
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle ORM requires dialect-specific column builders
-  const columns: Record<string, any> = {
-    // Standard system columns mirrored by buildDesiredTableFromFields
-    // so the diff engine sees the same desired shape this generator
-    // produces at runtime. Match those two paths if you change this list.
-    id: sqliteText("id").primaryKey(),
-    // Title column added unless explicitly defined in fields
-    ...(hasTitleField ? {} : { title: sqliteText("title").notNull() }),
-    ...(hasSlugField ? {} : { slug: sqliteText("slug").notNull() }),
-    created_at: sqliteInteger("created_at", { mode: "timestamp" }),
-    updated_at: sqliteInteger("updated_at", { mode: "timestamp" }),
-  };
-
-  // Add columns for each field
-  for (const field of fields) {
-    const columnName = field.name;
-    const column = mapFieldToSQLiteColumn(field);
-    if (column) {
-      columns[columnName] = column;
-    }
-  }
-
+  const columns = buildDrizzleColumnRecord(fields, "sqlite");
   return sqliteTable(tableName, columns);
 }
 
-function mapFieldToPostgresColumn(field: FieldDefinition): unknown {
-  // Layout-only fields don't create database columns
-  if (LAYOUT_FIELD_TYPES.has(field.type)) return null;
+/**
+ * Builds the dialect-keyed column record consumed by Drizzle's
+ * pgTable / mysqlTable / sqliteTable. Both system columns and
+ * user-field columns flow through `field-column-descriptor.ts`
+ * so this generator and `build-from-fields.ts` stay in lockstep.
+ */
+function buildDrizzleColumnRecord(
+  fields: FieldDefinition[],
+  dialect: SupportedDialect
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle requires dialect-specific column builder unions
+): Record<string, any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
+  const out: Record<string, any> = {};
 
-  const isRequired = field.required === true;
-  const colName = toSnakeCase(field.name);
+  const hasTitleField = fields.some(f => f.name === "title");
+  const hasSlugField = fields.some(f => f.name === "slug");
 
-  switch (field.type) {
-    case "text":
-    case "string": // Legacy alias for text
-    case "email":
-    case "password":
-    case "slug":
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
+  // System columns first (id, created_at, updated_at; conditionally
+  // title/slug). Source-of-truth descriptor list lives in
+  // field-column-descriptor.ts.
+  for (const sys of getSystemColumnDescriptors(dialect, {
+    hasTitleField,
+    hasSlugField,
+  })) {
+    out[sys.name] = buildSystemDrizzleColumn(sys, dialect);
+  }
 
-    case "textarea":
-    case "richText":
-    case "richtext": // Legacy alias
-    case "code":
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
+  // User-defined fields. Layout-only field types and unmapped types
+  // come back as `null` from getColumnDescriptor and are skipped.
+  for (const field of fields) {
+    const desc = getColumnDescriptor(field, dialect);
+    if (!desc) continue;
+    out[field.name] = buildUserDrizzleColumn(desc, dialect);
+  }
 
-    case "number":
-    case "decimal": // Legacy alias for number
-      return isRequired
-        ? pgDoublePrecision(colName).notNull()
-        : pgDoublePrecision(colName);
+  return out;
+}
 
-    case "checkbox":
-    case "boolean": // Legacy alias for checkbox
-      return isRequired ? pgBoolean(colName).notNull() : pgBoolean(colName);
-
-    case "date":
-      return isRequired ? pgTimestamp(colName).notNull() : pgTimestamp(colName);
-
-    case "select":
-    case "radio":
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
-
-    case "relationship":
-    case "relation": // Legacy alias
-    case "upload": {
-      const hasMany = (field as { hasMany?: boolean }).hasMany;
-      const relationTo = (field as { relationTo?: unknown }).relationTo;
-      if (hasMany || Array.isArray(relationTo)) {
-        return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
-      }
-      return pgText(colName);
+/**
+ * Translates a system-column descriptor (id / title / slug /
+ * created_at / updated_at) into the appropriate Drizzle column
+ * builder for the given dialect. Mirrors the legacy hardcoded
+ * builders byte-for-byte: id is primaryKey, title/slug are
+ * notNull, timestamps default to defaultNow on PG/MySQL.
+ */
+function buildSystemDrizzleColumn(
+  sys: ReturnType<typeof getSystemColumnDescriptors>[number],
+  dialect: SupportedDialect
+): unknown {
+  if (dialect === "postgresql") {
+    if (sys.name === "id") return pgText("id").primaryKey();
+    if (sys.name === "created_at") return pgTimestamp("created_at").defaultNow();
+    if (sys.name === "updated_at") return pgTimestamp("updated_at").defaultNow();
+    // title / slug — text NOT NULL.
+    return pgText(sys.name).notNull();
+  }
+  if (dialect === "mysql") {
+    if (sys.name === "id") {
+      return mysqlVarchar("id", { length: 36 }).primaryKey();
     }
-
-    case "repeater":
-    case "group":
-    case "blocks":
-    case "component":
-    case "json":
-    case "chips":
-      return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
-
-    case "point":
-      // Geolocation stored as JSON { lat, lng }
-      return pgJsonb(colName);
-
-    default:
-      // Default to text for unknown types
-      return pgText(colName);
-  }
-}
-
-function mapFieldToMySQLColumn(field: FieldDefinition): unknown {
-  // Layout-only fields don't create database columns
-  if (LAYOUT_FIELD_TYPES.has(field.type)) return null;
-
-  const isRequired = field.required === true;
-  const colName = toSnakeCase(field.name);
-
-  switch (field.type) {
-    case "text":
-    case "string":
-    case "email":
-    case "password":
-    case "slug":
-      return isRequired
-        ? mysqlVarchar(colName, { length: 255 }).notNull()
-        : mysqlVarchar(colName, { length: 255 });
-
-    case "textarea":
-    case "richText":
-    case "richtext":
-    case "code":
-      return isRequired ? mysqlText(colName).notNull() : mysqlText(colName);
-
-    case "number":
-    case "decimal":
-      return isRequired ? mysqlDouble(colName).notNull() : mysqlDouble(colName);
-
-    case "checkbox":
-    case "boolean":
-      return isRequired
-        ? mysqlBoolean(colName).notNull()
-        : mysqlBoolean(colName);
-
-    case "date":
-      return isRequired
-        ? mysqlTimestamp(colName).notNull()
-        : mysqlTimestamp(colName);
-
-    case "select":
-    case "radio":
-      return isRequired
-        ? mysqlVarchar(colName, { length: 255 }).notNull()
-        : mysqlVarchar(colName, { length: 255 });
-
-    case "relationship":
-    case "relation":
-    case "upload": {
-      const hasMany = (field as { hasMany?: boolean }).hasMany;
-      const relationTo = (field as { relationTo?: unknown }).relationTo;
-      if (hasMany || Array.isArray(relationTo)) {
-        return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
-      }
-      return mysqlVarchar(colName, { length: 36 });
+    if (sys.name === "created_at") {
+      return mysqlTimestamp("created_at").defaultNow();
     }
-
-    case "repeater":
-    case "group":
-    case "blocks":
-    case "component":
-    case "json":
-    case "chips":
-      return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
-
-    case "point":
-      return mysqlJson(colName);
-
-    default:
-      return mysqlVarchar(colName, { length: 255 });
+    if (sys.name === "updated_at") {
+      return mysqlTimestamp("updated_at").defaultNow();
+    }
+    return mysqlVarchar(sys.name, { length: 255 }).notNull();
   }
+  // sqlite
+  if (sys.name === "id") return sqliteText("id").primaryKey();
+  if (sys.name === "created_at") {
+    return sqliteInteger("created_at", { mode: "timestamp" });
+  }
+  if (sys.name === "updated_at") {
+    return sqliteInteger("updated_at", { mode: "timestamp" });
+  }
+  return sqliteText(sys.name).notNull();
 }
 
-function mapFieldToSQLiteColumn(field: FieldDefinition): unknown {
-  // Layout-only fields don't create database columns
-  if (LAYOUT_FIELD_TYPES.has(field.type)) return null;
+/**
+ * Translates a user-field descriptor into the appropriate Drizzle
+ * column builder. The descriptor's `kind` is the dispatch key —
+ * the per-dialect Drizzle imports stay isolated to this function.
+ */
+function buildUserDrizzleColumn(
+  desc: ColumnDescriptor,
+  dialect: SupportedDialect
+): unknown {
+  if (dialect === "postgresql") {
+    return buildPgColumnFromKind(desc.kind, desc.name, desc.nullable);
+  }
+  if (dialect === "mysql") {
+    return buildMysqlColumnFromKind(
+      desc.kind,
+      desc.name,
+      desc.nullable,
+      desc.length
+    );
+  }
+  return buildSqliteColumnFromKind(desc.kind, desc.name, desc.nullable);
+}
 
-  const isRequired = field.required === true;
-  const colName = toSnakeCase(field.name);
-
-  switch (field.type) {
+function buildPgColumnFromKind(
+  kind: ColumnKind,
+  name: string,
+  nullable: boolean
+): unknown {
+  switch (kind) {
     case "text":
-    case "string":
-    case "email":
-    case "password":
-    case "slug":
-    case "textarea":
-    case "richText":
-    case "richtext":
-    case "code":
-    case "select":
-    case "radio":
-      return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
-
-    case "number":
-    case "decimal":
-      return isRequired ? sqliteReal(colName).notNull() : sqliteReal(colName);
-
-    case "checkbox":
+    case "longText":
+    case "varchar":
+      return nullable ? pgText(name) : pgText(name).notNull();
     case "boolean":
-      return isRequired
-        ? sqliteInteger(colName, { mode: "boolean" }).notNull()
-        : sqliteInteger(colName, { mode: "boolean" });
-
-    case "date":
-      return isRequired
-        ? sqliteInteger(colName, { mode: "timestamp" }).notNull()
-        : sqliteInteger(colName, { mode: "timestamp" });
-
-    case "relationship":
-    case "relation":
-    case "upload":
-      return sqliteText(colName);
-
-    case "repeater":
-    case "group":
-    case "blocks":
-    case "component":
+      return nullable ? pgBoolean(name) : pgBoolean(name).notNull();
+    case "double":
+      return nullable
+        ? pgDoublePrecision(name)
+        : pgDoublePrecision(name).notNull();
+    case "timestamp":
+      return nullable ? pgTimestamp(name) : pgTimestamp(name).notNull();
     case "json":
-    case "chips":
-    case "point":
-      // SQLite stores structured data as text (JSON)
-      return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
-
-    default:
-      return sqliteText(colName);
+      return nullable ? pgJsonb(name) : pgJsonb(name).notNull();
+    case "fkSingle":
+      return pgText(name);
+    case "skip":
+      return null;
   }
 }
+
+function buildMysqlColumnFromKind(
+  kind: ColumnKind,
+  name: string,
+  nullable: boolean,
+  length: number | undefined
+): unknown {
+  switch (kind) {
+    case "text":
+    case "varchar": {
+      const col = mysqlVarchar(name, { length: length ?? 255 });
+      return nullable ? col : col.notNull();
+    }
+    case "longText":
+      return nullable ? mysqlText(name) : mysqlText(name).notNull();
+    case "boolean":
+      return nullable ? mysqlBoolean(name) : mysqlBoolean(name).notNull();
+    case "double":
+      return nullable ? mysqlDouble(name) : mysqlDouble(name).notNull();
+    case "timestamp":
+      return nullable ? mysqlTimestamp(name) : mysqlTimestamp(name).notNull();
+    case "json":
+      return nullable ? mysqlJson(name) : mysqlJson(name).notNull();
+    case "fkSingle":
+      return mysqlVarchar(name, { length: length ?? 36 });
+    case "skip":
+      return null;
+  }
+}
+
+function buildSqliteColumnFromKind(
+  kind: ColumnKind,
+  name: string,
+  nullable: boolean
+): unknown {
+  switch (kind) {
+    case "text":
+    case "longText":
+    case "varchar":
+      return nullable ? sqliteText(name) : sqliteText(name).notNull();
+    case "boolean":
+      return nullable
+        ? sqliteInteger(name, { mode: "boolean" })
+        : sqliteInteger(name, { mode: "boolean" }).notNull();
+    case "double":
+      return nullable ? sqliteReal(name) : sqliteReal(name).notNull();
+    case "timestamp":
+      return nullable
+        ? sqliteInteger(name, { mode: "timestamp" })
+        : sqliteInteger(name, { mode: "timestamp" }).notNull();
+    case "json":
+      // SQLite stores JSON as text.
+      return nullable ? sqliteText(name) : sqliteText(name).notNull();
+    case "fkSingle":
+      return sqliteText(name);
+    case "skip":
+      return null;
+  }
+}
+
+// Phase 5 (2026-05-01): the legacy mapFieldToPostgresColumn /
+// mapFieldToMySQLColumn / mapFieldToSQLiteColumn switches were removed.
+// Their logic was duplicated against pipeline/diff/build-from-fields.ts
+// and inevitably drifted (notably: hasMany / relationTo[] handling for
+// relations). All per-field type mapping now flows through
+// services/field-column-descriptor.ts, with the dialect-specific
+// Drizzle column construction handled by the buildXxxColumnFromKind
+// helpers above. Adding a new field type means updating one place.

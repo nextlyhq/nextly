@@ -9,10 +9,11 @@
 // We mock all dependencies + test hooks so each test exercises the
 // orchestrator in isolation without a real DB.
 
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
+import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
 import type { NextlySchemaSnapshot, Operation } from "../diff/types";
 import {
   noopClassifier,
@@ -56,13 +57,21 @@ function makePipeline(
     pushSchemaImpl?: Mock<
       (
         schema: Record<string, unknown>,
-        db: unknown
+        db: unknown,
+        tablesFilter?: string[]
       ) => Promise<{
         statementsToExecute: string[];
         warnings: string[];
         hasDataLoss: boolean;
       }>
     >;
+    // Phase C: surface buildDrizzleSchema override so tests can populate
+    // the schema returned to pushSchema (default returns `{}` which means
+    // tablesFilter would be `[]`).
+    buildDrizzleSchemaImpl?: (
+      desired: DesiredSchema,
+      dialect: SupportedDialect
+    ) => Record<string, unknown>;
     dbTransactionImpl?: Mock<
       <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>
     >;
@@ -192,7 +201,7 @@ function makePipeline(
     },
     {
       _kitOverride: { pushSchema: pushSchemaImpl },
-      _buildDrizzleSchemaOverride: () => ({}),
+      _buildDrizzleSchemaOverride: overrides.buildDrizzleSchemaImpl ?? (() => ({})),
       _txOverride: dbTransactionImpl as <T>(
         fn: (tx: unknown) => Promise<T>
       ) => Promise<T>,
@@ -223,6 +232,18 @@ const emptyDesired: DesiredSchema = {
   singles: {},
   components: {},
 };
+
+// Phase 5: clear the globalThis-backed snapshot cache between tests so
+// the dequal short-circuit doesn't carry over a snapshot from a prior
+// test. Otherwise a successful apply in one test would short-circuit
+// the next test unexpectedly.
+beforeEach(() => {
+  clearCachedSnapshot();
+});
+
+afterEach(() => {
+  clearCachedSnapshot();
+});
 
 const onePostsCollection: DesiredSchema = {
   collections: {
@@ -439,9 +460,10 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     expect(mocks.executor.executeStatements).toHaveBeenCalledTimes(1);
   });
 
-  it("filters DROP TABLE statements for non-managed tables", async () => {
-    // pushSchema emits DROP TABLE for an unmanaged user table; the filter
-    // strips it before execution.
+  it("blocks DROP TABLE for unmanaged tables (legacy behavior preserved)", async () => {
+    // Legacy assertion: drizzle-kit emits DROP TABLE for an unmanaged user
+    // table; the filter strips it. Phase C tightened this so MANAGED
+    // tables also get blocked — see the next test for that regression.
     const pushSchemaImpl = vi
       .fn<
         (
@@ -477,6 +499,305 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
       .calls[0] as [unknown, string[]];
     expect(executedStmts).toHaveLength(1);
     expect(executedStmts[0]).toContain('ALTER TABLE "dc_posts"');
+  });
+
+  it("Phase C regression: blocks DROP TABLE for MANAGED tables (admin-UI / out-of-scope drops)", async () => {
+    // Pre-Phase-C bug: filterUnsafeStatements allowed any `dc_*`/`single_*`/
+    // `comp_*`-prefixed table to be DROPped, on the theory that "managed"
+    // = "Nextly owns it" = "safe to drop." This silently destroyed
+    // admin-UI-created tables on every server restart and any managed
+    // table outside the current pipeline scope. Phase C blocks all
+    // drizzle-kit-emitted DROP TABLE unconditionally; intentional drops
+    // route through pre-resolution with explicit user confirmation.
+    // See findings/schema-issues-findings-2.md § Issues 1+2 for the
+    // full mechanism.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [
+          // dc_jobs is an admin-UI table not in this pipeline's desired
+          // schema. Pre-Phase-C the filter would have allowed this (dc_*
+          // prefix matched isManagedTable). Now it must be blocked.
+          `DROP TABLE "dc_jobs"`,
+          `DROP TABLE IF EXISTS "single_old_homepage"`,
+          `DROP TABLE "comp_legacy_button"`,
+          `ALTER TABLE "dc_posts" ADD COLUMN "y" text`,
+        ],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline, mocks } = makePipeline({ pushSchemaImpl });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    // Only the additive ALTER reaches the executor. Three DROP TABLE
+    // statements were emitted; ALL must be blocked, including the
+    // managed-prefixed ones.
+    const [, executedStmts] = mocks.executor.executeStatements.mock
+      .calls[0] as [unknown, string[]];
+    expect(executedStmts).toHaveLength(1);
+    expect(executedStmts[0]).toContain('ALTER TABLE "dc_posts"');
+    // No DROP made it through.
+    expect(executedStmts.some(s => /^DROP\s+TABLE/i.test(s))).toBe(false);
+  });
+
+  it("Phase C: passes desired-table names as tablesFilter to drizzle-kit pushSchema", async () => {
+    // Verifies the second half of Phase C: drizzle-kit's PG pushSchema
+    // gets the current pipeline's desired-table names as tablesFilter,
+    // so its internal introspection sees only managed tables in scope.
+    // Eliminates spurious rename-detection prompts and (on PG only)
+    // false DROP emissions for tables outside scope.
+    //
+    // The fixture's default `_buildDrizzleSchemaOverride` returns `{}`,
+    // which would yield `tablesFilter = []`. Override here so the test
+    // reflects realistic Phase D state: drizzleSchema = { dc_posts: ... },
+    // tablesFilter = ["dc_posts"].
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl: () => ({ dc_posts: {} }),
+    });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+    const [, , tablesFilter] = pushSchemaImpl.mock.calls[0]!;
+    expect(Array.isArray(tablesFilter)).toBe(true);
+    expect(tablesFilter).toContain("dc_posts");
+  });
+
+  it("Phase 6 follow-up: ALLOWS DROP TABLE for tables IN desired (SQLite rebuild pattern)", async () => {
+    // Phase C's original strict rule blocked ALL DROP TABLE — that
+    // turned out too aggressive on SQLite, where drizzle-kit emits
+    // a CREATE/COPY/DROP/RENAME sequence to handle ALTER COLUMN
+    // type changes (see filterUnsafeStatements comment for full
+    // pattern). Blocking the DROP step left __new_dc_X dangling
+    // and caused the subsequent RENAME to fail with "table already
+    // exists".
+    //
+    // New rule: DROP for tables IN the desired schema is allowed
+    // (intentional rebuild). DROP for tables NOT in the desired
+    // schema is still blocked (the original Phase C scenario).
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [
+          // SQLite rebuild sequence — all 4 statements should pass
+          // through because dc_posts IS in desired.
+          `CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY NOT NULL)`,
+          `INSERT INTO "__new_dc_posts" SELECT * FROM "dc_posts"`,
+          `DROP TABLE "dc_posts"`,
+          `ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"`,
+          // dc_jobs NOT in desired → still blocked (Phase C behavior).
+          `DROP TABLE "dc_jobs"`,
+        ],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline, mocks } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl: () => ({ dc_posts: {} }),
+    });
+
+    // Using PG dialect for the test — the filter logic is dialect-
+    // agnostic; SQLite's runSqlitePragma path needs a mock db with
+    // .run() that the harness doesn't provide. The rebuild SQL
+    // shape is realistic for the SQLite path that this test models.
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    const [, executedStmts] = mocks.executor.executeStatements.mock
+      .calls[0] as [unknown, string[]];
+
+    // The 4 rebuild statements pass through (CREATE / INSERT / DROP /
+    // RENAME), the orphan DROP for dc_jobs gets blocked.
+    expect(executedStmts).toHaveLength(4);
+    expect(executedStmts[0]).toContain('CREATE TABLE "__new_dc_posts"');
+    expect(executedStmts[1]).toContain("INSERT INTO");
+    expect(executedStmts[2]).toContain('DROP TABLE "dc_posts"');
+    expect(executedStmts[3]).toContain('RENAME TO "dc_posts"');
+    // dc_jobs DROP did NOT make it through.
+    expect(
+      executedStmts.some(s => /DROP\s+TABLE\s+"?dc_jobs/i.test(s))
+    ).toBe(false);
+  });
+
+  it("Phase 5: dequal short-circuit skips pushSchema when desired is unchanged since last apply", async () => {
+    // Run pipeline once to populate the snapshot cache; then run again
+    // with the SAME desired and assert pushSchema is not called the
+    // second time. Journal recordStart should also be skipped on the
+    // second call.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { pipeline, mocks } = makePipeline({ pushSchemaImpl });
+
+    // First run — populates the cache.
+    const first = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(first.success).toBe(true);
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+    const recordStartCallsAfterFirst =
+      mocks.migrationJournal.recordStart.mock.calls.length;
+
+    // Second run — same desired, dequal cache hit, should skip the
+    // entire pipeline including journal recordStart.
+    const second = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(second.success).toBe(true);
+    expect(second.statementsExecuted).toBe(0);
+    expect(second.renamesApplied).toBe(0);
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1); // unchanged
+    expect(
+      mocks.migrationJournal.recordStart.mock.calls.length
+    ).toBe(recordStartCallsAfterFirst); // no new journal entry
+
+    // Operator-visible signal that the pipeline short-circuited.
+    expect(
+      consoleSpy.mock.calls.some(call =>
+        String(call[0] ?? "").includes("No changes detected")
+      )
+    ).toBe(true);
+
+    consoleSpy.mockRestore();
+  });
+
+  it("Phase 5: cache miss when desired actually changed — pipeline runs again", async () => {
+    // Run with desired A, then with desired B — different shape — and
+    // assert pushSchema is called both times.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline } = makePipeline({ pushSchemaImpl });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+
+    // Different desired — extra collection added.
+    const changedDesired: DesiredSchema = {
+      collections: {
+        ...onePostsCollection.collections,
+        tags: {
+          slug: "tags",
+          tableName: "dc_tags",
+          fields: [{ name: "label", type: "text" }] as never,
+        },
+      },
+      singles: {},
+      components: {},
+    };
+
+    await pipeline.apply({
+      desired: changedDesired,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(2);
   });
 });
 

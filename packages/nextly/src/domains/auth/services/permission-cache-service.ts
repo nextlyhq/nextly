@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, gt, lt, sql } from "drizzle-orm";
 
 import { getAuthLogger } from "@nextly/lib/logger";
 
@@ -220,7 +220,14 @@ export class PermissionCacheService extends BaseService {
         .where(
           and(
             eq(userPermissionCache.id, cacheKey),
-            sql`${userPermissionCache.expiresAt} > ${now}`
+            // gt() lets Drizzle convert `now` (Date) to the column's typed
+            // representation (epoch seconds for SQLite mode:"timestamp",
+            // native timestamp for PG/MySQL). Raw `sql\`${col} > ${now}\``
+            // bypassed that conversion and SQLite drivers refused to bind
+            // a Date object — `TypeError: SQLite3 can only bind numbers,
+            // strings, bigints, buffers, and null` on every authed request.
+            // Mirrors the same-file `cleanupExpired` pattern at line 481.
+            gt(userPermissionCache.expiresAt, now)
           )
         )
         .limit(1);
@@ -429,13 +436,33 @@ export class PermissionCacheService extends BaseService {
       // Write-through invalidation: mark as expired (tombstone) instead of deleting.
       // Prevents race conditions where a concurrent permission check might write
       // stale data after invalidation.
+      //
+      // Phase A follow-up (2026-05-01): the `@>` JSONB containment
+      // operator is PostgreSQL-only — on SQLite it threw `SqliteError:
+      // unrecognized token: "@"` on every authed request that triggered
+      // role invalidation, on MySQL it would similarly fail.
+      //
+      // Per-dialect path:
+      //   - PG     → JSONB `@>` (column type IS jsonb)
+      //   - MySQL  → `JSON_CONTAINS(col, ?)`  (JSON column type)
+      //   - SQLite → `EXISTS (SELECT 1 FROM json_each(col) WHERE value = ?)`
+      //     using the JSON1 extension built into all modern SQLite (3.9+;
+      //     F17 minimum is 3.38). roleIds is stored as JSON text on
+      //     SQLite (`text("role_ids")`), so a plain LIKE-substring scan
+      //     would risk false positives if role IDs share substrings.
+      //     json_each gives us exact-match without that risk.
+      const containsRoleClause =
+        this.dialect === "postgresql"
+          ? sql`${userPermissionCache.roleIds} @> ${JSON.stringify([roleId])}`
+          : this.dialect === "mysql"
+            ? sql`JSON_CONTAINS(${userPermissionCache.roleIds}, ${JSON.stringify(roleId)})`
+            : sql`EXISTS (SELECT 1 FROM json_each(${userPermissionCache.roleIds}) WHERE value = ${roleId})`;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await (this.db as any)
         .update(userPermissionCache)
         .set({ expiresAt: new Date() })
-        .where(
-          sql`${userPermissionCache.roleIds} @> ${JSON.stringify([roleId])}`
-        );
+        .where(containsRoleClause);
 
       const invalidatedCount = result.rowCount ?? 0;
 

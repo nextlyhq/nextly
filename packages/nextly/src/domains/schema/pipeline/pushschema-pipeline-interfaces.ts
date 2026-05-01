@@ -137,6 +137,13 @@ export interface MigrationJournal {
     source: "ui" | "code";
     statementsPlanned: number;
     scope?: MigrationJournalScope;
+    // Phase 5 (2026-05-01): batch sentinel. -1 = HMR/dev push;
+    // 0+ = production migration batch (currently unused — reserved
+    // for symmetry with Payload's pattern). Pipeline sets -1 when
+    // source=="code". Default behavior (omit field) keeps the column
+    // at its DB default of 0, distinguishing "unbatched legacy"
+    // from "intentional dev push".
+    batch?: number;
   }): Promise<string>;
   recordEnd(
     journalId: string,

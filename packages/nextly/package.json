@@ -257,6 +257,7 @@
     "bundle-require": "^5.1.0",
     "chokidar": "^5.0.0",
     "commander": "^14.0.2",
+    "dequal": "^2.0.3",
     "dotenv": "^17.2.2",
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "^0.45.2",
