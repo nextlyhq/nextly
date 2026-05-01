@@ -1,5 +1,9 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
+// Phase 4 (Task 10): canonical respondX helpers replace ad-hoc
+// `{ data: ... }` envelopes on the auth surface. See spec §7.6.
+import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { verifyCredentials } from "../credentials/verify-credentials";
@@ -13,7 +17,6 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
-import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 
 import {
   jsonResponse,
@@ -182,18 +185,30 @@ export async function handleLogin(
 
     await stallResponse(startTime, deps.loginStallTimeMs);
 
-    return new Response(
-      JSON.stringify({
-        data: {
-          user: {
-            id: verifiedUser.id,
-            email: verifiedUser.email,
-            name: verifiedUser.name,
-            image: verifiedUser.image,
-            roleIds,
-          },
+    // Phase 4 / spec §7.6: emit `{ message, user, accessToken, refreshToken,
+    // expiresAt }` directly. Tokens are still issued as HttpOnly cookies for
+    // browser-based clients; surfacing them in the body too lets non-browser
+    // SDK consumers (mobile, CLI) drive Authorization headers without losing
+    // server-authored toast text.
+    return respondAction(
+      "Logged in.",
+      {
+        user: {
+          id: verifiedUser.id,
+          email: verifiedUser.email,
+          name: verifiedUser.name,
+          image: verifiedUser.image,
+          roleIds,
         },
-      }),
+        accessToken,
+        refreshToken: rawRefreshToken,
+        // `expiresAt` reflects the access-token JWT exp claim (the
+        // authoritative expiration server-side), not the cookie max-age.
+        // signAccessToken uses deps.accessTokenTTL for that.
+        expiresAt: new Date(
+          Date.now() + deps.accessTokenTTL * 1000
+        ).toISOString(),
+      },
       {
         status: 200,
         headers: buildCookieHeaders(cookies, { "x-request-id": requestId }),

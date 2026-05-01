@@ -4,7 +4,15 @@
  * No database hit -- purely stateless JWT verification.
  * Handles backward compatibility for old Auth.js cookies.
  */
-import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
+// Phase 4 (Task 10): respondData replaces the hand-rolled `{ data: ... }`
+// envelope on the authenticated success path. Error legs continue to
+// emit `{ error: { code, message } }` directly (refresh-coalescing
+// consumers already special-case those codes).
+import { respondData } from "../../api/response-shapes";
+import {
+  clearAccessTokenCookie,
+  readAccessTokenCookie,
+} from "../cookies/access-token-cookie";
 import {
   LEGACY_COOKIE_NAMES,
   serializeClearCookie,
@@ -24,7 +32,13 @@ export async function handleSession(
   const result = await getSession(request, deps.secret);
 
   if (result.authenticated) {
-    return jsonResponse(200, { data: { user: result.user } });
+    // Phase 4 / spec §7.6: bare `{ user, accessToken }`. The access token
+    // already verified successfully (it's how we got here), so reading it
+    // back from the cookie is safe. We surface it in the body so
+    // non-cookie SDK consumers (mobile, CLI) can pull the live token
+    // without owning cookie storage.
+    const accessToken = readAccessTokenCookie(request);
+    return respondData({ user: result.user, accessToken });
   }
 
   // Check if this is a legacy Auth.js cookie (backward compatibility)

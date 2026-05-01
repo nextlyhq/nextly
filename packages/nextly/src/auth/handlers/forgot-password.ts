@@ -11,6 +11,10 @@
 // CSRF double-submit cookie + origin check. Restored after c80d2982
 // reverted the earlier restore in 4bc0d9ee. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
+// Phase 4 (Task 10): respondAction emits the canonical `{ message }`
+// success body. The generic message is preserved verbatim so spec §13.3
+// anti-enumeration still holds.
+import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
@@ -32,8 +36,12 @@ export interface ForgotPasswordHandlerDeps {
   ) => Promise<{ token?: string }>;
 }
 
+// Phase 4 / spec §7.6: canonical generic forgot-password message. Must
+// not echo the user-supplied email back (spec §13.8) and must be byte-
+// identical regardless of whether the email is registered (spec §13.3
+// anti-enumeration).
 const SILENT_MESSAGE =
-  "If that email is in our records, you'll receive a reset link shortly.";
+  "If an account exists for this email, a password reset link has been sent.";
 
 /**
  * Audit H2 (T-011): validate the user-supplied `redirectPath` before
@@ -189,13 +197,12 @@ export async function handleForgotPassword(
     }
 
     await stallResponse(startTime, deps.loginStallTimeMs);
-    return new Response(JSON.stringify({ data: { message: SILENT_MESSAGE } }), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-        "x-request-id": requestId,
-      },
-    });
+    // Phase 4 / spec §7.6: silent success body is just `{ message }`.
+    return respondAction(
+      SILENT_MESSAGE,
+      {},
+      { status: 200, headers: { "x-request-id": requestId } }
+    );
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
     if (NextlyError.is(err)) {

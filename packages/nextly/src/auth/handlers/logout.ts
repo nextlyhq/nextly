@@ -1,3 +1,6 @@
+// Phase 4 (Task 10): respondAction replaces hand-rolled `{ data: ... }`
+// envelope on the logout success path. See spec §7.6.
+import { respondAction } from "../../api/response-shapes";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
   LEGACY_COOKIE_NAMES,
@@ -60,8 +63,11 @@ export async function handleLogout(
     ...LEGACY_COOKIE_NAMES.map(name => serializeClearCookie(name, "/admin")),
   ];
 
-  return new Response(JSON.stringify({ data: { success: true } }), {
-    status: 200,
-    headers: buildCookieHeaders(clearCookies),
-  });
+  // Phase 4 / spec §7.6: silent success body is just `{ message }`.
+  // Cleared cookies still travel via the headers param.
+  return respondAction(
+    "Logged out.",
+    {},
+    { status: 200, headers: buildCookieHeaders(clearCookies) }
+  );
 }

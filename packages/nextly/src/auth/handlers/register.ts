@@ -14,6 +14,11 @@
 // CSRF double-submit cookie + origin check. Prevents cross-site forced
 // account creation. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
+// Phase 4 (Task 10): respondAction emits `{ message, ...result }` on the
+// success branches. The silent-success message is preserved verbatim on
+// the no-reveal path so spec §13.2 anti-enumeration still holds (the
+// reveal-on path swaps in "Account created." per spec §7.6).
+import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
@@ -123,30 +128,28 @@ export async function handleRegister(
       // includes the user object; otherwise the generic message stays.
       if (deps.revealRegistrationConflict) {
         await stallResponse(startTime, deps.loginStallTimeMs);
-        return new Response(
-          JSON.stringify({
-            data: {
-              user: { id: user.id, email: user.email, name: user.name },
-            },
-          }),
+        // Phase 4 / spec §7.6: reveal-on success path uses the canonical
+        // "Account created." action message and a 201 status.
+        return respondAction(
+          "Account created.",
+          { user: { id: user.id, email: user.email, name: user.name } },
           {
             status: 201,
-            headers: {
-              "content-type": "application/json",
-              "x-request-id": requestId,
-            },
+            headers: { "x-request-id": requestId },
           }
         );
       }
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return new Response(
-        JSON.stringify({ data: { message: SILENT_SUCCESS_MESSAGE } }),
+      // Spec §13.2: silent-success message is identical for real success
+      // and swallowed-conflict so an attacker cannot distinguish them.
+      // Wrap via respondAction for shape consistency without changing the
+      // visible string.
+      return respondAction(
+        SILENT_SUCCESS_MESSAGE,
+        {},
         {
           status: 200,
-          headers: {
-            "content-type": "application/json",
-            "x-request-id": requestId,
-          },
+          headers: { "x-request-id": requestId },
         }
       );
     } catch (err) {
@@ -168,14 +171,14 @@ export async function handleRegister(
         // email to the existing user once email subsystem template support
         // lands (spec §19 follow-up).
         await stallResponse(startTime, deps.loginStallTimeMs);
-        return new Response(
-          JSON.stringify({ data: { message: SILENT_SUCCESS_MESSAGE } }),
+        // Phase 4 / spec §13.2: same silent-success shape as the no-reveal
+        // success branch. Anti-enumeration requires byte-equal responses.
+        return respondAction(
+          SILENT_SUCCESS_MESSAGE,
+          {},
           {
             status: 200,
-            headers: {
-              "content-type": "application/json",
-              "x-request-id": requestId,
-            },
+            headers: { "x-request-id": requestId },
           }
         );
       }
