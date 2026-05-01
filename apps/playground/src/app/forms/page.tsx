@@ -458,18 +458,51 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
         }),
       });
 
-      const response_data = await response.json();
-      // Handle unified API response format: { data: { success, message, ... } }
-      const result = response_data.data || response_data;
+      // Phase 4 (Task 15): success path now uses `respondAction(message, { submissionId })`
+      // which produces `{ message, submissionId }` (no `success` flag, no outer
+      // `data` wrapper). Failure path uses the canonical
+      // `{ error: { code, message, data?: { errors? } } }` shape via
+      // NextlyError.toResponseJSON. Validation errors arrive in
+      // `error.data.errors` as `{ path, code, message }[]`.
+      const responseData = (await response.json().catch(() => null)) as
+        | { message?: string; submissionId?: string }
+        | {
+            error?: {
+              code?: string;
+              message?: string;
+              data?: {
+                errors?: Array<{ path: string; code: string; message: string }>;
+              };
+            };
+          }
+        | null;
 
-      if (response.ok && result.success) {
-        setSubmitResult({ success: true, message: result.message });
+      if (response.ok) {
+        const success = responseData as { message?: string } | null;
+        setSubmitResult({
+          success: true,
+          message: success?.message ?? "Submission received.",
+        });
         setFormData({});
         onSuccess?.();
       } else {
-        // Handle validation errors
-        if (result.errors) {
-          setErrors(result.errors);
+        const errorBody = responseData as {
+          error?: {
+            message?: string;
+            data?: {
+              errors?: Array<{ path: string; code: string; message: string }>;
+            };
+          };
+        } | null;
+        // Map per-field validation errors back to the renderer's
+        // `Record<field.name, message>` shape used by FormRenderer.
+        const fieldErrors = errorBody?.error?.data?.errors;
+        if (fieldErrors && fieldErrors.length > 0) {
+          const mapped: Record<string, string> = {};
+          for (const err of fieldErrors) {
+            mapped[err.path] = err.message;
+          }
+          setErrors(mapped);
           setSubmitResult({
             success: false,
             message: "Please fix the errors below",
@@ -477,7 +510,7 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
         } else {
           setSubmitResult({
             success: false,
-            message: result.message || result.error || "Failed to submit form",
+            message: errorBody?.error?.message ?? "Failed to submit form",
           });
         }
       }
@@ -634,17 +667,20 @@ export default function FormsPage() {
       // Use the unified admin API endpoint
       const response = await fetch("/admin/api/forms");
       if (response.ok) {
-        const result = await response.json();
-        // Handle the unified API response format
-        const data = result.data;
-        if (data?.success) {
-          setForms(data.data?.docs || []);
-          setError(null);
-        } else {
-          setError(data?.message || "Failed to fetch forms");
-        }
+        // Phase 4 (Task 15): /admin/api/forms now returns the canonical
+        // ListResponse shape `{ items, meta }` directly (per response-shapes.ts
+        // `respondList`), with no outer `{ data: ... }` envelope and no
+        // legacy `success` flag. Read forms off `result.items`.
+        const result = (await response.json()) as { items?: Form[] };
+        setForms(result.items ?? []);
+        setError(null);
       } else {
-        setError("Failed to fetch forms");
+        // Phase 4 (Task 15): error wire shape is `{ error: { message, code, ... } }`.
+        // Surface the public message when available; fall back otherwise.
+        const errorBody = (await response.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        setError(errorBody?.error?.message ?? "Failed to fetch forms");
       }
     } catch (_err) {
       setError("Failed to connect to API");

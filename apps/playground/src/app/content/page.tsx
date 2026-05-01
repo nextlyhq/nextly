@@ -61,15 +61,18 @@ export default function ContentPage() {
   );
 
   useEffect(() => {
-    loadCollections();
+    // void: useEffect callback intentionally fires-and-forgets the async load.
+    void loadCollections();
   }, []);
 
   const loadCollections = async () => {
     try {
       const response = await fetch("/admin/api/collections");
       const result = await response.json();
-      if (result.data?.data) {
-        setCollections(result.data.data);
+      // Phase 4 (Task 15 fix): canonical respondList shape - { items, meta }
+      // Previously read result.data.data (legacy enhancedFetcher envelope).
+      if (Array.isArray(result.items)) {
+        setCollections(result.items);
       }
     } catch (error) {
       console.error("Failed to load collections:", error);
@@ -83,8 +86,10 @@ export default function ContentPage() {
         `/admin/api/collections/${collectionName}/entries`
       );
       const result = await response.json();
-      if (Array.isArray(result.data.data)) {
-        setEntries(result.data.data);
+      // Phase 4 (Task 15 fix): canonical respondList shape - { items, meta }
+      // Previously read result.data.data (legacy enhancedFetcher envelope).
+      if (Array.isArray(result.items)) {
+        setEntries(result.items);
       } else {
         setEntries([]);
       }
@@ -102,7 +107,8 @@ export default function ContentPage() {
     setShowForm(false);
     setFormData({});
     setMessage("");
-    loadEntries(collection.name);
+    // void: click handler intentionally fires-and-forgets the async load.
+    void loadEntries(collection.name);
   };
 
   const loadRelatedEntries = async (collectionName: string) => {
@@ -111,8 +117,10 @@ export default function ContentPage() {
         `/admin/api/collections/${collectionName}/entries`
       );
       const result = await response.json();
-      if (Array.isArray(result.data.data)) {
-        return result.data.data;
+      // Phase 4 (Task 15 fix): canonical respondList shape - { items, meta }
+      // Previously read result.data.data (legacy enhancedFetcher envelope).
+      if (Array.isArray(result.items)) {
+        return result.items;
       }
       return [];
     } catch (error) {
@@ -199,14 +207,20 @@ export default function ContentPage() {
       const result = await response.json();
 
       if (response.ok) {
+        // Phase 4 (Task 15 fix): respondMutation returns { message, item }.
+        // We do not need the created item here, but if we did, it would be
+        // result.item rather than the legacy result.data.
         setMessage("Entry created successfully!");
         setShowForm(false);
         setFormData({});
-        loadEntries(selectedCollection.name);
+        // void: post-submit refresh is fire-and-forget; UI already updated.
+        void loadEntries(selectedCollection.name);
       } else {
-        setMessage(
-          `Error: ${result.error || result.data?.error || "Failed to create entry"}`
-        );
+        // Phase 4 (Task 15 fix): canonical error envelope from
+        // withErrorHandler / routeHandler error path:
+        // { error: { code, message, requestId, ... } }.
+        const message = result?.error?.message ?? "Failed to create entry";
+        setMessage(`Error: ${message}`);
       }
     } catch (error) {
       setMessage(
@@ -234,9 +248,14 @@ export default function ContentPage() {
 
       if (response.ok) {
         setMessage("Entry deleted successfully!");
-        loadEntries(selectedCollection.name);
+        // void: post-delete refresh is fire-and-forget; UI already updated.
+        void loadEntries(selectedCollection.name);
       } else {
-        setMessage(`Error: ${result.error || "Failed to delete entry"}`);
+        // Phase 4 (Task 15 fix): canonical error envelope from
+        // withErrorHandler / routeHandler error path:
+        // { error: { code, message, requestId, ... } }.
+        const message = result?.error?.message ?? "Failed to delete entry";
+        setMessage(`Error: ${message}`);
       }
     } catch (error) {
       setMessage(
@@ -358,14 +377,31 @@ export default function ContentPage() {
     }
   };
 
-  // Helper function to get the best label for an entry
+  // Helper function to get the best label for an entry.
+  // Only stringifies primitive scalar values to avoid '[object Object]'
+  // output on relation/array fields (no-base-to-string).
+  const stringifyScalar = (v: unknown): string | null => {
+    if (v === null || v === undefined) return null;
+    // Inline typeof checks so TS narrows `v` to a primitive before String().
+    if (typeof v === "string") return v;
+    if (
+      typeof v === "number" ||
+      typeof v === "boolean" ||
+      typeof v === "bigint"
+    ) {
+      return String(v);
+    }
+    return null;
+  };
+
   const getEntryLabel = (
     entry: Record<string, unknown>,
     preferredField?: string
   ): string => {
     // If preferred field is specified and exists, use it
-    if (preferredField && entry[preferredField]) {
-      return String(entry[preferredField]);
+    if (preferredField) {
+      const preferred = stringifyScalar(entry[preferredField]);
+      if (preferred) return preferred;
     }
 
     // Priority order for label fields
@@ -379,13 +415,12 @@ export default function ContentPage() {
     ];
 
     for (const field of labelPriority) {
-      if (entry[field] && typeof entry[field] !== "object") {
-        return String(entry[field]);
-      }
+      const candidate = stringifyScalar(entry[field]);
+      if (candidate) return candidate;
     }
 
     // Fallback to ID
-    return String(entry.id || "Unknown");
+    return stringifyScalar(entry.id) ?? "Unknown";
   };
 
   const renderRelationField = (field: FieldDefinition) => {
@@ -538,28 +573,24 @@ export default function ContentPage() {
         value !== null &&
         !Array.isArray(value)
       ) {
-        const v = value as Record<string, unknown>;
-        return String(v.label || v.id || "-");
+        // Only stringify scalar label/id to avoid '[object Object]'.
+        return stringifyScalar(value.label) ?? stringifyScalar(value.id) ?? "-";
       }
 
       // Many-to-many array of relations
       if (Array.isArray(value)) {
         if (value.length === 0) return "-";
         return value
-          .map(v =>
-            String(
-              (v as Record<string, unknown>).label ||
-                (v as Record<string, unknown>).id
-            )
-          )
+          .map(v => stringifyScalar(v.label) ?? stringifyScalar(v.id) ?? "")
+          .filter(Boolean)
           .join(", ");
       }
 
-      // Fallback
-      return String(value);
+      // Fallback - value is a primitive here per the type union.
+      return stringifyScalar(value) ?? "-";
     }
 
-    return String(value);
+    return stringifyScalar(value) ?? "-";
   };
 
   return (
@@ -691,7 +722,10 @@ export default function ContentPage() {
                   )}
                 </div>
                 <button
-                  onClick={handleCreateNew}
+                  onClick={() => {
+                    // Wrap async handler so onClick gets a void return.
+                    void handleCreateNew();
+                  }}
                   disabled={loading}
                   style={{
                     padding: "10px 20px",
@@ -758,7 +792,12 @@ export default function ContentPage() {
                     </button>
                   </div>
 
-                  <form onSubmit={handleSubmit}>
+                  <form
+                    onSubmit={e => {
+                      // Wrap async handler so onSubmit gets a void return.
+                      void handleSubmit(e);
+                    }}
+                  >
                     <div
                       style={{
                         display: "flex",
@@ -938,7 +977,10 @@ export default function ContentPage() {
                             )}
                             <td style={{ padding: "12px" }}>
                               <button
-                                onClick={() => handleDeleteEntry(entry.id)}
+                                onClick={() => {
+                                  // Wrap async handler so onClick gets a void return.
+                                  void handleDeleteEntry(entry.id);
+                                }}
                                 disabled={loading}
                                 style={{
                                   padding: "6px 12px",

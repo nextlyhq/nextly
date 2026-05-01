@@ -75,10 +75,12 @@ export function SubmissionsFilter({
       try {
         const response = await fetch("/admin/api/collections/forms/entries");
         if (response.ok) {
-          const data = await response.json();
-          const docs =
-            data.data?.data?.docs || data.data?.docs || data.docs || [];
-          setForms(docs);
+          // Phase 4 (Task 15): the collection-entries list endpoint now
+          // returns the canonical ListResponse `{ items, meta }` directly
+          // (per response-shapes.ts `respondList`). No more `data.data.docs`
+          // / `data.docs` legacy envelopes to fall through.
+          const data = (await response.json()) as { items?: Form[] };
+          setForms(data.items ?? []);
         }
       } catch (error) {
         console.error("Failed to fetch forms:", error);
