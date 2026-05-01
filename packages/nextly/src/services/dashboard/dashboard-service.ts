@@ -278,6 +278,35 @@ export class DashboardService extends BaseService {
     }
   }
 
+  /**
+   * Format a Date for raw-SQL bind parameters per dialect.
+   *
+   * Phase A follow-up (2026-05-01) — `BaseService.formatDateForDb()`
+   * returns the Date unchanged; that works for Drizzle's typed query
+   * builder (which converts based on column mode) but breaks raw
+   * `adapter.executeQuery(sql, [date])` paths on SQLite, where
+   * better-sqlite3 throws "can only bind numbers, strings, bigints,
+   * buffers, and null" on Date objects.
+   *
+   * Per-dialect format:
+   *   - SQLite: epoch SECONDS (matches Drizzle's `integer mode:"timestamp"`
+   *     storage, which is what every timestamp column in the schema uses).
+   *   - MySQL: 'YYYY-MM-DD HH:MM:SS' (DATETIME/TIMESTAMP format).
+   *   - PostgreSQL: ISO 8601 string (driver converts to timestamp natively).
+   *
+   * Helper kept local to this service since it's the only raw-query
+   * consumer; promote to BaseService if more services need it.
+   */
+  private dateForRawBind(date: Date = new Date()): SqlParam {
+    if (this.dialect === "sqlite") {
+      return Math.floor(date.getTime() / 1000);
+    }
+    if (this.dialect === "mysql") {
+      return date.toISOString().slice(0, 19).replace("T", " ");
+    }
+    return date.toISOString();
+  }
+
   private async countTable(tableName: string): Promise<number> {
     try {
       const quoteChar = this.dialect === "mysql" ? "`" : '"';
@@ -297,7 +326,13 @@ export class DashboardService extends BaseService {
   private async countActiveApiKeys(): Promise<number> {
     try {
       const q = this.dialect === "mysql" ? "`" : '"';
-      const now = this.formatDateForDb();
+      // Phase A follow-up (2026-05-01): raw SQL queries can't bind a Date
+      // directly on SQLite (better-sqlite3 throws "can only bind numbers,
+      // strings, bigints, buffers, and null"). PG and MySQL drivers
+      // convert natively, but SQLite is strict. Format up-front per
+      // dialect so the bind value is always a primitive. See companion
+      // fix in `permission-cache-service.ts:222` (Phase A original).
+      const now = this.dateForRawBind();
       const ph1 = this.dialect === "postgresql" ? "$1" : "?";
       const ph2 = this.dialect === "postgresql" ? "$2" : "?";
       const isActiveLiteral =
@@ -333,7 +368,10 @@ export class DashboardService extends BaseService {
   private async countRecentChanges24h(): Promise<number> {
     try {
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const cutoffStr = this.formatDateForDb(cutoff);
+      // Phase A follow-up: same dialect-aware formatter as above. The
+      // legacy `this.formatDateForDb(cutoff)` returns the raw Date which
+      // SQLite rejects.
+      const cutoffParam = this.dateForRawBind(cutoff);
       const q = this.dialect === "mysql" ? "`" : '"';
       const ph = this.dialect === "postgresql" ? "$1" : "?";
 
@@ -343,7 +381,7 @@ export class DashboardService extends BaseService {
 
       const result = await this.adapter.executeQuery<{
         count: number | string;
-      }>(sql, [cutoffStr]);
+      }>(sql, [cutoffParam]);
 
       return Number(result[0]?.count ?? 0);
     } catch (error) {
