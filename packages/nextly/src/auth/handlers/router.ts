@@ -77,9 +77,13 @@ export interface AuthRouterDeps {
     ipAddress: string | null;
     expiresAt: Date;
   }) => Promise<void>;
-  findRefreshTokenByHash: (
-    tokenHash: string
-  ) => Promise<{ id: string; userId: string; expiresAt: Date } | null>;
+  findRefreshTokenByHash: (tokenHash: string) => Promise<{
+    id: string;
+    userId: string;
+    expiresAt: Date;
+    userAgent: string | null;
+    ipAddress: string | null;
+  } | null>;
   deleteRefreshToken: (id: string) => Promise<void>;
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
