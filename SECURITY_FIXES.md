@@ -12,13 +12,13 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 > **Last updated:** 2026-05-01 — keep this block in sync when any task status changes.
 
-| Phase        | Done | In review | Claimed | Blocked | Pending |
-| ------------ | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta | 13   | 0         | 0       | 0       | 0       |
+| Phase                  | Done | In review | Claimed | Blocked | Pending |
+| ---------------------- | ---- | --------- | ------- | ------- | ------- |
+| 1 — Pre-beta           | 13   | 0         | 0       | 0       | 0       |
+| 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
+| 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
-> **Note:** T-003 (default-deny on collection access) was implemented and then reverted per maintainer decision — default-allow is the framework's intended behavior. Audit C6 reclassified as accepted-risk; integrators are still advised to declare explicit `access` rules per-collection. Phase-1 task count is therefore 13 shipped + 1 explicitly-declined.
-> | 2 — Pre-1.0 | 0 | 0 | 0 | 0 | 14 |
-> | 3 — Roadmap (post-1.0) | 0 | 0 | 0 | 0 | 11 |
+**Phase 1 note:** T-003 (default-deny on collection access) was implemented and then reverted per maintainer decision — default-allow is the framework's intended behavior. Audit C6 reclassified as accepted-risk; integrators are still advised to declare explicit `access` rules per-collection. Phase-1 task count is therefore 13 shipped + 1 explicitly-declined.
 
 **Status values per task:** `pending` → `claimed: <name>` → `done (<short-sha>)`. Use `blocked: <reason>` if a dependency is unmet.
 
