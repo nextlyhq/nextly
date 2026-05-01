@@ -349,8 +349,40 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
     const oldFieldMap = new Map(oldFields.map(f => [f.name, f]));
     const newFieldMap = new Map(newFields.map(f => [f.name, f]));
 
+    // Phase D (Option 2, 2026-05-01): structural rename detection.
+    // Pre-Phase-D, this method diffed by name only — renaming a field
+    // emitted DROP <old> + ADD <new>, destroying the column's data.
+    // Now we detect "exactly one removed + exactly one added with
+    // compatible types" as a rename and emit ALTER TABLE RENAME COLUMN
+    // instead. Ambiguous cases (multiple removed/added) bail out to
+    // the unsafe DROP+ADD path with a console.warn so the user sees
+    // the data-loss risk.
+    //
+    // Limitation: when a rename happens together with an index toggle
+    // or type change in the same save, only the RENAME is emitted —
+    // index/type adjustments are silently skipped because the index/
+    // modified loops below key on the new name and the rename pair
+    // doesn't appear in oldFieldMap. Acceptable trade-off vs the
+    // alternative (data destruction). Track as a follow-up; admin UI
+    // ideally splits combined edits into two saves.
+    const rename = this.detectFieldRename(oldFields, newFields);
+    const renamedFromName = rename?.from.name ?? null;
+    const renamedToName = rename?.to.name ?? null;
+    if (rename) {
+      const fromCol = this.toSnakeCase(rename.from.name);
+      const toCol = this.toSnakeCase(rename.to.name);
+      // RENAME COLUMN syntax is consistent across PG, MySQL 8.0+,
+      // and SQLite 3.25+ — all dialects we support.
+      statements.push(
+        `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
+      );
+    }
+
     // Find added fields
     for (const field of newFields) {
+      // Phase D: skip the renamed target — it's already been handled
+      // above as ALTER TABLE RENAME COLUMN.
+      if (field.name === renamedToName) continue;
       if (!oldFieldMap.has(field.name)) {
         // Skip manyToMany fields - they don't get columns, they get junction tables
         if (
@@ -447,6 +479,9 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 
     // Find removed fields
     for (const field of oldFields) {
+      // Phase D: skip the renamed source — it's already been handled
+      // above as ALTER TABLE RENAME COLUMN.
+      if (field.name === renamedFromName) continue;
       if (!newFieldMap.has(field.name)) {
         const dropCol = this.toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
@@ -507,6 +542,117 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
       oldField.unique !== newField.unique ||
       oldField.index !== newField.index
     );
+  }
+
+  /**
+   * Phase D (Option 2) — structural rename detection.
+   *
+   * Pairs a removed field with an added field if and only if:
+   *   1. There is exactly ONE removed field (in oldFields, not in newFields)
+   *   2. AND exactly ONE added field (in newFields, not in oldFields)
+   *   3. AND their types are compatible (same `type`, and for relations
+   *      same target + relationType)
+   *
+   * This is the SAFE heuristic: zero ambiguity. If the user renames
+   * multiple fields in a single save, the heuristic bails out and the
+   * caller falls back to ADD+DROP. A console.warn surfaces the data-
+   * loss risk so the user knows to rename one field at a time, OR an
+   * admin-UI confirmation prompt can be added later (tracked as a
+   * Phase D follow-up).
+   *
+   * Why not the more aggressive multi-pair scoring described in the
+   * design doc: ambiguous pairings can silently rename to the wrong
+   * column. The cost of that bug exceeds the cost of asking the user
+   * to make smaller saves. We can soften this with an admin-UI
+   * confirmation later if friction is real.
+   */
+  detectFieldRename(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const oldNames = new Set(oldFields.map(f => f.name));
+    const newNames = new Set(newFields.map(f => f.name));
+
+    const oldOnly = oldFields.filter(f => !newNames.has(f.name));
+    const newOnly = newFields.filter(f => !oldNames.has(f.name));
+
+    if (oldOnly.length === 0 || newOnly.length === 0) {
+      // Pure add or pure drop — not a rename candidate.
+      return null;
+    }
+
+    if (oldOnly.length > 1 || newOnly.length > 1) {
+      // eslint-disable-next-line no-console -- structured warning is the
+      // primary signal to operators that data could be at risk.
+      console.warn(
+        `[Nextly schema] Detected ${oldOnly.length} removed and ` +
+          `${newOnly.length} added field(s) in the same save on this ` +
+          `collection. Skipping rename detection (ambiguous) — emitting ` +
+          `DROP/ADD which loses any data in the removed columns. To ` +
+          `rename safely, edit and save one field at a time. Removed: [` +
+          oldOnly.map(f => f.name).join(", ") +
+          `]. Added: [` +
+          newOnly.map(f => f.name).join(", ") +
+          `].`
+      );
+      return null;
+    }
+
+    const from = oldOnly[0]!;
+    const to = newOnly[0]!;
+
+    if (!this.areFieldTypesCompatible(from, to)) {
+      // eslint-disable-next-line no-console -- as above.
+      console.warn(
+        `[Nextly schema] Field "${from.name}" was removed and ` +
+          `"${to.name}" was added in the same save, but their types ` +
+          `(${from.type} vs ${to.type}) are not compatible. Treating ` +
+          `as DROP "${from.name}" + ADD "${to.name}" — existing data ` +
+          `in "${from.name}" will be lost. If this was intended as a ` +
+          `type-changing rename, do it in two steps: first rename ` +
+          `without changing type, then change the type.`
+      );
+      return null;
+    }
+
+    return { from, to };
+  }
+
+  /**
+   * Are two field definitions compatible enough that renaming one to
+   * the other preserves data semantics?
+   *
+   * Strict by design: same type, and for relations same target +
+   * relationType. Length differences are allowed for text/varchar
+   * since a column rename doesn't touch the size constraint. Required/
+   * unique/index differences are allowed (those are independent
+   * attribute changes the user can adjust on either side of a rename).
+   */
+  private areFieldTypesCompatible(
+    a: FieldDefinition,
+    b: FieldDefinition
+  ): boolean {
+    if (a.type !== b.type) return false;
+    // manyToMany relations don't get columns — they get junction tables.
+    // Renaming one is a different operation (rename junction table). We
+    // do NOT auto-rename here because the junction-table flow has its
+    // own naming conventions; safer to bail out and require explicit
+    // handling. The caller's add/drop loop will do drop-junction +
+    // add-junction (data loss for the join) — admin UI ideally warns
+    // before this kind of edit.
+    if (
+      a.type === "relation" &&
+      a.options?.relationType === "manyToMany"
+    ) {
+      return false;
+    }
+    if (a.type === "relation") {
+      return (
+        a.options?.target === b.options?.target &&
+        a.options?.relationType === b.options?.relationType
+      );
+    }
+    return true;
   }
 
   /**
