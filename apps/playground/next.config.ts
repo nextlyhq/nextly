@@ -116,6 +116,43 @@ const nextConfig: NextConfig = {
       "@revnixhq/storage-uploadthing": [
         "../../packages/storage-uploadthing/src/index.ts",
       ],
+      // Public sub-path imports of @revnixhq/nextly (e.g. /runtime, /config,
+      // /errors, /api, /storage, /database, /auth, /observability,
+      // /next, /actions, /validation, /api/<route>, /cli/utils).
+      // Mirrors the export map in packages/nextly/package.json. Without this
+      // wildcard, source-mode resolves only the bare "@revnixhq/nextly"
+      // import — sub-paths still try to load from dist via package.json
+      // exports and miss our source aliases.
+      "@revnixhq/nextly/*": ["../../packages/nextly/src/*"],
+      // Internal path aliases used INSIDE nextly's source (mirror of the
+      // "paths" block in packages/nextly/tsconfig.json). When tsup builds
+      // dist these get resolved away; in source-mode Turbopack reads .ts
+      // directly and needs to know about these aliases too. Without them,
+      // imports like `import { hashPassword } from "@nextly/auth/password"`
+      // inside packages/nextly/src/domains/users/services/user-mutation-service.ts
+      // fail with Module not found.
+      "@nextly/actions": ["../../packages/nextly/src/actions/index.ts"],
+      "@nextly/api/*": ["../../packages/nextly/src/api/*"],
+      "@nextly/auth/*": ["../../packages/nextly/src/auth/*"],
+      "@nextly/collections": [
+        "../../packages/nextly/src/collections/index.ts",
+      ],
+      "@nextly/collections/*": ["../../packages/nextly/src/collections/*"],
+      "@nextly/database/*": ["../../packages/nextly/src/database/*"],
+      "@nextly/di/*": ["../../packages/nextly/src/di/*"],
+      "@nextly/errors": ["../../packages/nextly/src/errors/index.ts"],
+      "@nextly/hooks/*": ["../../packages/nextly/src/hooks/*"],
+      "@nextly/lib/*": ["../../packages/nextly/src/lib/*"],
+      "@nextly/schemas/*": ["../../packages/nextly/src/schemas/*"],
+      "@nextly/scripts/*": ["../../packages/nextly/src/scripts/*"],
+      "@nextly/services/*": ["../../packages/nextly/src/services/*"],
+      "@nextly/storage": ["../../packages/nextly/src/storage/index.ts"],
+      "@nextly/storage/*": ["../../packages/nextly/src/storage/*"],
+      "@nextly/types/*": ["../../packages/nextly/src/types/*"],
+      "@nextly/validation": [
+        "../../packages/nextly/src/validation/index.ts",
+      ],
+      "@nextly/validation/*": ["../../packages/nextly/src/validation/*"],
       // Stubs / native-deps resolution. pg + mysql2 stubs predate this commit
       // and remain load-bearing for Turbopack's optional-peer-dep handling
       // inside @revnixhq/nextly.
