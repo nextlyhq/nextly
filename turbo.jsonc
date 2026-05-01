@@ -40,7 +40,7 @@
   //
   // Documentation: https://turborepo.com/docs/reference/configuration
 
-  "$schema": "https://turborepo.com/schema.json",
+  "$schema": "https://v2-9-7.turborepo.dev/schema.json",
   "ui": "tui", // Terminal UI for better task visualization
 
   // Runtime env vars referenced from package source (not build-time inputs).
