@@ -53,12 +53,31 @@ interface SmtpProviderConfig {
 export function createSmtpProvider(
   config: SmtpProviderConfig
 ): EmailProviderAdapter {
+  // Audit H7 (T-007): default `secure` to true. Reject obviously
+  // insecure setups at construction time so misconfiguration fails
+  // loudly rather than silently sending plaintext credentials over
+  // the network. STARTTLS on port 587 is allowed via secure: false
+  // (nodemailer upgrades implicitly when requireTLS is set, but the
+  // common pattern in the wild is to leave secure: false on 587).
+  const secure = config.secure ?? true;
+  const isLocalhost =
+    config.host === "localhost" ||
+    config.host === "127.0.0.1" ||
+    config.host === "::1";
+  if (!secure && !isLocalhost && config.port !== 587) {
+    throw new Error(
+      `[nextly/email/smtp] Refusing to use plaintext SMTP to remote host ` +
+        `${config.host}:${config.port}. Set secure: true (port 465) or use ` +
+        `port 587 (STARTTLS), or set host to localhost for plaintext-on-loopback ` +
+        `setups. See docs/email/smtp.md.`
+    );
+  }
   return {
     async send(options) {
       const transport = nodemailer.createTransport({
         host: config.host,
         port: config.port,
-        secure: config.secure ?? false,
+        secure,
         auth: {
           user: config.auth.user,
           pass: config.auth.pass,

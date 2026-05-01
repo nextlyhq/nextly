@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 4    | 0         | 0       | 0       | 10      |
+| 1 — Pre-beta           | 5    | 0         | 0       | 0       | 9       |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -443,7 +443,7 @@ pnpm test
 - **Files:** [packages/nextly/src/domains/email/services/providers/smtp-provider.ts:58-66](packages/nextly/src/domains/email/services/providers/smtp-provider.ts#L58-L66)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:** Default `secure: true`. Add startup validation: if `host` is not localhost AND `secure: false` AND port ≠ 587 (STARTTLS), throw with a clear message pointing at the SMTP docs.
 
@@ -465,7 +465,7 @@ pnpm test
 - **Files:** [packages/plugin-form-builder/src/handlers/webhooks.ts:414-428](packages/plugin-form-builder/src/handlers/webhooks.ts#L414-L428), [packages/nextly/src/di/registrations/register-email.ts:68-88](packages/nextly/src/di/registrations/register-email.ts#L68-L88), new `packages/nextly/src/utils/validate-external-url.ts`.
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`25b63ba`)
 
 **Fix:** New `validateExternalUrl(url, opts?)` helper:
 
