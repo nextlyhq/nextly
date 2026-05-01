@@ -56,13 +56,21 @@ function makePipeline(
     pushSchemaImpl?: Mock<
       (
         schema: Record<string, unknown>,
-        db: unknown
+        db: unknown,
+        tablesFilter?: string[]
       ) => Promise<{
         statementsToExecute: string[];
         warnings: string[];
         hasDataLoss: boolean;
       }>
     >;
+    // Phase C: surface buildDrizzleSchema override so tests can populate
+    // the schema returned to pushSchema (default returns `{}` which means
+    // tablesFilter would be `[]`).
+    buildDrizzleSchemaImpl?: (
+      desired: DesiredSchema,
+      dialect: SupportedDialect
+    ) => Record<string, unknown>;
     dbTransactionImpl?: Mock<
       <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>
     >;
@@ -192,7 +200,7 @@ function makePipeline(
     },
     {
       _kitOverride: { pushSchema: pushSchemaImpl },
-      _buildDrizzleSchemaOverride: () => ({}),
+      _buildDrizzleSchemaOverride: overrides.buildDrizzleSchemaImpl ?? (() => ({})),
       _txOverride: dbTransactionImpl as <T>(
         fn: (tx: unknown) => Promise<T>
       ) => Promise<T>,
@@ -439,9 +447,10 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     expect(mocks.executor.executeStatements).toHaveBeenCalledTimes(1);
   });
 
-  it("filters DROP TABLE statements for non-managed tables", async () => {
-    // pushSchema emits DROP TABLE for an unmanaged user table; the filter
-    // strips it before execution.
+  it("blocks DROP TABLE for unmanaged tables (legacy behavior preserved)", async () => {
+    // Legacy assertion: drizzle-kit emits DROP TABLE for an unmanaged user
+    // table; the filter strips it. Phase C tightened this so MANAGED
+    // tables also get blocked — see the next test for that regression.
     const pushSchemaImpl = vi
       .fn<
         (
@@ -477,6 +486,110 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
       .calls[0] as [unknown, string[]];
     expect(executedStmts).toHaveLength(1);
     expect(executedStmts[0]).toContain('ALTER TABLE "dc_posts"');
+  });
+
+  it("Phase C regression: blocks DROP TABLE for MANAGED tables (admin-UI / out-of-scope drops)", async () => {
+    // Pre-Phase-C bug: filterUnsafeStatements allowed any `dc_*`/`single_*`/
+    // `comp_*`-prefixed table to be DROPped, on the theory that "managed"
+    // = "Nextly owns it" = "safe to drop." This silently destroyed
+    // admin-UI-created tables on every server restart and any managed
+    // table outside the current pipeline scope. Phase C blocks all
+    // drizzle-kit-emitted DROP TABLE unconditionally; intentional drops
+    // route through pre-resolution with explicit user confirmation.
+    // See findings/schema-issues-findings-2.md § Issues 1+2 for the
+    // full mechanism.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [
+          // dc_jobs is an admin-UI table not in this pipeline's desired
+          // schema. Pre-Phase-C the filter would have allowed this (dc_*
+          // prefix matched isManagedTable). Now it must be blocked.
+          `DROP TABLE "dc_jobs"`,
+          `DROP TABLE IF EXISTS "single_old_homepage"`,
+          `DROP TABLE "comp_legacy_button"`,
+          `ALTER TABLE "dc_posts" ADD COLUMN "y" text`,
+        ],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline, mocks } = makePipeline({ pushSchemaImpl });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    // Only the additive ALTER reaches the executor. Three DROP TABLE
+    // statements were emitted; ALL must be blocked, including the
+    // managed-prefixed ones.
+    const [, executedStmts] = mocks.executor.executeStatements.mock
+      .calls[0] as [unknown, string[]];
+    expect(executedStmts).toHaveLength(1);
+    expect(executedStmts[0]).toContain('ALTER TABLE "dc_posts"');
+    // No DROP made it through.
+    expect(executedStmts.some(s => /^DROP\s+TABLE/i.test(s))).toBe(false);
+  });
+
+  it("Phase C: passes desired-table names as tablesFilter to drizzle-kit pushSchema", async () => {
+    // Verifies the second half of Phase C: drizzle-kit's PG pushSchema
+    // gets the current pipeline's desired-table names as tablesFilter,
+    // so its internal introspection sees only managed tables in scope.
+    // Eliminates spurious rename-detection prompts and (on PG only)
+    // false DROP emissions for tables outside scope.
+    //
+    // The fixture's default `_buildDrizzleSchemaOverride` returns `{}`,
+    // which would yield `tablesFilter = []`. Override here so the test
+    // reflects realistic Phase D state: drizzleSchema = { dc_posts: ... },
+    // tablesFilter = ["dc_posts"].
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl: () => ({ dc_posts: {} }),
+    });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+    const [, , tablesFilter] = pushSchemaImpl.mock.calls[0]!;
+    expect(Array.isArray(tablesFilter)).toBe(true);
+    expect(tablesFilter).toContain("dc_posts");
   });
 });
 
