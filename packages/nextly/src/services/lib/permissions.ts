@@ -1,12 +1,14 @@
-// Audit C7 (T-004): hard server-only guard. The previous form used a
-// dynamic `await import("server-only")` inside a try/catch which
-// silently allowed the module to load in client bundles. Replace with
-// a static `import "server-only"` so the bundler errors loudly when a
-// client component pulls this in, plus a runtime window check for
-// any path the bundler doesn't catch (e.g. server actions accidentally
-// pulled into a browser via misconfigured exports).
-import "server-only";
-
+// Audit C7 (T-004): hard runtime guard. The previous form was a
+// try/catch'd dynamic `await import("server-only")` that silently
+// allowed the module to load in client bundles. The audit recommended
+// adding a static `import "server-only"` on top of the runtime
+// check, but `server-only` always throws unless imported under
+// React Server Components — including plain Node, which breaks
+// nextly's package-level build-guard (which sanity-imports the root
+// entry to confirm it loads). The runtime window check below catches
+// the actual misuse path (a client component bundle that ends up
+// running in a browser) without breaking server-side build/test.
+// The verify-server-only.mjs CI script asserts the runtime throw.
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
