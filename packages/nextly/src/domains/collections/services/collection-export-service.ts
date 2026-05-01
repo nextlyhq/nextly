@@ -342,25 +342,14 @@ export default defineCollection(${collectionConfig});
 
   private generateAccessPlaceholder(): string {
     const i = this.indent;
-    // Audit C6 (T-003): emit a real default-deny block, not a
-    // commented-out stub. Without rules, the runtime now returns 403
-    // for every operation (default-deny), so a fully-commented block
-    // would silently break the exported collection. The active
-    // create/read/update/delete: () => false form is explicit, the
-    // TODO points authors at how to relax it per-operation.
     return `
-${i}// TODO: relax these per-operation. The framework defaults to deny
-${i}// for any operation without an explicit rule (audit C6 / T-003).
-${i}// Examples:
-${i}//   read: () => true                                 // public
-${i}//   create: ({ req }) => !!req.user                  // any signed-in user
-${i}//   update: ({ req }) => req.user?.role === 'admin'  // admin only
-${i}access: {
-${i}  create: () => false,
-${i}  read: () => false,
-${i}  update: () => false,
-${i}  delete: () => false,
-${i}},`;
+${i}// TODO: Configure access control
+${i}// access: {
+${i}//   create: ({ req }) => !!req.user,
+${i}//   read: () => true,
+${i}//   update: ({ req }) => req.user?.role === 'admin',
+${i}//   delete: ({ req }) => req.user?.role === 'admin',
+${i}// },`;
   }
 
   private generateHooksPlaceholder(): string {

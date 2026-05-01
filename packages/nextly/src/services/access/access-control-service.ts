@@ -204,16 +204,9 @@ export class AccessControlService {
   ): Promise<AccessEvaluationResult> {
     const rule = rules?.[operation];
 
-    // Audit C6 (T-003): default-deny. Collections without an explicit
-    // access rule for this operation are denied. Authors must declare
-    // intent (e.g. `access: { read: 'public' }`) — silent allow-all
-    // is a footgun on a CMS that holds user PII, drafts, and admin
-    // configuration. The error path returns 403 to the API caller.
+    // No rule = public access (for backward compatibility)
     if (!rule) {
-      return {
-        allowed: false,
-        reason: `No access rule declared for operation '${operation}'. Add an explicit rule (e.g. access: { ${operation}: 'public' }) to the collection definition.`,
-      };
+      return { allowed: true };
     }
 
     switch (rule.type) {
