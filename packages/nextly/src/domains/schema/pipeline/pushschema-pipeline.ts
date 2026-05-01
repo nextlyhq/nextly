@@ -24,6 +24,7 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
+import { getDialectTables } from "../../../database/index.js";
 import {
   getCachedSnapshot,
   setCachedSnapshot,
@@ -790,6 +791,34 @@ export class PushSchemaPipeline {
     dialect: SupportedDialect
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
+
+    // Phase 6 follow-up (2026-05-01): include Nextly's system tables in
+    // the schema handed to drizzle-kit. Without this, drizzle-kit's
+    // introspection sees system tables on disk but NOT in the desired
+    // schema we pass — its diff treats those as "dropped tables" and
+    // pairs them with new dc_* tables for rename detection. Rename
+    // detection fires the TTY prompt, which crashes on non-TTY
+    // environments (CI, `next dev`'s server thread). Result:
+    // dc_* tables never get created on SQLite.
+    //
+    // SQLite's drizzle-kit doesn't accept tablesFilter (only PG does),
+    // so the only way to suppress false-positive rename ambiguity is
+    // to make the desired schema complete from drizzle-kit's POV.
+    // System tables are already managed via drizzle-kit migration
+    // files (database/migrations/<dialect>/*.sql); declaring them here
+    // is informational — drizzle-kit emits zero statements for them
+    // when disk matches the schema definition. Phase C's strict
+    // filterUnsafeStatements is the safety net.
+    for (const [exportKey, value] of Object.entries(
+      getDialectTables(dialect)
+    )) {
+      if (this.isDrizzleTable(value)) {
+        const sqlName = this.getDrizzleTableName(value, exportKey);
+        out[sqlName] = value;
+      }
+    }
+
+    // User-defined collections override system entries on conflict.
     for (const c of Object.values(desired.collections)) {
       const { table } = generateRuntimeSchema(
         c.tableName,
@@ -799,6 +828,24 @@ export class PushSchemaPipeline {
       out[c.tableName] = table;
     }
     return out;
+  }
+
+  // Phase 6 follow-up: cheap structural check for Drizzle tables.
+  // Mirrors SchemaRegistry.isDrizzleTable but inlined to avoid
+  // pulling SchemaRegistry's DI graph into the pipeline module.
+  private isDrizzleTable(value: unknown): boolean {
+    if (!value || typeof value !== "object") return false;
+    // Drizzle tables carry Symbol.for("drizzle:Name") — the simplest
+    // stable cross-dialect check.
+    return Symbol.for("drizzle:Name") in (value as object);
+  }
+
+  // Phase 6 follow-up: extract a Drizzle table's SQL name.
+  private getDrizzleTableName(value: unknown, fallback: string): string {
+    const named = (value as Record<symbol, unknown>)[
+      Symbol.for("drizzle:Name")
+    ];
+    return typeof named === "string" ? named : fallback;
   }
 
   private async importDrizzleKit(
