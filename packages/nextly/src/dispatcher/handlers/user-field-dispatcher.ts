@@ -5,9 +5,21 @@
  * `reorderFields`. After each mutating op, the `UserExtSchemaService`
  * is asked to reload merged fields and ensure the `user_ext` table
  * schema reflects the change so new columns appear immediately.
+ *
+ * Phase 4 Task 9: every handler returns a Response built via the
+ * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
+ * passes the Response through unchanged. See spec §5.1 for the
+ * canonical shape contract.
  */
 
+import {
+  respondAction,
+  respondData,
+  respondDoc,
+  respondMutation,
+} from "../../api/response-shapes";
 import type { NextlyServiceConfig } from "../../di/register";
+import { NextlyError } from "../../errors";
 import type { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
 import {
@@ -33,87 +45,115 @@ async function syncUserExtSchema(
   await userExtSchemaService.ensureUserExtSchema(drizzleDb);
 }
 
+/**
+ * Throw a canonical NextlyError when the field-definition feature
+ * isn't enabled in this app. Used by every mutation handler so the
+ * dispatcher's error path emits a 500 with a generic publicMessage
+ * (the operator-facing detail flows through logContext).
+ */
+function requireFieldDefinitionService(
+  svc: UserFieldsServices
+): asserts svc is UserFieldsServices & {
+  fieldDefinitionService: UserFieldDefinitionService;
+} {
+  if (!svc.fieldDefinitionService) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "user-field-definition-service-unavailable",
+        hint: "users.fields feature must be enabled in nextly config",
+      },
+    });
+  }
+}
+
 const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   listUserFields: {
+    // Phase 4: respondData. The list is non-paginated AND ships
+    // adminConfig as a sibling field (legacy `meta.adminConfig`); we
+    // surface both via respondData so the admin can read both off the
+    // bare body without an envelope.
     execute: async svc => {
       const admin = svc.config.users?.admin;
       // Prefer the merged list (code + UI) when the service is available.
       if (svc.fieldDefinitionService) {
         const fields = await svc.fieldDefinitionService.listFields();
-        return {
-          success: true,
-          statusCode: 200,
-          data: fields,
-          meta: { total: fields.length, adminConfig: admin || {} },
-        };
+        return respondData({
+          fields,
+          total: fields.length,
+          adminConfig: admin || {},
+        });
       }
       // Fallback: return code-config fields only.
       const fields = svc.config.users?.fields || [];
-      return {
-        success: true,
-        statusCode: 200,
-        data: fields,
-        meta: { total: fields.length, adminConfig: admin || {} },
-      };
+      return respondData({
+        fields,
+        total: fields.length,
+        adminConfig: admin || {},
+      });
     },
   },
 
   createField: {
+    // Phase 4: respondMutation 201. The user_ext schema sync runs
+    // before respond so the toast firing implies "field is queryable".
     execute: async (svc, _p, body) => {
-      if (!svc.fieldDefinitionService) {
-        throw new Error("User field definition service not available.");
-      }
-      const data = await svc.fieldDefinitionService.createField(
+      requireFieldDefinitionService(svc);
+      const field = await svc.fieldDefinitionService.createField(
         body as Parameters<typeof svc.fieldDefinitionService.createField>[0]
       );
       await syncUserExtSchema(svc.userExtSchemaService);
-      return { success: true, statusCode: 201, data };
+      return respondMutation("User field created.", field, { status: 201 });
     },
   },
 
   getField: {
+    // Phase 4: respondDoc. Service throws NextlyError NOT_FOUND if the
+    // field doesn't exist, so we never return a null doc here.
     execute: async (svc, p) => {
-      if (!svc.fieldDefinitionService) {
-        throw new Error("User field definition service not available.");
-      }
-      const data = await svc.fieldDefinitionService.getField(p.fieldId);
-      return { success: true, statusCode: 200, data };
+      requireFieldDefinitionService(svc);
+      const field = await svc.fieldDefinitionService.getField(p.fieldId);
+      return respondDoc(field);
     },
   },
 
   updateField: {
+    // Phase 4: respondMutation 200.
     execute: async (svc, p, body) => {
-      if (!svc.fieldDefinitionService) {
-        throw new Error("User field definition service not available.");
-      }
-      const data = await svc.fieldDefinitionService.updateField(
+      requireFieldDefinitionService(svc);
+      const field = await svc.fieldDefinitionService.updateField(
         p.fieldId,
         body as Parameters<typeof svc.fieldDefinitionService.updateField>[1]
       );
       await syncUserExtSchema(svc.userExtSchemaService);
-      return { success: true, statusCode: 200, data };
+      return respondMutation("User field updated.", field);
     },
   },
 
   deleteField: {
+    // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete to
+    // respondMutation, but fieldDefinitionService.deleteField returns
+    // void (no deleted record to surface). We use respondAction here
+    // so the wire shape is `{ message, fieldId }` rather than the
+    // awkward `{ message, item: undefined }` that respondMutation would
+    // emit. If fieldDefinitionService.deleteField is later refactored
+    // to return the deleted record, switch this back to respondMutation.
     execute: async (svc, p) => {
-      if (!svc.fieldDefinitionService) {
-        throw new Error("User field definition service not available.");
-      }
+      requireFieldDefinitionService(svc);
       await svc.fieldDefinitionService.deleteField(p.fieldId);
       await syncUserExtSchema(svc.userExtSchemaService);
-      return { success: true, statusCode: 204, data: null };
+      return respondAction("User field deleted.", { fieldId: p.fieldId });
     },
   },
 
   reorderFields: {
+    // Phase 4: respondAction. reorderFields is a non-CRUD mutation:
+    // there's no single "item"; a batch of records was rewritten in
+    // place. Surface the new ordered list as a sibling field.
     execute: async (svc, _p, body) => {
-      if (!svc.fieldDefinitionService) {
-        throw new Error("User field definition service not available.");
-      }
+      requireFieldDefinitionService(svc);
       const { fieldIds } = body as { fieldIds: string[] };
-      const data = await svc.fieldDefinitionService.reorderFields(fieldIds);
-      return { success: true, statusCode: 200, data };
+      const fields = await svc.fieldDefinitionService.reorderFields(fieldIds);
+      return respondAction("User fields reordered.", { fields });
     },
   },
 };
