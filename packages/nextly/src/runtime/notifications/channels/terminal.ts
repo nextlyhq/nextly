@@ -25,6 +25,19 @@ export class TerminalChannel implements NotificationChannel {
   }
 
   write(event: MigrationNotificationEvent): Promise<void> {
+    // CONFIRMATION_REQUIRED_NO_TTY is not a failure; it is a
+    // "user input required" pause. The reload-config caller prints
+    // a clear top-level instruction in that case (run db:sync,
+    // migrate:create, or use the admin UI). Emitting an additional
+    // boxed "Schema apply FAILED" line here would be both
+    // redundant and misleading because it reads as a real bug.
+    if (
+      event.status === "failed" &&
+      event.error.code === "CONFIRMATION_REQUIRED_NO_TTY"
+    ) {
+      return Promise.resolve();
+    }
+
     const title =
       event.status === "success"
         ? `Schema applied — ${describeScope(event.scope)}`

@@ -338,16 +338,40 @@ export async function reloadNextlyConfig(opts?: {
   });
 
   if (!applyResult.success) {
-    // CONFIRMATION_REQUIRED_NO_TTY is the expected outcome when a rename
-    // is detected on a non-TTY runtime (CI, IDE task runner). Surface it
-    // as a warn (actionable for the user) rather than an error (which
-    // implies a bug). All other codes still go through error.
     const code = applyResult.error.code;
-    const msg = `[Nextly HMR] Batch apply failed (${code}): ${applyResult.error.message}`;
+
     if (code === "CONFIRMATION_REQUIRED_NO_TTY") {
-      logger?.warn(msg);
+      // Boot-time + HMR runs in a request-handler context where the
+      // dev server's TTY is not directly attached to the prompt
+      // dispatcher's stdin. Renames + drops can't be confirmed
+      // safely from here. The pure-additive pipeline already
+      // applied any safe changes; only structural changes are
+      // pending. Surface a top-level, scannable instruction so the
+      // user knows exactly what to do, rather than burying it in
+      // a "FAILED" line that reads like a bug.
+      const detail = applyResult.error.message
+        .replace(/^TTY required for schema confirmation\.\s*/i, "")
+        .replace(
+          /\s*Run from an interactive terminal,.*$/i,
+          ""
+        )
+        .trim();
+      console.warn(
+        `\n[Nextly] Schema change needs your confirmation:\n` +
+          `  ${detail}\n\n` +
+          `Renames + drops auto-apply only when you confirm them.\n` +
+          `To apply, run one of:\n` +
+          `  • pnpm nextly db:sync         (prompts in this terminal)\n` +
+          `  • pnpm nextly migrate:create  (generates a committable migration)\n` +
+          `  • Use the admin UI Schema Builder at /admin\n\n` +
+          `Pure-additive changes (new fields, new collections) apply\n` +
+          `automatically on dev start; only structural changes need\n` +
+          `explicit confirmation.\n`
+      );
     } else {
-      logger?.error(msg);
+      logger?.error(
+        `[Nextly HMR] Batch apply failed (${code}): ${applyResult.error.message}`
+      );
     }
   }
 }
