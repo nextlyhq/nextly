@@ -34,11 +34,20 @@ import { dirname, join, basename, extname } from "node:path";
 import { build, type Plugin } from "esbuild";
 
 // Turbopack-bypass: createRequire anchors module resolution to the
-// calling source URL. Turbopack treats createRequire output as a
-// Node-builtin runtime require and does not statically analyze the
-// path argument. This is the same anchor pattern PR #110 uses for
-// drizzle-kit/api to escape the same class of bundler failure.
+// calling source URL. We then route the call through a
+// Function-constructor wrapper so Turbopack's static analyzer does
+// not see a literal `require(variable)` shape (Next 16 Turbopack
+// emits a "Module not found: Can't resolve <dynamic>" warning on
+// every dev request when the call is direct, even though the
+// require itself works fine at runtime). The Function constructor
+// is opaque to bundler analysis and resolves at runtime via the
+// captured `nodeRequire`.
 const nodeRequire = createRequire(import.meta.url);
+const opaqueRequire = new Function(
+  "req",
+  "id",
+  "return req(id)"
+) as (req: NodeJS.Require, id: string) => unknown;
 
 export interface BundleConfigResult {
   // The default-or-namespace export of the compiled config module.
@@ -128,7 +137,12 @@ export async function bundleAndRequire(
     // same process (HMR cycle re-entries do this).
     delete nodeRequire.cache[outFile];
 
-    const mod = nodeRequire(outFile) as {
+    // Routed through `opaqueRequire` (Function-constructor wrap of
+    // nodeRequire) so Turbopack's bundler analyzer does not emit a
+    // "Module not found: Can't resolve <dynamic>" warning on every
+    // request. The behaviour is identical to a direct
+    // `nodeRequire(outFile)` call.
+    const mod = opaqueRequire(nodeRequire, outFile) as {
       default?: unknown;
     } & Record<string, unknown>;
 
