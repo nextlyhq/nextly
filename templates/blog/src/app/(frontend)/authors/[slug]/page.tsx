@@ -112,7 +112,8 @@ export default async function AuthorPage({
           style={{ color: "var(--color-fg-muted)" }}
         >
           <span>
-            {posts.totalDocs} {posts.totalDocs === 1 ? "post" : "posts"}
+            {/* Phase 4 (Task 14): getPostsByAuthor returns canonical envelope. */}
+            {posts.meta.total} {posts.meta.total === 1 ? "post" : "posts"}
           </span>
           <span aria-hidden="true">·</span>
           <a
@@ -137,7 +138,8 @@ export default async function AuthorPage({
         >
           Posts by {author.name}
         </h2>
-        <PostGrid posts={posts.docs} />
+        {/* Phase 4 (Task 14): canonical envelope; post slice is on `items`. */}
+        <PostGrid posts={posts.items} />
       </section>
     </>
   );

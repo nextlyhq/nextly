@@ -110,18 +110,20 @@ export default async function CategoryPage({
         description={category.description ?? undefined}
         stats={[
           {
-            text: `${posts.totalDocs} ${posts.totalDocs === 1 ? "post" : "posts"}`,
+            // Phase 4 (Task 14): canonical envelope; total moved to meta.total.
+            text: `${posts.meta.total} ${posts.meta.total === 1 ? "post" : "posts"}`,
           },
           { text: "RSS", href: `/categories/${slug}/feed.xml` },
         ]}
       />
 
-      <PostGrid posts={posts.docs} />
+      {/* Phase 4 (Task 14): canonical envelope; post slice is on `items`. */}
+      <PostGrid posts={posts.items} />
 
       <div className="mt-12">
         <Pagination
           currentPage={currentPage}
-          totalPages={posts.totalPages}
+          totalPages={posts.meta.totalPages}
           basePath={`/categories/${slug}`}
         />
       </div>

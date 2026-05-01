@@ -79,7 +79,9 @@ async function pickPermissionIdsForRoles(
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
   try {
     const all = await nextly.permissions.find({ limit: 500 });
-    const perms = all.docs;
+    // Phase 4 (Task 14): permissions.find returns canonical ListResult shape
+    // (`{ items, meta }`); read the page slice from `items` (was `docs`).
+    const perms = all.items;
     out.admin = perms.map(p => (p as { id: string }).id);
     out.editor = perms
       .filter(p => {
@@ -115,16 +117,16 @@ async function pickPermissionIdsForRoles(
   return out;
 }
 
-async function seedRoles(
-  nextly: Nextly
-): Promise<Record<string, string>> {
+async function seedRoles(nextly: Nextly): Promise<Record<string, string>> {
   const roleIdBySlug: Record<string, string> = {};
 
   // First pass: find any existing roles by listing.
   try {
     const existing = await nextly.roles.find({ limit: 100, page: 1 });
+    // Phase 4 (Task 14): roles.find returns canonical ListResult shape;
+    // iterate `items` (was `docs`).
     for (const role of TEMPLATE_ROLES) {
-      const match = existing.docs.find(
+      const match = existing.items.find(
         r => (r as { slug?: string }).slug === role.slug
       );
       if (match) roleIdBySlug[role.slug] = (match as { id: string }).id;
@@ -162,7 +164,9 @@ async function seedRoles(
           permissionIds,
         },
       });
-      roleIdBySlug[role.slug] = created.id as string;
+      // Phase 4 (Task 14): roles.create now returns `{ message, item }`,
+      // so the created role lives on `.item` (was returned bare previously).
+      roleIdBySlug[role.slug] = created.item.id as string;
       console.log(
         `  Seeded role: ${role.slug} (${permissionIds.length} permissions)`
       );
@@ -414,7 +418,9 @@ async function collectionHasEntries(
       collection,
       limit: 1,
     });
-    return result.totalDocs > 0;
+    // Phase 4 (Task 14): canonical envelope; total lives at meta.total
+    // (was top-level totalDocs).
+    return result.meta.total > 0;
   } catch {
     return false;
   }
@@ -550,7 +556,9 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
           ...(roleIds.length > 0 ? { roles: roleIds } : {}),
         },
       });
-      userId = created.id as string;
+      // Phase 4 (Task 14): users.create now returns `{ message, item }`,
+      // so the created user lives on `.item`.
+      userId = created.item.id as string;
     }
     userIdMap[user.slug] = userId;
   }
@@ -567,7 +575,9 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
         description: category.description,
       },
     });
-    categoryIdMap[category.slug] = created.id as string;
+    // Phase 4 (Task 14): nextly.create now returns `{ message, item }`,
+    // so the created category lives on `.item`.
+    categoryIdMap[category.slug] = created.item.id as string;
   }
 
   console.log("  Creating tags...");
@@ -582,7 +592,9 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
         description: tag.description,
       },
     });
-    tagIdMap[tag.slug] = created.id as string;
+    // Phase 4 (Task 14): nextly.create now returns `{ message, item }`,
+    // so the created tag lives on `.item`.
+    tagIdMap[tag.slug] = created.item.id as string;
   }
 
   console.log("  Creating posts...");
@@ -677,7 +689,9 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
       where: { slug: { equals: "newsletter" } },
       limit: 1,
     });
-    if (existing.totalDocs === 0) {
+    // Phase 4 (Task 14): canonical envelope; read total from `meta.total`
+    // (was top-level `totalDocs`).
+    if (existing.meta.total === 0) {
       // Payload shape: the form-builder plugin's `forms` collection has
       // top-level `name` (required, internal), `slug` (required, unique),
       // `fields` (required, JSON array of field configs), `status`
@@ -721,8 +735,7 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
           settings: {
             submitButtonText: "Subscribe",
             confirmationType: "message",
-            successMessage:
-              "Thanks for subscribing! We'll be in touch.",
+            successMessage: "Thanks for subscribing! We'll be in touch.",
           },
         },
       });
