@@ -11,6 +11,17 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  */
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
+/**
+ * Audit H9 (T-018): characters that would break the surrounding
+ * `CHECK (col ~ '…')` constraint expression when embedded as raw text
+ * after the existing single-quote escaping. The R3 update notes that
+ * `replace(/'/g, "''")` alone is not sufficient — a regex containing
+ * a stray `;`, backslash, or newline can corrupt the DDL even without
+ * SQL injection. We allowlist by reject-listing the smallest set that
+ * shouldn't appear in any reasonable validation pattern.
+ */
+const REGEX_DDL_FORBIDDEN_CHARS = /[;\\\n\r\0]/;
+
 /** SQL keywords that should be blocked as field/collection names. */
 export const SQL_KEYWORDS = [
   "select",
@@ -281,6 +292,12 @@ export class DynamicCollectionValidationService {
     if (!safeRegex(pattern)) {
       throw new Error(
         `Regex pattern for field "${fieldName}" is unsafe (catastrophic backtracking detected).`
+      );
+    }
+
+    if (REGEX_DDL_FORBIDDEN_CHARS.test(pattern)) {
+      throw new Error(
+        `Regex pattern for field "${fieldName}" contains characters that are not allowed in CHECK constraint expressions (no semicolons, backslashes, newlines, or null bytes).`
       );
     }
   }
