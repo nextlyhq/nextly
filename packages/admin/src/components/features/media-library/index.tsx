@@ -23,6 +23,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  toast,
 } from "@revnixhq/ui";
 import * as React from "react";
 
@@ -124,10 +125,10 @@ export function MediaLibrary({
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<MediaType | "all">("all");
-  const [sortBy, setSortBy] = React.useState<
+  const [sortBy, _setSortBy] = React.useState<
     "filename" | "uploadedAt" | "size"
   >(defaultSortBy);
-  const [sortOrder, setSortOrder] = React.useState<"asc" | "desc">(
+  const [sortOrder, _setSortOrder] = React.useState<"asc" | "desc">(
     defaultSortOrder
   );
 
@@ -202,7 +203,6 @@ export function MediaLibrary({
   // Fetch child folders: subfolders when inside a folder, root folders when at root
   const { data: childSubfolders } = useSubfolders(activeFolderId ?? undefined);
   const { data: rootFoldersList } = useRootFolders();
-  const displayFolders = activeFolderId ? childSubfolders : rootFoldersList;
 
   // Debounce search input
   React.useEffect(() => {
@@ -363,14 +363,6 @@ export function MediaLibrary({
     setPage(0); // Reset to page 1 when filter changes
   }, []);
 
-  const handleSortByChange = React.useCallback((value: string) => {
-    setSortBy(value as "filename" | "uploadedAt" | "size");
-  }, []);
-
-  const handleSortOrderToggle = React.useCallback(() => {
-    setSortOrder(prev => (prev === "asc" ? "desc" : "asc"));
-  }, []);
-
   // Handlers: Folders
 
   const handleDeleteFolderSuccess = React.useCallback(() => {
@@ -384,6 +376,24 @@ export function MediaLibrary({
     if (selectedIds.size === 0) return;
     setIsMoveToFolderDialogOpen(true);
   }, [selectedIds]);
+
+  const handleDownload = React.useCallback(async (media: Media) => {
+    if (!media.url) return;
+    try {
+      const response = await fetch(media.url);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = media.originalFilename || media.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      window.open(media.url, "_blank");
+    }
+  }, []);
 
   const handleToggleAll = React.useCallback(
     (selected: boolean) => {
@@ -574,29 +584,6 @@ export function MediaLibrary({
               )}
             </SelectContent>
           </Select>
-
-          {/* Sort By */}
-          <Select value={sortBy} onValueChange={handleSortByChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white dark:bg-slate-950">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="uploadedAt">Uploaded</SelectItem>
-              <SelectItem value="filename">Name</SelectItem>
-              <SelectItem value="size">Size</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Sort Order Toggle */}
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={handleSortOrderToggle}
-            aria-label={`Sort ${sortOrder === "asc" ? "ascending" : "descending"}`}
-            className="bg-white dark:bg-slate-950"
-          >
-            {sortOrder === "asc" ? "↑" : "↓"}
-          </Button>
         </div>
 
         {/* Folder Breadcrumbs & Grid (Moved under search and filters) */}
@@ -608,78 +595,130 @@ export function MediaLibrary({
               showRoot={false}
               className="mb-4"
             />
-
-            {/* Child Folder Cards */}
+            {/* Root Folders Row */}
             <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-4">
                 {/* All Media (Root) Card */}
                 <button
                   type="button"
                   onClick={() => setActiveFolderId(null)}
                   className={cn(
-                    "group flex items-center gap-3 rounded-md border p-3 text-left transition-all duration-200 hover-unified ring-1 cursor-pointer",
+                    "group flex items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                     !activeFolderId
-                      ? "border-primary/20 bg-primary/5 ring-primary/20"
-                      : "border-border bg-card hover:border-primary/20 ring-border/50"
+                      ? "border-primary/20 bg-primary/5"
+                      : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
                   )}
                 >
-                  <span
+                  <Home
                     className={cn(
-                      "flex h-10 w-10 shrink-0 items-center justify-center rounded-md transition-colors",
+                      "h-4 w-4 shrink-0 transition-colors",
                       !activeFolderId
-                        ? "bg-primary text-white"
-                        : "bg-slate-50 group-hover:bg-primary/10 transition-colors"
+                        ? "text-primary"
+                        : "text-muted-foreground/70 group-hover:text-primary"
                     )}
-                  >
-                    <Home
-                      className={cn(
-                        "h-5 w-5",
-                        !activeFolderId
-                          ? "text-white"
-                          : "text-slate-400 group-hover:text-primary"
-                      )}
-                    />
-                  </span>
+                  />
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
-                        "truncate text-sm font-bold transition-colors",
+                        "truncate text-xs font-semibold transition-colors",
                         !activeFolderId ? "text-primary" : "text-foreground"
                       )}
                     >
                       All Media
                     </p>
-                    <p className="truncate text-[10px] text-slate-400/80 font-medium transition-colors">
-                      Root Folder
-                    </p>
                   </div>
                 </button>
 
-                {/* Subfolders */}
-                {displayFolders?.map(folder => (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    onClick={() => setActiveFolderId(folder.id)}
-                    className="group flex items-center gap-3 rounded-md border border-border bg-card p-3 text-left transition-all duration-200 hover-subtle-row hover:border-primary/20 ring-1 ring-border/50 cursor-pointer"
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-50 transition-colors group-hover:bg-primary/10">
-                      <FolderIconComponent className="h-5 w-5 text-slate-400 group-hover:text-primary" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold text-slate-800 transition-colors">
-                        {folder.name}
-                      </p>
-                      {folder.description && (
-                        <p className="truncate text-[10px] text-slate-400/80 font-medium transition-colors">
-                          {folder.description}
-                        </p>
+                {/* Root Folders */}
+                {rootFoldersList?.map(folder => {
+                  const isActive = activeFolderId === folder.id;
+                  return (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      onClick={() => setActiveFolderId(folder.id)}
+                      className={cn(
+                        "group flex items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                        isActive
+                          ? "border-primary/20 bg-primary/5"
+                          : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
                       )}
-                    </div>
-                  </button>
-                ))}
+                    >
+                      <FolderIconComponent
+                        className={cn(
+                          "h-4 w-4 shrink-0 transition-colors",
+                          isActive
+                            ? "text-primary"
+                            : "text-muted-foreground/70 group-hover:text-blue-500"
+                        )}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className={cn(
+                            "truncate text-xs font-semibold transition-colors",
+                            isActive
+                              ? "text-primary"
+                              : "text-muted-foreground group-hover:text-foreground"
+                          )}
+                        >
+                          {folder.name}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
+
+            {/* Child Subfolders Row (Only if in a folder and has children) */}
+            {activeFolderId &&
+              childSubfolders &&
+              childSubfolders.length > 0 && (
+                <div className="animate-in fade-in slide-in-from-top-2 duration-300 border-t border-border/50 pt-4 mt-2">
+                  <div className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest mb-3 px-1">
+                    Subfolders
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-6">
+                    {childSubfolders.map(folder => {
+                      const isActive = activeFolderId === folder.id;
+                      return (
+                        <button
+                          key={folder.id}
+                          type="button"
+                          onClick={() => setActiveFolderId(folder.id)}
+                          className={cn(
+                            "group flex items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                            isActive
+                              ? "border-primary/20 bg-primary/5"
+                              : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
+                          )}
+                        >
+                          <FolderIconComponent
+                            className={cn(
+                              "h-4 w-4 shrink-0 transition-colors",
+                              isActive
+                                ? "text-primary"
+                                : "text-muted-foreground/70 group-hover:text-blue-500"
+                            )}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={cn(
+                                "truncate text-xs font-semibold transition-colors",
+                                isActive
+                                  ? "text-primary"
+                                  : "text-muted-foreground group-hover:text-foreground"
+                              )}
+                            >
+                              {folder.name}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
           </div>
         )}
 
@@ -704,9 +743,7 @@ export function MediaLibrary({
                 error={error}
                 selectedIds={selectedIds}
                 onSelectionChange={handleSelectionChange}
-                onItemClick={(media: Media) =>
-                  console.log("[MediaLibrary] Item clicked:", media)
-                }
+                onItemClick={handleEditMedia}
                 onEdit={handleEditMedia}
                 onDelete={(media: Media) => handleDeleteItem(media)}
                 onCopyUrl={(url: string) => {
@@ -810,6 +847,18 @@ export function MediaLibrary({
           onOpenChange={setIsEditDialogOpen}
           onSave={handleSaveMedia}
           isLoading={isUpdating}
+          onDelete={m => {
+            setMediaToDelete(m);
+            setIsDeleteDialogOpen(true);
+            setIsEditDialogOpen(false);
+          }}
+          onDownload={m => {
+            void handleDownload(m);
+          }}
+          onCopyUrl={url => {
+            void navigator.clipboard.writeText(url);
+            toast.success("URL copied to clipboard");
+          }}
         />
 
         {/* Create Folder Dialog */}

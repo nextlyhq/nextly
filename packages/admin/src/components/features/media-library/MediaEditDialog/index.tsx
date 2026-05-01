@@ -19,11 +19,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   Input,
   Label,
+  toast,
 } from "@revnixhq/ui";
 import * as React from "react";
 import { useForm } from "react-hook-form";
@@ -35,11 +35,12 @@ import {
   ChevronDown,
   ChevronRight,
   Home,
-  Folder,
+  Folder as FolderIcon,
   Copy,
   Check,
+  Trash2,
+  Download,
 } from "@admin/components/icons";
-import { toast } from "@admin/components/ui";
 import { useRootFolders } from "@admin/hooks/queries/useMedia";
 import { formatFileSize } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
@@ -80,6 +81,9 @@ export interface MediaEditDialogProps {
   media: Media | null;
   onOpenChange: (open: boolean) => void;
   onSave: (updates: MediaUpdateInput) => Promise<void>;
+  onDelete?: (media: Media) => void;
+  onDownload?: (media: Media) => void;
+  onCopyUrl?: (url: string) => void;
   isLoading?: boolean;
 }
 
@@ -159,26 +163,29 @@ function CropPointPicker({
       </div>
 
       {/* Preview strip - shows how image crops at common ratios */}
-      <div className="flex gap-2">
+      <div className="flex gap-4 pt-2">
         {[
-          { label: "1:1", w: 48, h: 48 },
-          { label: "16:9", w: 64, h: 36 },
-          { label: "4:3", w: 56, h: 42 },
+          { label: "1:1", w: 56, h: 56 },
+          { label: "16:9", w: 72, h: 40 },
+          { label: "4:3", w: 64, h: 48 },
         ].map(({ label, w, h }) => (
-          <div key={label} className="text-center">
+          <div
+            key={label}
+            className="flex flex-col items-center gap-1.5 group/ratio cursor-default"
+          >
             <div
-              className="rounded border border-border overflow-hidden bg-muted"
+              className="rounded-lg border-0 overflow-hidden bg-muted/30 transition-all duration-300 ring-0 group-hover/ratio:ring-2 group-hover/ratio:ring-primary/20"
               style={{ width: w, height: h }}
             >
               <img
                 src={imageUrl}
                 alt={`${label} crop preview`}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover transition-transform duration-500 group-hover/ratio:scale-110"
                 style={{ objectPosition: `${focalX}% ${focalY}%` }}
                 draggable={false}
               />
             </div>
-            <span className="text-[10px] text-muted-foreground mt-0.5 block">
+            <span className="text-[9px] font-bold text-black dark:text-white uppercase tracking-widest leading-none">
               {label}
             </span>
           </div>
@@ -254,6 +261,9 @@ export function MediaEditDialog({
   media,
   onOpenChange,
   onSave,
+  onDelete,
+  onDownload,
+  onCopyUrl,
   isLoading = false,
 }: MediaEditDialogProps) {
   const [isSaving, setIsSaving] = React.useState(false);
@@ -275,7 +285,7 @@ export function MediaEditDialog({
     defaultValues: {
       altText: media?.altText || "",
       caption: media?.caption || "",
-      tags: media?.tags?.join(", ") || "",
+      tags: Array.isArray(media?.tags) ? media?.tags.join(", ") : "",
     },
   });
 
@@ -285,7 +295,7 @@ export function MediaEditDialog({
       form.reset({
         altText: media.altText || "",
         caption: media.caption || "",
-        tags: media.tags?.join(", ") || "",
+        tags: Array.isArray(media.tags) ? media.tags.join(", ") : "",
       });
       setSelectedFolderId(media.folderId ?? null);
       setFocalX(media.focalX ?? 50);
@@ -351,24 +361,34 @@ export function MediaEditDialog({
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       e.stopPropagation();
-      void handleSubmit(e);
+      void handleSubmit();
     },
     [handleSubmit]
   );
 
-  if (!media) return null;
-
   // Parse sizes if they exist (might be a JSON string from some DB adapters)
-  const parsedSizes = media.sizes
-    ? typeof media.sizes === "string"
-      ? JSON.parse(media.sizes)
-      : media.sizes
-    : null;
+  const parsedSizes = React.useMemo(() => {
+    if (!media?.sizes) return null;
+    if (typeof media.sizes === "object") return media.sizes;
+    try {
+      return JSON.parse(media.sizes);
+    } catch (e) {
+      console.error("Failed to parse media sizes:", e);
+      return null;
+    }
+  }, [media?.sizes]);
+
+  if (!media) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn("sm:max-w-4xl", !isImage && "sm:max-w-2xl")}>
-        <DialogHeader>
+      <DialogContent
+        className={cn(
+          "sm:max-w-4xl p-0 gap-0 overflow-hidden",
+          !isImage && "sm:max-w-2xl"
+        )}
+      >
+        <DialogHeader className="p-6 pb-2">
           <DialogTitle>Edit Media</DialogTitle>
           <DialogDescription>
             {media.originalFilename}
@@ -386,147 +406,206 @@ export function MediaEditDialog({
         </DialogHeader>
 
         <form onSubmit={handleFormSubmit}>
-          <div className={cn("flex gap-6", !isImage && "flex-col")}>
-            {/* Left Panel - Image Preview + Crop Point (images only) */}
-            {isImage && (
-              <div className="w-full sm:w-[340px] flex-shrink-0 space-y-3">
-                <CropPointPicker
-                  imageUrl={media.thumbnailUrl || media.url}
-                  focalX={focalX}
-                  focalY={focalY}
-                  onChange={handleCropPointChange}
-                  disabled={isPending}
-                />
-              </div>
-            )}
+          <div className="px-6 pb-6">
+            <div className={cn("flex gap-6", !isImage && "flex-col")}>
+              {/* Left Panel - Image Preview + Crop Point (images only) */}
+              {isImage && (
+                <div className="w-full sm:w-[340px] flex-shrink-0 space-y-3">
+                  <CropPointPicker
+                    imageUrl={media.thumbnailUrl || media.url}
+                    focalX={focalX}
+                    focalY={focalY}
+                    onChange={handleCropPointChange}
+                    disabled={isPending}
+                  />
+                </div>
+              )}
 
-            {/* Right Panel - Metadata Form + Sizes */}
-            <div className="flex-1 space-y-4 min-w-0">
-              {/* Alt Text */}
-              <div className="space-y-1.5">
-                <Label htmlFor="altText" className="text-sm">
-                  Alt Text
-                  {isImage && (
+              {/* Right Panel - Metadata Form + Sizes */}
+              <div className="flex-1 space-y-4 min-w-0">
+                {/* Alt Text */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="altText" className="text-sm">
+                    Alt Text
+                    {isImage && (
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        (recommended)
+                      </span>
+                    )}
+                  </Label>
+                  <Input
+                    id="altText"
+                    placeholder="Describe the image for screen readers..."
+                    {...form.register("altText")}
+                    disabled={isPending}
+                  />
+                </div>
+
+                {/* Caption */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="caption" className="text-sm">
+                    Caption
+                  </Label>
+                  <Input
+                    id="caption"
+                    placeholder="Optional caption or description..."
+                    {...form.register("caption")}
+                    disabled={isPending}
+                  />
+                </div>
+
+                {/* Tags */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="tags" className="text-sm">
+                    Tags
                     <span className="ml-1 text-xs text-muted-foreground">
-                      (recommended)
+                      (comma-separated)
                     </span>
+                  </Label>
+                  <Input
+                    id="tags"
+                    placeholder="e.g., logo, branding, header"
+                    {...form.register("tags")}
+                    disabled={isPending}
+                  />
+                </div>
+
+                {/* Folder */}
+                <div className="space-y-1.5">
+                  <Label className="text-sm">Folder</Label>
+                  <button
+                    type="button"
+                    onClick={() => setIsFolderPickerOpen(!isFolderPickerOpen)}
+                    className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent"
+                  >
+                    {selectedFolderId ? (
+                      <FolderIcon className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <Home className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <span className="flex-1 text-left truncate">
+                      {selectedFolderId
+                        ? rootFolders?.find(f => f.id === selectedFolderId)
+                            ?.name ||
+                          (media?.folderId === selectedFolderId
+                            ? "Current Folder"
+                            : "Selected folder")
+                        : "Root (No Folder)"}
+                    </span>
+                    {isFolderPickerOpen ? (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </button>
+
+                  {isFolderPickerOpen && (
+                    <div className="max-h-[150px] overflow-y-auto rounded-md border border-border p-2">
+                      <FolderTreePicker
+                        selectedFolderId={selectedFolderId}
+                        onSelect={folder => {
+                          setSelectedFolderId(folder?.id ?? null);
+                          setIsFolderPickerOpen(false);
+                        }}
+                        rootLabel="Root (No Folder)"
+                        compact
+                      />
+                    </div>
                   )}
-                </Label>
-                <Input
-                  id="altText"
-                  placeholder="Describe the image for screen readers..."
-                  {...form.register("altText")}
-                  disabled={isPending}
-                />
-              </div>
+                </div>
 
-              {/* Caption */}
-              <div className="space-y-1.5">
-                <Label htmlFor="caption" className="text-sm">
-                  Caption
-                </Label>
-                <Input
-                  id="caption"
-                  placeholder="Optional caption or description..."
-                  {...form.register("caption")}
-                  disabled={isPending}
-                />
-              </div>
-
-              {/* Tags */}
-              <div className="space-y-1.5">
-                <Label htmlFor="tags" className="text-sm">
-                  Tags
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    (comma-separated)
-                  </span>
-                </Label>
-                <Input
-                  id="tags"
-                  placeholder="e.g., logo, branding, header"
-                  {...form.register("tags")}
-                  disabled={isPending}
-                />
-              </div>
-
-              {/* Folder */}
-              <div className="space-y-1.5">
-                <Label className="text-sm">Folder</Label>
-                <button
-                  type="button"
-                  onClick={() => setIsFolderPickerOpen(!isFolderPickerOpen)}
-                  className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent"
-                >
-                  {selectedFolderId ? (
-                    <Folder className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <Home className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <span className="flex-1 text-left truncate">
-                    {selectedFolderId
-                      ? (rootFolders?.find(f => f.id === selectedFolderId)
-                          ?.name ?? "Selected folder")
-                      : "Root (No Folder)"}
-                  </span>
-                  {isFolderPickerOpen ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </button>
-
-                {isFolderPickerOpen && (
-                  <div className="max-h-[150px] overflow-y-auto rounded-md border border-border p-2">
-                    <FolderTreePicker
-                      selectedFolderId={selectedFolderId}
-                      onSelect={folder => {
-                        setSelectedFolderId(folder?.id ?? null);
-                        setIsFolderPickerOpen(false);
-                      }}
-                      rootLabel="Root (No Folder)"
-                      compact
-                    />
-                  </div>
+                {/* Image Sizes (if available) */}
+                {parsedSizes && Object.keys(parsedSizes).length > 0 && (
+                  <ImageSizesDisplay sizes={parsedSizes} />
                 )}
               </div>
-
-              {/* Image Sizes (if available) */}
-              {parsedSizes && Object.keys(parsedSizes).length > 0 && (
-                <ImageSizesDisplay sizes={parsedSizes} />
-              )}
             </div>
+
+            {/* Error Alert */}
+            {error && (
+              <Alert variant="destructive" className="mt-4">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
           </div>
 
-          {/* Error Alert */}
-          {error && (
-            <Alert variant="destructive" className="mt-4">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* Footer */}
-          <DialogFooter className="mt-6">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={isPending}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isPending}>
-              {isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                "Save Changes"
+          {/* Footer - Full-Width Unified Background */}
+          <div className="mt-2 flex items-center justify-between gap-4 bg-primary/5 dark:bg-primary/10 border-t border-primary/10 px-6 py-4">
+            {/* Action Buttons Group (Left) */}
+            <div className="flex items-center gap-2">
+              {onDelete && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => media && onDelete(media)}
+                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  <span className="text-xs font-bold tracking-tight">
+                    Delete
+                  </span>
+                </Button>
               )}
-            </Button>
-          </DialogFooter>
+              {onCopyUrl && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => media && onCopyUrl(media.url)}
+                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  <span className="text-xs font-bold tracking-tight">
+                    Copy URL
+                  </span>
+                </Button>
+              )}
+              {onDownload && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => media && onDownload(media)}
+                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  <span className="text-xs font-bold tracking-tight">
+                    Download
+                  </span>
+                </Button>
+              )}
+            </div>
+
+            {/* Submit Group (Right) */}
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={isPending}
+                className="h-10 px-6 font-bold tracking-tight bg-white dark:bg-slate-900 border-border/50"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={isPending}
+                className="h-10 px-8 bg-primary text-primary-foreground font-bold tracking-tight hover:opacity-90 shadow-sm"
+              >
+                {isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </Button>
+            </div>
+          </div>
         </form>
       </DialogContent>
     </Dialog>

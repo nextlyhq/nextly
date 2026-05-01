@@ -80,7 +80,7 @@ export function FolderTreeView({
   );
 
   return (
-    <div className={cn("flex flex-col h-full py-6", className)}>
+    <div className={cn("flex flex-col h-full pt-1 pb-6", className)}>
       {/* Sidebar Heading */}
       <div className="flex items-center justify-between px-3 mb-2">
         <span className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/40 px-3">
@@ -223,10 +223,10 @@ function FolderTreeItem({
                 onToggle(folder.id);
               }}
               className={cn(
-                "flex h-8 w-6 items-center justify-center transition-colors hover:bg-primary/10 rounded-md",
+                "flex h-8 w-6 items-center justify-center transition-colors rounded-md",
                 isActive
-                  ? "text-primary/40 hover:text-primary"
-                  : "text-muted-foreground/60 hover:text-foreground"
+                  ? "text-primary/40 group-hover:text-primary"
+                  : "text-muted-foreground/40 group-hover:text-foreground"
               )}
             >
               <ExpandIcon className="h-3.5 w-3.5" />
@@ -273,7 +273,7 @@ function FolderTreeItem({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover-unified"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
                 tabIndex={-1}
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-slate-400" />
