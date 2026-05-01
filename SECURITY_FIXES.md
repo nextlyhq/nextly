@@ -372,7 +372,7 @@ node scripts/verify-server-only.mjs  # must exit 0 on the throw
 - **Files:** [packages/nextly/src/middleware/rate-limit.ts:318-339](packages/nextly/src/middleware/rate-limit.ts#L318-L339), [packages/nextly/src/auth/handlers/handler-utils.ts:66-68](packages/nextly/src/auth/handlers/handler-utils.ts#L66-L68); new helper at `packages/nextly/src/utils/get-trusted-client-ip.ts`.
 - **Blocked by:** —
 - **Blocks:** T-015 (refresh binding), T-016 (per-IP rate limit) — both Phase 2.
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`72db96f`)
 
 **Fix:**
 
