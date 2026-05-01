@@ -5,8 +5,20 @@
  * password/account helpers and `getCurrentUserPermissions`) to
  * `container.users`, which is the `UserService` instance held on the
  * `ServiceContainer`.
+ *
+ * Phase 4: every handler returns a Response built via the respondX
+ * helpers in `../../api/response-shapes.ts`. The dispatcher passes the
+ * Response through unchanged. See spec §5.1 for the canonical shape
+ * contract.
  */
 
+import {
+  respondAction,
+  respondData,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "../../api/response-shapes";
 import type { ServiceContainer } from "../../services";
 import {
   isSuperAdmin,
@@ -24,29 +36,30 @@ import type { MethodHandler, Params } from "../types";
 
 type UsersService = ServiceContainer["users"];
 
+/**
+ * Translate the legacy service `{ data, meta: {total,page,pageSize,totalPages} }`
+ * shape to the canonical `PaginationMeta` shape expected by `respondList`.
+ * Service-internal field names (e.g. `pageSize`) stay where they are
+ * for now; renaming them is a separate refactor (out of scope for Phase 4).
+ */
+function toPaginationMeta(meta: {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}) {
+  return {
+    total: meta.total,
+    page: meta.page,
+    limit: meta.pageSize,
+    totalPages: meta.totalPages,
+    hasNext: meta.page < meta.totalPages,
+    hasPrev: meta.page > 1,
+  };
+}
+
 const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   listUsers: {
-    // UserQueryService.listUsers returns the raw shape
-    // `{ data: MinimalUser[], meta: {...} }`. The dispatcher's
-    // smart-extraction path (dispatcher.ts:180) only triggers when
-    // the result has a `statusCode` or `status` field. Without one,
-    // the dumb fallback wraps the WHOLE return as `data`, producing
-    // the double-nested `{ data: { data: [...], meta: {...} } }`
-    // shape the admin Users page hits.
-    //
-    // Wrapping the result with `statusCode: 200` here triggers the
-    // smart path so `data` and `meta` are extracted correctly into
-    // the response envelope. Mirrors the shape `form-dispatcher.ts`
-    // uses for `listForms` and the `CollectionServiceResult<T>`
-    // shape collection services already return.
-    //
-    // Phase 4 (deferred from Task 24, see
-    // `tasks/nextly-dev-tasks/24-payload-alignment-and-fixes.md`)
-    // will migrate user endpoints to Payload's `PaginatedDocs<T>`
-    // shape (`{ docs, totalDocs, totalPages, page, limit }`) and
-    // make this wrapping unnecessary. Until then, this surgical
-    // fix unblocks the admin UI without changing the public
-    // response contract.
     execute: async (svc, p) => {
       const result = await svc.listUsers({
         page: toNumber(p.page),
@@ -59,82 +72,124 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         sortBy: p.sortBy as "createdAt" | "name" | "email" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
       });
-      return {
-        success: true,
-        statusCode: 200,
-        data: result.data,
-        meta: result.meta,
-      };
+      return respondList(result.data, toPaginationMeta(result.meta));
     },
   },
   getUserById: {
-    execute: (svc, p) => svc.getUserById(requireParam(p, "userId", "UserId")),
+    execute: async (svc, p) => {
+      const user = await svc.getUserById(requireParam(p, "userId", "UserId"));
+      return respondDoc(user);
+    },
   },
   getCurrentUser: {
-    execute: (svc, p) =>
-      svc.getCurrentUser(requireParam(p, "userId", "UserId")),
+    execute: async (svc, p) => {
+      const user = await svc.getCurrentUser(
+        requireParam(p, "userId", "UserId")
+      );
+      return respondDoc(user);
+    },
   },
   updateCurrentUser: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       if (!p.userId || !body)
         throw new Error("UserId and update data are required");
-      return svc.updateCurrentUser(p.userId, body as Record<string, unknown>);
+      const user = await svc.updateCurrentUser(
+        p.userId,
+        body as Record<string, unknown>
+      );
+      return respondMutation("Profile updated.", user);
     },
   },
   findByEmail: {
-    execute: (svc, p) => svc.findByEmail(requireParam(p, "email", "Email")),
+    execute: async (svc, p) => {
+      const user = await svc.findByEmail(requireParam(p, "email", "Email"));
+      return respondDoc(user);
+    },
   },
   hasPassword: {
-    execute: (svc, p) => svc.hasPassword(requireParam(p, "userId", "UserId")),
+    execute: async (svc, p) => {
+      const result = await svc.hasPassword(
+        requireParam(p, "userId", "UserId")
+      );
+      // No-Boolean-only rule (spec §5.1): wrap in object so callers can
+      // grow the shape without breaking the contract later.
+      return respondData({ hasPassword: result });
+    },
   },
   getAccounts: {
-    execute: (svc, p) => svc.getAccounts(requireParam(p, "userId", "UserId")),
+    execute: async (svc, p) => {
+      const accounts = await svc.getAccounts(
+        requireParam(p, "userId", "UserId")
+      );
+      // Non-paginated list — use respondData with a named field rather
+      // than respondList (which would require synthetic pagination meta).
+      return respondData({ accounts });
+    },
   },
   createLocalUser: {
-    execute: (svc, _, body) => {
+    execute: async (svc, _, body) => {
       const b = requireBodyField<{ email: string }>(
         body,
         "email",
         "User data with email is required"
       );
-      return svc.createLocalUser(
+      const user = await svc.createLocalUser(
         b as Parameters<typeof svc.createLocalUser>[0]
       );
+      return respondMutation("User created.", user, { status: 201 });
     },
   },
   updateUser: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       if (!p.userId || !body)
         throw new Error("UserId and update data are required");
-      return svc.updateUser(p.userId, body as Record<string, unknown>);
+      const user = await svc.updateUser(
+        p.userId,
+        body as Record<string, unknown>
+      );
+      return respondMutation("User updated.", user);
     },
   },
   deleteUser: {
-    execute: (svc, p) => svc.deleteUser(requireParam(p, "userId", "UserId")),
+    execute: async (svc, p) => {
+      const user = await svc.deleteUser(requireParam(p, "userId", "UserId"));
+      return respondMutation("User deleted.", user);
+    },
   },
   updatePasswordHash: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       const b = body as { passwordHash?: string } | undefined;
       if (!p.userId || !b?.passwordHash)
         throw new Error("UserId and passwordHash are required");
-      return svc.updatePasswordHash(p.userId, b.passwordHash);
+      await svc.updatePasswordHash(p.userId, b.passwordHash);
+      return respondAction("Password hash updated.");
     },
   },
   unlinkAccountForUser: {
-    execute: (svc, p) => {
+    execute: async (svc, p) => {
       if (!p.userId || !p.provider || !p.providerAccountId) {
-        throw new Error("UserId, provider, and providerAccountId are required");
+        throw new Error(
+          "UserId, provider, and providerAccountId are required"
+        );
       }
-      return svc.unlinkAccountForUser(
+      await svc.unlinkAccountForUser(
         p.userId,
         p.provider,
         p.providerAccountId
       );
+      return respondAction("Account unlinked.", {
+        provider: p.provider,
+        providerAccountId: p.providerAccountId,
+      });
     },
   },
   getUserPasswordHashById: {
-    execute: (svc, p) =>
-      svc.getUserPasswordHashById(requireParam(p, "userId", "UserId")),
+    execute: async (svc, p) => {
+      const hash = await svc.getUserPasswordHashById(
+        requireParam(p, "userId", "UserId")
+      );
+      return respondData({ passwordHash: hash });
+    },
   },
   getCurrentUserPermissions: {
     execute: async (_svc, p) => {
@@ -150,16 +205,11 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         const [resource, action] = pair.split(":");
         return `${action}-${resource}`;
       });
-      return {
-        success: true,
-        statusCode: 200,
-        message: "User permissions retrieved",
-        data: {
-          permissions,
-          isSuperAdmin: superAdmin,
-          roles: roleSlugs,
-        },
-      };
+      return respondData({
+        permissions,
+        isSuperAdmin: superAdmin,
+        roles: roleSlugs,
+      });
     },
   },
 };
