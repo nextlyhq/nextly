@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Slash Command Plugin
  *

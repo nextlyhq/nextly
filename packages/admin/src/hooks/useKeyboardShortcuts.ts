@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Keyboard Shortcuts Hook
  *

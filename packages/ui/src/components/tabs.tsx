@@ -1,3 +1,5 @@
+"use client";
+
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
 import { forwardRef } from "react";
 

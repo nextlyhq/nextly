@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Custom Lexical ImageNode
  *

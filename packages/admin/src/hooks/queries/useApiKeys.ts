@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * API Key Query Hooks
  *

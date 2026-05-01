@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Collection Builder — Edit Page
  *

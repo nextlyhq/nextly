@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * ImagePlugin - Handles image insertion via MediaPickerDialog
  *

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * UploadEditor Component
  *

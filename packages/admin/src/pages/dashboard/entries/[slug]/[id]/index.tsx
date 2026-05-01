@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Edit Entry Page
  *

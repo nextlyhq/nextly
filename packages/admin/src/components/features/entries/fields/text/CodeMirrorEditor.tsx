@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * CodeMirror Editor Component
  *

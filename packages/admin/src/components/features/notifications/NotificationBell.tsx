@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * F10 PR 5 — bell icon + popover trigger for the notification dropdown.
  *

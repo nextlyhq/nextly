@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * FieldEditor Component
  *

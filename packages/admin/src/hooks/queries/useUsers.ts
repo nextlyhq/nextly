@@ -1,3 +1,5 @@
+"use client";
+
 import type { TableParams, TableResponse } from "@revnixhq/ui";
 import {
   useMutation,

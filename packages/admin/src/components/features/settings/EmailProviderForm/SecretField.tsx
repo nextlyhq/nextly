@@ -1,3 +1,5 @@
+"use client";
+
 import { Input } from "@revnixhq/ui";
 import { useState } from "react";
 import type { Control, FieldValues } from "react-hook-form";

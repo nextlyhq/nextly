@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Entry Compare Component
  *

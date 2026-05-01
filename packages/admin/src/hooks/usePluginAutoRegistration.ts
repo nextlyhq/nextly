@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Plugin Auto-Registration Hook
  *

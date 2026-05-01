@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Show JSON Dialog Component
  *

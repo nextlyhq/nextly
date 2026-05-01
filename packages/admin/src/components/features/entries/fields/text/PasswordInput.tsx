@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Password Input Component
  *
