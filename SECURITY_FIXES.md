@@ -269,7 +269,7 @@ Tasks within a lane are roughly serial; tasks across lanes are parallel-safe.
 - **Files:** [packages/adapter-postgres/src/index.ts:774](packages/adapter-postgres/src/index.ts#L774)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`10e4d90`)
+- **Status:** done (`5a6cf0d`)
 
 **Fix:** Remove the silent `ssl = { rejectUnauthorized: false }` fallback. When provider auto-detection requires SSL but no user config exists, default to `{ rejectUnauthorized: true }`. Keep an explicit opt-out path (`ssl: { rejectUnauthorized: false }` in user config) but emit a `console.warn` when it's used.
 
@@ -293,7 +293,7 @@ pnpm test:integration:postgres17
 - **Files:** [packages/storage-s3/src/adapter.ts:116](packages/storage-s3/src/adapter.ts#L116)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`1ebea04`)
+- **Status:** done (`2212b3b`)
 
 **Fix:** `acl: config.acl ?? "private"`. Update [packages/storage-s3/README.md](packages/storage-s3/README.md) and the playground example to set `acl: "public-read"` explicitly when public buckets are intended. Add a short migration note explaining when to flip ACL vs use signed URLs.
 
@@ -314,7 +314,7 @@ pnpm test --filter @nextly/storage-s3
 - **Files:** [packages/nextly/src/services/access/access-control-service.ts:198-210](packages/nextly/src/services/access/access-control-service.ts#L198-L210)
 - **Blocked by:** —
 - **Blocks:** Templates / quickstart need updating in same PR.
-- **Status:** done (`5c24cbe`)
+- **Status:** done (`c96e7cc`)
 
 **Fix (decision R5: default-deny):**
 
@@ -345,7 +345,7 @@ pnpm dev:app  # playground end-to-end smoke test
 - **Files:** [packages/nextly/src/services/lib/permissions.ts:11-15](packages/nextly/src/services/lib/permissions.ts#L11-L15), [packages/nextly/src/nextly.ts:252](packages/nextly/src/nextly.ts#L252), [packages/client/package.json](packages/client/package.json)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`2940662`)
+- **Status:** done (`8592287`)
 
 **Fix:**
 
@@ -372,7 +372,7 @@ node scripts/verify-server-only.mjs  # must exit 0 on the throw
 - **Files:** [packages/nextly/src/middleware/rate-limit.ts:318-339](packages/nextly/src/middleware/rate-limit.ts#L318-L339), [packages/nextly/src/auth/handlers/handler-utils.ts:66-68](packages/nextly/src/auth/handlers/handler-utils.ts#L66-L68); new helper at `packages/nextly/src/utils/get-trusted-client-ip.ts`.
 - **Blocked by:** —
 - **Blocks:** T-015 (refresh binding), T-016 (per-IP rate limit) — both Phase 2.
-- **Status:** done (`72db96f`)
+- **Status:** done (`9aa3322`)
 
 **Fix:**
 
@@ -405,7 +405,7 @@ pnpm --filter auth-e2e test
 - **Files:** [packages/nextly/src/services/upload-service.ts:483-515](packages/nextly/src/services/upload-service.ts#L483-L515); add `file-type` and `isomorphic-dompurify` to `packages/nextly/package.json`.
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`225fd91`)
+- **Status:** done (`f912c13`)
 
 **Fix (decision R5: sanitize SVG with DOMPurify):**
 
@@ -443,7 +443,7 @@ pnpm test
 - **Files:** [packages/nextly/src/domains/email/services/providers/smtp-provider.ts:58-66](packages/nextly/src/domains/email/services/providers/smtp-provider.ts#L58-L66)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`7a118e9`)
+- **Status:** done (`abc070f`)
 
 **Fix:** Default `secure: true`. Add startup validation: if `host` is not localhost AND `secure: false` AND port ≠ 587 (STARTTLS), throw with a clear message pointing at the SMTP docs.
 
@@ -465,7 +465,7 @@ pnpm test
 - **Files:** [packages/plugin-form-builder/src/handlers/webhooks.ts:414-428](packages/plugin-form-builder/src/handlers/webhooks.ts#L414-L428), [packages/nextly/src/di/registrations/register-email.ts:68-88](packages/nextly/src/di/registrations/register-email.ts#L68-L88), new `packages/nextly/src/utils/validate-external-url.ts`.
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`25b63ba`)
+- **Status:** done (`641fb1e`)
 
 **Fix:** New `validateExternalUrl(url, opts?)` helper:
 
@@ -495,7 +495,7 @@ pnpm test
 - **Files:** [SECURITY.md](SECURITY.md); GitHub repo settings (Security & analysis)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`e2fc006`)
+- **Status:** done (`b9f9e47`)
 
 **Fix (decision R5: GitHub Private Vulnerability Reporting, no PGP):**
 
@@ -539,7 +539,7 @@ pnpm test
 - **Files:** [packages/nextly/src/auth/handlers/register.ts:26-65](packages/nextly/src/auth/handlers/register.ts#L26-L65)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`137b962`)
+- **Status:** done (`ae8bf56`)
 
 **Fix:**
 
@@ -564,7 +564,7 @@ pnpm --filter auth-e2e test
 - **Files:** [packages/nextly/src/auth/handlers/forgot-password.ts:47-56](packages/nextly/src/auth/handlers/forgot-password.ts#L47-L56)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`e4eba99`)
+- **Status:** done (`55fb233`)
 
 **Fix:**
 
@@ -589,7 +589,7 @@ pnpm test
 - **Files:** [packages/nextly/src/api/uploads.ts:272](packages/nextly/src/api/uploads.ts#L272), middleware, config schema in `packages/nextly/src/config/`
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`e1ebbba`)
+- **Status:** done (`864d94d`)
 
 **Fix:**
 
@@ -627,7 +627,7 @@ pnpm test
 - **Files:** [packages/storage-vercel-blob/src/adapter.ts:106-117](packages/storage-vercel-blob/src/adapter.ts#L106-L117)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`013a583`)
+- **Status:** done (`faf94f0`)
 
 **Fix:** Replace the one-time console warning with a thrown error for `image/svg+xml` and `text/html` uploads. Update the adapter README to explain the platform limitation and point to S3 as the alternative.
 
@@ -648,7 +648,7 @@ pnpm test --filter @nextly/storage-vercel-blob
 - **Files:** [packages/nextly/src/domains/collections/query/query-operators.ts:193-203](packages/nextly/src/domains/collections/query/query-operators.ts#L193-L203)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`7c05fae`)
+- **Status:** done (`564d6f2`)
 
 **Fix:** Mirror the escape logic that already exists correctly in `buildSearchCondition` ([collection-query-service.ts:1196-1237](packages/nextly/src/domains/collections/services/collection-query-service.ts#L1196-L1237)):
 
