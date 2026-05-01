@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 2    | 0         | 0       | 0       | 12      |
+| 1 — Pre-beta           | 3    | 0         | 0       | 0       | 11      |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -372,7 +372,7 @@ node scripts/verify-server-only.mjs  # must exit 0 on the throw
 - **Files:** [packages/nextly/src/middleware/rate-limit.ts:318-339](packages/nextly/src/middleware/rate-limit.ts#L318-L339), [packages/nextly/src/auth/handlers/handler-utils.ts:66-68](packages/nextly/src/auth/handlers/handler-utils.ts#L66-L68); new helper at `packages/nextly/src/utils/get-trusted-client-ip.ts`.
 - **Blocked by:** —
 - **Blocks:** T-015 (refresh binding), T-016 (per-IP rate limit) — both Phase 2.
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:**
 

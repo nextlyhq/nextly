@@ -27,6 +27,8 @@
  * ```
  */
 
+import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
+
 // ============================================================================
 // Types & Interfaces
 // ============================================================================
@@ -152,21 +154,32 @@ export interface RateLimitConfig {
 
   /**
    * Function to generate a unique key for rate limiting.
-   * Defaults to using the client IP address.
+   * Defaults to the trusted client IP address (see `trustProxy` /
+   * `trustedProxyIps`). Requests with no resolvable IP fall back to a
+   * shared `unknown` bucket so anonymous traffic is still rate-limited.
    *
    * @param request - The incoming request
    * @returns A unique identifier string
-   *
-   * @example
-   * ```typescript
-   * keyGenerator: (req) => {
-   *   // Rate limit by user ID if authenticated
-   *   const userId = req.headers.get('x-user-id');
-   *   return userId || getClientIp(req);
-   * }
-   * ```
    */
   keyGenerator?: (request: Request) => string;
+
+  /**
+   * Audit C4 / T-005: when true, the default keyGenerator parses
+   * `X-Forwarded-For` (filtered through `trustedProxyIps`). When false
+   * (default), proxy headers are ignored — direct-internet deployments
+   * fall back to a single `unknown` bucket. Wired from
+   * `nextly.config.ts → security.trustProxy`.
+   *
+   * @default false
+   */
+  trustProxy?: boolean;
+
+  /**
+   * Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS).
+   * Used by the default keyGenerator to walk the X-Forwarded-For chain
+   * rightmost-first, returning the first non-proxy hop.
+   */
+  trustedProxyIps?: readonly string[];
 
   /**
    * Function to skip rate limiting for certain requests.
@@ -311,31 +324,20 @@ const DEFAULTS = {
 } as const;
 
 /**
- * Extract client IP from request headers.
+ * Build the default keyGenerator: returns the trusted client IP, or
+ * the literal string `"unknown"` when no IP is available (so anonymous
+ * traffic still shares one bucket rather than collapsing into a
+ * unique-per-request key).
  *
- * Checks common proxy headers in order of preference.
+ * Audit C4 / T-005: replaces a leftmost-XFF parser that any direct
+ * attacker could rotate to bypass per-IP rate limits.
  */
-function getClientIp(request: Request): string {
-  // Check common proxy headers
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    // x-forwarded-for can contain multiple IPs, take the first one
-    return forwarded.split(",")[0].trim();
-  }
-
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) {
-    return realIp;
-  }
-
-  // Cloudflare
-  const cfIp = request.headers.get("cf-connecting-ip");
-  if (cfIp) {
-    return cfIp;
-  }
-
-  // Fallback for local development
-  return "127.0.0.1";
+function buildDefaultKeyGenerator(
+  trustProxy: boolean,
+  trustedProxyIps: readonly string[]
+): (request: Request) => string {
+  return request =>
+    getTrustedClientIp(request, { trustProxy, trustedProxyIps }) ?? "unknown";
 }
 
 /**
@@ -392,7 +394,12 @@ export function createRateLimiter(config: RateLimitConfig) {
   const readLimit = config.readLimit ?? DEFAULTS.readLimit;
   const writeLimit = config.writeLimit ?? DEFAULTS.writeLimit;
   const windowMs = config.windowMs ?? DEFAULTS.windowMs;
-  const keyGenerator = config.keyGenerator ?? getClientIp;
+  const keyGenerator =
+    config.keyGenerator ??
+    buildDefaultKeyGenerator(
+      config.trustProxy ?? false,
+      config.trustedProxyIps ?? []
+    );
   const skip = config.skip ?? (() => false);
   const collections = config.collections ?? {};
   const handler = config.handler;

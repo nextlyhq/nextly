@@ -263,6 +263,23 @@ export interface SecurityConfig {
    * All features enabled by default.
    */
   sanitization?: SanitizationConfigInput;
+
+  /**
+   * Trust reverse-proxy headers when resolving the client IP.
+   *
+   * When `true`, `X-Forwarded-For` (filtered through the
+   * `TRUSTED_PROXY_IPS` env-var CIDR list) is used to determine the
+   * client IP for rate limiting, refresh-token binding, and audit
+   * logging. When `false` (default), proxy headers are ignored —
+   * direct-internet deployments fall back to a single `unknown`
+   * bucket so an attacker cannot rotate `X-Forwarded-For` to bypass
+   * per-IP throttles.
+   *
+   * Audit: closes C4 (XFF blindly trusted across rate-limit / auth flows).
+   *
+   * @default false
+   */
+  trustProxy?: boolean;
 }
 
 // ============================================================

@@ -12,6 +12,7 @@
 import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
 import { env } from "../../lib/env";
+import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
 
 import type { AuthRouterDeps } from "./router";
 
@@ -40,6 +41,8 @@ export function buildAuthRouterDeps(
     // unset. The schema is already populated by sanitizeConfig.
     revealRegistrationConflict: readRevealRegistrationConflict(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
+    trustProxy: readTrustProxy(getService),
+    trustedProxyIps: parseTrustedProxyIpsEnv(process.env.TRUSTED_PROXY_IPS),
 
     findUserByEmail: async (email: string) => {
       try {
@@ -397,6 +400,28 @@ function readRevealRegistrationConflict(
     return false;
   } catch {
     // DI container not initialised yet — fall back to the safe default.
+    return false;
+  }
+}
+
+/**
+ * Audit C4 / T-005: read `security.trustProxy` from the NextlyConfig
+ * registered in the DI container. Returns `false` (the safe default)
+ * when the container is not yet initialised or the flag is unset.
+ */
+function readTrustProxy(getService: (name: string) => unknown): boolean {
+  try {
+    const config = getService("config");
+    if (config && typeof config === "object" && "security" in config) {
+      const security = (config as { security?: unknown }).security;
+      if (security && typeof security === "object" && "trustProxy" in security) {
+        return (
+          (security as { trustProxy?: unknown }).trustProxy === true
+        );
+      }
+    }
+    return false;
+  } catch {
     return false;
   }
 }

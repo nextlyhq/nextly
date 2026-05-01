@@ -33,6 +33,14 @@ export interface AuthRouterDeps {
    */
   revealRegistrationConflict: boolean;
   allowedOrigins: string[];
+  /**
+   * Audit C4 / T-005: when true, client-IP resolution honors
+   * `X-Forwarded-For` (filtered through `trustedProxyIps`). When false
+   * (default), proxy headers are ignored.
+   */
+  trustProxy: boolean;
+  /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
+  trustedProxyIps: string[];
 
   // User lookups (widest return type to satisfy all handlers)
   findUserByEmail: (email: string) => Promise<{

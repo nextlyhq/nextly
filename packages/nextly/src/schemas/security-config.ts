@@ -139,6 +139,7 @@ export const SanitizationConfigSchema = z.object({
  *   headers: { contentSecurityPolicy: "default-src 'self'" },
  *   cors: { origin: ['https://example.com'] },
  *   sanitization: { enabled: true },
+ *   trustProxy: true,
  * });
  * ```
  */
@@ -147,6 +148,22 @@ export const SecurityConfigSchema = z.object({
   cors: CorsConfigSchema.optional(),
   uploads: UploadSecurityConfigSchema.optional(),
   sanitization: SanitizationConfigSchema.optional(),
+  /**
+   * When the application sits behind a reverse proxy (Vercel, Cloudflare,
+   * Nginx, ALB, etc.), set this to `true` so client-IP resolution honors
+   * `X-Forwarded-For`. Pair with the `TRUSTED_PROXY_IPS` env var (a
+   * comma-separated CIDR list of your proxy fleet) so the framework
+   * can identify which hops in the chain are proxies vs the real client.
+   *
+   * When `false` (default), proxy headers are ignored entirely. Use
+   * this when the application is exposed directly to clients with no
+   * trusted intermediary, or during local development.
+   *
+   * Audit: closes C4 (XFF blindly trusted across rate-limit / auth flows).
+   *
+   * @default false
+   */
+  trustProxy: z.boolean().optional(),
 });
 
 export type SecurityConfigInput = z.infer<typeof SecurityConfigSchema>;
