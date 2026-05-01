@@ -1,26 +1,53 @@
 import type { NextConfig } from "next";
 
+// Payload-style env-conditional source-mode (see packages/next/src/withPayload/withPayload.js
+// in the payloadcms/payload repo for the canonical reference).
+//
+// Strategy:
+//   - In DEV: workspace packages are NOT in serverExternalPackages → Next.js bundles
+//     them via Turbopack from the source aliases below → editing source files in
+//     packages/nextly, packages/adapter-*, packages/storage-* triggers HMR. No
+//     `tsup --watch` is required for the dev loop.
+//   - In PROD: workspace packages ARE in serverExternalPackages → smaller bundle,
+//     no duplicate-install risk, dist/ output ships as-is.
+//   - Native / third-party Node-only deps (pg, mysql2, sharp, esbuild, etc.) are
+//     ALWAYS external — they cannot be transpiled by Turbopack and they must
+//     stay as Node `require()` at runtime.
+//
+// This replaces the prior bimodal architecture (workspace packages always external,
+// HMR via tsup --watch + Node module-cache invalidation) which never reliably picked
+// up server-side source edits because `serverExternalPackages` opts modules out of
+// Next.js's HMR machinery entirely.
+
+const isDev = process.env.NODE_ENV === "development";
+
+const NEXTLY_WORKSPACE_PACKAGES = [
+  "@revnixhq/nextly",
+  "@revnixhq/adapter-drizzle",
+  "@revnixhq/adapter-postgres",
+  "@revnixhq/adapter-mysql",
+  "@revnixhq/adapter-sqlite",
+  "@revnixhq/storage-s3",
+  "@revnixhq/storage-vercel-blob",
+  "@revnixhq/storage-uploadthing",
+];
+
 const nextConfig: NextConfig = {
-  // Source-mode is enabled for the client-side workspace packages
-  // (@revnixhq/ui, @revnixhq/admin, @revnixhq/plugin-form-builder) — see
-  // turbopack.resolveAlias below. transpilePackages tells Next.js to
-  // run these packages' .ts/.tsx through its own transpiler on the way
-  // in. Server-side packages (nextly + adapters + storage) stay in
-  // serverExternalPackages and continue to be loaded by Node from dist;
-  // their tsup --watch keeps dist fresh during dev. Node-only code in
-  // nextly's runtime path can't be safely transpiled by Turbopack, so
-  // this bimodal split is intentional.
+  // Source-mode for ALL workspace packages — both client UI (admin, ui,
+  // plugin-form-builder) and server-side (nextly, adapters, storage).
+  // Turbopack reads .ts/.tsx directly via the resolveAlias entries below.
   transpilePackages: [
     "@revnixhq/admin",
     "@revnixhq/ui",
     "@revnixhq/plugin-form-builder",
+    ...NEXTLY_WORKSPACE_PACKAGES,
   ],
+  // Native + third-party Node-only deps stay external always. Workspace packages
+  // are external ONLY in prod (Payload pattern). In dev, they're bundled by
+  // Next.js via the source aliases, which is what enables HMR for server files
+  // like packages/nextly/src/init/build-service-config.ts and
+  // packages/plugin-form-builder/src/plugin.ts.
   serverExternalPackages: [
-    "@revnixhq/nextly",
-    "@revnixhq/adapter-drizzle",
-    "@revnixhq/adapter-postgres",
-    "@revnixhq/adapter-mysql",
-    "@revnixhq/adapter-sqlite",
     "@aws-sdk/client-s3",
     "@aws-sdk/lib-storage",
     "better-sqlite3",
@@ -30,6 +57,8 @@ const nextConfig: NextConfig = {
     "drizzle-orm",
     "esbuild",
     "bundle-require",
+    "nodemailer",
+    ...(isDev ? [] : NEXTLY_WORKSPACE_PACKAGES),
   ],
   experimental: {
     esmExternals: true,
@@ -40,9 +69,7 @@ const nextConfig: NextConfig = {
       // source files use it for cross-cutting imports inside the
       // package — see packages/admin/tsconfig.json paths).
       "@admin/*": ["../../packages/admin/src/*"],
-      // Source-mode for the client packages: Turbopack reads .ts/.tsx
-      // directly so edits to their src/... live-reload via HMR without
-      // waiting for tsup --watch to write dist.
+      // Source aliases for client-side packages.
       //
       // admin and plugin-form-builder MUST be aliased together: the plugin
       // registers components into admin's component registry, which only
@@ -66,16 +93,35 @@ const nextConfig: NextConfig = {
       "@revnixhq/plugin-form-builder/components": [
         "../../packages/plugin-form-builder/src/components/index.ts",
       ],
-      // Turbopack does not honour serverExternalPackages for optional peer
-      // deps that are dynamically imported inside @revnixhq/nextly dist.
-      // Alias them to the installed package so Turbopack can resolve them
-      // at build time.
+      // Source aliases for server-side workspace packages — Payload-style.
+      // With these in place AND the packages omitted from serverExternalPackages
+      // in dev, Turbopack reads .ts directly and HMR fires on source edits.
+      "@revnixhq/nextly": ["../../packages/nextly/src/index.ts"],
+      "@revnixhq/adapter-drizzle": [
+        "../../packages/adapter-drizzle/src/index.ts",
+      ],
+      "@revnixhq/adapter-postgres": [
+        "../../packages/adapter-postgres/src/index.ts",
+      ],
+      "@revnixhq/adapter-mysql": [
+        "../../packages/adapter-mysql/src/index.ts",
+      ],
+      "@revnixhq/adapter-sqlite": [
+        "../../packages/adapter-sqlite/src/index.ts",
+      ],
+      "@revnixhq/storage-s3": ["../../packages/storage-s3/src/index.ts"],
+      "@revnixhq/storage-vercel-blob": [
+        "../../packages/storage-vercel-blob/src/index.ts",
+      ],
+      "@revnixhq/storage-uploadthing": [
+        "../../packages/storage-uploadthing/src/index.ts",
+      ],
+      // Stubs / native-deps resolution. pg + mysql2 stubs predate this commit
+      // and remain load-bearing for Turbopack's optional-peer-dep handling
+      // inside @revnixhq/nextly.
       pg: "pg",
       "mysql2/promise": "./src/stubs/mysql2-stub.js",
       mysql2: "./src/stubs/mysql2-stub.js",
-      "@revnixhq/adapter-postgres": "@revnixhq/adapter-postgres",
-      "@revnixhq/adapter-mysql": "@revnixhq/adapter-mysql",
-      "@revnixhq/adapter-sqlite": "@revnixhq/adapter-sqlite",
       // CSS files come from dist (the build-css.mjs pipeline applies the
       // .adminapp scoping post-process; Phase 2 added a watch loop so the
       // dist file stays fresh during dev). With @revnixhq/admin aliased to
