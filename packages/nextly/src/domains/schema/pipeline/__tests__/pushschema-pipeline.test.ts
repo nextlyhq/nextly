@@ -605,6 +605,78 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     expect(tablesFilter).toContain("dc_posts");
   });
 
+  it("Phase 6 follow-up: ALLOWS DROP TABLE for tables IN desired (SQLite rebuild pattern)", async () => {
+    // Phase C's original strict rule blocked ALL DROP TABLE — that
+    // turned out too aggressive on SQLite, where drizzle-kit emits
+    // a CREATE/COPY/DROP/RENAME sequence to handle ALTER COLUMN
+    // type changes (see filterUnsafeStatements comment for full
+    // pattern). Blocking the DROP step left __new_dc_X dangling
+    // and caused the subsequent RENAME to fail with "table already
+    // exists".
+    //
+    // New rule: DROP for tables IN the desired schema is allowed
+    // (intentional rebuild). DROP for tables NOT in the desired
+    // schema is still blocked (the original Phase C scenario).
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [
+          // SQLite rebuild sequence — all 4 statements should pass
+          // through because dc_posts IS in desired.
+          `CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY NOT NULL)`,
+          `INSERT INTO "__new_dc_posts" SELECT * FROM "dc_posts"`,
+          `DROP TABLE "dc_posts"`,
+          `ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"`,
+          // dc_jobs NOT in desired → still blocked (Phase C behavior).
+          `DROP TABLE "dc_jobs"`,
+        ],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const { pipeline, mocks } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl: () => ({ dc_posts: {} }),
+    });
+
+    // Using PG dialect for the test — the filter logic is dialect-
+    // agnostic; SQLite's runSqlitePragma path needs a mock db with
+    // .run() that the harness doesn't provide. The rebuild SQL
+    // shape is realistic for the SQLite path that this test models.
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    const [, executedStmts] = mocks.executor.executeStatements.mock
+      .calls[0] as [unknown, string[]];
+
+    // The 4 rebuild statements pass through (CREATE / INSERT / DROP /
+    // RENAME), the orphan DROP for dc_jobs gets blocked.
+    expect(executedStmts).toHaveLength(4);
+    expect(executedStmts[0]).toContain('CREATE TABLE "__new_dc_posts"');
+    expect(executedStmts[1]).toContain("INSERT INTO");
+    expect(executedStmts[2]).toContain('DROP TABLE "dc_posts"');
+    expect(executedStmts[3]).toContain('RENAME TO "dc_posts"');
+    // dc_jobs DROP did NOT make it through.
+    expect(
+      executedStmts.some(s => /DROP\s+TABLE\s+"?dc_jobs/i.test(s))
+    ).toBe(false);
+  });
+
   it("Phase 5: dequal short-circuit skips pushSchema when desired is unchanged since last apply", async () => {
     // Run pipeline once to populate the snapshot cache; then run again
     // with the SAME desired and assert pushSchema is not called the

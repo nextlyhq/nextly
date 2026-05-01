@@ -632,7 +632,8 @@ export class PushSchemaPipeline {
           );
         }
         const safe = this.filterUnsafeStatements(
-          pushResult.statementsToExecute
+          pushResult.statementsToExecute,
+          desiredTableNames
         );
 
         try {
@@ -742,36 +743,75 @@ export class PushSchemaPipeline {
     }
   }
 
-  private filterUnsafeStatements(statements: string[]): string[] {
+  private filterUnsafeStatements(
+    statements: string[],
+    desiredTableNames: string[]
+  ): string[] {
+    // Phase 6 follow-up (2026-05-01): the original Phase C strict
+    // block-all-DROPs rule turned out too aggressive — it broke
+    // SQLite's table-rebuild pattern.
+    //
+    // SQLite can't ALTER COLUMN type, so drizzle-kit emits a
+    // CREATE/COPY/DROP/RENAME sequence for type changes (renames
+    // included):
+    //   1. CREATE TABLE __new_dc_job (...)
+    //   2. INSERT INTO __new_dc_job SELECT ... FROM dc_job
+    //   3. DROP TABLE dc_job          ← intentional, NOT accidental
+    //   4. ALTER TABLE __new_dc_job RENAME TO dc_job
+    //
+    // The original strict filter blocked step 3, so step 4 then
+    // failed with "table dc_job already exists". Result: the rename
+    // never completed; the dynamic_collections.fields JSON updated
+    // to the new name but the actual column kept the old name; every
+    // subsequent query against the collection failed with "no such
+    // column".
+    //
+    // Refined rule:
+    //   - DROP TABLE for tables IN the desired schema → ALLOW
+    //     (drizzle-kit's emit is part of an intentional rebuild —
+    //     the table will be recreated by a subsequent CREATE/RENAME)
+    //   - DROP TABLE for tables NOT in the desired schema → BLOCK
+    //     (drizzle-kit thinks it's orphaned — original Phase C
+    //     scenario where boot-time partial desired would otherwise
+    //     destroy admin-UI tables)
+    //
+    // The Phase C goal — preventing accidental drops of admin-UI
+    // tables on restart — is preserved because such tables are not
+    // in the boot-path's partial desired schema and therefore still
+    // hit the BLOCK branch. PR #118's "include system tables in
+    // desired" change makes system tables hit the ALLOW branch
+    // (their DROPs during rebuilds are now intended).
+    const desiredSet = new Set(
+      desiredTableNames.map(t => t.toLowerCase())
+    );
+
     return statements.filter(stmt => {
       const dropMatch = stmt.match(
         /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
       if (!dropMatch) return true;
 
-      // Phase C (2026-05-01): block ALL DROP TABLE emitted by drizzle-kit's
-      // pushSchema, unconditionally. Pre-Phase-C this filter allowed any
-      // managed-prefix table (`dc_*`, `single_*`, `comp_*`) through —
-      // which silently destroyed admin-UI-created tables on server
-      // restart and any managed table outside the current pipeline's
-      // scope. By the time pushSchema runs at Phase D, all intentional
-      // drops have already been applied via Phase C's pre-resolution
-      // executor (with explicit user confirmation through the
-      // classifier). ANY drizzle-kit-emitted DROP TABLE here is by
-      // definition accidental — caused by a partial desired schema or
-      // by SQLite/MySQL upstream not accepting a tablesFilter. See
-      // findings/schema-issues-findings-2.md for the full mechanism.
       const tableName = dropMatch[1] ?? "<unknown>";
-      // eslint-disable-next-line no-console -- structured warning is the
-      // primary signal an operator has that Nextly just protected their
-      // data. Logger is not on the deps interface for this pipeline.
+      const isInDesired = desiredSet.has(tableName.toLowerCase());
+
+      if (isInDesired) {
+        // Intentional drop — rebuild pattern, system-table refresh,
+        // etc. Pass through and let executor run it.
+        return true;
+      }
+
+      // Accidental drop — table not in desired schema. Block and
+      // log so operators see the protection.
+      // eslint-disable-next-line no-console -- structured warning is
+      // the primary signal an operator has that Nextly just
+      // protected their data. Logger is not on the deps interface
+      // for this pipeline.
       console.warn(
         `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
-          `drizzle-kit pushSchema. Drops must route through the ` +
+          `drizzle-kit pushSchema (table not in current desired schema). ` +
+          `If this drop was intentional, route it through the ` +
           `pre-resolution executor with explicit user confirmation. ` +
-          `If this drop was intentional, remove the table from the ` +
-          `desired schema and let the classifier prompt for ` +
-          `confirmation. (managed=${isManagedTable(tableName)})`
+          `(managed=${isManagedTable(tableName)})`
       );
       return false;
     });
