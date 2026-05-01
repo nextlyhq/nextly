@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 3    | 0         | 0       | 0       | 11      |
+| 1 — Pre-beta           | 4    | 0         | 0       | 0       | 10      |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -465,7 +465,7 @@ pnpm test
 - **Files:** [packages/plugin-form-builder/src/handlers/webhooks.ts:414-428](packages/plugin-form-builder/src/handlers/webhooks.ts#L414-L428), [packages/nextly/src/di/registrations/register-email.ts:68-88](packages/nextly/src/di/registrations/register-email.ts#L68-L88), new `packages/nextly/src/utils/validate-external-url.ts`.
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:** New `validateExternalUrl(url, opts?)` helper:
 
