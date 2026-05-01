@@ -25,7 +25,13 @@ function makeStubDeps(): AuthRouterDeps {
     lockoutDurationSeconds: 900,
     loginStallTimeMs: 0,
     requireEmailVerification: true,
+    revealRegistrationConflict: false,
     allowedOrigins: [],
+    trustProxy: false,
+    trustedProxyIps: [],
+    // T-016: 0 disables the per-IP envelope so CSRF (which is the
+    // contract under test) still runs first.
+    authRateLimit: { requestsPerHour: 0, windowMs: 3_600_000 },
     findUserByEmail: unreachable as never,
     findUserById: unreachable as never,
     incrementFailedAttempts: unreachable as never,

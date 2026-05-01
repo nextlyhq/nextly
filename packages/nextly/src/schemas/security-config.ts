@@ -164,12 +164,30 @@ export const SecurityLimitsConfigSchema = z.object({
  * });
  * ```
  */
+/**
+ * Audit H4 (T-016): per-IP rate limit on auth write endpoints
+ * (`/auth/login`, `/auth/register`, `/auth/forgot-password`,
+ * `/auth/reset-password`). Layered on top of the per-user lockout so
+ * an attacker can't cycle usernames at full speed from one IP.
+ *
+ * The limiter shares one bucket across the four endpoints per IP so an
+ * attacker can't reset their budget by switching paths. Set
+ * `requestsPerHour` to `0` to disable (test/dev only).
+ */
+export const AuthRateLimitConfigSchema = z.object({
+  /** Max auth-write requests per IP per window. Set to `0` to disable. @default 30 */
+  requestsPerHour: z.number().int().nonnegative().optional(),
+  /** Sliding window duration in ms. @default 3_600_000 (1 hour) */
+  windowMs: z.number().int().positive().optional(),
+});
+
 export const SecurityConfigSchema = z.object({
   headers: SecurityHeadersConfigSchema.optional(),
   cors: CorsConfigSchema.optional(),
   uploads: UploadSecurityConfigSchema.optional(),
   sanitization: SanitizationConfigSchema.optional(),
   limits: SecurityLimitsConfigSchema.optional(),
+  authRateLimit: AuthRateLimitConfigSchema.optional(),
   /**
    * When the application sits behind a reverse proxy (Vercel, Cloudflare,
    * Nginx, ALB, etc.), set this to `true` so client-IP resolution honors
@@ -200,3 +218,4 @@ export type SanitizationConfigInput = z.infer<typeof SanitizationConfigSchema>;
 export type SecurityLimitsConfigInput = z.infer<
   typeof SecurityLimitsConfigSchema
 >;
+export type AuthRateLimitConfigInput = z.infer<typeof AuthRateLimitConfigSchema>;

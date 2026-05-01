@@ -281,6 +281,23 @@ export interface SecurityConfig {
   };
 
   /**
+   * Audit H4 (T-016): per-IP rate limit on `/auth/login`,
+   * `/auth/register`, `/auth/forgot-password`, `/auth/reset-password`.
+   * One shared bucket per IP across all four endpoints so credential-
+   * stuffing from a single source can't cycle paths to refill its
+   * budget. Layered on top of the per-user lockout, not in place of.
+   *
+   * Set `requestsPerHour: 0` to disable the per-IP envelope (test /
+   * dev only — leaves the deployment exposed to credential-stuffing).
+   *
+   * @default `{ requestsPerHour: 30, windowMs: 3_600_000 }`
+   */
+  authRateLimit?: {
+    requestsPerHour?: number;
+    windowMs?: number;
+  };
+
+  /**
    * Trust reverse-proxy headers when resolving the client IP.
    *
    * When `true`, `X-Forwarded-For` (filtered through the
