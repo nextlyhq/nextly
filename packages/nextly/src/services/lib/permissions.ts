@@ -1,3 +1,12 @@
+// Audit C7 (T-004): hard server-only guard. The previous form used a
+// dynamic `await import("server-only")` inside a try/catch which
+// silently allowed the module to load in client bundles. Replace with
+// a static `import "server-only"` so the bundler errors loudly when a
+// client component pulls this in, plus a runtime window check for
+// any path the bundler doesn't catch (e.g. server actions accidentally
+// pulled into a browser via misconfigured exports).
+import "server-only";
+
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
@@ -8,11 +17,13 @@ import { container } from "../../di/container";
 import { PermissionCacheService } from "../auth/permission-cache-service";
 import type { Logger } from "../shared";
 
-void (async () => {
-  try {
-    await import("server-only");
-  } catch {}
-})();
+if (typeof window !== "undefined") {
+  throw new Error(
+    "[nextly] Direct API permissions module loaded in a browser context. " +
+      "Direct API is server-only — import only from Server Components, " +
+      "Route Handlers, or Server Actions, never from client components."
+  );
+}
 
 function getDb(): unknown {
   const adapter = container.get("adapter") as DrizzleAdapter;
