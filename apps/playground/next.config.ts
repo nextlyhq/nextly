@@ -8,6 +8,17 @@ const nextConfig: NextConfig = {
   // This avoids Turbopack transpiling nextly's source files which can cause
   // issues with its URL polyfill handling server-side code.
   transpilePackages: ["@revnixhq/admin"],
+  // serverExternalPackages: packages that should NOT be Turbopack-bundled
+  // — kept as runtime require()s instead. This list MUST match (or be a
+  // superset of) the SERVER_EXTERNAL_PACKAGES list in the CLI scaffolder
+  // at packages/create-nextly-app/src/generators/next-config.ts. New
+  // scaffolds get the full list automatically; the playground was
+  // hand-written and missed `drizzle-kit`, `bcryptjs`, and the dup
+  // `bundle-require` entry — added/cleaned here so playground behavior
+  // tracks consumer behavior. Previously: `import("drizzle-kit/api")`
+  // failed at runtime because Turbopack rebundled nextly's dist into a
+  // chunk under apps/playground/.next/.../chunks/ from where Node ESM's
+  // resolver couldn't reach packages/nextly/node_modules/drizzle-kit/.
   serverExternalPackages: [
     "@revnixhq/nextly",
     "@revnixhq/adapter-drizzle",
@@ -21,9 +32,10 @@ const nextConfig: NextConfig = {
     "mysql2",
     "sharp",
     "drizzle-orm",
+    "drizzle-kit",
+    "bcryptjs",
     "esbuild",
-    'esbuild',
-      'bundle-require',
+    "bundle-require",
   ],
   experimental: {
     esmExternals: true,
