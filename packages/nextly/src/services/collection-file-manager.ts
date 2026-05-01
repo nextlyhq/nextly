@@ -83,6 +83,25 @@ export class CollectionFileManager {
     );
   }
 
+  // Drop a single collection's cached runtime schema so the next
+  // `loadDynamicSchema(...)` rebuilds it from the (already-updated)
+  // `dynamic_collections.fields` JSON via the metadata fetcher.
+  //
+  // Called after an admin-UI schema apply that mutates field shape
+  // (rename, drop, add). Without this invalidation, the stale cached
+  // schema generates queries against columns that no longer exist on
+  // the live DB, e.g. `SELECT salary FROM dc_job` after `salary` was
+  // renamed to `amount`. Symptom: entry list 500s with
+  // `no such column: "<oldName>"` until server restart.
+  invalidateSchema(collectionName: string): void {
+    const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
+    if (this.schemaRegistry.delete(schemaKey)) {
+      console.log(
+        `[FileManager] Invalidated cached schema for "${collectionName}" (key: ${schemaKey})`
+      );
+    }
+  }
+
   async saveArtifacts(artifacts: CollectionArtifacts): Promise<void> {
     await fs.mkdir(this.schemasDir, { recursive: true });
     await fs.mkdir(this.migrationsDir, { recursive: true });

@@ -185,6 +185,16 @@ export class CollectionsHandler {
     this.metadataService.setPermissionSeedService(service);
   }
 
+  // Drop the cached runtime Drizzle schema for one collection slug.
+  // Called by the dispatcher's `applySchemaChanges` after a successful
+  // schema apply + metadata write so subsequent entry-list/get/create
+  // queries rebuild the schema from the freshly-written
+  // `dynamic_collections.fields` JSON. Without this, queries reference
+  // the OLD column names and 500 with "no such column" until restart.
+  invalidateCollectionSchema(slug: string): void {
+    this.fileManager.invalidateSchema(slug);
+  }
+
   /**
    * Register dynamic schemas with the file manager.
    * @param schemas - Map of schema names to schema objects
