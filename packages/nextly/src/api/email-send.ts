@@ -10,15 +10,17 @@
  * export { POST } from '@revnixhq/nextly/api/email-send';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
+ * Wire shape: Phase 4 Task 11 migrates this handler off the legacy
+ * `{ data: <result> }` envelope onto `respondAction` (spec §5.1). The
+ * service returns `{ success, messageId? }`; the `messageId` is the
+ * useful caller-facing field, paired with a server-authored toast.
  * Auth uses the existing `requireAuthentication` middleware bridged to
  * `NextlyError` via `toNextlyAuthError`. Validation errors flow through
  * `nextlyValidationFromZod` (F11). The attachment resolver throws
  * `NextlyError` directly (validation for caller-fixable failures,
- * internal for storage I/O) — `withErrorHandler` produces the canonical
- * envelope. The machine-readable `EMAIL_ATTACHMENT_*` code lives at
- * `error.data.errors[0].code`.
+ * internal for storage I/O); `withErrorHandler` produces the canonical
+ * problem+json envelope. The machine-readable `EMAIL_ATTACHMENT_*` code
+ * lives at `error.data.errors[0].code`.
  *
  * @module api/email-send
  */
@@ -32,7 +34,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondAction } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -70,10 +72,10 @@ const sendEmailSchema = z.object({
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
  *
  * Response codes:
- * - 200 OK: `{ data: { success, messageId? } }`
- * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found
- * - 401 Unauthorized
- * - 500 Internal Server Error: storage read failed or provider error
+ * - 200 OK: `{ message, success, messageId? }` via `respondAction`.
+ * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found.
+ * - 401 Unauthorized.
+ * - 500 Internal Server Error: storage read failed or provider error.
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -113,6 +115,10 @@ export const POST = withErrorHandler(
 
     const service = await getEmailService();
     const result = await service.send(args);
-    return createSuccessResponse(result);
+    // Phase 4: respondAction. Spread the service result (`{ success,
+    // messageId? }`) onto the action body so existing consumers that
+    // read `messageId` and `success` keep working alongside the new
+    // server-authored toast string.
+    return respondAction("Email queued.", { ...result });
   }
 );

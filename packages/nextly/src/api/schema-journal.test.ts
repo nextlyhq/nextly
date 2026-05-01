@@ -18,8 +18,13 @@ vi.mock("../auth/middleware/to-nextly-error", () => ({
   }),
 }));
 
+// `schema-journal.ts` calls `getCachedNextly()` (not `getNextly()`); the
+// pre-Phase-4 mock named the wrong export, which silently made the
+// success-path tests fail with a 500 from the route handler. Fixing it
+// here as part of Task 11 because the migrated assertions (no `data`
+// envelope) only pass once the success path runs to completion.
 vi.mock("../init", () => ({
-  getNextly: vi.fn().mockResolvedValue(undefined),
+  getCachedNextly: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../di", () => ({
@@ -99,8 +104,12 @@ describe("getSchemaJournal", () => {
     const res = await getSchemaJournal(makeReq("http://x/api/schema/journal"));
 
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { data: unknown };
-    expect(json.data).toEqual({
+    // Phase 4 (Task 11): respondData emits a bare body. Cursor-style reads
+    // (limit + before) skip the `respondList` envelope because there is no
+    // total / page / totalPages to surface.
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json).not.toHaveProperty("data");
+    expect(json).toEqual({
       rows: [{ id: "id-1", source: "ui", status: "success" }],
       hasMore: false,
     });

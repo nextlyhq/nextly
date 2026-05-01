@@ -10,15 +10,24 @@
  * These functions are called by the main route handler when it detects
  * `service === "apiKeys"` in the parsed route (wired in Subtask 3.2.1).
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. Errors flow
- * through the wrapper and serialize as `application/problem+json`. The
- * legacy non-paginated `{ data: [...], meta: { total } }` for `listApiKeys`
- * is replaced with the canonical `{ data: [...] }` (no synthetic pagination
- * meta — listing returns every key the caller is allowed to see). The
- * session-only 403 surface drops its policy-specific public message in
- * favor of the canonical "You don't have permission to perform this action."
- * (per §13.8); the legacy reason lives in `logContext`.
+ * Wire shape: Phase 4 Task 11 migrates these handlers off the legacy
+ * `{ data: <result> }` envelope onto the canonical respondX helpers
+ * (spec §5.1):
+ *
+ *   list   -> respondList(keys, syntheticMeta)
+ *   get    -> respondDoc(key)
+ *   create -> respondMutation("API key created.", { doc, key }, 201)
+ *   update -> respondMutation("API key updated.", item)
+ *   revoke -> respondAction("API key revoked.", { id })
+ *
+ * The list endpoint is not server-paginated (callers receive every key
+ * they are allowed to see in one page). To stay on the canonical
+ * `respondList` envelope, we ship a single-page synthetic meta whose
+ * `total` matches the array length. Errors continue to flow through
+ * `withErrorHandler` and serialize as `application/problem+json`. The
+ * session-only 403 surface keeps its canonical
+ * "You don't have permission to perform this action." message; the
+ * legacy reason lives in `logContext`.
  *
  * @module api/api-keys
  * @since 1.0.0
@@ -35,8 +44,13 @@ import { CreateApiKeySchema, UpdateApiKeySchema } from "../schemas/api-keys";
 import type { ApiKeyService } from "../services/auth/api-key-service";
 import { isSuperAdmin } from "../services/lib/permissions";
 
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -76,7 +90,10 @@ function denySessionOnly(action: "create" | "update" | "delete"): never {
  *
  * Auth: session or API key + `manage-api-keys` permission.
  *
- * Response: `{ "data": ApiKeyMeta[] }` — non-paginated list.
+ * Response: `{ items: ApiKeyMeta[], meta: PaginationMeta }`. The list is
+ * not server-paginated (callers see every key they're allowed to read);
+ * meta is a single-page synthetic envelope so the wire format matches
+ * `respondList` for every list endpoint.
  */
 export const listApiKeys = withErrorHandler(
   async (req: Request): Promise<Response> => {
@@ -87,7 +104,16 @@ export const listApiKeys = withErrorHandler(
     const allUsers = await isSuperAdmin(authResult.userId);
     const keys = await service.listApiKeys(authResult.userId, { allUsers });
 
-    return createSuccessResponse(keys);
+    // Phase 4: respondList. Synthetic single-page meta keeps the canonical
+    // list shape even though the underlying service does not paginate.
+    return respondList(keys, {
+      total: keys.length,
+      page: 1,
+      limit: keys.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
   }
 );
 
@@ -100,7 +126,7 @@ export const listApiKeys = withErrorHandler(
  *
  * Auth: session or API key + `manage-api-keys` permission.
  *
- * Response: `{ "data": ApiKeyMeta }`
+ * Response: bare `ApiKeyMeta` document body via `respondDoc`.
  */
 export function getApiKeyById(req: Request, id: string): Promise<Response> {
   return withErrorHandler(async (request: Request) => {
@@ -121,7 +147,8 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
       });
     }
 
-    return createSuccessResponse(key);
+    // Phase 4: respondDoc. Single document fetch returns the row bare.
+    return respondDoc(key);
   })(req);
 }
 
@@ -134,8 +161,8 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
- * Response: `{ "data": { "doc": ApiKeyMeta, "key": string } }` — `key` is
- * the one-time raw secret. Status 201.
+ * Response: `{ message, item: { doc: ApiKeyMeta, key: string } }` via
+ * `respondMutation`. `key` is the one-time raw secret; status 201.
  */
 export const createApiKey = withErrorHandler(
   async (req: Request): Promise<Response> => {
@@ -160,7 +187,14 @@ export const createApiKey = withErrorHandler(
       validated
     );
 
-    return createSuccessResponse({ doc: meta, key }, { status: 201 });
+    // Phase 4: respondMutation 201. The composite `{ doc, key }` payload
+    // is the mutation `item` so the one-time raw secret stays adjacent to
+    // its metadata; the toast message is server-authored.
+    return respondMutation(
+      "API key created.",
+      { doc: meta, key },
+      { status: 201 }
+    );
   }
 );
 
@@ -174,7 +208,7 @@ export const createApiKey = withErrorHandler(
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
- * Response: `{ "data": ApiKeyMeta }`
+ * Response: `{ message, item: ApiKeyMeta }` via `respondMutation`.
  */
 export function updateApiKey(req: Request, id: string): Promise<Response> {
   return withErrorHandler(async (request: Request) => {
@@ -200,7 +234,9 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
       validated
     );
 
-    return createSuccessResponse(updated);
+    // Phase 4: respondMutation. Updated row is the mutation `item`; the
+    // toast message is server-authored.
+    return respondMutation("API key updated.", updated);
   })(req);
 }
 
@@ -214,7 +250,9 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
- * Response: `{ "data": { "success": true } }`
+ * Response: `{ message, id }` via `respondAction`. Revoke is non-CRUD
+ * (the row is preserved with `isActive = false`), so the action shape
+ * applies rather than `respondMutation`.
  */
 export function revokeApiKey(req: Request, id: string): Promise<Response> {
   return withErrorHandler(async (request: Request) => {
@@ -226,6 +264,8 @@ export function revokeApiKey(req: Request, id: string): Promise<Response> {
     const service = await getApiKeyService();
     await service.revokeApiKey(id, authResult.userId);
 
-    return createSuccessResponse({ success: true });
+    // Phase 4: respondAction. Revocation is a state transition rather
+    // than a row mutation; surface the affected id alongside the toast.
+    return respondAction("API key revoked.", { id });
   })(req);
 }
