@@ -378,7 +378,7 @@ export function MediaLibrary({
       setActiveFolderId(null);
       setPage(1);
     }
-  }, [deleteFolderId, activeFolderId]);
+  }, [deleteFolderId, activeFolderId, setActiveFolderId]);
 
   const handleMoveToFolder = React.useCallback(() => {
     if (selectedIds.size === 0) return;
