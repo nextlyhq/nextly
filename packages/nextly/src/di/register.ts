@@ -929,6 +929,13 @@ async function syncCodeFirstCollections(
       // Skip collections whose tables already exist — the pipeline's
       // diff would compare against the live table and could emit
       // interactive events. Mirrors legacy `skipExistingTables: true`.
+      //
+      // Exception: if the collection is in syncResult.updated (its config
+      // changed since the last boot), let it through the pipeline even if
+      // the table exists. Purely additive ops (new optional columns) apply
+      // without any prompts. Non-safe ops (e.g. required field on a table
+      // with existing rows) return CONFIRMATION_REQUIRED_NO_TTY, which is
+      // caught below and logged as a warning — the server still boots.
       let tableExists = false;
       try {
         tableExists = await adapter.tableExists(tableName);
@@ -938,7 +945,8 @@ async function syncCodeFirstCollections(
         // and we're wrong, drizzle-kit will emit `CREATE TABLE IF NOT
         // EXISTS`-equivalent semantics or a no-op diff.
       }
-      if (tableExists) {
+      const isUpdatedCollection = syncResult.updated.includes(collection.slug);
+      if (tableExists && !isUpdatedCollection) {
         logger.info?.(
           `Table ${tableName} already exists for ${collection.slug}, skipping`
         );

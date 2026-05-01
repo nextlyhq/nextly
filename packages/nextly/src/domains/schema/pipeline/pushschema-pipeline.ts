@@ -539,7 +539,8 @@ export class PushSchemaPipeline {
           );
         }
         const safe = this.filterUnsafeStatements(
-          pushResult.statementsToExecute
+          pushResult.statementsToExecute,
+          managedTableNames
         );
 
         try {
@@ -642,13 +643,21 @@ export class PushSchemaPipeline {
     }
   }
 
-  private filterUnsafeStatements(statements: string[]): string[] {
+  private filterUnsafeStatements(
+    statements: string[],
+    allowedDropTables: string[]
+  ): string[] {
+    const allowedSet = new Set(allowedDropTables.map(t => t.toLowerCase()));
     return statements.filter(stmt => {
       const dropMatch = stmt.match(
         /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
       if (!dropMatch) return true;
-      return isManagedTable(dropMatch[1]);
+      // Only allow DROP TABLE for tables explicitly included in the desired
+      // schema for this pipeline run. Drizzle-kit introspects the full live
+      // DB independently and will emit DROP TABLE for any managed table not
+      // in the schema object we passed it — those drops must be blocked.
+      return allowedSet.has(dropMatch[1].toLowerCase());
     });
   }
 
