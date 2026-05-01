@@ -164,9 +164,20 @@ interface PushSchemaPassResult {
 }
 
 interface DrizzleKitLike {
+  // Phase C (2026-05-01): added optional tablesFilter so PG pushSchema
+  // can scope drizzle-kit's internal introspection to only the desired
+  // tables. Without this, drizzle-kit walks the full live DB and emits
+  // DROP TABLE for any managed table absent from the partial pipeline
+  // desired schema (boot-time sync only knows code-first collections,
+  // so admin-UI tables get DROPped). SQLite/MySQL drizzle-kit upstream
+  // does NOT accept tablesFilter — those branches discard it. The
+  // post-emission `filterUnsafeStatements` is the second line of
+  // defense and the ONLY defense for SQLite/MySQL until upstream adds
+  // tablesFilter or we move to generateMigration.
   pushSchema: (
     schema: Record<string, unknown>,
-    db: unknown
+    db: unknown,
+    tablesFilter?: string[]
   ) => Promise<PushSchemaPassResult>;
 }
 
@@ -529,9 +540,19 @@ export class PushSchemaPipeline {
         //
         // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
         // SQLite (it's the same handle).
+        //
+        // Phase C (2026-05-01): pass desired-table names to PG drizzle-kit
+        // as `tablesFilter` so its introspection is scoped to just our
+        // managed tables. SQLite/MySQL discard this; their data-loss
+        // safety relies entirely on `filterUnsafeStatements` below.
+        const desiredTableNames = Object.keys(drizzleSchema);
         let pushResult: PushSchemaPassResult;
         try {
-          pushResult = await kit.pushSchema(drizzleSchema, tx);
+          pushResult = await kit.pushSchema(
+            drizzleSchema,
+            tx,
+            desiredTableNames
+          );
         } catch (err) {
           throw new PushSchemaError(
             err instanceof Error ? err.message : String(err),
@@ -648,7 +669,32 @@ export class PushSchemaPipeline {
         /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
       if (!dropMatch) return true;
-      return isManagedTable(dropMatch[1]);
+
+      // Phase C (2026-05-01): block ALL DROP TABLE emitted by drizzle-kit's
+      // pushSchema, unconditionally. Pre-Phase-C this filter allowed any
+      // managed-prefix table (`dc_*`, `single_*`, `comp_*`) through —
+      // which silently destroyed admin-UI-created tables on server
+      // restart and any managed table outside the current pipeline's
+      // scope. By the time pushSchema runs at Phase D, all intentional
+      // drops have already been applied via Phase C's pre-resolution
+      // executor (with explicit user confirmation through the
+      // classifier). ANY drizzle-kit-emitted DROP TABLE here is by
+      // definition accidental — caused by a partial desired schema or
+      // by SQLite/MySQL upstream not accepting a tablesFilter. See
+      // findings/schema-issues-findings-2.md for the full mechanism.
+      const tableName = dropMatch[1] ?? "<unknown>";
+      // eslint-disable-next-line no-console -- structured warning is the
+      // primary signal an operator has that Nextly just protected their
+      // data. Logger is not on the deps interface for this pipeline.
+      console.warn(
+        `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
+          `drizzle-kit pushSchema. Drops must route through the ` +
+          `pre-resolution executor with explicit user confirmation. ` +
+          `If this drop was intentional, remove the table from the ` +
+          `desired schema and let the classifier prompt for ` +
+          `confirmation. (managed=${isManagedTable(tableName)})`
+      );
+      return false;
     });
   }
 
@@ -688,7 +734,12 @@ export class PushSchemaPipeline {
       case "postgresql": {
         const kit = await getPgDrizzleKit();
         return {
-          pushSchema: (schema, db) => kit.pushSchema(schema, db, ["public"]),
+          // PG drizzle-kit accepts tablesFilter (4th arg) — pass through
+          // so introspection is scoped to just the current pipeline's
+          // desired tables. Eliminates spurious DROP TABLE / RENAME
+          // emissions for managed tables outside the pipeline's scope.
+          pushSchema: (schema, db, tablesFilter) =>
+            kit.pushSchema(schema, db, ["public"], tablesFilter),
         };
       }
       case "mysql": {
@@ -701,12 +752,17 @@ export class PushSchemaPipeline {
         }
         const kit = await getMySQLDrizzleKit();
         return {
+          // MySQL drizzle-kit upstream takes (schema, db, databaseName) —
+          // no tablesFilter slot. Discard the arg here; the post-emission
+          // filterUnsafeStatements is the data-loss safeguard.
           pushSchema: (schema, db) => kit.pushSchema(schema, db, databaseName),
         };
       }
       case "sqlite": {
         const kit = await getSQLiteDrizzleKit();
         return {
+          // SQLite drizzle-kit upstream takes only (schema, db) — no
+          // tablesFilter. Same caveat as MySQL.
           pushSchema: (schema, db) => kit.pushSchema(schema, db),
         };
       }
