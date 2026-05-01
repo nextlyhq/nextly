@@ -200,6 +200,7 @@ export function MediaCard({
       aria-selected={isSelected}
       className={cn(
         "group relative aspect-square rounded-xl overflow-hidden cursor-pointer flex items-center justify-center",
+        "bg-white dark:bg-slate-900/50",
         "transition-all duration-200",
         "border",
         isSelected
@@ -220,7 +221,7 @@ export function MediaCard({
             setImageLoading(false);
           }}
           className={cn(
-            "max-w-full max-h-full object-contain bg-muted/5",
+            "max-w-full max-h-full object-contain",
             imageLoading ? "opacity-0" : "opacity-100",
             "transition-opacity duration-150"
           )}
@@ -279,7 +280,9 @@ export function MediaCard({
         )}
         {onDownload && (
           <button
-            onClick={(e) => { void handleDownloadClick(e); }}
+            onClick={e => {
+              void handleDownloadClick(e);
+            }}
             className="text-muted-foreground hover:text-foreground hover:scale-110 transition-all cursor-pointer"
             aria-label="Download"
             title="Download"

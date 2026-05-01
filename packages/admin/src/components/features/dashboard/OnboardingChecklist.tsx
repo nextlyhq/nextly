@@ -15,7 +15,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
           className={cn(
             "h-6 w-6 rounded-full flex items-center justify-center transition-all duration-500",
             step.isComplete
-              ? "bg-emerald-500/10 border border-emerald-500/30 scale-110 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
+              ? "bg-emerald-500/10 border border-emerald-500/30 scale-110 shadow-glow-success"
               : "bg-primary/5 border border-primary/10 group-hover:border-primary/30 group-hover:scale-105"
           )}
         >
@@ -61,7 +61,7 @@ export const OnboardingChecklist: React.FC = () => {
     <Card className="border-primary/20 bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-[2.5rem] transition-all duration-700 hover:border-primary/40 group/card relative">
       <div className="absolute top-0 left-0 w-full h-1 bg-primary/5">
         <div
-          className="h-full bg-primary shadow-[0_0_15px_rgba(var(--primary-rgb),0.5)] transition-all duration-1000 ease-out"
+          className="h-full bg-primary shadow-glow-primary transition-all duration-1000 ease-out"
           style={{ width: `${completionPct}%` }}
         />
       </div>

@@ -85,7 +85,7 @@ export function SidebarUserFooter({
             <DropdownMenuSeparator className="bg-sidebar-border/30" />
             <DropdownMenuItem
               asChild
-              className="cursor-pointer rounded-md hover-unified focus:bg-primary/10 focus:text-primary"
+              className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <a href="/profile" className="flex items-center gap-2">
                 <User className="h-4 w-4" />
@@ -94,7 +94,7 @@ export function SidebarUserFooter({
             </DropdownMenuItem>
             <DropdownMenuItem
               asChild
-              className="cursor-pointer rounded-md hover-unified focus:bg-primary/10 focus:text-primary"
+              className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <a href="/help" className="flex items-center gap-2">
                 <HelpCircle className="h-4 w-4" />
@@ -103,8 +103,10 @@ export function SidebarUserFooter({
             </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-sidebar-border/30" />
             <DropdownMenuItem
-              onClick={() => { void logout(); }}
-              className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/10 focus:text-primary"
+              onClick={() => {
+                void logout();
+              }}
+              className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <LogOut className="mr-2 h-4 w-4" />
               <span>Log out</span>
@@ -163,7 +165,7 @@ export function SidebarUserFooter({
         <DropdownMenuSeparator className="bg-sidebar-border/30" />
         <DropdownMenuItem
           asChild
-          className="cursor-pointer rounded-md hover-unified focus:bg-primary/10 focus:text-primary"
+          className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <a href="/profile" className="flex items-center gap-2">
             <User className="h-4 w-4" />
@@ -172,7 +174,7 @@ export function SidebarUserFooter({
         </DropdownMenuItem>
         <DropdownMenuItem
           asChild
-          className="cursor-pointer rounded-md hover-unified focus:bg-primary/10 focus:text-primary"
+          className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <a href="/help" className="flex items-center gap-2">
             <HelpCircle className="h-4 w-4" />
@@ -181,8 +183,10 @@ export function SidebarUserFooter({
         </DropdownMenuItem>
         <DropdownMenuSeparator className="bg-sidebar-border/30" />
         <DropdownMenuItem
-          onClick={() => { void logout(); }}
-          className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/10 focus:text-primary"
+          onClick={() => {
+            void logout();
+          }}
+          className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <LogOut className="mr-2 h-4 w-4" />
           <span>Log out</span>

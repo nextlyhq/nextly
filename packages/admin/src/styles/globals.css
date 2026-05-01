@@ -33,6 +33,7 @@
 /* Scope overflow fix to adminapp only */
 .adminapp {
   overflow-x: hidden;
+  --sidebar-width-safe: var(--sidebar-width, 20.5rem);
 }
 
 /**
@@ -361,13 +362,38 @@
   /* ============================================
    * BOX SHADOWS (Tailwind v4.1)
    * ============================================ */
-  --: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md:
     0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   --shadow-lg:
     0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   --shadow-xl:
     0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  /* Custom Functional Shadows (Fixes build warnings from arbitrary values) */
+  --shadow-inner-subtle: 0 -4px 6px -1px rgba(0, 0, 0, 0.05);
+  --shadow-glow-success: 0 0 10px rgba(16, 185, 129, 0.1);
+  --shadow-glow-primary: 0 0 15px hsl(var(--primary) / 0.5);
+  --shadow-elevation-primary: 0 8px 20px -8px hsl(var(--primary) / 0.4);
+  --shadow-soft-primary: 0 8px 30px hsl(var(--primary) / 0.06);
+  --shadow-neo: 4px 4px 0px 0px rgba(0, 0, 0, 0.1);
+
+  /* ============================================
+   * FLUID TYPOGRAPHY (Tailwind v4.1)
+   * Fixes build warnings from arbitrary values
+   * ============================================ */
+  --text-fluid-2xs: clamp(0.6rem, 0.55rem + 0.1vw, 0.65rem);
+  --text-fluid-xs: clamp(0.65rem, 0.6rem + 0.1vw, 0.7rem);
+  --text-fluid-sm: clamp(0.7rem, 0.65rem + 0.1vw, 0.75rem);
+  --text-fluid-base: clamp(0.875rem, 0.8rem + 0.2vw, 1rem);
+  --text-fluid-lg: clamp(1rem, 2vw, 1.125rem);
+  --text-fluid-xl: clamp(1.25rem, 3vw, 1.5rem);
+  --text-fluid-2xl: clamp(1.5rem, 5vw, 2.25rem);
+  --text-fluid-3xl: clamp(1.5rem, 5vw, 2.5rem);
+  --text-fluid-4xl: clamp(1.75rem, 5vw, 2.5rem);
+
+  /* Custom Transitions */
+  --ease-premium: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 /* ============================================
@@ -1219,24 +1245,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   transition: none !important;
 }
 
-/* Explicitly force Active State styles to resolve non-implementation */
-[data-sidebar="menu-button"][data-active="true"],
-[data-sidebar="menu-sub-button"][data-active="true"],
-[data-sidebar="menu-item"][data-active="true"] .peer\/menu-button,
-[data-sidebar="menu-item"][data-active="true"] [data-sidebar="menu-button"] {
-  background-color: #000000 !important;
-  color: #ffffff !important;
-}
-
-[data-sidebar="menu-button"][data-active="true"] svg,
-[data-sidebar="menu-sub-button"][data-active="true"] svg,
-[data-sidebar="menu-item"][data-active="true"] .peer\/menu-button svg,
-[data-sidebar="menu-item"][data-active="true"]
-  [data-sidebar="menu-button"]
-  svg {
-  color: #ffffff !important;
-}
-
 [data-sidebar="group"] {
   padding: 0.375rem;
 }
@@ -2016,11 +2024,12 @@ button[data-slot="radio-group-item"][data-state="checked"],
  * Target class for all component hover states.
  */
 .hover-unified {
-  @apply hover:bg-black hover:text-white transition-colors;
+  @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
 
-.hover-unified:hover svg {
-  color: #ffffff !important;
+.hover-unified:hover svg,
+[data-active="true"] svg {
+  color: hsl(var(--primary)) !important;
 }
 
 /**
@@ -2028,7 +2037,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
  * Specifically for lists/rows where the solid black is too harsh.
  */
 .hover-subtle-row {
-  @apply hover:bg-black/5 dark:hover:bg-white/5 transition-colors;
+  @apply hover:bg-primary/5 hover:text-primary dark:hover:bg-white/5 transition-colors;
 }
 
 .hover-subtle-row:hover * {
@@ -2039,22 +2048,16 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: inherit !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark .hover-unified {
-    @apply hover:bg-black hover:text-white transition-colors;
-  }
-}
-
 .group-hover-unified {
-  @apply group-hover:bg-black group-hover:text-white;
+  @apply group-hover:bg-primary/5 group-hover:text-primary;
 }
 
 .group-hover-subtle-row {
-  @apply group-hover:bg-black/5 dark:group-hover:bg-white/5 transition-colors;
+  @apply group-hover:bg-primary/5 dark:group-hover:bg-white/5 transition-colors;
 }
 
 .group:hover .group-hover-unified svg {
-  color: #ffffff !important;
+  color: hsl(var(--primary)) !important;
 }
 
 .group:hover .group-hover-subtle-row svg {
@@ -2063,7 +2066,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 /* Dedicated hover for dashboard cards: full black surface + white content */
 .hover-unified-dashboard-card {
-  @apply hover:!bg-black hover:!text-white transition-colors;
+  @apply hover:!bg-primary/5 hover:!text-primary transition-colors;
 }
 
 .hover-unified-dashboard-card:hover * {
@@ -2076,7 +2079,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 @media (prefers-color-scheme: dark) {
   .adminapp.dark .hover-unified-dashboard-card {
-    @apply hover:!bg-black hover:!text-white transition-colors;
+    @apply hover:!bg-primary/5 hover:!text-primary transition-colors;
   }
 }
 
@@ -2085,7 +2088,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
  * Use for all data-table rows where hover should be subtle.
  */
 .hover-unified-table-row {
-  @apply hover:bg-black/5 hover:text-black transition-colors;
+  @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
 
 .hover-unified-table-row:hover * {

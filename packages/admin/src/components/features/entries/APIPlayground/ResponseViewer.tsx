@@ -109,10 +109,10 @@ export function ResponseViewer({
         <div className="h-12 w-12 rounded-none border-2 border-destructive/20 flex items-center justify-center mb-6">
           <span className="text-destructive font-bold text-xl">!</span>
         </div>
-        <h3 className="text-[clamp(0.7rem,0.65rem+0.1vw,0.75rem)] font-bold uppercase tracking-[0.15em] text-destructive mb-2">
+        <h3 className="text-fluid-sm font-bold uppercase tracking-[0.15em] text-destructive mb-2">
           Request Failed
         </h3>
-        <p className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] text-muted-foreground font-medium max-w-xs leading-relaxed">
+        <p className="text-fluid-xs text-muted-foreground font-medium max-w-xs leading-relaxed">
           {error}
         </p>
       </div>
@@ -129,10 +129,10 @@ export function ResponseViewer({
             <FileJson className="h-6 w-6 text-muted-foreground/40" />
           </div>
         </div>
-        <h3 className="text-[clamp(0.7rem,0.65rem+0.1vw,0.75rem)] font-bold uppercase tracking-[0.15em] text-muted-foreground/80 mb-3">
+        <h3 className="text-fluid-sm font-bold uppercase tracking-[0.15em] text-muted-foreground/80 mb-3">
           Response Pool
         </h3>
-        <p className="text-[clamp(0.65rem,0.6rem+0.1vw,0.7rem)] text-muted-foreground/60 font-medium max-w-[200px] leading-relaxed uppercase tracking-tight">
+        <p className="text-fluid-xs text-muted-foreground/60 font-medium max-w-[200px] leading-relaxed uppercase tracking-tight">
           Select an action and execute the request to view structured response
           data
         </p>
@@ -145,13 +145,15 @@ export function ResponseViewer({
     <div className="h-full min-h-[400px] flex flex-col bg-background">
       {/* Action Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/20">
-        <span className="text-[clamp(0.6rem,0.55rem+0.1vw,0.65rem)] font-bold uppercase tracking-widest text-muted-foreground/60">
+        <span className="text-fluid-2xs font-bold uppercase tracking-widest text-muted-foreground/60">
           Result Data
         </span>
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => { void handleCopy(); }}
+          onClick={() => {
+            void handleCopy();
+          }}
           className="h-7 gap-2 px-3 rounded-none text-[10px] font-bold uppercase tracking-tighter hover:bg-background/80"
         >
           {copied ? (

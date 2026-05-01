@@ -25,6 +25,7 @@ import {
   FileAudio,
   FileText,
   File,
+  Image,
 } from "@admin/components/icons";
 import { DEFAULT_MEDIA_SKELETON_COUNT } from "@admin/constants/media";
 import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
@@ -49,19 +50,25 @@ interface MediaListViewProps {
 }
 
 // Get the right icon for a media type
-function MediaTypeIcon({ mimeType }: { mimeType: string }) {
+function MediaTypeIcon({
+  mimeType,
+  className,
+}: {
+  mimeType: string;
+  className?: string;
+}) {
   const type = getMediaType(mimeType);
   switch (type) {
     case "image":
-      return <FileImage className="h-4 w-4 text-blue-500" />;
+      return <FileImage className={cn("h-4 w-4", className)} />;
     case "video":
-      return <FileVideo className="h-4 w-4 text-purple-500" />;
+      return <FileVideo className={cn("h-4 w-4", className)} />;
     case "audio":
-      return <FileAudio className="h-4 w-4 text-green-500" />;
+      return <FileAudio className={cn("h-4 w-4", className)} />;
     case "document":
-      return <FileText className="h-4 w-4 text-orange-500" />;
+      return <FileText className={cn("h-4 w-4", className)} />;
     default:
-      return <File className="h-4 w-4 text-muted-foreground" />;
+      return <File className={cn("h-4 w-4", className)} />;
   }
 }
 
@@ -192,7 +199,7 @@ export function MediaListView({
       {/* Header row */}
       <div className="flex items-center gap-3 px-3 py-2 bg-muted/50 border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
         <div className="w-10" />
-        <div className="w-12" />
+        <div className="w-32" />
         <div className="flex-1">Name</div>
         <div className="w-24 text-center">Type</div>
         <div className="w-20 text-right">Size</div>
@@ -232,19 +239,19 @@ export function MediaListView({
               </div>
 
               {/* Thumbnail */}
-              <div className="w-12 h-10 rounded overflow-hidden bg-muted flex items-center justify-center flex-shrink-0">
+              <div className="w-16 h-16 overflow-hidden bg-white dark:bg-slate-900/50 flex items-center justify-center flex-shrink-0 border border-border/50">
                 {isImage && item.thumbnailUrl ? (
                   <img
                     src={item.thumbnailUrl}
                     alt={item.altText || item.originalFilename}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain"
                     loading="lazy"
                   />
                 ) : isImage && item.url ? (
                   <img
                     src={item.url}
                     alt={item.altText || item.originalFilename}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain"
                     loading="lazy"
                   />
                 ) : (
@@ -265,18 +272,16 @@ export function MediaListView({
               </div>
 
               {/* Type badge */}
-              <div className="w-24 text-center">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full",
-                    type === "image" && "bg-blue-500/10 text-blue-600",
-                    type === "video" && "bg-purple-500/10 text-purple-600",
-                    type === "audio" && "bg-green-500/10 text-green-600",
-                    type === "document" && "bg-orange-500/10 text-orange-600",
-                    type === "other" && "bg-muted text-muted-foreground"
+              <div className="w-24 flex justify-center">
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full bg-primary/5 text-primary border border-primary/10 uppercase tracking-tight">
+                  {type === "image" ? (
+                    <Image className="h-3 w-3 text-primary" />
+                  ) : (
+                    <MediaTypeIcon
+                      mimeType={item.mimeType}
+                      className="h-3 w-3 text-primary"
+                    />
                   )}
-                >
-                  <MediaTypeIcon mimeType={item.mimeType} />
                   <span className="capitalize">{type}</span>
                 </span>
               </div>
