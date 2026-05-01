@@ -1,4 +1,34 @@
-import { unstable_rethrow } from "next/navigation";
+// `unstable_rethrow` is loaded lazily on first use via `createRequire`
+// (CommonJS-style resolution). Why not a regular static or dynamic
+// `import "next/navigation"`?
+//
+//   - Static `import { x } from "next/navigation"` chokes Node's strict
+//     ESM resolver when this package is loaded as an external via
+//     `serverExternalPackages` (Next.js 16 doesn't list `./navigation`
+//     in its package.json `exports` field).
+//   - The `.js`-suffix variant fixes Node ESM but makes Turbopack's
+//     bundler descend into Next.js internals that aren't on disk.
+//   - Plain `await import("next/navigation")` shifts the same Node ESM
+//     resolution failure from load time to call time — still crashes.
+//
+// `createRequire(import.meta.url)` falls back to Node's CommonJS
+// resolver, which finds `node_modules/next/navigation.js` directly.
+// Turbopack treats `createRequire` as opaque (it doesn't follow the
+// require path at build time), so neither side complains. References
+// cached at module scope so the resolution cost is paid once.
+import { createRequire } from "node:module";
+
+type UnstableRethrow = (err: unknown) => void;
+let cachedUnstableRethrow: UnstableRethrow | null = null;
+function getUnstableRethrow(): UnstableRethrow {
+  if (cachedUnstableRethrow) return cachedUnstableRethrow;
+  const require = createRequire(import.meta.url);
+  const mod = require("next/navigation") as {
+    unstable_rethrow: UnstableRethrow;
+  };
+  cachedUnstableRethrow = mod.unstable_rethrow;
+  return cachedUnstableRethrow;
+}
 
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
@@ -61,7 +91,9 @@ export function withErrorHandler<TArgs extends unknown[]>(
     } catch (err) {
       // (1) Re-throw Next.js sentinels FIRST. Without this, `redirect()` /
       // `notFound()` inside a handler get silently converted to 500s.
-      unstable_rethrow(err);
+      // `getUnstableRethrow` resolves via `createRequire` (see top of
+      // file for the dual-resolution rationale). Synchronous now.
+      getUnstableRethrow()(err);
 
       // (2) Classify.
       let nextlyErr: NextlyError;

@@ -341,8 +341,10 @@ export async function generatePackageJson(
       start: "next start",
       lint: "next lint",
       nextly: "nextly",
-      // First-time setup: create system tables, seed demo content.
-      "db:setup": "nextly db:sync --seed",
+      // First-time setup: sync schema + seed system permissions. Demo
+      // content is seeded separately from the admin UI (visit /welcome
+      // after running `pnpm dev` and completing /admin/setup).
+      "db:setup": "nextly db:sync",
       "db:migrate": "nextly migrate",
       "db:migrate:status": "nextly migrate:status",
       "db:migrate:fresh": "nextly migrate:fresh",
@@ -446,8 +448,10 @@ export async function copyTemplate(
     },
   });
 
-  // Step 2: Copy template's src/ directory (frontend pages, components)
-  // Skip configs/, seed/, and template.json - those are handled separately
+  // Step 2: Copy template's src/ directory (frontend pages, components,
+  // src/endpoints/seed/ — the latter contains the demo seed function +
+  // colocated seed-data.json/media after task 24 phase 3).
+  // Skip configs/ and template.json — those are handled separately.
   const templateSrcDir = path.join(typeDir, "src");
   if (await fs.pathExists(templateSrcDir)) {
     await fs.copy(templateSrcDir, path.join(targetDir, "src"), {
@@ -497,38 +501,19 @@ export async function copyTemplate(
     }
   }
 
-  // Step 4: Copy seed files if demo data was selected
+  // Step 4: Task 24 phase 3 — seed code, seed-data.json, and media now
+  // live under the template's `src/endpoints/seed/` directory and get
+  // copied with the rest of `src/` in the regular template copy step.
+  // The CLI no longer plants a `nextly.seed.ts` at the project root or
+  // a sibling `seed/` directory; nothing to do here when --no-demo-data
+  // is set, since the seed function only runs when the admin clicks
+  // "Seed demo content" on /welcome.
   if (demoData) {
-    const seedDir = path.join(typeDir, "seed");
-    if (await fs.pathExists(seedDir)) {
-      // Copy nextly.seed.ts to project root
-      const seedScript = path.join(seedDir, "nextly.seed.ts");
-      if (await fs.pathExists(seedScript)) {
-        await fs.copy(seedScript, path.join(targetDir, "nextly.seed.ts"));
-      }
-
-      // Copy seed data directory (seed-data.json + media files)
-      await fs.ensureDir(path.join(targetDir, "seed"));
-      const seedDataFile = path.join(seedDir, "seed-data.json");
-      if (await fs.pathExists(seedDataFile)) {
-        await fs.copy(
-          seedDataFile,
-          path.join(targetDir, "seed", "seed-data.json")
-        );
-      }
-
-      // Copy seed media files
-      const seedMediaDir = path.join(seedDir, "media");
-      if (await fs.pathExists(seedMediaDir)) {
-        await fs.copy(seedMediaDir, path.join(targetDir, "seed", "media"), {
-          filter: _src => {
-            const basename = path.basename(_src);
-            // Skip README.md from media dir - it's dev documentation
-            return !SKIP_FILES.has(basename) && basename !== "README.md";
-          },
-        });
-      }
-    }
+    // No-op intentionally: src/endpoints/seed is part of the template
+    // tree and was already copied by the recursive template copy. Left
+    // as a hook so a future template that ships demo data outside
+    // src/ can reintroduce the per-file copy logic without changing
+    // surrounding control flow.
   }
 
   // Step 5: Remove base template's page.tsx if blog template has (frontend) route group

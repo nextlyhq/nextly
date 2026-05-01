@@ -13,8 +13,9 @@ import fs from "fs-extra";
 // defined in nextly.config.ts. Instead, a nextly.seed.ts file is generated
 // that creates them in the database as unlocked (editable) entries.
 //
-// The seed runs via `npm run db:setup` (which invokes
-// `nextly db:sync --seed`) after migrations.
+// Seeding (in current architecture, task 24 phase 3) is invoked from a
+// project-local auth-gated POST route at /admin/api/seed — no longer
+// from the CLI. Schema Builder reintroduction may revisit this.
 
 /**
  * Blog CMS seed template.

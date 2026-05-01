@@ -411,11 +411,15 @@ Re-export pre-built handlers in your Next.js app:
 
 ```typescript
 // app/api/[[...nextly]]/route.ts
-import { createDynamicHandlers } from "nextly";
+import { createDynamicHandlers } from "nextly/runtime";
 
 const handlers = createDynamicHandlers();
 export const { GET, POST, PUT, PATCH, DELETE } = handlers;
 ```
+
+> The `/runtime` subpath isolates Next.js-coupled handler code so the
+> package root stays loadable in plain Node (CLI, config files,
+> plugins). See "Layered exports" in the architecture docs.
 
 ## Server Actions
 

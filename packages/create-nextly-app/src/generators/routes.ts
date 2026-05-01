@@ -4,7 +4,10 @@ import fs from "fs-extra";
 
 import type { ProjectInfo } from "../types";
 
-const API_ROUTE_TEMPLATE = `import { createDynamicHandlers } from "@revnixhq/nextly";
+const API_ROUTE_TEMPLATE = `// Imported from \`@revnixhq/nextly/runtime\` (not the package root) so the
+// Next.js-coupled handler factory stays out of Node-only code paths
+// like the CLI and config loaders. See task 24 stage 1 for context.
+import { createDynamicHandlers } from "@revnixhq/nextly/runtime";
 
 const handlers = createDynamicHandlers();
 

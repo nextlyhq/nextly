@@ -27,7 +27,7 @@
 import { z } from "zod";
 
 import { container } from "../di";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
 import { requireAuthHeader } from "./auth-header-only";
@@ -37,7 +37,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function getEmailTemplateService(): Promise<EmailTemplateService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<EmailTemplateService>("emailTemplateService");
 }
 

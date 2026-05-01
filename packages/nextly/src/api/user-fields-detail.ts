@@ -21,7 +21,7 @@
  */
 
 import { container } from "../di";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
 import { requireAuthHeader } from "./auth-header-only";
@@ -34,7 +34,7 @@ interface RouteContext {
 }
 
 async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionService> {
-  await getNextly();
+  await getCachedNextly();
   return container.get<UserFieldDefinitionService>(
     "userFieldDefinitionService"
   );

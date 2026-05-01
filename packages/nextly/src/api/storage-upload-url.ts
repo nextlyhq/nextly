@@ -33,7 +33,7 @@
 import { z } from "zod";
 
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { getMediaStorage } from "../storage/storage";
 import type { ClientUploadData } from "../storage/types";
 
@@ -42,7 +42,7 @@ import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 async function ensureServicesInitialized(): Promise<void> {
-  await getNextly();
+  await getCachedNextly();
 }
 
 const uploadUrlRequestSchema = z.object({

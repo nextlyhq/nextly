@@ -38,3 +38,24 @@ try {
   console.error("Failed to copy migration files:", error);
   process.exit(1);
 }
+
+// Architectural guard (task 24 stage 1): the package root must stay
+// loadable in plain Node.js so the CLI, config loaders, and plugin
+// authors can `import { ... } from "@revnixhq/nextly"` without
+// dragging Next.js subpaths into a Node-only context.
+//
+// `dist/index.mjs` itself shouldn't have any `import "next/..."` at
+// module top-level (only inside dynamically-loaded chunks). The check
+// below loads the file in plain Node and fails the build if the
+// import-chain crashes — which is precisely the regression we want to
+// catch before publishing.
+console.log("Verifying root entry loads in plain Node.js...");
+require("child_process").execFileSync(
+  process.execPath,
+  [
+    "-e",
+    "import('./dist/index.mjs').then(() => process.exit(0)).catch(e => { console.error('[build-guard] Root entry crashed at load time:', e.message); process.exit(1); });",
+  ],
+  { cwd: join(__dirname, ".."), stdio: "inherit" }
+);
+console.log("Root entry is Node-safe.\n");

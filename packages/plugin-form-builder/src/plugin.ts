@@ -9,7 +9,11 @@
  */
 
 import type { CollectionConfig, PluginDefinition } from "@revnixhq/nextly";
-import { getCollectionsHandler } from "@revnixhq/nextly";
+// `getCollectionsHandler` runs inside Next.js request handlers, so it
+// lives behind the runtime subpath (task 24 stage 1). Importing from
+// the root would drag Next.js subpaths into Node-only contexts (CLI,
+// config loaders) that pull this plugin via `nextly.config.ts`.
+import { getCollectionsHandler } from "@revnixhq/nextly/runtime";
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";

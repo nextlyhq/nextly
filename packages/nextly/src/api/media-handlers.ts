@@ -65,7 +65,11 @@ import { z } from "zod";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly, type GetNextlyOptions } from "../init";
+import {
+  getCachedNextly,
+  getNextly,
+  type GetNextlyOptions,
+} from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type {
   MediaService,
@@ -112,7 +116,16 @@ let handlerConfig: GetNextlyOptions | undefined;
 // ============================================================
 
 async function getMediaService(): Promise<MediaService> {
-  await getNextly(handlerConfig);
+  // Two paths after Plan B: if the host called createMediaHandlers({
+  // config }) we have a config to bootstrap with — use getNextly to
+  // initialise the storage plugins on this worker. Otherwise we rely
+  // on whoever set up instrumentation.ts and just look up the cached
+  // instance via getCachedNextly().
+  if (handlerConfig?.config) {
+    await getNextly(handlerConfig);
+  } else {
+    await getCachedNextly();
+  }
   return getService("mediaService");
 }
 

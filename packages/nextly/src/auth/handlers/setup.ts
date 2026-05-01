@@ -50,11 +50,12 @@ export async function handleSetupStatus(
   deps: Pick<SetupHandlerDeps, "getUserCount">
 ): Promise<Response> {
   const count = await deps.getUserCount();
-  // Response shape: { data: { data: { isSetupComplete } } }
-  // The admin UI fetcher extracts json.data.data, so we need double nesting.
-  // Field name is isSetupComplete to match the admin UI's expected type.
+  // Canonical Task-21 envelope: { data: <payload> }. The admin fetcher peels
+  // one `data` layer, so consumers read `result.isSetupComplete` directly.
+  // (The previous double-wrap was a stale workaround that broke the
+  // login<->setup redirect guard once the fetcher was migrated.)
   return jsonResponse(200, {
-    data: { data: { isSetupComplete: count > 0 } },
+    data: { isSetupComplete: count > 0 },
   });
 }
 

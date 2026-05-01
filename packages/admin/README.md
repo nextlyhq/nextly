@@ -47,7 +47,7 @@ export default function AdminPage() {
 
 ```typescript
 // app/admin/api/[[...params]]/route.ts
-import { createDynamicHandlers } from "nextly";
+import { createDynamicHandlers } from "nextly/runtime";
 
 const handlers = createDynamicHandlers();
 export const { GET, POST, PUT, PATCH, DELETE } = handlers;

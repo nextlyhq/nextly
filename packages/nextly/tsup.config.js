@@ -9,6 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
 const serverEntries = [
   "src/index.ts",
+  // Runtime subpath (task 24 stage 1): aggregates everything that
+  // (transitively) imports next/navigation, next/cache, next/headers.
+  // Templates' catch-all admin route imports from
+  // `@revnixhq/nextly/runtime`. The root `.` entry must NOT pull this.
+  "src/runtime.ts",
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
@@ -45,6 +50,10 @@ const serverEntries = [
   "src/observability/index.ts",
   "src/database/index.ts",
   "src/api/index.ts",
+  // Auth subpath: exposes session/getSession + role guards so user-facing
+  // route handlers (e.g. the template's seed POST route) can validate
+  // sessions without reaching into private internals (Task 24 phase 3).
+  "src/auth/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims

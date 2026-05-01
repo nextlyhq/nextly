@@ -793,7 +793,37 @@ async function handleServiceRequest(
     headers["X-Nextly-Schema-Version"] = String(schemaVersion);
   }
 
-  return new Response(JSON.stringify({ data: result }), {
+  // Task 24 phase 4: collapse the dispatcher's triple-wrap to the
+  // canonical envelope. Pre-task-24 the wire was
+  //   { data: { success, status, data: <T>, message?, meta? } }
+  // which forced consumers to read `result.data.<field>` after the
+  // fetcher's single-`data` peel — and most of them got it wrong.
+  // Now success responses follow the Task-21 spec (§10.2) shape:
+  //   { data: <T>, meta?: <M> }                 // success
+  //   { errors: [{ code, message }] }           // failure
+  // Status code carries success/failure on the wire. Consumers read
+  // `result.<field>` directly (or `.docs` / `.meta` for paginated
+  // lists once those endpoints get migrated to PaginatedDocs<T>).
+  if (!result.success) {
+    const errorBody = {
+      errors: [
+        {
+          code: "INTERNAL_ERROR",
+          message: result.error ?? "An unexpected error occurred.",
+        },
+      ],
+    };
+    return new Response(JSON.stringify(errorBody), {
+      status: result.status,
+      headers,
+    });
+  }
+
+  const successBody: Record<string, unknown> = { data: result.data };
+  if (result.meta !== undefined) {
+    successBody.meta = result.meta;
+  }
+  return new Response(JSON.stringify(successBody), {
     status: result.status,
     headers,
   });
@@ -920,10 +950,13 @@ async function handleAdminMetaRequest(): Promise<Response> {
     console.error("[ADMIN-META] Error fetching settings from DB:", err);
   }
 
-  return new Response(
-    JSON.stringify({ data: { status: 200, success: true, data: payload } }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
-  );
+  // Canonical Task-21 envelope: { data: <payload> }. The dispatcher used to
+  // wrap an extra { status, success, data } envelope which the migrated
+  // fetcher no longer peels — see task 24 phase 1.
+  return new Response(JSON.stringify({ data: payload }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 /**
@@ -966,10 +999,11 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
     const svc = container.get<GeneralSettingsService>("generalSettingsService");
     const updated = await svc.updateCustomSidebarGroups(validated);
 
-    return new Response(
-      JSON.stringify({ data: { status: 200, success: true, data: updated } }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    // Canonical envelope: { data: <updated> } — see task 24 phase 1.
+    return new Response(JSON.stringify({ data: updated }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   } catch (error) {
     const message =
       error instanceof Error

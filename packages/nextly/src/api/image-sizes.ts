@@ -27,7 +27,7 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { ImageSizeService } from "../services/image-size";
 import { MediaRegenerationService } from "../services/media-regeneration";
 
@@ -41,7 +41,7 @@ let imageSizeServiceInstance: ImageSizeService | null = null;
 async function getImageSizeService(): Promise<ImageSizeService> {
   if (!imageSizeServiceInstance) {
     // Ensure Nextly is initialized (adapter registered in DI container)
-    await getNextly();
+    await getCachedNextly();
     const adapter = container.get<DrizzleAdapter>("adapter");
     imageSizeServiceInstance = new ImageSizeService(adapter, console);
   }
@@ -236,7 +236,7 @@ export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
-  await getNextly();
+  await getCachedNextly();
   const adapter = container.get<DrizzleAdapter>("adapter");
   const regenService = new MediaRegenerationService(adapter, console);
   const status = await regenService.getRegenerationStatus();
@@ -278,7 +278,7 @@ export const regenerateBatch = withErrorHandler(async (req: Request) => {
   const batchSize = typeof opts.batchSize === "number" ? opts.batchSize : 10;
   const cursor = typeof opts.cursor === "string" ? opts.cursor : undefined;
 
-  await getNextly();
+  await getCachedNextly();
   const adapter = container.get<DrizzleAdapter>("adapter");
   const regenService = new MediaRegenerationService(adapter, console);
   const result = await regenService.regenerateBatch({ batchSize, cursor });

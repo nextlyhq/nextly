@@ -1,5 +1,30 @@
-import { headers } from "next/headers";
-import { unstable_rethrow } from "next/navigation";
+// Next.js subpath imports use `createRequire` for dual-resolution
+// safety. See packages/nextly/src/api/with-error-handler.ts for the
+// full rationale — both Node ESM and Turbopack accept the
+// CommonJS-style resolution path while neither accepts a single
+// shared `import` statement.
+import { createRequire } from "node:module";
+
+type HeadersFn = () => Promise<{ get(name: string): string | null }>;
+type UnstableRethrow = (err: unknown) => void;
+let cachedHeaders: HeadersFn | null = null;
+let cachedUnstableRethrow: UnstableRethrow | null = null;
+function getHeaders(): HeadersFn {
+  if (cachedHeaders) return cachedHeaders;
+  const require = createRequire(import.meta.url);
+  const mod = require("next/headers") as { headers: HeadersFn };
+  cachedHeaders = mod.headers;
+  return cachedHeaders;
+}
+function getUnstableRethrow(): UnstableRethrow {
+  if (cachedUnstableRethrow) return cachedUnstableRethrow;
+  const require = createRequire(import.meta.url);
+  const mod = require("next/navigation") as {
+    unstable_rethrow: UnstableRethrow;
+  };
+  cachedUnstableRethrow = mod.unstable_rethrow;
+  return cachedUnstableRethrow;
+}
 
 import { generateRequestId } from "../api/request-id";
 import { isDbError } from "../database/errors";
@@ -22,6 +47,7 @@ type WithActionOptions = {
  */
 async function readOrGenerateRequestIdFromHeaders(): Promise<string> {
   try {
+    const headers = getHeaders();
     const h = await headers();
     return (
       h.get("x-request-id") ??
@@ -58,8 +84,9 @@ export function withAction<TArgs extends unknown[], TResult>(
       return { ok: true, data };
     } catch (err) {
       // Re-throw Next.js sentinels FIRST so redirect()/notFound() inside an
-      // action behave as expected.
-      unstable_rethrow(err);
+      // action behave as expected. `getUnstableRethrow` resolves via
+      // createRequire (see top of file for rationale).
+      getUnstableRethrow()(err);
 
       // Classify.
       let nextlyErr: NextlyError;

@@ -462,6 +462,10 @@ export async function createNextly(
   // --- Success output ---
 
   const pm = projectInfo.packageManager;
+  // npm requires `npm run <script>`; pnpm/yarn/bun accept the bare
+  // form as a shorthand for `run`. Without this, scaffolds chosen
+  // with npm print `npm dev` which fails with "Unknown command: dev".
+  const devCommand = pm === "npm" ? "npm run dev" : `${pm} dev`;
 
   // Build next steps content
   const lines: string[] = [];
@@ -469,7 +473,7 @@ export async function createNextly(
   if (isFreshProject && projectName && !installInCwd) {
     lines.push(`  ${pc.bold("cd")} ${projectName}`);
   }
-  lines.push(`  ${pc.bold(`${pm} dev`)}`);
+  lines.push(`  ${pc.bold(devCommand)}`);
   lines.push("");
 
   // Database-specific note
@@ -483,22 +487,22 @@ export async function createNextly(
     );
   }
   lines.push(
-    `  ${pc.bold(`${pm} dev`)} will create system tables on first run.`
+    `  ${pc.bold(devCommand)} will create system tables on first run.`
   );
 
   // Template-specific notes
   if (projectType === "blog") {
-    if (demoData) {
-      lines.push(
-        `  Demo content (${pc.dim("posts, authors, categories")}) will be seeded automatically.`
-      );
-    }
     lines.push(`  Visit ${pc.cyan("http://localhost:3000")} to see your blog.`);
   }
 
   lines.push(
     `  Visit ${pc.cyan("http://localhost:3000/admin/setup")} to create your admin account.`
   );
+  if (projectType === "blog" && demoData) {
+    lines.push(
+      `  Then visit ${pc.cyan("http://localhost:3000/welcome")} to seed demo content.`
+    );
+  }
   lines.push("");
 
   // Storage note

@@ -30,7 +30,7 @@
 import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import { getNextly } from "../init";
+import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import { CollectionExportService } from "../services/collections/collection-export-service";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
@@ -48,7 +48,7 @@ interface RouteContext {
 }
 
 async function getCollectionRegistry(): Promise<CollectionRegistryService> {
-  await getNextly();
+  await getCachedNextly();
   return getService("collectionRegistryService");
 }
 
