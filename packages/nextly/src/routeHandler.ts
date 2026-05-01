@@ -845,17 +845,22 @@ async function handleServiceRequest(
     );
   }
 
-  // Phase 4: dispatcher handlers now return canonical shapes directly
-  // via the respondX helpers in api/response-shapes.ts. The dispatcher
-  // result.data already IS the wire body shape — no more { data: ... }
-  // wrapping at this layer.
-  //
-  // Migration is staged commit-by-commit in Tasks 6-12. Until every
-  // dispatcher is migrated, this layer keeps the legacy { data, meta }
-  // wrap so unmigrated handlers don't break. The `if (result.data &&
-  // ...)` check below detects already-canonical bodies (which set
-  // result.data to the full body via respondX → DispatchResult.data
-  // path) and passes them through unchanged.
+  // Phase 4: dispatcher handlers migrated via respondX helpers return
+  // a Response directly (body + status + content-type already set).
+  // Just attach the schema-version header (and any other route-level
+  // metadata) and return it.
+  if (result.data instanceof Response) {
+    const response = result.data;
+    if (schemaVersion !== undefined) {
+      response.headers.set("X-Nextly-Schema-Version", String(schemaVersion));
+    }
+    return response;
+  }
+
+  // Legacy path for unmigrated handlers (Tasks 6-12 in progress):
+  // wrap whatever data they returned in { data, meta }. This is
+  // gone after the migration is complete and `respondX` is the only
+  // way to build a body in the dispatcher path.
   const successBody: Record<string, unknown> = { data: result.data };
   if (result.meta !== undefined) {
     successBody.meta = result.meta;

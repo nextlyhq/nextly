@@ -187,12 +187,21 @@ export class ServiceDispatcher {
     try {
       const result = await this.executeServiceMethod(request);
 
+      // Phase 4: handlers migrated via respondX helpers return a Response
+      // directly (with body, status, content-type already set). Pass
+      // through unchanged via DispatchResult.data; routeHandler reads it
+      // as `instanceof Response` and returns it. This MUST come before
+      // the smart-extract path below — a Response has a `.status`
+      // property which would falsely trigger smart-extract and lose
+      // the body.
+      if (result instanceof Response) {
+        return { success: true, data: result, status: result.status };
+      }
+
       // Normalize ServiceResult-shaped responses so every dispatch
-      // exits via the same DispatchResult contract. Phase 4: every
-      // migrated dispatcher returns a Response from respondX helpers,
-      // which the routeHandler unwraps via DispatchResult.data. The
-      // smart-extract path below stays for unmigrated handlers (Tasks
-      // 6-12) that still return ServiceResult-shaped objects.
+      // exits via the same DispatchResult contract. The smart-extract
+      // path below stays for unmigrated handlers (Tasks 6-12) that
+      // still return ServiceResult-shaped objects.
       if (
         result &&
         typeof result === "object" &&
