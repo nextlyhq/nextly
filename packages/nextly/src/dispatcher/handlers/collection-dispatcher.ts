@@ -557,6 +557,30 @@ const COLLECTIONS_METHODS: Record<
         );
       }
 
+      // Phase 6 follow-up #6 (2026-05-01): the FileManager caches the
+      // runtime Drizzle schema in an in-memory Map keyed by slug. After
+      // a rename/drop/add the DB column shape and `dynamic_collections.fields`
+      // are both correct, but the Map still holds the OLD shape. The
+      // next entry list/get/create query reads the stale schema and
+      // generates SQL referencing the old column name, returning 500
+      // `no such column: "<oldName>"` until the server restarts.
+      // Invalidating the slug here forces the next loadDynamicSchema()
+      // to rebuild via the metadata fetcher (which reads the freshly
+      // written fields JSON above).
+      try {
+        getCollectionsHandlerFromDI()?.invalidateCollectionSchema(
+          p.collectionName
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- intentional operator-visible warning
+        console.warn(
+          `[applySchemaChanges] Schema-cache invalidation failed for ` +
+            `'${p.collectionName}': ${msg}. Field changes may not be ` +
+            `visible to entry queries until next reload.`
+        );
+      }
+
       // F8 PR 3: bumpSchemaVersion was previously wired via
       // SchemaChangeService.setOnApplySuccess in di/register.ts. With the
       // legacy service gone, the dispatcher fires it directly after a
