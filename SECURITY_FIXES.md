@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 8    | 0         | 0       | 0       | 6       |
+| 1 — Pre-beta           | 14   | 0         | 0       | 0       | 0       |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -314,7 +314,7 @@ pnpm test --filter @nextly/storage-s3
 - **Files:** [packages/nextly/src/services/access/access-control-service.ts:198-210](packages/nextly/src/services/access/access-control-service.ts#L198-L210)
 - **Blocked by:** —
 - **Blocks:** Templates / quickstart need updating in same PR.
-- **Status:** pending
+- **Status:** done (`5c24cbe`)
 
 **Fix (decision R5: default-deny):**
 
@@ -345,7 +345,7 @@ pnpm dev:app  # playground end-to-end smoke test
 - **Files:** [packages/nextly/src/services/lib/permissions.ts:11-15](packages/nextly/src/services/lib/permissions.ts#L11-L15), [packages/nextly/src/nextly.ts:252](packages/nextly/src/nextly.ts#L252), [packages/client/package.json](packages/client/package.json)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`2940662`)
 
 **Fix:**
 
@@ -405,7 +405,7 @@ pnpm --filter auth-e2e test
 - **Files:** [packages/nextly/src/services/upload-service.ts:483-515](packages/nextly/src/services/upload-service.ts#L483-L515); add `file-type` and `isomorphic-dompurify` to `packages/nextly/package.json`.
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`225fd91`)
 
 **Fix (decision R5: sanitize SVG with DOMPurify):**
 
@@ -495,7 +495,7 @@ pnpm test
 - **Files:** [SECURITY.md](SECURITY.md); GitHub repo settings (Security & analysis)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`e2fc006`)
 
 **Fix (decision R5: GitHub Private Vulnerability Reporting, no PGP):**
 
@@ -539,7 +539,7 @@ pnpm test
 - **Files:** [packages/nextly/src/auth/handlers/register.ts:26-65](packages/nextly/src/auth/handlers/register.ts#L26-L65)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`137b962`)
 
 **Fix:**
 
@@ -589,7 +589,7 @@ pnpm test
 - **Files:** [packages/nextly/src/api/uploads.ts:272](packages/nextly/src/api/uploads.ts#L272), middleware, config schema in `packages/nextly/src/config/`
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`e1ebbba`)
 
 **Fix:**
 
