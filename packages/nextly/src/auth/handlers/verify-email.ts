@@ -1,10 +1,10 @@
 // CSRF is enforced on /resend (state-changing, sends email, cross-origin
 // abusable). It is NOT enforced on /verify-email proper because the URL
 // token is itself the unguessable secret. See docs/auth/csrf.md.
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils.js";
+import { jsonResponse } from "./handler-utils";
 
 export interface VerifyEmailHandlerDeps {
   allowedOrigins: string[];

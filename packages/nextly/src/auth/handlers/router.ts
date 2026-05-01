@@ -1,14 +1,14 @@
-import { handleChangePassword } from "./change-password.js";
-import { handleCsrf } from "./csrf.js";
-import { handleForgotPassword } from "./forgot-password.js";
-import { handleLogin } from "./login.js";
-import { handleLogout } from "./logout.js";
-import { handleRefresh } from "./refresh.js";
-import { handleRegister } from "./register.js";
-import { handleResetPassword } from "./reset-password.js";
-import { handleSession } from "./session.js";
-import { handleSetupStatus, handleSetup } from "./setup.js";
-import { handleVerifyEmail, handleResendVerification } from "./verify-email.js";
+import { handleChangePassword } from "./change-password";
+import { handleCsrf } from "./csrf";
+import { handleForgotPassword } from "./forgot-password";
+import { handleLogin } from "./login";
+import { handleLogout } from "./logout";
+import { handleRefresh } from "./refresh";
+import { handleRegister } from "./register";
+import { handleResetPassword } from "./reset-password";
+import { handleSession } from "./session";
+import { handleSetupStatus, handleSetup } from "./setup";
+import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
 /**
  * Combined dependency interface for all auth handlers.

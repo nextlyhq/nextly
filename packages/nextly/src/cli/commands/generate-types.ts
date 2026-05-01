@@ -29,27 +29,27 @@ import { resolve, dirname } from "node:path";
 
 import type { Command } from "commander";
 
-import type { CollectionConfig } from "../../collections/config/define-collection.js";
-import type { ComponentConfig } from "../../components/config/types.js";
+import type { CollectionConfig } from "../../collections/config/define-collection";
+import type { ComponentConfig } from "../../components/config/types";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
-} from "../../domains/schema/services/type-generator.js";
-import { ZodGenerator } from "../../domains/schema/services/zod-generator.js";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name.js";
-import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types.js";
-import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types.js";
-import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types.js";
-import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types.js";
+} from "../../domains/schema/services/type-generator";
+import { ZodGenerator } from "../../domains/schema/services/zod-generator";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
+import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types";
+import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
+import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import {
   toSingularLabel,
   toPluralLabel,
-} from "../../shared/lib/pluralization.js";
-import type { SingleConfig } from "../../singles/config/types.js";
-import type { UserFieldConfig } from "../../users/config/types.js";
-import { createContext, type CommandContext } from "../program.js";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
-import { formatDuration, formatCount } from "../utils/logger.js";
+} from "../../shared/lib/pluralization";
+import type { SingleConfig } from "../../singles/config/types";
+import type { UserFieldConfig } from "../../users/config/types";
+import { createContext, type CommandContext } from "../program";
+import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { formatDuration, formatCount } from "../utils/logger";
 
 // ============================================================================
 // Types

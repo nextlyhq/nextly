@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Upload Input Component
  *

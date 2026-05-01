@@ -18,7 +18,7 @@ import type {
   PromptDispatchResult,
   RenameCandidate,
   Resolution,
-} from "../pushschema-pipeline-interfaces.js";
+} from "../pushschema-pipeline-interfaces";
 
 // Pre-attached rename choice from the admin UI. Mirrors the shape the
 // admin SchemaChangeDialog renders + posts.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { diffSnapshots } from "../diff.js";
-import type { NextlySchemaSnapshot } from "../types.js";
+import { diffSnapshots } from "../diff";
+import type { NextlySchemaSnapshot } from "../types";
 
 const empty: NextlySchemaSnapshot = { tables: [] };
 

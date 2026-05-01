@@ -1,3 +1,5 @@
+"use client";
+
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@revnixhq/ui";
 import type React from "react";
 import { useRef, useEffect } from "react";

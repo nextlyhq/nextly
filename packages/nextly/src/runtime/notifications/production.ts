@@ -13,10 +13,10 @@
 
 import { join } from "node:path";
 
-import type { Notifier } from "./types.js";
-import { createNotifier } from "./dispatcher.js";
-import { TerminalChannel } from "./channels/terminal.js";
-import { NDJSONChannel } from "./channels/ndjson.js";
+import type { Notifier } from "./types";
+import { createNotifier } from "./dispatcher";
+import { TerminalChannel } from "./channels/terminal";
+import { NDJSONChannel } from "./channels/ndjson";
 
 let cached: Notifier | null = null;
 

@@ -1,5 +1,5 @@
 import { Input, Switch } from "@revnixhq/ui";
-import type { Control, type FieldValues } from "react-hook-form";
+import type { Control, FieldValues } from "react-hook-form";
 
 import {
   FormControl,

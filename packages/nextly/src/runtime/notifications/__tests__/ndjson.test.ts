@@ -14,8 +14,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NDJSONChannel } from "../channels/ndjson.js";
-import type { MigrationNotificationEvent } from "../types.js";
+import { NDJSONChannel } from "../channels/ndjson";
+import type { MigrationNotificationEvent } from "../types";
 
 const baseEvent: MigrationNotificationEvent = {
   ts: "2026-04-29T18:00:00.000Z",

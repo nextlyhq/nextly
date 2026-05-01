@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildNotificationEvent } from "../build-event.js";
+import { buildNotificationEvent } from "../build-event";
 
 const fixedNow = () => new Date("2026-04-29T18:00:00.000Z");
 

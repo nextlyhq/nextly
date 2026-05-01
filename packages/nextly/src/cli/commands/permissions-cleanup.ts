@@ -1,14 +1,14 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { Command } from "commander";
 
-import { PermissionSeedService } from "../../services/auth/permission-seed-service.js";
-import { createContext, type GlobalOptions } from "../program.js";
+import { PermissionSeedService } from "../../services/auth/permission-seed-service";
+import { createContext, type GlobalOptions } from "../program";
 import {
   createAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
-} from "../utils/adapter.js";
-import { loadConfig } from "../utils/config-loader.js";
+} from "../utils/adapter";
+import { loadConfig } from "../utils/config-loader";
 
 /**
  * CLI command to cleanup orphaned permissions

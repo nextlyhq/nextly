@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Chips Input Component
  *

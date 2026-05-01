@@ -1,9 +1,9 @@
-import type { AuthContext } from "../session/session-types.js";
+import type { AuthContext } from "../session/session-types";
 
 import {
   createErrorResponse,
   type ErrorResponse,
-} from "./require-permission.js";
+} from "./require-permission";
 
 /**
  * Attempt API key authentication from the Authorization header.

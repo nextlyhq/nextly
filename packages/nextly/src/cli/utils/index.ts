@@ -18,7 +18,7 @@ export {
   type ConfigChangeCallback,
   SUPPORTED_EXTENSIONS,
   SEARCH_DIRECTORIES,
-} from "./config-loader.js";
+} from "./config-loader";
 
 export {
   createLogger,
@@ -29,7 +29,7 @@ export {
   type LogLevel,
   type LoggerOptions,
   type Logger,
-} from "./logger.js";
+} from "./logger";
 
 export {
   createAdapter,
@@ -42,4 +42,4 @@ export {
   type DatabaseEnvValidation,
   type CLIDatabaseAdapter,
   type SupportedDialect,
-} from "./adapter.js";
+} from "./adapter";

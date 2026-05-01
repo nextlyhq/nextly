@@ -20,10 +20,11 @@
  * @since 1.0.0
  */
 
-import {
-  RESERVED_SLUGS,
-  SQL_RESERVED_KEYWORDS,
-} from "../collections/config/validate-config";
+// Imported from a leaf data module to avoid the circular dependency that
+// arises when this file imports from collections/config/validate-config and
+// validate-config in turn imports from this file. See shared/sql-reserved.ts
+// for the full rationale.
+import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
 // ============================================================
 // Shared Types

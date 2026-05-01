@@ -1,3 +1,5 @@
+"use client";
+
 import { useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";

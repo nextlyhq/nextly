@@ -7,7 +7,7 @@ import {
   formatMigrationFile,
   formatTimestamp,
   slugify,
-} from "../format-file.js";
+} from "../format-file";
 
 describe("formatMigrationFile", () => {
   const NOW = new Date("2026-04-29T15:45:00.123Z");

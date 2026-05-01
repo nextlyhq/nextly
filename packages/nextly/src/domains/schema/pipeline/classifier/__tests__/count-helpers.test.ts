@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import { countNulls, countRows } from "../count-helpers.js";
+import { countNulls, countRows } from "../count-helpers";
 
 describe("countNulls", () => {
   it("PG: queries SELECT COUNT(*) ... WHERE col IS NULL", async () => {

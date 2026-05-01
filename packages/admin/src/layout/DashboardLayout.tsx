@@ -1,3 +1,5 @@
+"use client";
+
 import { Button, Sheet, SheetContent } from "@revnixhq/ui";
 import type React from "react";
 import { useState, useEffect } from "react";

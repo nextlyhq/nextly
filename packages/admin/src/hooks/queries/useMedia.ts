@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Media Query Hooks
  *

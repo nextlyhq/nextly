@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Form Notifications Tab
  *

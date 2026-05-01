@@ -1,5 +1,5 @@
-import { setCsrfCookie } from "../csrf/csrf-cookie.js";
-import { generateCsrfToken } from "../csrf/generate.js";
+import { setCsrfCookie } from "../csrf/csrf-cookie";
+import { generateCsrfToken } from "../csrf/generate";
 
 export interface CsrfHandlerDeps {
   isProduction: boolean;

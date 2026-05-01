@@ -26,7 +26,7 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { ColumnSpec, TableSpec } from "./types.js";
+import type { ColumnSpec, TableSpec } from "./types";
 
 // Layout-only field types don't create database columns. Mirrors the
 // LAYOUT_FIELD_TYPES set in runtime-schema-generator.ts.

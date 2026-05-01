@@ -2,8 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { Operation } from "../../diff/types.js";
-import { generateSQL, MysqlUnsupportedOperationError } from "../index.js";
+import type { Operation } from "../../diff/types";
+import { generateSQL, MysqlUnsupportedOperationError } from "../index";
 
 const my = (op: Operation) => generateSQL(op, "mysql");
 

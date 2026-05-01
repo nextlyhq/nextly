@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { DrizzleMigrationJournal } from "../migration-journal.js";
+import { DrizzleMigrationJournal } from "../migration-journal";
 
 interface InsertCapture {
   table: unknown;

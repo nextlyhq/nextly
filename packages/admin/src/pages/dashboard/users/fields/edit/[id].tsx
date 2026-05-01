@@ -1,3 +1,5 @@
+"use client";
+
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import { useCallback } from "react";
 

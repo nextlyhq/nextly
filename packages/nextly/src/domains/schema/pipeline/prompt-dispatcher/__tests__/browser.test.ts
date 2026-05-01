@@ -4,8 +4,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { RenameCandidate } from "../../pushschema-pipeline-interfaces.js";
-import { BrowserPromptDispatcher } from "../browser.js";
+import type { RenameCandidate } from "../../pushschema-pipeline-interfaces";
+import { BrowserPromptDispatcher } from "../browser";
 
 function candidate(
   tableName: string,

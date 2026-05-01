@@ -22,7 +22,7 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { getDialectDisplayName } from "../../../cli/utils/adapter.js";
+import { getDialectDisplayName } from "../../../cli/utils/adapter";
 
 export interface FormatArgs {
   /** Slug-cased migration name (without timestamp prefix or extension). */

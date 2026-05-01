@@ -2,10 +2,10 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import type { NextlySchemaSnapshot } from "../../diff/types.js";
-import { PromptCancelledError } from "../../prompt-dispatcher/errors.js";
-import type { ClassifierEvent, Resolution } from "../../resolution/types.js";
-import { RealPreCleanupExecutor } from "../executor.js";
+import type { NextlySchemaSnapshot } from "../../diff/types";
+import { PromptCancelledError } from "../../prompt-dispatcher/errors";
+import type { ClassifierEvent, Resolution } from "../../resolution/types";
+import { RealPreCleanupExecutor } from "../executor";
 
 const baseSnapshot: NextlySchemaSnapshot = {
   tables: [

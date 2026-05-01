@@ -12,12 +12,12 @@
 // CSRF double-submit cookie + origin check. The URL token is already an
 // unguessable secret, but CSRF still prevents cross-origin abuse of the
 // authenticated password-reset form. See docs/auth/csrf.md.
-import { readOrGenerateRequestId } from "../../api/request-id.js";
-import { NextlyError } from "../../errors/nextly-error.js";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
+import { readOrGenerateRequestId } from "../../api/request-id";
+import { NextlyError } from "../../errors/nextly-error";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils.js";
+import { jsonResponse } from "./handler-utils";
 
 export interface ResetPasswordHandlerDeps {
   allowedOrigins: string[];

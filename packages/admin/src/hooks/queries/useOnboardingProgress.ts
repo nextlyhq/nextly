@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Onboarding Progress Hook
  *

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { AddColumnOp, DropColumnOp, Operation } from "../diff/types.js";
-import { RegexRenameDetector } from "../rename-detector.js";
+import type { AddColumnOp, DropColumnOp, Operation } from "../diff/types";
+import { RegexRenameDetector } from "../rename-detector";
 
 const detector = new RegexRenameDetector();
 

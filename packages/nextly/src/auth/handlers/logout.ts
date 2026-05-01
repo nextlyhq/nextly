@@ -1,25 +1,25 @@
-import { clearAccessTokenCookie } from "../cookies/access-token-cookie.js";
+import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
   LEGACY_COOKIE_NAMES,
   serializeClearCookie,
-} from "../cookies/cookie-config.js";
+} from "../cookies/cookie-config";
 import {
   readRefreshTokenCookie,
   clearRefreshTokenCookie,
-} from "../cookies/refresh-token-cookie.js";
+} from "../cookies/refresh-token-cookie";
 import {
   clearCsrfCookie,
   readCsrfCookie,
   readCsrfFromRequest,
-} from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
-import { hashRefreshToken } from "../session/refresh.js";
+} from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
+import { hashRefreshToken } from "../session/refresh";
 
 import {
   jsonResponse,
   parseJsonBody,
   buildCookieHeaders,
-} from "./handler-utils.js";
+} from "./handler-utils";
 
 export interface LogoutHandlerDeps {
   allowedOrigins: string[];

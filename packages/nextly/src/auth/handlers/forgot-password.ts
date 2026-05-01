@@ -10,12 +10,12 @@
  */
 // CSRF double-submit cookie + origin check. Restored after c80d2982
 // reverted the earlier restore in 4bc0d9ee. See docs/auth/csrf.md.
-import { readOrGenerateRequestId } from "../../api/request-id.js";
-import { NextlyError } from "../../errors/nextly-error.js";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
+import { readOrGenerateRequestId } from "../../api/request-id";
+import { NextlyError } from "../../errors/nextly-error";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse, stallResponse } from "./handler-utils.js";
+import { jsonResponse, stallResponse } from "./handler-utils";
 
 export interface ForgotPasswordHandlerDeps {
   allowedOrigins: string[];

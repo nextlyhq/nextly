@@ -1,3 +1,5 @@
+"use client";
+
 // Context for managing the schema apply overlay state.
 // Shows a brief overlay while schema changes are being applied,
 // then invalidates caches and shows success/error toast.

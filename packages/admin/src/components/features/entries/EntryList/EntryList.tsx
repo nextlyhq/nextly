@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Entry List Container Component
  *

@@ -17,7 +17,7 @@
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import type { ColumnSpec, NextlySchemaSnapshot, TableSpec } from "./types.js";
+import type { ColumnSpec, NextlySchemaSnapshot, TableSpec } from "./types";
 
 interface PgRow {
   table_name: string;

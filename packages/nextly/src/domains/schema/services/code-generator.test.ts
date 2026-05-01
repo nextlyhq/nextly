@@ -1,7 +1,7 @@
 // Tests for the collection-to-TypeScript serializer used by --promote.
 import { describe, expect, it } from "vitest";
 
-import { serializeCollection } from "./code-generator.js";
+import { serializeCollection } from "./code-generator";
 
 describe("serializeCollection", () => {
   it("produces unquoted identifier keys and double-quoted strings", () => {

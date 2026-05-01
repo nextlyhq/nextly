@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * F10 PR 5 — the dropdown panel rendered when the bell is clicked.
  *

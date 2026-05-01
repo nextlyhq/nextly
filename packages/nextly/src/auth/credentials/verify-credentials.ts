@@ -13,8 +13,8 @@
 //   3. The exported helpers are pure throw-on-error functions; callers no
 //      longer pattern-match a result tuple. handleLogin catches NextlyError
 //      and serialises via toResponseJSON (same shape as withErrorHandler).
-import { NextlyError } from "../../errors/nextly-error.js";
-import { verifyPassword } from "../password/index.js";
+import { NextlyError } from "../../errors/nextly-error";
+import { verifyPassword } from "../password/index";
 
 export interface CredentialVerifyInput {
   email: string;

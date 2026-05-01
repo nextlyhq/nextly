@@ -1,25 +1,25 @@
 // CSRF double-submit cookie + origin check. Setup is a one-time but
 // state-changing bootstrap — CSRF guards against a malicious page
 // racing the legitimate first-admin form. See docs/auth/csrf.md.
-import { setAccessTokenCookie } from "../cookies/access-token-cookie.js";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie.js";
-import { validatePasswordStrength } from "../credentials/password-strength.js";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
-import { buildClaims } from "../jwt/claims.js";
-import { signAccessToken } from "../jwt/sign.js";
+import { setAccessTokenCookie } from "../cookies/access-token-cookie";
+import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { validatePasswordStrength } from "../credentials/password-strength";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
+import { buildClaims } from "../jwt/claims";
+import { signAccessToken } from "../jwt/sign";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 import {
   generateRefreshToken,
   hashRefreshToken,
   generateRefreshTokenId,
-} from "../session/refresh.js";
+} from "../session/refresh";
 
 import {
   jsonResponse,
   buildCookieHeaders,
   getClientIp,
-} from "./handler-utils.js";
+} from "./handler-utils";
 
 export interface SetupHandlerDeps {
   secret: string;

@@ -25,29 +25,29 @@ import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { buildDesiredTableFromFields } from "../pipeline/diff/build-from-fields.js";
-import { diffSnapshots } from "../pipeline/diff/diff.js";
+import { buildDesiredTableFromFields } from "../pipeline/diff/build-from-fields";
+import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
   NextlySchemaSnapshot,
   Operation,
   RenameColumnOp,
   TableSpec,
-} from "../pipeline/diff/types.js";
-import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces.js";
-import { RegexRenameDetector } from "../pipeline/rename-detector.js";
-import { generateSQL } from "../pipeline/sql-templates/index.js";
+} from "../pipeline/diff/types";
+import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { RegexRenameDetector } from "../pipeline/rename-detector";
+import { generateSQL } from "../pipeline/sql-templates/index";
 
 import {
   formatMigrationFile,
   formatTimestamp,
   slugify,
-} from "./format-file.js";
-import { promptRenames, type RenameDecision } from "./prompt-renames.js";
+} from "./format-file";
+import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
   writeSnapshot,
-} from "./snapshot-io.js";
+} from "./snapshot-io";
 
 /**
  * Minimal field shape we read from `nextly.config.ts`. Mirrors the

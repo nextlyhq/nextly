@@ -39,20 +39,20 @@ import { fileURLToPath } from "node:url";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
+import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import type {
   MigrationErrorJson,
   MigrationRecordStatus,
-} from "../../schemas/dynamic-collections/types.js";
-import { createContext, type CommandContext } from "../program.js";
+} from "../../schemas/dynamic-collections/types";
+import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
-} from "../utils/adapter.js";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
-import { formatDuration, formatCount } from "../utils/logger.js";
+} from "../utils/adapter";
+import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { formatDuration, formatCount } from "../utils/logger";
 
 /**
  * Options specific to the migrate command

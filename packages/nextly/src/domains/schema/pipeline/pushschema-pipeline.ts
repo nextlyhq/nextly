@@ -23,26 +23,26 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { generateRuntimeSchema } from "../services/runtime-schema-generator.js";
+import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
-} from "./classifier/count-helpers.js";
-import { buildDesiredTableFromFields } from "./diff/build-from-fields.js";
-import { diffSnapshots } from "./diff/diff.js";
-import { introspectLiveSnapshot } from "./diff/introspect-live.js";
-import type { Operation, NextlySchemaSnapshot } from "./diff/types.js";
+} from "./classifier/count-helpers";
+import { buildDesiredTableFromFields } from "./diff/build-from-fields";
+import { diffSnapshots } from "./diff/diff";
+import { introspectLiveSnapshot } from "./diff/introspect-live";
+import type { Operation, NextlySchemaSnapshot } from "./diff/types";
 import {
   MANAGED_TABLE_PREFIXES_REGEX,
   isManagedTable,
-} from "./managed-tables.js";
-import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions.js";
-import { executePreResolutionOps } from "./pre-resolution/executor.js";
+} from "./managed-tables";
+import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
+import { executePreResolutionOps } from "./pre-resolution/executor";
 import {
   PromptCancelledError,
   TTYRequiredError,
-} from "./prompt-dispatcher/errors.js";
+} from "./prompt-dispatcher/errors";
 import type {
   Classifier,
   DrizzleStatementExecutor,
@@ -55,12 +55,12 @@ import type {
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
-} from "./pushschema-pipeline-interfaces.js";
+} from "./pushschema-pipeline-interfaces";
 
-import { buildNotificationEvent } from "../../../runtime/notifications/build-event.js";
-import type { MigrationScope } from "../../../runtime/notifications/types.js";
-import type { ClassifierEvent, Resolution } from "./resolution/types.js";
-import type { DesiredSchema } from "./types.js";
+import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
+import type { MigrationScope } from "../../../runtime/notifications/types";
+import type { ClassifierEvent, Resolution } from "./resolution/types";
+import type { DesiredSchema } from "./types";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -682,7 +682,7 @@ export class PushSchemaPipeline {
     databaseName: string | undefined
   ): Promise<DrizzleKitLike> {
     const { getPgDrizzleKit, getMySQLDrizzleKit, getSQLiteDrizzleKit } =
-      await import("../../../database/drizzle-kit-lazy.js");
+      await import("../../../database/drizzle-kit-lazy");
 
     switch (dialect) {
       case "postgresql": {

@@ -34,6 +34,16 @@ import {
   validateSelectOptionsShared,
   validateSlugShared,
 } from "../../shared/base-validator";
+// RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
+// moved to shared/sql-reserved.ts to break a circular dependency with
+// base-validator. Imported here for local use in RESERVED_SLUGS_SET below
+// and re-exported so existing consumers that import them from this file's
+// path continue to work unchanged.
+import {
+  RESERVED_SLUGS,
+  SQL_RESERVED_KEYWORDS,
+} from "../../shared/sql-reserved";
+export { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS };
 
 import type { CollectionConfig } from "./define-collection";
 
@@ -125,156 +135,9 @@ export interface ValidationResult {
 // Reserved Names and Keywords
 // ============================================================
 
-/**
- * Reserved collection slugs that cannot be used.
- * These are used by the system or have special meaning.
- */
-export const RESERVED_SLUGS = [
-  // API routes
-  "api",
-  "graphql",
-  "rest",
-  // Admin routes
-  "admin",
-  "dashboard",
-  // Auth routes
-  "auth",
-  "login",
-  "logout",
-  "register",
-  "signup",
-  "signin",
-  "signout",
-  "forgot-password",
-  "reset-password",
-  "verify",
-  "verify-email",
-  // System routes
-  "static",
-  "public",
-  "assets",
-  "_next",
-  "health",
-  "status",
-  "metrics",
-  // Common system collections
-  "users",
-  "roles",
-  "permissions",
-  "sessions",
-  "tokens",
-  "media",
-  "uploads",
-  "files",
-] as const;
-
-/**
- * SQL reserved keywords that should not be used as identifiers.
- *
- * Curated list of the most problematic keywords across PostgreSQL, MySQL,
- * and SQLite. Using these as table or column names can cause issues even
- * with quoting.
- *
- * @see https://sqlite.org/lang_keywords.html
- * @see https://www.postgresql.org/docs/current/sql-keywords-appendix.html
- * @see https://dev.mysql.com/doc/refman/8.0/en/keywords.html
- */
-export const SQL_RESERVED_KEYWORDS = [
-  // Data manipulation
-  "select",
-  "insert",
-  "update",
-  "delete",
-  "from",
-  "where",
-  "set",
-  "values",
-  // Table operations
-  "create",
-  "drop",
-  "alter",
-  "table",
-  "index",
-  "view",
-  "trigger",
-  "database",
-  // Joins and relations
-  "join",
-  "inner",
-  "outer",
-  "left",
-  "right",
-  "cross",
-  "full",
-  "on",
-  "using",
-  // Clauses
-  "order",
-  "group",
-  "by",
-  "having",
-  "limit",
-  "offset",
-  "distinct",
-  "as",
-  "case",
-  "when",
-  "then",
-  "else",
-  "end",
-  // Logical
-  "and",
-  "or",
-  "not",
-  "in",
-  "is",
-  "null",
-  "like",
-  "between",
-  "exists",
-  // Constraints
-  "primary",
-  "foreign",
-  "key",
-  "references",
-  "unique",
-  "check",
-  "constraint",
-  "default",
-  // Transactions
-  "begin",
-  "commit",
-  "rollback",
-  "transaction",
-  // Aggregates (can cause confusion)
-  "count",
-  "sum",
-  "avg",
-  "min",
-  "max",
-  // Other commonly problematic
-  "all",
-  "any",
-  "union",
-  "except",
-  "intersect",
-  "column",
-  "row",
-  "rows",
-  "for",
-  "to",
-  "into",
-  "with",
-  // High-risk specific keywords
-  "user",
-  "password",
-  "role",
-  "session",
-  "grant",
-  "revoke",
-  "match",
-  "natural",
-] as const;
+// RESERVED_SLUGS and SQL_RESERVED_KEYWORDS were defined here historically;
+// they now live in shared/sql-reserved.ts and are re-exported above so the
+// public API surface for this file is unchanged.
 
 const RESERVED_SLUGS_SET: Set<string> = new Set<string>(RESERVED_SLUGS);
 

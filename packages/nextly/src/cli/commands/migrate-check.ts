@@ -50,22 +50,22 @@ import type { Command } from "commander";
 import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
-} from "../../domains/schema/migrate-create/generate.js";
+} from "../../domains/schema/migrate-create/generate";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
   SnapshotFileError,
   verifyMigrationHash,
-} from "../../domains/schema/migrate-create/snapshot-io.js";
-import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff.js";
+} from "../../domains/schema/migrate-create/snapshot-io";
+import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type {
   NextlySchemaSnapshot,
   Operation,
-} from "../../domains/schema/pipeline/diff/types.js";
-import type { SupportedDialect } from "../../domains/schema/services/schema-generator.js";
-import { createContext, type CommandContext } from "../program.js";
-import { validateDatabaseEnv } from "../utils/adapter.js";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
+} from "../../domains/schema/pipeline/diff/types";
+import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
+import { createContext, type CommandContext } from "../program";
+import { validateDatabaseEnv } from "../utils/adapter";
+import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 
 // ============================================================================
 // Types

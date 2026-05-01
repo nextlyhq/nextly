@@ -1,3 +1,5 @@
+"use client";
+
 import type { FieldConfig } from "@revnixhq/nextly/config";
 import { ChevronDown } from "lucide-react";
 import type React from "react";

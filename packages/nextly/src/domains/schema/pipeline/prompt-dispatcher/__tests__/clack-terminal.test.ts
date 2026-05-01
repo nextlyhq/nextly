@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RenameCandidate } from "../../pushschema-pipeline-interfaces.js";
+import type { RenameCandidate } from "../../pushschema-pipeline-interfaces";
 import {
   ClackTerminalPromptDispatcher,
   TTYRequiredError,
-} from "../clack-terminal.js";
+} from "../clack-terminal";
 
 // Spy hooks for the @clack/prompts entry points the dispatcher uses.
 // We mock the module so tests can drive prompt outcomes deterministically

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Rich Text Button Group Plugin
  *

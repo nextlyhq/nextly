@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { DesiredCollection, DesiredSingle } from "../types.js";
+import type { DesiredCollection, DesiredSingle } from "../types";
 
-import { buildDesiredSchemaFromRegistry } from "../snapshot.js";
+import { buildDesiredSchemaFromRegistry } from "../snapshot";
 
 // Stub registry — only needs the getAllCollectionsRecords /
 // getAllSinglesRecords / getAllComponentsRecords methods that the helper

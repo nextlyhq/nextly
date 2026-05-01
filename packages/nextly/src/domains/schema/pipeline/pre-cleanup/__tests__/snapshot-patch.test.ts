@@ -2,9 +2,9 @@
 
 import { describe, it, expect } from "vitest";
 
-import type { NextlySchemaSnapshot } from "../../diff/types.js";
-import type { ClassifierEvent, Resolution } from "../../resolution/types.js";
-import { applyMakeOptionalToSnapshot } from "../snapshot-patch.js";
+import type { NextlySchemaSnapshot } from "../../diff/types";
+import type { ClassifierEvent, Resolution } from "../../resolution/types";
+import { applyMakeOptionalToSnapshot } from "../snapshot-patch";
 
 describe("applyMakeOptionalToSnapshot", () => {
   it("flips nullable=true on the resolved event's column", () => {

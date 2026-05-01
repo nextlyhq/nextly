@@ -1,6 +1,8 @@
+"use client";
+
 import { Input } from "@revnixhq/ui";
 import { useState } from "react";
-import type { Control, type FieldValues } from "react-hook-form";
+import type { Control, FieldValues } from "react-hook-form";
 
 import { Eye, EyeOff } from "@admin/components/icons";
 import {

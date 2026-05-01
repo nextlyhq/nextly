@@ -22,24 +22,24 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { RealClassifier } from "./classifier/classifier.js";
+import { RealClassifier } from "./classifier/classifier";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
-} from "./classifier/count-helpers.js";
-import { buildDesiredTableFromFields } from "./diff/build-from-fields.js";
-import { diffSnapshots } from "./diff/diff.js";
-import { introspectLiveSnapshot } from "./diff/introspect-live.js";
-import type { NextlySchemaSnapshot, Operation } from "./diff/types.js";
+} from "./classifier/count-helpers";
+import { buildDesiredTableFromFields } from "./diff/build-from-fields";
+import { diffSnapshots } from "./diff/diff";
+import { introspectLiveSnapshot } from "./diff/introspect-live";
+import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import type {
   Classifier,
   ClassificationLevel,
   RenameCandidate,
   RenameDetector,
-} from "./pushschema-pipeline-interfaces.js";
-import { RegexRenameDetector } from "./rename-detector.js";
-import type { ClassifierEvent } from "./resolution/types.js";
-import type { DesiredSchema } from "./types.js";
+} from "./pushschema-pipeline-interfaces";
+import { RegexRenameDetector } from "./rename-detector";
+import type { ClassifierEvent } from "./resolution/types";
+import type { DesiredSchema } from "./types";
 
 // Result of a preview-mode pipeline run. Mirrors the readable subset of
 // PushSchemaPipeline's internal state without exposing apply-only fields.

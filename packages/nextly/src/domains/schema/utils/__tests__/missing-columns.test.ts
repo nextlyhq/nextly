@@ -10,9 +10,9 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import type { FieldConfig } from "../../../../collections/fields/types/index.js";
-import type { Logger } from "../../../../shared/types/index.js";
-import { addMissingColumnsForFields } from "../missing-columns.js";
+import type { FieldConfig } from "../../../../collections/fields/types/index";
+import type { Logger } from "../../../../shared/types/index";
+import { addMissingColumnsForFields } from "../missing-columns";
 
 interface FakeAdapter {
   getCapabilities: () => { dialect: "postgresql" | "mysql" | "sqlite" };

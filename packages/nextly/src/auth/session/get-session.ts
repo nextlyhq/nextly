@@ -1,8 +1,8 @@
-import { readAccessTokenCookie } from "../cookies/access-token-cookie.js";
-import { JWT_INTERNAL_CLAIMS, type NextlyJwtPayload } from "../jwt/claims.js";
-import { verifyAccessToken, type VerifyResult } from "../jwt/verify.js";
+import { readAccessTokenCookie } from "../cookies/access-token-cookie";
+import { JWT_INTERNAL_CLAIMS, type NextlyJwtPayload } from "../jwt/claims";
+import { verifyAccessToken, type VerifyResult } from "../jwt/verify";
 
-import type { SessionUser } from "./session-types.js";
+import type { SessionUser } from "./session-types";
 
 export type GetSessionResult =
   | { authenticated: true; user: SessionUser }

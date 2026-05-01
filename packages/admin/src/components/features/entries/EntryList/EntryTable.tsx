@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Entry Table Component
  *

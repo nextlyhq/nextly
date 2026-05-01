@@ -9,7 +9,7 @@
 // resolutions can reference an event across HTTP/SSE boundaries without
 // relying on object identity.
 
-import type { ClassificationLevel } from "../pushschema-pipeline-interfaces.js";
+import type { ClassificationLevel } from "../pushschema-pipeline-interfaces";
 
 export type ResolutionKind =
   | "provide_default"

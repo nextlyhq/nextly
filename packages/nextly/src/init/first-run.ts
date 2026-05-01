@@ -110,8 +110,8 @@ async function resolveDeps(
     return injected as EnsureFirstRunSetupDeps;
   }
   const [{ freshPushSchema }, { getDialectTables }] = await Promise.all([
-    import("../domains/schema/pipeline/fresh-push.js"),
-    import("../database/index.js"),
+    import("../domains/schema/pipeline/fresh-push"),
+    import("../database/index"),
   ]);
   return {
     freshPushSchema: injected?.freshPushSchema ?? freshPushSchema,

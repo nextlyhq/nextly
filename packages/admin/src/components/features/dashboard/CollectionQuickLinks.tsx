@@ -1,3 +1,5 @@
+"use client";
+
 import { Card, CardContent, Skeleton } from "@revnixhq/ui";
 import {
   AlertCircle,

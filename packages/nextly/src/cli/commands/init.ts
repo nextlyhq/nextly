@@ -34,7 +34,7 @@ import {
   createContext,
   type CommandContext,
   type GlobalOptions,
-} from "../program.js";
+} from "../program";
 
 /**
  * Options specific to the init command

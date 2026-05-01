@@ -19,7 +19,7 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { DrizzleStatementExecutor as DrizzleStatementExecutorInterface } from "../pipeline/pushschema-pipeline-interfaces.js";
+import type { DrizzleStatementExecutor as DrizzleStatementExecutorInterface } from "../pipeline/pushschema-pipeline-interfaces";
 
 // Minimal duck-typed shapes for the per-dialect db / tx clients.
 // Avoids `as any` casts at every call site by narrowing to what we

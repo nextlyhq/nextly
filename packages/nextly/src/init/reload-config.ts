@@ -24,35 +24,35 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply.js";
-import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier.js";
-import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url.js";
-import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields.js";
-import { diffSnapshots } from "../domains/schema/pipeline/diff/diff.js";
-import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live.js";
+import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
+import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
+import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
+import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
+import { diffSnapshots } from "../domains/schema/pipeline/diff/diff";
+import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live";
 import type {
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
-} from "../domains/schema/pipeline/diff/types.js";
-import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor.js";
-import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal.js";
+} from "../domains/schema/pipeline/diff/types";
+import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
+import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import type {
   MigrationJournal,
   PromptDispatcher,
-} from "../domains/schema/pipeline/pushschema-pipeline-interfaces.js";
+} from "../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
-} from "../domains/schema/pipeline/pushschema-pipeline-stubs.js";
-import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline.js";
-import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector.js";
+} from "../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
+import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
   DesiredSchema,
-} from "../domains/schema/pipeline/types.js";
-import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor.js";
-import { getProductionNotifier } from "../runtime/notifications/index.js";
+} from "../domains/schema/pipeline/types";
+import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
+import { getProductionNotifier } from "../runtime/notifications/index";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
@@ -93,7 +93,7 @@ interface MinimalField {
 
 // Default resolver: lazy-imports DI to avoid a circular import with init.ts.
 async function defaultResolver(name: string): Promise<unknown> {
-  const { getService } = await import("../di/register.js");
+  const { getService } = await import("../di/register");
   // The DI key types are a fixed map; we cast through the resolver edge.
   return getService(name as Parameters<typeof getService>[0]);
 }
@@ -119,7 +119,7 @@ export async function reloadNextlyConfig(opts?: {
   let newConfig: { collections?: CollectionDef[] } | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
-      "../cli/utils/config-loader.js"
+      "../cli/utils/config-loader"
     );
     clearConfigCache();
     const result = await loadConfig();

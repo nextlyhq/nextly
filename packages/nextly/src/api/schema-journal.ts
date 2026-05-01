@@ -27,7 +27,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
-import { readJournal } from "../domains/schema/journal/read-journal.js";
+import { readJournal } from "../domains/schema/journal/read-journal";
 import { NextlyError } from "../errors/nextly-error";
 import { isSuperAdmin } from "../services/lib/permissions";
 

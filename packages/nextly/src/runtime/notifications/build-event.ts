@@ -6,7 +6,7 @@ import type {
   MigrationNotificationEvent,
   MigrationScope,
   MigrationSummary,
-} from "./types.js";
+} from "./types";
 
 interface BuildSuccessArgs {
   success: true;

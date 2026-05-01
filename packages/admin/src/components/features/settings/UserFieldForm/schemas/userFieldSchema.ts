@@ -2,9 +2,10 @@ import * as z from "zod";
 
 import type {
   UserFieldType,
-  type UserFieldDefinitionRecord,
-  type CreateUserFieldPayload,
-  type UpdateUserFieldPayload} from "@admin/services/userFieldsApi";
+  UserFieldDefinitionRecord,
+  CreateUserFieldPayload,
+  UpdateUserFieldPayload,
+} from "@admin/services/userFieldsApi";
 
 // ============================================================
 // Form Values Type

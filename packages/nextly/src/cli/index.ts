@@ -27,11 +27,11 @@ export {
   CLI_VERSION,
   type GlobalOptions,
   type CommandContext,
-} from "./program.js";
+} from "./program";
 
 // Command exports
 // Task 11 rename: runDev -> runDbSync, DevCommandOptions -> DbSyncCommandOptions.
-export { runDbSync, type DbSyncCommandOptions } from "./commands/db-sync.js";
+export { runDbSync, type DbSyncCommandOptions } from "./commands/db-sync";
 
 // Re-export utilities
-export * from "./utils/index.js";
+export * from "./utils/index";

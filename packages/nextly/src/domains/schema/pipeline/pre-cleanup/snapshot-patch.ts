@@ -4,8 +4,8 @@
 //
 // Pure function; never mutates the input snapshot.
 
-import type { NextlySchemaSnapshot } from "../diff/types.js";
-import type { ClassifierEvent, Resolution } from "../resolution/types.js";
+import type { NextlySchemaSnapshot } from "../diff/types";
+import type { ClassifierEvent, Resolution } from "../resolution/types";
 
 export function applyMakeOptionalToSnapshot(
   snapshot: NextlySchemaSnapshot,
