@@ -10,6 +10,7 @@
  * we use the database adapter directly.
  */
 import { getDialectTables } from "../../database/index";
+import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { env } from "../../lib/env";
 import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
@@ -44,6 +45,7 @@ export function buildAuthRouterDeps(
     trustProxy: readTrustProxy(getService),
     trustedProxyIps: parseTrustedProxyIpsEnv(process.env.TRUSTED_PROXY_IPS),
     authRateLimit: readAuthRateLimit(getService),
+    auditLog: buildAuditLogWriter(getService),
 
     findUserByEmail: async (email: string) => {
       try {

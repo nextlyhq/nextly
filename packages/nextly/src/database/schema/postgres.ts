@@ -198,6 +198,31 @@ export const refreshTokens = pgTable(
   ]
 );
 
+// Audit log for security-sensitive events (Audit M10 / T-022). Append-
+// only by application convention — operators should revoke UPDATE /
+// DELETE GRANTs on this table in production for stricter integrity.
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: text("id").primaryKey(),
+    kind: varchar("kind", { length: 64 }).notNull(),
+    actorUserId: text("actor_user_id"),
+    targetUserId: text("target_user_id"),
+    ipAddress: varchar("ip_address", { length: 45 }),
+    userAgent: text("user_agent"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: false })
+      .defaultNow()
+      .notNull(),
+  },
+  t => [
+    index("audit_log_kind_idx").on(t.kind),
+    index("audit_log_actor_user_id_idx").on(t.actorUserId),
+    index("audit_log_target_user_id_idx").on(t.targetUserId),
+    index("audit_log_created_at_idx").on(t.createdAt),
+  ]
+);
+
 // -----------------------------
 // RBAC tables (roles/permissions)
 // -----------------------------

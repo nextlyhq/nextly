@@ -1,5 +1,6 @@
-import { rateLimiter } from "../middleware/rate-limiter";
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+import { rateLimiter } from "../middleware/rate-limiter";
 
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
@@ -67,6 +68,13 @@ export interface AuthRouterDeps {
     requestsPerHour: number;
     windowMs: number;
   };
+  /**
+   * Audit M10 / T-022: writer for security-sensitive auth events.
+   * Handlers call `auditLog.write(...)` on failed CSRF, failed login,
+   * password change, role mutation, and user delete. Writer is
+   * fail-safe — any DB error logs a warning and the request continues.
+   */
+  auditLog: AuditLogWriter;
 
   // User lookups (widest return type to satisfy all handlers)
   findUserByEmail: (email: string) => Promise<{
@@ -186,40 +194,78 @@ export async function routeAuthRequest(
       const limited = checkAuthIpRateLimit(request, deps);
       if (limited) return limited;
     }
-    switch (authPath) {
-      case "login":
-        return handleLogin(request, deps);
-      case "logout":
-        return handleLogout(request, deps);
-      case "refresh":
-        return handleRefresh(request, deps);
-      case "setup":
-        return handleSetup(request, deps);
-      case "register":
-        return handleRegister(request, deps);
-      case "forgot-password":
-        return handleForgotPassword(request, deps);
-      case "reset-password":
-        return handleResetPassword(request, deps);
-      case "verify-email":
-        return handleVerifyEmail(request, deps);
-      case "verify-email/resend":
-        return handleResendVerification(request, deps);
-      default:
-        return null;
-    }
+    return auditCsrfFailure(request, authPath, deps, () => {
+      switch (authPath) {
+        case "login":
+          return handleLogin(request, deps);
+        case "logout":
+          return handleLogout(request, deps);
+        case "refresh":
+          return handleRefresh(request, deps);
+        case "setup":
+          return handleSetup(request, deps);
+        case "register":
+          return handleRegister(request, deps);
+        case "forgot-password":
+          return handleForgotPassword(request, deps);
+        case "reset-password":
+          return handleResetPassword(request, deps);
+        case "verify-email":
+          return handleVerifyEmail(request, deps);
+        case "verify-email/resend":
+          return handleResendVerification(request, deps);
+        default:
+          return Promise.resolve(null);
+      }
+    });
   }
 
   if (method === "PATCH") {
-    switch (authPath) {
-      case "change-password":
-        return handleChangePassword(request, deps);
-      default:
-        return null;
-    }
+    return auditCsrfFailure(request, authPath, deps, () => {
+      switch (authPath) {
+        case "change-password":
+          return handleChangePassword(request, deps);
+        default:
+          return Promise.resolve(null);
+      }
+    });
   }
 
   return null;
+}
+
+/**
+ * Audit M10 / T-022: write a `csrf-failed` event whenever a dispatched
+ * handler returns a 403 carrying `error.code === "CSRF_FAILED"`.
+ * Centralising this in the router avoids touching every individual
+ * handler. Body parsing is gated on the cheap status check first, so
+ * happy-path requests pay nothing.
+ */
+async function auditCsrfFailure(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps,
+  dispatch: () => Promise<Response | null>
+): Promise<Response | null> {
+  const response = await dispatch();
+  if (!response || response.status !== 403) return response;
+
+  try {
+    const body = await response.clone().json();
+    if (body?.error?.code !== "CSRF_FAILED") return response;
+    await deps.auditLog.write({
+      kind: "csrf-failed",
+      ipAddress: getTrustedClientIp(request, {
+        trustProxy: deps.trustProxy,
+        trustedProxyIps: deps.trustedProxyIps,
+      }),
+      userAgent: request.headers.get("user-agent"),
+      metadata: { path: authPath, method: request.method.toUpperCase() },
+    });
+  } catch {
+    /* response had no JSON body or audit write failed silently */
+  }
+  return response;
 }
 
 /**
