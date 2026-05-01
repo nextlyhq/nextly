@@ -2016,11 +2016,11 @@ button[data-slot="radio-group-item"][data-state="checked"],
  * Target class for all component hover states.
  */
 .hover-unified {
-  @apply hover:bg-black hover:text-white transition-colors;
+  @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
 
 .hover-unified:hover svg {
-  color: #ffffff !important;
+  color: hsl(var(--primary)) !important;
 }
 
 /**
@@ -2028,7 +2028,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
  * Specifically for lists/rows where the solid black is too harsh.
  */
 .hover-subtle-row {
-  @apply hover:bg-black/5 dark:hover:bg-white/5 transition-colors;
+  @apply hover:bg-primary/5 hover:text-primary dark:hover:bg-white/5 transition-colors;
 }
 
 .hover-subtle-row:hover * {
@@ -2039,22 +2039,16 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: inherit !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark .hover-unified {
-    @apply hover:bg-black hover:text-white transition-colors;
-  }
-}
-
 .group-hover-unified {
-  @apply group-hover:bg-black group-hover:text-white;
+  @apply group-hover:bg-primary/5 group-hover:text-primary;
 }
 
 .group-hover-subtle-row {
-  @apply group-hover:bg-black/5 dark:group-hover:bg-white/5 transition-colors;
+  @apply group-hover:bg-primary/5 dark:group-hover:bg-white/5 transition-colors;
 }
 
 .group:hover .group-hover-unified svg {
-  color: #ffffff !important;
+  color: hsl(var(--primary)) !important;
 }
 
 .group:hover .group-hover-subtle-row svg {
@@ -2063,7 +2057,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 /* Dedicated hover for dashboard cards: full black surface + white content */
 .hover-unified-dashboard-card {
-  @apply hover:!bg-black hover:!text-white transition-colors;
+  @apply hover:!bg-primary/5 hover:!text-primary transition-colors;
 }
 
 .hover-unified-dashboard-card:hover * {
@@ -2076,7 +2070,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 @media (prefers-color-scheme: dark) {
   .adminapp.dark .hover-unified-dashboard-card {
-    @apply hover:!bg-black hover:!text-white transition-colors;
+    @apply hover:!bg-primary/5 hover:!text-primary transition-colors;
   }
 }
 
@@ -2085,7 +2079,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
  * Use for all data-table rows where hover should be subtle.
  */
 .hover-unified-table-row {
-  @apply hover:bg-black/5 hover:text-black transition-colors;
+  @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
 
 .hover-unified-table-row:hover * {

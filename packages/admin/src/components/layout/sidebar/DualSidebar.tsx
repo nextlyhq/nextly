@@ -514,12 +514,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         {/* Logo */}
         <Link
           href={ROUTES.DASHBOARD}
-          className="mb-8 flex items-center justify-center h-10 w-10 bg-black rounded-none overflow-hidden group"
+          className="mb-8 flex items-center justify-center h-10 w-10 group"
         >
           <ThemeAwareLogo
             className="w-6 h-6 object-contain"
             alt={branding.logoText ?? "Logo"}
-            forceTheme="dark"
           />
         </Link>
 
@@ -535,16 +534,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-primary text-primary-foreground"
-                : "text-sidebar-foreground/60 hover-unified"
+                ? "bg-primary/5 text-primary"
+                : "text-primary/50 hover-unified"
             );
 
             const iconContent = (
               <>
                 <Icon className="h-5 w-5" />
-                {isSelected && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-primary rounded-r-full" />
-                )}
               </>
             );
 
@@ -583,7 +579,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       {/* 2. Sub Sidebar (Detail Menu) */}
       <aside
         className={cn(
-          "flex flex-col bg-background overflow-hidden shrink-0 transition-all duration-300",
+          "flex flex-col bg-background overflow-hidden shrink-0",
           isMobile
             ? "relative flex border-l border-border"
             : "border-r border-border fixed inset-y-0 left-[72px] z-45 lg:static lg:flex lg:border-r", // Absolute on tablet, static on desktop

@@ -178,7 +178,7 @@ export function SidebarNavigationItem({
                       className={cn(
                         "transition-none", // No transition
                         isSubActive
-                          ? "!bg-primary/10 !text-primary font-medium hover:!bg-primary/10 hover:!text-primary"
+                          ? "!bg-primary/5 !text-primary font-medium hover:!bg-primary/5 hover:!text-primary"
                           : "hover-unified"
                       )}
                     >
