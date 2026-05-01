@@ -35,6 +35,77 @@ export interface ForgotPasswordHandlerDeps {
 const SILENT_MESSAGE =
   "If that email is in our records, you'll receive a reset link shortly.";
 
+/**
+ * Audit H2 (T-011): validate the user-supplied `redirectPath` before
+ * passing it to the password-reset email builder. An unvalidated value
+ * lets an attacker turn the reset email into a phishing redirect.
+ *
+ * Accepts:
+ *   - Relative paths under `/admin/*` (the legitimate use-case for
+ *     applications that mount the admin UI under `/admin`).
+ *   - Absolute URLs whose origin is on the `ALLOWED_REDIRECT_HOSTS`
+ *     env-var allowlist (comma-separated host[:port] entries).
+ *
+ * Rejected values fall back to `undefined` (the password-reset
+ * service applies its default) and emit a `console.warn` so
+ * misconfigurations are visible in production logs. Returning
+ * `undefined` (not throwing) preserves the timing-equalised
+ * anti-enumeration response shape.
+ */
+function sanitizeRedirectPath(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+
+  // Reject obvious garbage early.
+  if (raw.length > 2048 || raw.includes("\0")) {
+    console.warn(
+      `[nextly/auth] Rejected forgot-password redirectPath: oversized or contained null byte`
+    );
+    return undefined;
+  }
+
+  // Relative paths: must start with a single `/` (not `//`, which is
+  // protocol-relative and resolves to a foreign origin) and live under
+  // `/admin`.
+  if (raw.startsWith("/") && !raw.startsWith("//")) {
+    if (raw === "/admin" || raw.startsWith("/admin/") || raw.startsWith("/admin?")) {
+      return raw;
+    }
+    console.warn(
+      `[nextly/auth] Rejected forgot-password redirectPath outside /admin: ${raw}`
+    );
+    return undefined;
+  }
+
+  // Absolute URLs: parse and check against ALLOWED_REDIRECT_HOSTS.
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    console.warn(
+      `[nextly/auth] Rejected forgot-password redirectPath: unparseable URL: ${raw}`
+    );
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    console.warn(
+      `[nextly/auth] Rejected forgot-password redirectPath: bad protocol ${parsed.protocol}`
+    );
+    return undefined;
+  }
+  const allowed = (process.env.ALLOWED_REDIRECT_HOSTS ?? "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  const host = parsed.host.toLowerCase();
+  if (allowed.includes(host)) {
+    return raw;
+  }
+  console.warn(
+    `[nextly/auth] Rejected forgot-password redirectPath: host ${host} not in ALLOWED_REDIRECT_HOSTS`
+  );
+  return undefined;
+}
+
 function buildForgotErrorResponse(
   err: NextlyError,
   requestId: string
@@ -87,12 +158,21 @@ export async function handleForgotPassword(
       });
     }
 
+    // Audit H2 (T-011): validate redirectPath. The reset email embeds it
+    // in the link, so an attacker who can post arbitrary requests to
+    // /auth/forgot-password (no auth required) can craft a phishing
+    // link that looks like a legitimate reset email but redirects the
+    // victim to a controlled site. Reject with a silent fallback to
+    // avoid breaking the existing enumeration protection (the caller
+    // must not be able to distinguish "bad email" from "bad redirect").
+    const safeRedirectPath = sanitizeRedirectPath(redirectPath);
+
     // Per spec §13.3: even if generatePasswordResetToken throws because the
     // email is unknown / invalid / locked / disabled, we silently swallow
     // and return the generic message. Internal infrastructure errors still
     // surface as 5xx so operators see them.
     try {
-      await deps.generatePasswordResetToken(email, redirectPath);
+      await deps.generatePasswordResetToken(email, safeRedirectPath);
     } catch (err) {
       if (
         NextlyError.is(err) &&

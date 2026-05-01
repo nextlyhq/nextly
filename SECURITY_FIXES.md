@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 7    | 0         | 0       | 0       | 7       |
+| 1 — Pre-beta           | 8    | 0         | 0       | 0       | 6       |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -564,7 +564,7 @@ pnpm --filter auth-e2e test
 - **Files:** [packages/nextly/src/auth/handlers/forgot-password.ts:47-56](packages/nextly/src/auth/handlers/forgot-password.ts#L47-L56)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:**
 
