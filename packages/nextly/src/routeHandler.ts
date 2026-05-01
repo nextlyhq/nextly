@@ -55,6 +55,10 @@ import {
   deleteImageSize,
 } from "./api/image-sizes";
 import { readOrGenerateRequestId } from "./api/request-id";
+// Phase 4 Task 12: direct branches (admin-meta, sidebar-groups) emit
+// canonical respondX wire shapes (spec section 5.1) instead of the
+// hand-rolled `{ data: <payload> }` envelope.
+import { respondData, respondMutation } from "./api/response-shapes";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
@@ -992,13 +996,12 @@ async function handleAdminMetaRequest(): Promise<Response> {
     console.error("[ADMIN-META] Error fetching settings from DB:", err);
   }
 
-  // Canonical Task-21 envelope: { data: <payload> }. The dispatcher used to
-  // wrap an extra { status, success, data } envelope which the migrated
-  // fetcher no longer peels — see task 24 phase 1.
-  return new Response(JSON.stringify({ data: payload }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  // Phase 4 Task 12: respondData (bare object). The admin-meta payload is
+  // a non-CRUD read; the admin client already consumes a bare body via the
+  // migrated fetcher. `respondData` requires a Record-shaped argument and
+  // `payload` is built as `Record<string, unknown>` above so the bound is
+  // satisfied without a cast.
+  return respondData(payload);
 }
 
 /**
@@ -1041,11 +1044,9 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
     const svc = container.get<GeneralSettingsService>("generalSettingsService");
     const updated = await svc.updateCustomSidebarGroups(validated);
 
-    // Canonical envelope: { data: <updated> } — see task 24 phase 1.
-    return new Response(JSON.stringify({ data: updated }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    // Phase 4 Task 12: respondMutation. The updated groups array is the
+    // mutation `item` and the toast message is server-authored.
+    return respondMutation("Sidebar groups updated.", updated);
   } catch (error) {
     const message =
       error instanceof Error
@@ -1351,3 +1352,18 @@ export function getCollectionsHandler(): CollectionsHandler | undefined {
   // The caller should check for this and handle accordingly
   return undefined;
 }
+
+/**
+ * Test-only re-exports for the routeHandler direct branches.
+ *
+ * Phase 4 Task 12 introduced regression tests that pin the canonical
+ * respondX wire shapes for the admin-meta and sidebar-groups branches.
+ * Those branches are private (defined inside this module to keep the
+ * route-dispatch surface narrow), so we expose them under a clearly
+ * test-flagged name. Production code must keep importing through
+ * `createDynamicHandlers`. The underscore prefix and `_ForTest` suffix
+ * make accidental production imports obvious in code review.
+ */
+export const _handleAdminMetaRequestForTest = handleAdminMetaRequest;
+export const _handleAdminMetaSidebarGroupsForTest =
+  handleAdminMetaSidebarGroups;
