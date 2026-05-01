@@ -8,8 +8,19 @@
  * - `RBAC_METHODS` — role / permission / role-permission / user-role /
  *   role-inheritance operations that need access to multiple sub-services
  *   on the container, so the handler receives the full `ServiceContainer`.
+ *
+ * Phase 4: every handler returns a Response built via the respondX
+ * helpers in `../../api/response-shapes.ts`. See spec §5.1 for the
+ * canonical shape contract.
  */
 
+import {
+  respondAction,
+  respondData,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "../../api/response-shapes";
 import type { ServiceContainer } from "../../services";
 import {
   requireBodyField,
@@ -22,29 +33,58 @@ import type { MethodHandler, Params } from "../types";
 type AuthService = ServiceContainer["auth"];
 type RbacContainer = ServiceContainer;
 
+/**
+ * Translate the legacy service `{ data, meta: {total,page,pageSize,totalPages} }`
+ * shape to the canonical `PaginationMeta` shape expected by `respondList`.
+ * Same helper as user-dispatcher; kept local for now (refactor to a shared
+ * helper post-Phase-4 once every dispatcher uses it).
+ */
+function toPaginationMeta(meta: {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}) {
+  return {
+    total: meta.total,
+    page: meta.page,
+    limit: meta.pageSize,
+    totalPages: meta.totalPages,
+    hasNext: meta.page < meta.totalPages,
+    hasPrev: meta.page > 1,
+  };
+}
+
 // ============================================================
 // Auth methods
 // ============================================================
 
 const AUTH_METHODS: Record<string, MethodHandler<AuthService>> = {
   registerUser: {
-    execute: (svc, _, body) => {
+    execute: async (svc, _, body) => {
       const b = body as { email?: string; password?: string } | undefined;
       if (!b?.email || !b?.password)
         throw new Error("Email and password are required");
-      return svc.registerUser(b as Parameters<typeof svc.registerUser>[0]);
+      const user = await svc.registerUser(
+        b as Parameters<typeof svc.registerUser>[0]
+      );
+      return respondMutation("Account created.", user, { status: 201 });
     },
   },
   verifyCredentials: {
-    execute: (svc, _, body) => {
+    execute: async (svc, _, body) => {
       const b = body as { email?: string; password?: string } | undefined;
       if (!b?.email || !b?.password)
         throw new Error("Email and password are required");
-      return svc.verifyCredentials(b.email, b.password);
+      const user = await svc.verifyCredentials(b.email, b.password);
+      // verifyCredentials returns the user record on success or null on
+      // bad creds; expose as a bare data shape so callers can branch on
+      // `body.user === null`.
+      return respondData({ user });
     },
   },
   changePassword: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       const b = body as
         | { currentPassword?: string; newPassword?: string }
         | undefined;
@@ -53,51 +93,65 @@ const AUTH_METHODS: Record<string, MethodHandler<AuthService>> = {
           "UserId, currentPassword, and newPassword are required"
         );
       }
-      return svc.changePassword(p.userId, b.currentPassword, b.newPassword);
+      await svc.changePassword(p.userId, b.currentPassword, b.newPassword);
+      return respondAction("Password changed.");
     },
   },
   generatePasswordResetToken: {
-    execute: (svc, _, body) => {
-      const b = requireBodyField<{
-        email: string;
-        redirectPath?: string;
-      }>(body, "email", "Email is required");
-      return svc.generatePasswordResetToken(b.email, {
+    execute: async (svc, _, body) => {
+      const b = requireBodyField<{ email: string; redirectPath?: string }>(
+        body,
+        "email",
+        "Email is required"
+      );
+      await svc.generatePasswordResetToken(b.email, {
         redirectPath: b.redirectPath,
       });
+      // Generic message — do not leak whether the email exists.
+      return respondAction(
+        "If an account exists for this email, a password reset link has been sent."
+      );
     },
   },
   resetPasswordWithToken: {
-    execute: (svc, _, body) => {
+    execute: async (svc, _, body) => {
       const b = body as { token?: string; newPassword?: string } | undefined;
       if (!b?.token || !b?.newPassword)
         throw new Error("Token and newPassword are required");
-      return svc.resetPasswordWithToken(b.token, b.newPassword);
+      await svc.resetPasswordWithToken(b.token, b.newPassword);
+      return respondAction("Password reset.");
     },
   },
   generateEmailVerificationToken: {
-    execute: (svc, _, body) => {
-      const b = requireBodyField<{
-        email: string;
-        redirectPath?: string;
-      }>(body, "email", "Email is required");
-      return svc.generateEmailVerificationToken(b.email, {
+    execute: async (svc, _, body) => {
+      const b = requireBodyField<{ email: string; redirectPath?: string }>(
+        body,
+        "email",
+        "Email is required"
+      );
+      await svc.generateEmailVerificationToken(b.email, {
         redirectPath: b.redirectPath,
       });
+      return respondAction("Verification email sent.");
     },
   },
   verifyEmail: {
-    execute: (svc, _, body) => {
+    execute: async (svc, _, body) => {
       const b = requireBodyField<{ token: string }>(
         body,
         "token",
         "Token is required"
       );
-      return svc.verifyEmail(b.token);
+      await svc.verifyEmail(b.token);
+      return respondAction("Email verified.");
     },
   },
   cleanupExpiredTokens: {
-    execute: svc => svc.cleanupExpiredTokens(),
+    execute: async svc => {
+      // cleanupExpiredTokens returns void; the message is the only payload.
+      await svc.cleanupExpiredTokens();
+      return respondAction("Expired tokens cleaned up.");
+    },
   },
 };
 
@@ -108,17 +162,6 @@ const AUTH_METHODS: Record<string, MethodHandler<AuthService>> = {
 const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
   // Role operations
   listRoles: {
-    // Same root cause + fix as `user-dispatcher.ts:listUsers` (see PR
-    // #125): the underlying RoleQueryService.listRoles returns the
-    // raw `{ data, meta }` shape with no `statusCode` field, so the
-    // dispatcher's smart-extraction path (dispatcher.ts:180) skipped
-    // it and the dumb fallback wrapped the whole object as `data`,
-    // producing the double-nested `{ data: { data, meta } }` shape
-    // the admin "Roles" dropdown chokes on. Wrapping the result with
-    // `{ statusCode: 200, data, meta }` triggers the smart path and
-    // yields the canonical single-envelope `{ data, meta }`.
-    // Phase 4 will replace this with a consistent `PaginatedDocs<T>`
-    // migration across all endpoints.
     execute: async (c, p) => {
       const result = await c.roles.listRoles({
         page: toNumber(p.page),
@@ -131,22 +174,27 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
         includePermissions: toBoolean(p.includePermissions),
       });
-      return {
-        success: true,
-        statusCode: 200,
-        data: result.data,
-        meta: result.meta,
-      };
+      return respondList(result.data, toPaginationMeta(result.meta));
     },
   },
   getRoleById: {
-    execute: (c, p) => c.roles.getRoleById(requireParam(p, "roleId", "RoleId")),
+    execute: async (c, p) => {
+      const role = await c.roles.getRoleById(
+        requireParam(p, "roleId", "RoleId")
+      );
+      return respondDoc(role);
+    },
   },
   getRoleByName: {
-    execute: (c, p) => c.roles.getRoleByName(requireParam(p, "name", "Name")),
+    execute: async (c, p) => {
+      const role = await c.roles.getRoleByName(
+        requireParam(p, "name", "Name")
+      );
+      return respondDoc(role);
+    },
   },
   createRole: {
-    execute: (c, _, body) => {
+    execute: async (c, _, body) => {
       const b = body as
         | { name?: string; slug?: string; permissionIds?: string[] }
         | undefined;
@@ -155,24 +203,33 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       if (!b.permissionIds?.length) {
         throw new Error("At least one permission is required to create a role");
       }
-      return c.roles.createRole(b as Parameters<typeof c.roles.createRole>[0]);
+      const role = await c.roles.createRole(
+        b as Parameters<typeof c.roles.createRole>[0]
+      );
+      return respondMutation("Role created.", role, { status: 201 });
     },
   },
   updateRole: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       if (!p.roleId || !body)
         throw new Error("RoleId and changes data are required");
-      return c.roles.updateRole(p.roleId, body);
+      const role = await c.roles.updateRole(p.roleId, body);
+      return respondMutation("Role updated.", role);
     },
   },
   deleteRole: {
-    execute: (c, p) => c.roles.deleteRole(requireParam(p, "roleId", "RoleId")),
+    execute: async (c, p) => {
+      const role = await c.roles.deleteRole(
+        requireParam(p, "roleId", "RoleId")
+      );
+      return respondMutation("Role deleted.", role);
+    },
   },
 
   // Permission operations
   listPermissions: {
-    execute: (c, p) =>
-      c.permissions.listPermissions({
+    execute: async (c, p) => {
+      const result = await c.permissions.listPermissions({
         page: toNumber(p.page),
         pageSize: toNumber(p.pageSize),
         search: p.search,
@@ -180,16 +237,20 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
         resource: p.resource,
         sortBy: p.sortBy as "action" | "resource" | "name" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
-      }),
+      });
+      return respondList(result.data, toPaginationMeta(result.meta));
+    },
   },
   getPermissionById: {
-    execute: (c, p) =>
-      c.permissions.getPermissionById(
+    execute: async (c, p) => {
+      const permission = await c.permissions.getPermissionById(
         requireParam(p, "permissionId", "PermissionId")
-      ),
+      );
+      return respondDoc(permission);
+    },
   },
   ensurePermission: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       const b = body as
         | {
             action?: string;
@@ -210,52 +271,78 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
           "Action, resource, name, and slug parameters are required"
         );
       }
-      return c.permissions.ensurePermission(
+      const permission = await c.permissions.ensurePermission(
         action,
         resource,
         name,
         slug,
         description
       );
+      // ensurePermission may create OR return existing; status 200 covers
+      // both since this operation is idempotent and the caller can't tell
+      // them apart anyway.
+      return respondMutation("Permission ensured.", permission);
     },
   },
   updatePermission: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       if (!p.permissionId || !body)
         throw new Error("PermissionId and changes data are required");
-      return c.permissions.updatePermission(p.permissionId, body);
+      const permission = await c.permissions.updatePermission(
+        p.permissionId,
+        body
+      );
+      return respondMutation("Permission updated.", permission);
     },
   },
   deletePermission: {
-    execute: (c, p) => {
+    execute: async (c, p) => {
       if (!p.action || !p.resource)
         throw new Error("Action and resource parameters are required");
-      return c.permissions.deletePermission(p.action, p.resource);
+      const permission = await c.permissions.deletePermission(
+        p.action,
+        p.resource
+      );
+      return respondMutation("Permission deleted.", permission);
     },
   },
   deletePermissionById: {
-    execute: (c, p) =>
-      c.permissions.deletePermissionById(
+    execute: async (c, p) => {
+      const permission = await c.permissions.deletePermissionById(
         requireParam(p, "permissionId", "PermissionId")
-      ),
+      );
+      return respondMutation("Permission deleted.", permission);
+    },
   },
 
   // Role-permission operations
   listRolePermissions: {
-    execute: (c, p) =>
-      c.rolePermissions.listRolePermissions(
+    execute: async (c, p) => {
+      const permissions = await c.rolePermissions.listRolePermissions(
         requireParam(p, "roleId", "RoleId")
-      ),
+      );
+      // Non-paginated list — use respondData with named field so the
+      // shape can grow without breaking the contract.
+      return respondData({ permissions });
+    },
   },
   addPermissionToRole: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       const b = body as { action?: string; resource?: string } | undefined;
       if (!p.roleId || !b?.action || !b?.resource) {
         throw new Error(
           "RoleId and permission data (action, resource) are required"
         );
       }
-      return c.rolePermissions.addPermissionToRole(p.roleId, {
+      // addPermissionToRole may return void or a row; either way, the
+      // useful info for the client is the role/action/resource trio
+      // they just changed.
+      await c.rolePermissions.addPermissionToRole(p.roleId, {
+        action: b.action,
+        resource: b.resource,
+      });
+      return respondAction("Permission added to role.", {
+        roleId: p.roleId,
         action: b.action,
         resource: b.resource,
       });
@@ -271,9 +358,13 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
         // missing rows, which propagates to the caller as an error
         // response.
         const perm = await c.permissions.getPermissionById(p.permissionId);
-        return c.rolePermissions.removePermissionFromRole(p.roleId, {
+        await c.rolePermissions.removePermissionFromRole(p.roleId, {
           action: perm.action,
           resource: perm.resource,
+        });
+        return respondAction("Permission removed from role.", {
+          roleId: p.roleId,
+          permissionId: p.permissionId,
         });
       }
       const b = body as { action?: string; resource?: string } | undefined;
@@ -282,85 +373,127 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
           "RoleId and permission data (action, resource) are required"
         );
       }
-      return c.rolePermissions.removePermissionFromRole(p.roleId, {
+      await c.rolePermissions.removePermissionFromRole(p.roleId, {
+        action: b.action,
+        resource: b.resource,
+      });
+      return respondAction("Permission removed from role.", {
+        roleId: p.roleId,
         action: b.action,
         resource: b.resource,
       });
     },
   },
   setRolePermissions: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       const b = body as { permissionIds?: string[] } | undefined;
       if (!p.roleId) throw new Error("RoleId is required");
       const permissionIds = Array.isArray(b?.permissionIds)
         ? b.permissionIds
         : [];
-      return c.rolePermissions.setRolePermissions(p.roleId, permissionIds);
+      await c.rolePermissions.setRolePermissions(p.roleId, permissionIds);
+      return respondAction("Role permissions updated.", {
+        roleId: p.roleId,
+        permissionCount: permissionIds.length,
+      });
     },
   },
 
   // User-role operations
   listUserRoles: {
-    execute: (c, p) =>
-      c.userRoles.listUserRoles(requireParam(p, "userId", "UserId")),
+    execute: async (c, p) => {
+      const roles = await c.userRoles.listUserRoles(
+        requireParam(p, "userId", "UserId")
+      );
+      return respondData({ roles });
+    },
   },
   listUserRoleNames: {
-    execute: (c, p) =>
-      c.userRoles.listUserRoleNames(requireParam(p, "userId", "UserId")),
+    execute: async (c, p) => {
+      const roleNames = await c.userRoles.listUserRoleNames(
+        requireParam(p, "userId", "UserId")
+      );
+      return respondData({ roleNames });
+    },
   },
   assignRoleToUser: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       const b = body as { roleId?: string } | undefined;
       // Support both REST-style (roleId in body) and dispatcher-style (roleId in params).
       const roleId = b?.roleId ?? p.roleId;
       if (!p.userId || !roleId)
         throw new Error("UserId and roleId parameters are required");
-      return c.userRoles.assignRoleToUser(
+      // assignRoleToUser may return void or a confirmation row. The
+      // useful info for the client is the user/role ids they just
+      // changed; expose those as the action's result payload.
+      await c.userRoles.assignRoleToUser(
         p.userId,
         roleId,
         body as Record<string, unknown>
       );
+      return respondAction("Role assigned to user.", {
+        userId: p.userId,
+        roleId,
+      });
     },
   },
   unassignRoleFromUser: {
-    execute: (c, p) => {
+    execute: async (c, p) => {
       if (!p.userId || !p.roleId)
         throw new Error("UserId and roleId parameters are required");
-      return c.userRoles.unassignRoleFromUser(p.userId, p.roleId);
+      await c.userRoles.unassignRoleFromUser(p.userId, p.roleId);
+      return respondAction("Role unassigned from user.", {
+        userId: p.userId,
+        roleId: p.roleId,
+      });
     },
   },
 
   // Role inheritance operations
   listAncestorRoles: {
-    execute: (c, p) =>
-      c.roleInheritance.listAncestorRoles(requireParam(p, "roleId", "RoleId")),
+    execute: async (c, p) => {
+      const roles = await c.roleInheritance.listAncestorRoles(
+        requireParam(p, "roleId", "RoleId")
+      );
+      return respondData({ roles });
+    },
   },
   listDescendantRoles: {
-    execute: (c, p) =>
-      c.roleInheritance.listDescendantRoles(
+    execute: async (c, p) => {
+      const roles = await c.roleInheritance.listDescendantRoles(
         requireParam(p, "roleId", "RoleId")
-      ),
+      );
+      return respondData({ roles });
+    },
   },
   addRoleInheritance: {
-    execute: (c, p, body) => {
+    execute: async (c, p, body) => {
       const b = body as { childRoleId?: string } | undefined;
       // Support both REST-style and dispatcher-style.
       const childRoleId = b?.childRoleId ?? p.childRoleId;
       if (!childRoleId || !p.parentRoleId) {
         throw new Error("ChildRoleId and parentRoleId parameters are required");
       }
-      return c.roleInheritance.addRoleInheritance(childRoleId, p.parentRoleId);
+      await c.roleInheritance.addRoleInheritance(childRoleId, p.parentRoleId);
+      return respondAction("Role inheritance added.", {
+        childRoleId,
+        parentRoleId: p.parentRoleId,
+      });
     },
   },
   removeRoleInheritance: {
-    execute: (c, p) => {
+    execute: async (c, p) => {
       if (!p.parentRoleId || !p.childRoleId) {
         throw new Error("ChildRoleId and parentRoleId parameters are required");
       }
-      return c.roleInheritance.removeRoleInheritance(
+      await c.roleInheritance.removeRoleInheritance(
         p.childRoleId,
         p.parentRoleId
       );
+      return respondAction("Role inheritance removed.", {
+        childRoleId: p.childRoleId,
+        parentRoleId: p.parentRoleId,
+      });
     },
   },
 };
