@@ -19,25 +19,29 @@
  *
  * const nextly = getNextly();
  *
- * // Find documents
- * const posts = await nextly.find({
+ * // Find documents -> ListResult<T> = { items, meta }
+ * const result = await nextly.find({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  *   limit: 10,
  *   sort: '-createdAt',
  * });
+ * result.items;       // Post[]
+ * result.meta.total;  // number
  *
- * // Get single document
+ * // Get single document -> bare doc or null
  * const post = await nextly.findByID({
  *   collection: 'posts',
  *   id: 'post-123',
  * });
  *
- * // Create document
- * const newPost = await nextly.create({
+ * // Create document -> MutationResult<T> = { message, item }
+ * const created = await nextly.create({
  *   collection: 'posts',
  *   data: { title: 'Hello', content: 'World' },
  * });
+ * created.item;     // Post
+ * created.message;  // string
  * ```
  *
  * @packageDocumentation
@@ -212,7 +216,10 @@ import type {
  * const nextly = getNextly();
  *
  * // Default: bypass access control (trusted server context)
+ * // Returns ListResult<T> = { items, meta }.
  * const posts = await nextly.find({ collection: 'posts' });
+ * posts.items;       // Post[]
+ * posts.meta.total;  // number
  *
  * // Enforce access control for user-facing operations
  * const userPosts = await nextly.find({
@@ -626,12 +633,13 @@ const globalForDirectApi = globalThis as unknown as {
  *
  * const nextly = getNextly();
  *
- * // Find posts
- * const posts = await nextly.find({
+ * // Find posts. Returns ListResult<T> = { items, meta }.
+ * const result = await nextly.find({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  * });
- * // Phase 4 (Task 13): returns { items, meta }. See ListResult.
+ * result.items;       // Post[]
+ * result.meta.total;  // number
  * ```
  */
 export function getNextly(config?: DirectAPIConfig): Nextly {
@@ -684,12 +692,15 @@ export function resetNextlyInstance(): void {
  * ```typescript
  * import { nextly } from '@revnixhq/nextly';
  *
- * const posts = await nextly.find({
+ * // Returns ListResult<T> = { items, meta }.
+ * const result = await nextly.find({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  *   limit: 10,
  *   sort: '-createdAt',
  * });
+ * result.items;       // Post[]
+ * result.meta.total;  // number
  * ```
  */
 export const nextly = {

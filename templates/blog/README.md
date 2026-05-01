@@ -144,6 +144,7 @@ import { getNextly } from "@revnixhq/nextly";
 
 export default async function BlogPage() {
   const nextly = await getNextly();
+  // Returns ListResult<T> = { items, meta }.
   const result = await nextly.find({
     collection: "posts",
     where: { status: { equals: "published" } },
@@ -151,7 +152,9 @@ export default async function BlogPage() {
     limit: 9,
     depth: 2,
   });
-  // render posts...
+  result.items; // Post[]
+  result.meta.total; // number
+  // render result.items...
 }
 ```
 
