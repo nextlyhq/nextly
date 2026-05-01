@@ -33,20 +33,29 @@ const NEXTLY_WORKSPACE_PACKAGES = [
 ];
 
 const nextConfig: NextConfig = {
-  // Source-mode for ALL workspace packages — both client UI (admin, ui,
-  // plugin-form-builder) and server-side (nextly, adapters, storage).
-  // Turbopack reads .ts/.tsx directly via the resolveAlias entries below.
+  // Source-mode for client UI packages (admin, ui, plugin-form-builder) is
+  // always on — they're transpiled from source via the resolveAlias entries
+  // below in both dev and prod. (Their tsup builds produce dist outputs the
+  // playground doesn't actually consume because the aliases redirect to src.)
+  //
+  // Server-side workspace packages (nextly, adapters, storage) flip between
+  // bundled-from-source (dev → HMR) and Node-required-from-dist (prod →
+  // smaller bundle). They CANNOT be in both transpilePackages and
+  // serverExternalPackages at the same time — Next.js rejects that
+  // combination — so the two arrays are flipped symmetrically below.
   transpilePackages: [
     "@revnixhq/admin",
     "@revnixhq/ui",
     "@revnixhq/plugin-form-builder",
-    ...NEXTLY_WORKSPACE_PACKAGES,
+    // Only in dev: server packages bundled by Next.js → HMR works.
+    // In prod: server packages move to serverExternalPackages instead.
+    ...(isDev ? NEXTLY_WORKSPACE_PACKAGES : []),
   ],
-  // Native + third-party Node-only deps stay external always. Workspace packages
-  // are external ONLY in prod (Payload pattern). In dev, they're bundled by
-  // Next.js via the source aliases, which is what enables HMR for server files
-  // like packages/nextly/src/init/build-service-config.ts and
-  // packages/plugin-form-builder/src/plugin.ts.
+  // Native + third-party Node-only deps stay external always. Workspace
+  // packages are external ONLY in prod (Payload pattern). In dev they're
+  // bundled by Next.js via the source aliases, which is what enables HMR
+  // for server files like packages/nextly/src/init/build-service-config.ts
+  // and packages/plugin-form-builder/src/plugin.ts.
   serverExternalPackages: [
     "@aws-sdk/client-s3",
     "@aws-sdk/lib-storage",
@@ -58,6 +67,10 @@ const nextConfig: NextConfig = {
     "esbuild",
     "bundle-require",
     "nodemailer",
+    // Symmetric with transpilePackages above: workspace packages live in
+    // exactly ONE of the two arrays at any time. In prod they're external
+    // (loaded from dist via Node require) — smaller bundle, dist ships
+    // as published.
     ...(isDev ? [] : NEXTLY_WORKSPACE_PACKAGES),
   ],
   experimental: {
