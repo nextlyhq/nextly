@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 1    | 0         | 0       | 0       | 13      |
+| 1 — Pre-beta           | 2    | 0         | 0       | 0       | 12      |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -293,7 +293,7 @@ pnpm test:integration:postgres17
 - **Files:** [packages/storage-s3/src/adapter.ts:116](packages/storage-s3/src/adapter.ts#L116)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:** `acl: config.acl ?? "private"`. Update [packages/storage-s3/README.md](packages/storage-s3/README.md) and the playground example to set `acl: "public-read"` explicitly when public buckets are intended. Add a short migration note explaining when to flip ACL vs use signed URLs.
 

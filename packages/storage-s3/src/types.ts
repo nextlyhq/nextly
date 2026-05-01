@@ -144,14 +144,19 @@ export interface S3StorageConfig extends StoragePluginConfig {
    * Determines who can access the uploaded files.
    *
    * Common values:
-   * - `'public-read'`: Anyone can read (for public media)
-   * - `'private'`: Only authenticated users (use with signed URLs)
-   * - `'bucket-owner-full-control'`: Bucket owner has full control
+   * - `'private'` (default): Only authenticated users; serve via signed URLs.
+   * - `'public-read'`: Anyone can read (opt in only for buckets that
+   *   genuinely host public media).
+   * - `'bucket-owner-full-control'`: Bucket owner has full control.
+   *
+   * Defaults to `'private'` so uploads are not world-readable unless
+   * explicitly opted in. Pair with `getSignedUrl()` for read access to
+   * private objects.
    *
    * Note: Cloudflare R2 ignores ACL settings. Configure public access
    * in the R2 dashboard instead.
    *
-   * @default 'public-read'
+   * @default 'private'
    */
   acl?: S3ObjectACL;
 
