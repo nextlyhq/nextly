@@ -1,6 +1,15 @@
+import safeRegex from "safe-regex2";
 import { z } from "zod";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
+
+/**
+ * Audit H5 (T-017): cap admin-supplied regex pattern length. Long
+ * patterns are both useless (almost no real-world validation needs
+ * 200+ chars) and a vector for hiding catastrophic-backtracking
+ * constructs that defeat static analyzers.
+ */
+const MAX_REGEX_PATTERN_LENGTH = 200;
 
 /** SQL keywords that should be blocked as field/collection names. */
 export const SQL_KEYWORDS = [
@@ -230,20 +239,48 @@ export class DynamicCollectionValidationService {
   }
 
   /**
-   * @throws Error if the regex is invalid or contains unsafe constructs
+   * Audit H5 (T-017). The previous check only blocked `(?{` and `(?>` —
+   * neither of which is even valid JS regex syntax, so the function
+   * accepted catastrophic patterns like `(a+)+b` that DoS the database
+   * regex engine on subsequent writes.
+   *
+   * The new gate has three layers:
+   *
+   *   1. **Length cap** (≤200 chars). Real validation patterns are
+   *      short; long patterns are usually obfuscated.
+   *   2. **JS parse**. If `new RegExp(pattern)` throws, it's malformed
+   *      regardless of the runtime that will execute it.
+   *   3. **`safe-regex2`** static analysis. Detects nested-quantifier
+   *      and alternation explosion patterns (the standard ReDoS shapes).
+   *
+   * Note on `re2`: T-017's spec mentions `re2` "for runtime matching."
+   * In this codebase the runtime engine is the database (Postgres `~`
+   * or MySQL `REGEXP`), not Node — JS-side runtime matching of admin-
+   * supplied patterns does not exist here. So we don't pull in the
+   * native re2 binding; the static `safe-regex2` check + length cap is
+   * the load-bearing defense for what actually ships to the DB.
+   *
+   * @throws Error if the regex is invalid, too long, or unsafe
    */
   validateRegexPattern(fieldName: string, pattern: string): void {
+    if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+      throw new Error(
+        `Regex pattern for field "${fieldName}" exceeds the ${MAX_REGEX_PATTERN_LENGTH}-character cap (got ${pattern.length}).`
+      );
+    }
+
     try {
       new RegExp(pattern);
-      if (pattern.includes("(?{") || pattern.includes("(?>")) {
-        throw new Error(
-          `Regex pattern for field "${fieldName}" contains unsafe constructs`
-        );
-      }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(
         `Invalid regex pattern for field "${fieldName}": ${message}`
+      );
+    }
+
+    if (!safeRegex(pattern)) {
+      throw new Error(
+        `Regex pattern for field "${fieldName}" is unsafe (catastrophic backtracking detected).`
       );
     }
   }
