@@ -1,8 +1,8 @@
 import {
   createDynamicHandlers,
-  getCollectionsHandler,
-  getNextly,
-} from "@revnixhq/nextly";
+  getCollectionsHandler,  
+} from "@revnixhq/nextly/runtime";
+import { getNextly } from "@revnixhq/nextly";
 
 import nextlyConfig from "../../../../../nextly.config";
 
