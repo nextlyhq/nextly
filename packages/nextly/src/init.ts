@@ -46,6 +46,7 @@ import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "./init/build-service-config";
+import { runBootTimeApplyIfDev } from "./init/boot-apply";
 import { runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
@@ -228,6 +229,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
           collections,
           logger: driftLogger,
         });
+
+        // Boot-time auto-apply for code-first schema changes (dev only).
+        // Shared with `route-handler/auth-handler.ts:ensureServicesInitialized`
+        // so the same behavior applies whether the first request hits
+        // the direct API or the route-handler dispatcher path.
+        await runBootTimeApplyIfDev({ caller: "init" });
 
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()

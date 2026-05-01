@@ -254,7 +254,6 @@
     "@lexical/rich-text": "^0.38.2",
     "@revnixhq/adapter-drizzle": "workspace:*",
     "bcryptjs": "^3.0.2",
-    "bundle-require": "^5.1.0",
     "chokidar": "^5.0.0",
     "commander": "^14.0.2",
     "dequal": "^2.0.3",

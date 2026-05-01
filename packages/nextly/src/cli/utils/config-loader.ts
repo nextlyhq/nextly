@@ -25,13 +25,13 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { resolve, dirname } from "node:path";
 
-import { bundleRequire } from "bundle-require";
-
 import {
   defineConfig,
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
 import { NextlyError } from "../../errors/index";
+
+import { bundleAndRequire } from "./config-bundler";
 
 /**
  * Options for loading the config file.
@@ -193,9 +193,17 @@ async function loadConfigInternal(
   debugLog(options, "Loading config from:", configPath);
 
   try {
-    const { mod, dependencies } = await bundleRequire({
+    // bundleAndRequire is our Turbopack-safe alternative to the
+    // previous `bundle-require` dependency. See `config-bundler.ts`
+    // for the full rationale; the short version is bundle-require's
+    // internal `import(file)` triggers Turbopack's "Cannot find
+    // module as expression is too dynamic" failure when nextly
+    // runs inside a Next.js dev server. The new loader uses
+    // `createRequire(import.meta.url)` instead, which Turbopack
+    // recognizes as a Node-builtin escape hatch and does not
+    // analyze. The external-list contract is preserved verbatim.
+    const { mod, dependencies } = await bundleAndRequire({
       filepath: configPath,
-      format: "esm",
       cwd: dirname(configPath),
       external: [
         "nextly",
