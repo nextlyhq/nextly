@@ -80,21 +80,16 @@ export function FolderTreeView({
   );
 
   return (
-    <div
-      className={cn(
-        "flex flex-col h-full bg-background dark:bg-transparent border-r border-border/50",
-        className
-      )}
-    >
+    <div className={cn("flex flex-col h-full pt-1 pb-6", className)}>
       {/* Sidebar Heading */}
-      <div className="flex items-center justify-between px-6 py-5 border-b border-border/40">
-        <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground/80 dark:text-muted-foreground">
+      <div className="flex items-center justify-between px-3 mb-2">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/40 px-3">
           Folders
         </span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 w-8 p-0 hover-unified transition-colors text-slate-400"
+          className="h-8 w-8 p-0 hover:bg-primary/5 transition-colors text-slate-400"
           onClick={() => onCreateFolder()}
           title="Create folder"
         >
@@ -102,26 +97,26 @@ export function FolderTreeView({
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="flex-1 overflow-y-auto px-2 space-y-1">
         {/* Top-level "All Media" */}
         <button
           type="button"
           onClick={() => onFolderSelect(null)}
           onKeyDown={e => handleKeyDown(e, null)}
           className={cn(
-            "group flex w-full items-center px-4 py-2.5 text-sm transition-all duration-200 cursor-pointer",
+            "group flex w-full items-center px-2 py-2 text-sm transition-all duration-200 cursor-pointer rounded-md",
             activeFolderId === null
-              ? "bg-foreground text-background font-bold ring-1 ring-foreground/5"
-              : "text-muted-foreground hover-subtle-row font-medium"
+              ? "bg-primary/5 text-primary font-bold"
+              : "text-muted-foreground hover:bg-primary/5 font-medium"
           )}
         >
-          {/* Spacer to align with chevrons below (which are 24px wide + level margin) */}
-          <div className="w-8 shrink-0" />
+          {/* Spacer to align with chevrons below */}
+          <div className="w-6 shrink-0" />
           <FolderIconDefault
             className={cn(
               "h-4 w-4 shrink-0 transition-colors mr-2.5",
               activeFolderId === null
-                ? "text-background"
+                ? "text-primary"
                 : "text-muted-foreground/60 group-hover:text-foreground"
             )}
           />
@@ -189,6 +184,7 @@ function FolderTreeItem({
   onDelete,
   onKeyDown,
 }: FolderTreeItemProps) {
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   // Fetch subfolders to determine if we have children and for expansion
   const { data: subfoldersData } = useSubfolders(folder.id);
   const hasSubfolders = (subfoldersData?.length ?? 0) > 0;
@@ -207,19 +203,19 @@ function FolderTreeItem({
     <div>
       <div
         className={cn(
-          "group flex w-full items-center transition-all duration-200 cursor-pointer relative",
+          "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-md mx-0.5",
           isActive
-            ? "bg-foreground text-background font-bold"
-            : "text-muted-foreground hover-subtle-row font-medium border-b border-transparent"
+            ? "bg-primary/5 text-primary font-bold"
+            : "text-muted-foreground hover:bg-primary/5 font-medium"
         )}
-        style={{ paddingLeft: `${16 + level * 12}px` }}
+        style={{ paddingLeft: `${4 + level * 10}px` }}
         onClick={() => {
           onSelect(folder.id);
           if (hasSubfolders) onToggle(folder.id);
         }}
       >
         {/* Dropdown Indicator (Arrow on the LEFT) */}
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+        <div className="flex h-8 w-6 shrink-0 items-center justify-center">
           {hasSubfolders ? (
             <button
               type="button"
@@ -228,16 +224,16 @@ function FolderTreeItem({
                 onToggle(folder.id);
               }}
               className={cn(
-                "flex h-8 w-8 items-center justify-center transition-colors hover:bg-white/10 rounded-md",
+                "flex h-8 w-6 items-center justify-center transition-colors rounded-md cursor-pointer",
                 isActive
-                  ? "text-background/60 hover:text-background"
-                  : "text-muted-foreground/60 hover:text-foreground"
+                  ? "text-primary/40 group-hover:text-primary"
+                  : "text-muted-foreground/40 group-hover:text-foreground"
               )}
             >
               <ExpandIcon className="h-3.5 w-3.5" />
             </button>
           ) : (
-            <div className="w-8" />
+            <div className="w-6" />
           )}
         </div>
 
@@ -247,7 +243,7 @@ function FolderTreeItem({
             className={cn(
               "h-4 w-4 shrink-0 transition-colors",
               isActive
-                ? "text-background"
+                ? "text-primary"
                 : "text-muted-foreground/60 group-hover:text-foreground"
             )}
           />
@@ -256,10 +252,10 @@ function FolderTreeItem({
           {itemCount > 0 && (
             <span
               className={cn(
-                "shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-all duration-200",
+                "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-[9px] font-bold tabular-nums transition-all duration-200",
                 isActive
-                  ? "bg-background/20 text-background"
-                  : "bg-muted text-muted-foreground group-hover:bg-foreground group-hover:text-background"
+                  ? "bg-primary/20 text-primary"
+                  : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
               )}
             >
               {itemCount}
@@ -271,14 +267,16 @@ function FolderTreeItem({
         <div
           className={cn(
             "pr-2 transition-opacity",
-            isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            isActive || isMenuOpen
+              ? "opacity-100 cursor-pointer"
+              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100 cursor-pointer"
           )}
         >
-          <DropdownMenu>
+          <DropdownMenu onOpenChange={setIsMenuOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover-unified"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer"
                 tabIndex={-1}
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-slate-400" />
@@ -286,7 +284,7 @@ function FolderTreeItem({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="w-48 shadow-lg border-border/50"
+              className="w-48 shadow-none border-border/50"
             >
               <DropdownMenuItem
                 onClick={() => onCreateSubfolder(folder.id)}
@@ -304,9 +302,9 @@ function FolderTreeItem({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDelete(folder.id, folder.name)}
-                className="gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
+                className="gap-2"
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-4 w-4 text-slate-500" />
                 <span>Delete</span>
               </DropdownMenuItem>
             </DropdownMenuContent>

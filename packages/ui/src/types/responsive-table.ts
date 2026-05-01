@@ -44,6 +44,10 @@ export type Column<T, K extends keyof T = keyof T> = {
   hideOnMobile?: boolean;
   /** Hide the label on mobile card view (optional, default: false) */
   hideLabelOnMobile?: boolean;
+  /** Optional custom className for the table header cell */
+  headerClassName?: string;
+  /** Optional custom className for the table body cell */
+  cellClassName?: string;
 };
 
 /**

@@ -13,9 +13,12 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  Badge,
   Button,
-  Checkbox,
+  ResponsiveTable,
+  type Column,
 } from "@revnixhq/ui";
+import { useMemo } from "react";
 
 import {
   AlertTriangle,
@@ -25,8 +28,8 @@ import {
   FileAudio,
   FileText,
   File,
-  Image,
 } from "@admin/components/icons";
+import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbox";
 import { DEFAULT_MEDIA_SKELETON_COUNT } from "@admin/constants/media";
 import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
@@ -39,14 +42,14 @@ interface MediaListViewProps {
   error?: Error | null;
   selectedIds?: Set<string>;
   onSelectionChange?: (id: string) => void;
+  onToggleAll?: (selected: boolean) => void;
   onItemClick?: (media: Media) => void;
   onEdit?: (media: Media) => void;
   onDelete?: (media: Media) => void;
   onCopyUrl?: (url: string) => void;
   onDownload?: (media: Media) => void;
   onRetry?: () => void;
-  className?: string;
-  emptyStateMessage?: React.ReactNode;
+  hiddenColumns?: Set<string>;
 }
 
 // Get the right icon for a media type
@@ -96,14 +99,155 @@ export function MediaListView({
   isLoading = false,
   error = null,
   selectedIds = new Set(),
+  hiddenColumns = new Set(),
   onSelectionChange,
-  _onItemClick,
+  onToggleAll,
   onEdit,
-  _onDelete,
   onRetry,
   className = "",
   emptyStateMessage,
 }: MediaListViewProps) {
+  const selectAllState: boolean | "indeterminate" = useMemo(() => {
+    if (media.length === 0) return false;
+    const selectedCount = media.filter(m => selectedIds.has(m.id)).length;
+    if (selectedCount === 0) return false;
+    if (selectedCount === media.length) return true;
+    return "indeterminate";
+  }, [media, selectedIds]);
+
+  const columnDefs: Column<Media>[] = useMemo(() => {
+    const allColumns: Column<Media>[] = [
+      {
+        key: "id",
+        label: (
+          <BulkSelectCheckbox
+            checked={selectAllState}
+            onCheckedChange={checked => onToggleAll?.(checked === true)}
+            rowId="select-all"
+            rowLabel="Select all media on page"
+          />
+        ),
+        headerClassName: "w-12 px-0 text-center",
+        cellClassName: "w-12 px-0 text-center",
+        render: (_, item) => (
+          <div className="flex justify-center">
+            <BulkSelectCheckbox
+              checked={selectedIds.has(item.id)}
+              onCheckedChange={() => onSelectionChange?.(item.id)}
+              rowId={item.id}
+              rowLabel={item.originalFilename}
+            />
+          </div>
+        ),
+      },
+      {
+        key: "originalFilename",
+        label: "NAME",
+        headerClassName: "text-left pl-0",
+        cellClassName: "text-left pl-0",
+        render: (_, item) => {
+          const type = getMediaType(item.mimeType);
+          const isImage = type === "image";
+          return (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 overflow-hidden bg-white dark:bg-slate-900/50 flex items-center justify-center flex-shrink-0 border border-border/50 rounded">
+                {isImage && item.thumbnailUrl ? (
+                  <img
+                    src={item.thumbnailUrl}
+                    alt={item.altText || item.originalFilename}
+                    className="max-w-full max-h-full block"
+                    style={{ objectFit: "contain" }}
+                    loading="lazy"
+                  />
+                ) : isImage && item.url ? (
+                  <img
+                    src={item.url}
+                    alt={item.altText || item.originalFilename}
+                    className="max-w-full max-h-full block"
+                    style={{ objectFit: "contain" }}
+                    loading="lazy"
+                  />
+                ) : (
+                  <MediaTypeIcon mimeType={item.mimeType} />
+                )}
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-sm font-medium truncate">
+                  {item.originalFilename}
+                </span>
+                {item.altText && (
+                  <span className="text-xs text-muted-foreground truncate">
+                    {item.altText}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        },
+      },
+      {
+        key: "mimeType",
+        label: "TYPE",
+        headerClassName: "text-center",
+        cellClassName: "text-center",
+        render: (_, item) => {
+          const type = getMediaType(item.mimeType);
+          return (
+            <Badge
+              variant="default"
+              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-primary/5 text-primary border border-primary/10 uppercase tracking-tight"
+            >
+              {type}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: "size",
+        label: "SIZE",
+        headerClassName: "text-right",
+        cellClassName: "text-right font-medium",
+        render: size => (
+          <span className="text-sm text-muted-foreground">
+            {formatFileSize(Number(size))}
+          </span>
+        ),
+      },
+      {
+        key: "width",
+        label: "DIMENSIONS",
+        hideOnMobile: true,
+        headerClassName: "text-right",
+        cellClassName: "text-right",
+        render: (_, item) => (
+          <span className="text-sm text-muted-foreground">
+            {formatDimensions(item.width, item.height)}
+          </span>
+        ),
+      },
+      {
+        key: "uploadedAt",
+        label: "UPLOADED",
+        hideOnMobile: true,
+        headerClassName: "text-right",
+        cellClassName: "text-right",
+        render: date => (
+          <span className="text-sm text-muted-foreground">
+            {formatDate(date as string | Date)}
+          </span>
+        ),
+      },
+    ];
+
+    return allColumns.filter(col => !hiddenColumns.has(col.key as string));
+  }, [
+    selectAllState,
+    onToggleAll,
+    selectedIds,
+    onSelectionChange,
+    hiddenColumns,
+  ]);
+
   // Loading state
   if (isLoading) {
     return (
@@ -156,13 +300,11 @@ export function MediaListView({
   if (!media || media.length === 0) {
     return (
       <div
-        className="flex flex-col items-center justify-center py-8 px-4 text-center"
+        className="flex flex-col items-center justify-center py-16 px-4 text-center"
         role="status"
         aria-label="No media files"
       >
-        <div className="w-16 h-16 rounded-full bg-accent flex items-center justify-center mb-4">
-          <Folder className="w-8 h-8 text-muted-foreground" />
-        </div>
+        <Folder className="w-16 h-16 text-muted-foreground/20 mb-6" />
         <h2 className="text-xl font-semibold text-foreground mb-2">
           No media files found
         </h2>
@@ -174,136 +316,14 @@ export function MediaListView({
     );
   }
 
-  // Table header
-  const _columns = [
-    { key: "select", label: "", width: "w-10" },
-    { key: "preview", label: "", width: "w-12" },
-    { key: "name", label: "Name", width: "flex-1" },
-    { key: "type", label: "Type", width: "w-24" },
-    { key: "size", label: "Size", width: "w-20" },
-    {
-      key: "dimensions",
-      label: "Dimensions",
-      width: "w-28 hidden md:table-cell",
-    },
-    { key: "date", label: "Uploaded", width: "w-28 hidden lg:table-cell" },
-  ];
-
   return (
-    <div
-      className={cn(
-        "border border-border rounded-lg overflow-hidden",
-        className
-      )}
-    >
-      {/* Header row */}
-      <div className="flex items-center gap-3 px-3 py-2 bg-muted/50 border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
-        <div className="w-10" />
-        <div className="w-32" />
-        <div className="flex-1">Name</div>
-        <div className="w-24 text-center">Type</div>
-        <div className="w-20 text-right">Size</div>
-        <div className="w-28 text-right hidden md:block">Dimensions</div>
-        <div className="w-28 text-right hidden lg:block">Uploaded</div>
-      </div>
-
-      {/* Data rows */}
-      <div className="divide-y divide-border">
-        {media.map(item => {
-          const isSelected = selectedIds.has(item.id);
-          const type = getMediaType(item.mimeType);
-          const isImage = type === "image";
-
-          return (
-            <div
-              key={item.id}
-              className={cn(
-                "flex items-center gap-3 px-3 py-2 transition-colors cursor-pointer",
-                "hover:bg-accent/50",
-                isSelected && "bg-primary/5"
-              )}
-              onClick={() => onEdit?.(item)}
-              role="row"
-              aria-selected={isSelected}
-            >
-              {/* Checkbox */}
-              <div
-                className="w-10 flex justify-center"
-                onClick={e => e.stopPropagation()}
-              >
-                <Checkbox
-                  checked={isSelected}
-                  onCheckedChange={() => onSelectionChange?.(item.id)}
-                  aria-label={`Select ${item.originalFilename}`}
-                />
-              </div>
-
-              {/* Thumbnail */}
-              <div className="w-16 h-16 overflow-hidden bg-white dark:bg-slate-900/50 flex items-center justify-center flex-shrink-0 border border-border/50">
-                {isImage && item.thumbnailUrl ? (
-                  <img
-                    src={item.thumbnailUrl}
-                    alt={item.altText || item.originalFilename}
-                    className="w-full h-full object-contain"
-                    loading="lazy"
-                  />
-                ) : isImage && item.url ? (
-                  <img
-                    src={item.url}
-                    alt={item.altText || item.originalFilename}
-                    className="w-full h-full object-contain"
-                    loading="lazy"
-                  />
-                ) : (
-                  <MediaTypeIcon mimeType={item.mimeType} />
-                )}
-              </div>
-
-              {/* Name */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">
-                  {item.originalFilename}
-                </p>
-                {item.altText && (
-                  <p className="text-xs text-muted-foreground truncate">
-                    {item.altText}
-                  </p>
-                )}
-              </div>
-
-              {/* Type badge */}
-              <div className="w-24 flex justify-center">
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full bg-primary/5 text-primary border border-primary/10 uppercase tracking-tight">
-                  {type === "image" ? (
-                    <Image className="h-3 w-3 text-primary" />
-                  ) : (
-                    <MediaTypeIcon
-                      mimeType={item.mimeType}
-                      className="h-3 w-3 text-primary"
-                    />
-                  )}
-                  <span className="capitalize">{type}</span>
-                </span>
-              </div>
-
-              {/* Size */}
-              <div className="w-20 text-right text-sm text-muted-foreground">
-                {formatFileSize(item.size)}
-              </div>
-
-              {/* Dimensions (hidden on mobile) */}
-              <div className="w-28 text-right text-sm text-muted-foreground hidden md:block">
-                {formatDimensions(item.width, item.height)}
-              </div>
-
-              {/* Date (hidden on smaller screens) */}
-              <div className="w-28 text-right text-sm text-muted-foreground hidden lg:block">
-                {formatDate(item.uploadedAt)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <ResponsiveTable
+      data={media}
+      columns={columnDefs}
+      onRowClick={onEdit}
+      emptyMessage={emptyStateMessage as string}
+      tableWrapperClassName="border-0 rounded-none shadow-none"
+      className={className}
+    />
   );
 }

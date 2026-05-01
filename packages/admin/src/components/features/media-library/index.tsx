@@ -17,27 +17,39 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Button,
-  Input,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  toast,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@revnixhq/ui";
 import * as React from "react";
 
 import {
-  Search,
   List,
   ChevronRight,
   Folder as FolderIconComponent,
+  FolderPlus,
   Home,
   LayoutGrid,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
+  Trash2,
   Upload,
+  Columns,
 } from "@admin/components/icons";
 import { Pagination } from "@admin/components/shared/pagination";
+import { SearchBar } from "@admin/components/shared/search-bar";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
@@ -117,22 +129,38 @@ export function MediaLibrary({
   className,
 }: MediaLibraryProps = {}) {
   // State: Pagination
-  const [page, setPage] = React.useState(1);
+  const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(defaultPageSize);
+  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(
+    new Set()
+  );
+
+  const toggleColumn = (key: string) => {
+    setHiddenColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   // State: Filters
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<MediaType | "all">("all");
-  const [sortBy, setSortBy] = React.useState<
+  const [sortBy, _setSortBy] = React.useState<
     "filename" | "uploadedAt" | "size"
   >(defaultSortBy);
-  const [sortOrder, setSortOrder] = React.useState<"asc" | "desc">(
+  const [sortOrder, _setSortOrder] = React.useState<"asc" | "desc">(
     defaultSortOrder
   );
 
   // State: UI
   const [viewMode, setViewMode] = React.useState<"grid" | "list">("grid");
+  const [openMenuId, setOpenMenuId] = React.useState<string | null>(null);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [isUploadCollapsed, setIsUploadCollapsed] = React.useState(true);
   const [editingMedia, setEditingMedia] = React.useState<Media | null>(null);
@@ -157,7 +185,7 @@ export function MediaLibrary({
 
   // Reset page when folder changes
   React.useEffect(() => {
-    setPage(1);
+    setPage(0);
   }, [activeFolderId]);
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
@@ -202,13 +230,15 @@ export function MediaLibrary({
   // Fetch child folders: subfolders when inside a folder, root folders when at root
   const { data: childSubfolders } = useSubfolders(activeFolderId ?? undefined);
   const { data: rootFoldersList } = useRootFolders();
-  const displayFolders = activeFolderId ? childSubfolders : rootFoldersList;
+
+  const foldersToDisplay = activeFolderId ? childSubfolders : rootFoldersList;
+  const hasFoldersToDisplay = foldersToDisplay && foldersToDisplay.length > 0;
 
   // Debounce search input
   React.useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
-      setPage(1); // Reset to page 1 when search changes
+      setPage(0); // Reset to page 1 when search changes
     }, 300);
 
     return () => clearTimeout(timer);
@@ -216,7 +246,7 @@ export function MediaLibrary({
 
   // Build query params
   const queryParams: MediaParams = {
-    page,
+    page: page + 1,
     pageSize,
     search: debouncedSearch || undefined,
     type: typeFilter === "all" ? undefined : typeFilter,
@@ -226,7 +256,7 @@ export function MediaLibrary({
   };
 
   // TanStack Query: Fetch media
-  const { data, isLoading, error, refetch } = useMedia(queryParams);
+  const { data, isLoading, isFetching, error, refetch } = useMedia(queryParams);
 
   // TanStack Query: Delete single item
   const { mutate: deleteMedia, isPending: isDeleting } = useDeleteMedia();
@@ -347,28 +377,17 @@ export function MediaLibrary({
 
   const handlePageSizeChange = React.useCallback((newPageSize: number) => {
     setPageSize(newPageSize);
-    setPage(1); // Reset to page 1 when page size changes
+    setPage(0); // Reset to page 1 when page size changes
   }, []);
 
   // Handlers: Filters
-  const handleSearchChange = React.useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      setSearch(e.target.value);
-    },
-    []
-  );
+  const handleSearchChange = React.useCallback((value: string) => {
+    setSearch(value);
+  }, []);
 
   const handleTypeFilterChange = React.useCallback((value: string) => {
     setTypeFilter(value as MediaType | "all");
-    setPage(1); // Reset to page 1 when filter changes
-  }, []);
-
-  const handleSortByChange = React.useCallback((value: string) => {
-    setSortBy(value as "filename" | "uploadedAt" | "size");
-  }, []);
-
-  const handleSortOrderToggle = React.useCallback(() => {
-    setSortOrder(prev => (prev === "asc" ? "desc" : "asc"));
+    setPage(0); // Reset to page 1 when filter changes
   }, []);
 
   // Handlers: Folders
@@ -376,7 +395,7 @@ export function MediaLibrary({
   const handleDeleteFolderSuccess = React.useCallback(() => {
     if (deleteFolderId === activeFolderId) {
       setActiveFolderId(null);
-      setPage(1);
+      setPage(0);
     }
   }, [deleteFolderId, activeFolderId, setActiveFolderId]);
 
@@ -385,10 +404,48 @@ export function MediaLibrary({
     setIsMoveToFolderDialogOpen(true);
   }, [selectedIds]);
 
-  // Render
-  const totalPages = data?.meta?.totalPages || 0;
+  const handleDownload = React.useCallback(async (media: Media) => {
+    if (!media.url) return;
+    try {
+      const response = await fetch(media.url);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = media.originalFilename || media.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      window.open(media.url, "_blank");
+    }
+  }, []);
+
+  const handleToggleAll = React.useCallback(
+    (selected: boolean) => {
+      if (selected) {
+        const allIdsOnPage = data?.data.map(m => m.id) || [];
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          allIdsOnPage.forEach(id => next.add(id));
+          return next;
+        });
+      } else {
+        const allIdsOnPage = data?.data.map(m => m.id) || [];
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          allIdsOnPage.forEach(id => next.delete(id));
+          return next;
+        });
+      }
+    },
+    [data?.data]
+  );
+  const totalPages =
+    data?.meta?.totalPages || (data?.data && data.data.length > 0 ? 1 : 0);
   const total = data?.meta?.total || 0;
-  const hasSelection = selectedIds.size > 0;
+  // const hasSelection = selectedIds.size > 0;
 
   return (
     <div
@@ -424,15 +481,15 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-muted/50 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200",
+                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
                   folderViewMode === "sidebar"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setFolderViewMode("sidebar")}
                 title="Show Sidebar"
@@ -443,10 +500,10 @@ export function MediaLibrary({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200",
+                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
                   folderViewMode === "grid"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setFolderViewMode("grid")}
                 title="Hide Sidebar"
@@ -455,15 +512,15 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-muted/50 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200",
+                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
                   viewMode === "grid"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setViewMode("grid")}
                 title="Grid View"
@@ -474,10 +531,10 @@ export function MediaLibrary({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200",
+                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
                   viewMode === "list"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setViewMode("list")}
                 title="List View"
@@ -490,10 +547,10 @@ export function MediaLibrary({
             <Button
               onClick={() => setIsUploadCollapsed(!isUploadCollapsed)}
               className={cn(
-                "flex items-center gap-2 px-5 h-10 shrink-0 transition-all duration-200 font-bold tracking-tight rounded-xl",
+                "flex items-center gap-2 px-5 h-10 shrink-0 transition-all duration-200 font-medium tracking-tight rounded-xl",
                 !isUploadCollapsed
-                  ? "bg-primary/80 text-primary-foreground"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground shadow-sm"
+                  ? "bg-primary/90 text-primary-foreground hover:bg-primary"
+                  : "bg-primary text-primary-foreground hover:opacity-90 shadow-sm"
               )}
             >
               <Upload className="h-4 w-4" />
@@ -518,21 +575,19 @@ export function MediaLibrary({
           className="flex flex-col gap-4 sm:flex-row sm:items-center mb-6"
           suppressHydrationWarning
         >
-          {/* Search */}
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="Search media files..."
+            <SearchBar
               value={search}
               onChange={handleSearchChange}
-              className="pl-9"
+              placeholder="Search media files by name or alt text..."
+              isLoading={isFetching}
+              className="max-w-md"
             />
           </div>
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white dark:bg-slate-950">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -555,28 +610,71 @@ export function MediaLibrary({
             </SelectContent>
           </Select>
 
-          {/* Sort By */}
-          <Select value={sortBy} onValueChange={handleSortByChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="uploadedAt">Uploaded</SelectItem>
-              <SelectItem value="filename">Name</SelectItem>
-              <SelectItem value="size">Size</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Sort Order Toggle */}
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={handleSortOrderToggle}
-            aria-label={`Sort ${sortOrder === "asc" ? "ascending" : "descending"}`}
-          >
-            {sortOrder === "asc" ? "↑" : "↓"}
-          </Button>
+          {/* Columns Toggle (Only for List View) */}
+          {viewMode === "list" && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 hover-unified px-4 shrink-0"
+                >
+                  <Columns className="mr-2 h-4 w-4 text-muted-foreground" />
+                  Columns
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="w-48 shadow-none border-border/50"
+              >
+                <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 px-2 py-1.5">
+                  Toggle Columns
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-border/50" />
+                <DropdownMenuCheckboxItem
+                  checked={!hiddenColumns.has("mimeType")}
+                  onCheckedChange={() => toggleColumn("mimeType")}
+                  className="text-xs font-medium"
+                >
+                  Type
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={!hiddenColumns.has("size")}
+                  onCheckedChange={() => toggleColumn("size")}
+                  className="text-xs font-medium"
+                >
+                  Size
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={!hiddenColumns.has("width")}
+                  onCheckedChange={() => toggleColumn("width")}
+                  className="text-xs font-medium"
+                >
+                  Dimensions
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={!hiddenColumns.has("uploadedAt")}
+                  onCheckedChange={() => toggleColumn("uploadedAt")}
+                  className="text-xs font-medium"
+                >
+                  Uploaded Date
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
+
+        {selectedIds.size > 0 && (
+          <div className="mb-6">
+            <MediaBulkActionBar
+              selectedCount={selectedIds.size}
+              onDelete={handleBulkDelete}
+              onClear={handleClearSelection}
+              isDeleting={isBulkDeleting}
+              onMoveToFolder={handleMoveToFolder}
+            />
+          </div>
+        )}
 
         {/* Folder Breadcrumbs & Grid (Moved under search and filters) */}
         {folderViewMode === "grid" && (
@@ -587,145 +685,324 @@ export function MediaLibrary({
               showRoot={false}
               className="mb-4"
             />
-
-            {/* Child Folder Cards */}
+            {/* Root Folders Row */}
             <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-4">
                 {/* All Media (Root) Card */}
                 <button
                   type="button"
                   onClick={() => setActiveFolderId(null)}
                   className={cn(
-                    "group flex items-center gap-3 rounded-md border p-3 text-left transition-all duration-200 hover-unified ring-1 cursor-pointer",
+                    "group flex items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                     !activeFolderId
-                      ? "border-primary/20 bg-primary/5 ring-primary/20"
-                      : "border-border bg-card hover:border-primary/20 ring-border/50"
+                      ? "border-primary/20 bg-primary/5"
+                      : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
                   )}
                 >
-                  <span
+                  <Home
                     className={cn(
-                      "flex h-10 w-10 shrink-0 items-center justify-center rounded-md transition-colors",
+                      "h-4 w-4 shrink-0 transition-colors",
                       !activeFolderId
-                        ? "bg-primary text-white"
-                        : "bg-slate-50 group-hover:bg-primary/10 transition-colors"
+                        ? "text-primary"
+                        : "text-muted-foreground/70 group-hover:text-primary"
                     )}
-                  >
-                    <Home
-                      className={cn(
-                        "h-5 w-5",
-                        !activeFolderId
-                          ? "text-white"
-                          : "text-slate-400 group-hover:text-primary"
-                      )}
-                    />
-                  </span>
+                  />
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
-                        "truncate text-sm font-bold transition-colors",
+                        "truncate text-xs font-semibold transition-colors",
                         !activeFolderId ? "text-primary" : "text-foreground"
                       )}
                     >
                       All Media
                     </p>
-                    <p className="truncate text-[10px] text-slate-400/80 font-medium transition-colors">
-                      Root Folder
-                    </p>
                   </div>
                 </button>
 
-                {/* Subfolders */}
-                {displayFolders?.map(folder => (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    onClick={() => setActiveFolderId(folder.id)}
-                    className="group flex items-center gap-3 rounded-md border border-border bg-card p-3 text-left transition-all duration-200 hover-subtle-row hover:border-primary/20 ring-1 ring-border/50 cursor-pointer"
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-50 transition-colors group-hover:bg-primary/10">
-                      <FolderIconComponent className="h-5 w-5 text-slate-400 group-hover:text-primary" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold text-slate-800 transition-colors">
-                        {folder.name}
-                      </p>
-                      {folder.description && (
-                        <p className="truncate text-[10px] text-slate-400/80 font-medium transition-colors">
-                          {folder.description}
-                        </p>
-                      )}
+                {/* Root Folders */}
+                {rootFoldersList?.map(folder => {
+                  const isActive = activeFolderId === folder.id;
+                  return (
+                    <div key={folder.id} className="group relative">
+                      <button
+                        type="button"
+                        onClick={() => setActiveFolderId(folder.id)}
+                        className={cn(
+                          "flex w-full items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                          isActive
+                            ? "border-primary/20 bg-primary/5 ring-1 ring-primary/20"
+                            : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
+                        )}
+                      >
+                        <FolderIconComponent
+                          className={cn(
+                            "h-4 w-4 shrink-0 transition-colors",
+                            isActive
+                              ? "text-primary"
+                              : "text-muted-foreground/70 group-hover:text-foreground"
+                          )}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p
+                            className={cn(
+                              "truncate text-xs font-semibold transition-colors",
+                              isActive
+                                ? "text-primary"
+                                : "text-muted-foreground group-hover:text-foreground"
+                            )}
+                          >
+                            {folder.name}
+                          </p>
+                        </div>
+                      </button>
+
+                      {/* Folder Context Menu */}
+                      <div
+                        className={cn(
+                          "absolute top-2 right-2 transition-opacity",
+                          isActive || openMenuId === folder.id
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+                        )}
+                      >
+                        <DropdownMenu
+                          onOpenChange={open =>
+                            setOpenMenuId(open ? folder.id : null)
+                          }
+                        >
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-primary/10 transition-colors !cursor-pointer"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            className="w-48 shadow-none border-border/50"
+                          >
+                            <DropdownMenuItem
+                              onClick={e => {
+                                e.stopPropagation();
+                                setCreateFolderParentId(folder.id);
+                                setIsCreateFolderDialogOpen(true);
+                              }}
+                              className="gap-2"
+                            >
+                              <FolderPlus className="h-4 w-4 text-slate-500" />
+                              <span>New subfolder</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={e => {
+                                e.stopPropagation();
+                                setEditFolderId(folder.id);
+                                setIsEditFolderDialogOpen(true);
+                              }}
+                              className="gap-2"
+                            >
+                              <Pencil className="h-4 w-4 text-slate-500" />
+                              <span>Rename</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={e => {
+                                e.stopPropagation();
+                                setDeleteFolderId(folder.id);
+                                setDeleteFolderName(folder.name);
+                                setIsDeleteFolderDialogOpen(true);
+                              }}
+                              className="gap-2"
+                            >
+                              <Trash2 className="h-4 w-4 text-slate-500" />
+                              <span>Delete</span>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
+
+            {/* Subfolders Row (Only shown when inside a folder) */}
+            {activeFolderId && hasFoldersToDisplay && (
+              <div className="animate-in fade-in slide-in-from-top-2 duration-300 border-t border-border/50 pt-4 mt-2">
+                <div className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest mb-3 px-1">
+                  {activeFolderId ? "Subfolders" : "Folders"}
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 pb-6">
+                  {foldersToDisplay.map(folder => {
+                    const isActive = activeFolderId === folder.id;
+                    return (
+                      <div key={folder.id} className="group relative">
+                        <button
+                          type="button"
+                          onClick={() => setActiveFolderId(folder.id)}
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                            isActive
+                              ? "border-primary/20 bg-primary/5 ring-1 ring-primary/20"
+                              : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
+                          )}
+                        >
+                          <FolderIconComponent
+                            className={cn(
+                              "h-4 w-4 shrink-0 transition-colors",
+                              isActive
+                                ? "text-primary"
+                                : "text-muted-foreground/70 group-hover:text-foreground"
+                            )}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={cn(
+                                "truncate text-xs font-semibold transition-colors",
+                                isActive
+                                  ? "text-primary"
+                                  : "text-muted-foreground group-hover:text-foreground"
+                              )}
+                            >
+                              {folder.name}
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Folder Context Menu */}
+                        <div
+                          className={cn(
+                            "absolute top-2 right-2 transition-opacity",
+                            isActive || openMenuId === folder.id
+                              ? "opacity-100"
+                              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+                          )}
+                        >
+                          <DropdownMenu
+                            onOpenChange={open =>
+                              setOpenMenuId(open ? folder.id : null)
+                            }
+                          >
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-primary/10 transition-colors !cursor-pointer"
+                                onClick={e => e.stopPropagation()}
+                              >
+                                <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="end"
+                              className="w-48 shadow-none border-border/50"
+                            >
+                              <DropdownMenuItem
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setCreateFolderParentId(folder.id);
+                                  setIsCreateFolderDialogOpen(true);
+                                }}
+                                className="gap-2 cursor-pointer"
+                              >
+                                <FolderPlus className="h-4 w-4 text-slate-500" />
+                                <span>New subfolder</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setEditFolderId(folder.id);
+                                  setIsEditFolderDialogOpen(true);
+                                }}
+                                className="gap-2 cursor-pointer"
+                              >
+                                <Pencil className="h-4 w-4 text-slate-500" />
+                                <span>Rename</span>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setDeleteFolderId(folder.id);
+                                  setDeleteFolderName(folder.name);
+                                  setIsDeleteFolderDialogOpen(true);
+                                }}
+                                className="gap-2 cursor-pointer"
+                              >
+                                <Trash2 className="h-4 w-4 text-slate-500" />
+                                <span>Delete</span>
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Bulk Action Bar (fixed at bottom) */}
-        {hasSelection && (
-          <MediaBulkActionBar
-            selectedCount={selectedIds.size}
-            onDelete={handleBulkDelete}
-            onClear={handleClearSelection}
-            isDeleting={isBulkDeleting}
-            onMoveToFolder={handleMoveToFolder}
-          />
-        )}
-
         {/* Media Content - Grid or List view */}
-        {viewMode === "grid" ? (
-          <MediaGrid
-            media={data?.data || []}
-            isLoading={isLoading}
-            error={error}
-            selectedIds={selectedIds}
-            onSelectionChange={handleSelectionChange}
-            onItemClick={(media: Media) =>
-              console.log("[MediaLibrary] Item clicked:", media)
-            }
-            onEdit={handleEditMedia}
-            onDelete={(media: Media) => handleDeleteItem(media)}
-            onCopyUrl={(url: string) => {
-              void navigator.clipboard.writeText(url);
-            }}
-            onDownload={(media: Media) => {
-              const a = document.createElement("a");
-              a.href = media.url;
-              a.download = media.filename;
-              a.click();
-            }}
-            onRetry={() => {
-              void refetch();
-            }}
-          />
-        ) : (
-          <MediaListView
-            media={data?.data || []}
-            isLoading={isLoading}
-            error={error}
-            selectedIds={selectedIds}
-            onSelectionChange={handleSelectionChange}
-            onEdit={handleEditMedia}
-            onDelete={(media: Media) => handleDeleteItem(media)}
-            onRetry={() => {
-              void refetch();
-            }}
-          />
-        )}
+        <div className="rounded-md border border-border bg-card overflow-hidden">
+          {viewMode === "grid" ? (
+            <div className="p-6">
+              <MediaGrid
+                media={data?.data || []}
+                isLoading={isLoading}
+                error={error}
+                selectedIds={selectedIds}
+                onSelectionChange={handleSelectionChange}
+                onItemClick={handleEditMedia}
+                onEdit={handleEditMedia}
+                onDelete={(media: Media) => handleDeleteItem(media)}
+                onCopyUrl={(url: string) => {
+                  void navigator.clipboard.writeText(url);
+                }}
+                onDownload={(media: Media) => {
+                  const a = document.createElement("a");
+                  a.href = media.url;
+                  a.download = media.filename;
+                  a.click();
+                }}
+                onRetry={() => {
+                  void refetch();
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              <MediaListView
+                media={data?.data || []}
+                isLoading={isLoading}
+                error={error}
+                selectedIds={selectedIds}
+                hiddenColumns={hiddenColumns}
+                onSelectionChange={handleSelectionChange}
+                onToggleAll={handleToggleAll}
+                onEdit={handleEditMedia}
+                onDelete={(media: Media) => handleDeleteItem(media)}
+                onRetry={() => {
+                  void refetch();
+                }}
+              />
 
-        {/* Pagination */}
-        {!isLoading && !error && data && totalPages > 1 && (
-          <Pagination
-            currentPage={page}
-            totalPages={totalPages}
-            pageSize={pageSize}
-            pageSizeOptions={[12, 24, 48, 96]}
-            showPageSizeSelector
-            onPageChange={handlePageChange}
-            onPageSizeChange={handlePageSizeChange}
-          />
-        )}
+              {/* Pagination for List View - Inside Boxed Container */}
+              {!isLoading && !error && data && data.data.length > 0 && (
+                <div className="border-t border-border bg-[hsl(var(--table-header-bg))] p-4">
+                  <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    pageSize={pageSize}
+                    pageSizeOptions={[12, 24, 48, 96]}
+                    showPageSizeSelector
+                    onPageChange={handlePageChange}
+                    onPageSizeChange={handlePageSizeChange}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
         {/* Media Delete Dialog (single item) */}
         <MediaDeleteDialog
@@ -780,6 +1057,18 @@ export function MediaLibrary({
           onOpenChange={setIsEditDialogOpen}
           onSave={handleSaveMedia}
           isLoading={isUpdating}
+          onDelete={m => {
+            setMediaToDelete(m);
+            setIsDeleteDialogOpen(true);
+            setIsEditDialogOpen(false);
+          }}
+          onDownload={m => {
+            void handleDownload(m);
+          }}
+          onCopyUrl={url => {
+            void navigator.clipboard.writeText(url);
+            toast.success("URL copied to clipboard");
+          }}
         />
 
         {/* Create Folder Dialog */}

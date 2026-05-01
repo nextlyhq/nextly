@@ -75,76 +75,69 @@ export function MediaBulkActionBar({
       aria-label="Bulk actions for selected media"
       aria-live="polite"
       className={cn(
-        "fixed bottom-0 right-0 z-40 transition-[left] duration-200 ease-linear",
-        "left-0 md:group-data-[state=expanded]/sidebar-wrapper:left-[var(--sidebar-width)] md:group-data-[state=collapsed]/sidebar-wrapper:left-[var(--sidebar-width-icon)]",
-        "border-t border-border bg-background shadow-inner-subtle backdrop-blur supports-[backdrop-filter]:bg-background/80",
-        "animate-in slide-in-from-bottom duration-300",
+        "flex items-center justify-between gap-4 w-full p-3 rounded-xl border border-primary/20 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
         className
       )}
     >
-      <div className="container mx-auto px-4 py-4">
-        <div className="flex items-center justify-between gap-4">
-          {/* Left side: Selection info */}
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 items-center gap-2 rounded-lg bg-primary/10 px-4">
-              <span className="text-lg font-semibold text-primary">
-                {selectedCount}
-              </span>
-              <span className="text-sm text-muted-foreground">
-                {itemLabel} selected
-              </span>
-            </div>
-          </div>
-
-          {/* Right side: Actions */}
-          <div className="flex items-center gap-3">
-            {/* Clear selection button */}
-            <Button
-              variant="ghost"
-              size="default"
-              onClick={onClear}
-              disabled={isDeleting}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <X className="mr-2 h-4 w-4" />
-              Clear selection
-            </Button>
-
-            {/* Move to folder button */}
-            <Button
-              variant="outline"
-              size="default"
-              onClick={onMoveToFolder}
-              disabled={isDeleting}
-              className="gap-2"
-            >
-              <FolderInput className="h-4 w-4" />
-              Move
-            </Button>
-
-            {/* Delete button */}
-            <Button
-              variant="destructive"
-              size="default"
-              onClick={onDelete}
-              disabled={isDeleting}
-              className="min-w-[120px]"
-              aria-label={`Delete ${selectedCount} selected ${itemLabel}`}
-            >
-              {isDeleting ? (
-                <>
-                  <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Deleting...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete {selectedCount > 1 ? `(${selectedCount})` : ""}
-                </>
-              )}
-            </Button>
-          </div>
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 items-center gap-2 px-3">
+          <span className="text-sm font-semibold text-primary">
+            {selectedCount}
+          </span>
+          <span className="text-xs text-muted-foreground font-normal">
+            {itemLabel} selected
+          </span>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        {/* Clear selection button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClear}
+          disabled={isDeleting}
+          className="text-muted-foreground hover:text-foreground h-8 text-xs font-normal"
+        >
+          <X className="mr-1.5 h-3.5 w-3.5" />
+          Clear
+        </Button>
+
+        <div className="h-4 w-px bg-primary/20 mx-1" />
+
+        {/* Move to folder button */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onMoveToFolder}
+          disabled={isDeleting}
+          className="gap-1.5 h-8 text-xs font-normal bg-white dark:bg-slate-950 border-primary/20 text-primary hover:bg-primary/5"
+        >
+          <FolderInput className="h-3.5 w-3.5" />
+          Move
+        </Button>
+
+        {/* Delete button - Black and White scheme */}
+        <Button
+          variant="default"
+          size="sm"
+          onClick={onDelete}
+          disabled={isDeleting}
+          className="h-8 text-xs font-normal px-4 bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+          aria-label={`Delete ${selectedCount} selected ${itemLabel}`}
+        >
+          {isDeleting ? (
+            <>
+              <span className="mr-1.5 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              Deleting...
+            </>
+          ) : (
+            <>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Delete
+            </>
+          )}
+        </Button>
       </div>
     </div>
   );

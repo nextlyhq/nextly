@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   Folder as FolderIcon,
-  Home,
 } from "@admin/components/icons";
 import {
   useFolderById,
@@ -140,29 +139,33 @@ export function FolderTreePicker({
           type="button"
           onClick={() => onSelect(null)}
           className={cn(
-            "flex w-full items-center rounded-md border text-left transition-colors hover:bg-accent",
+            "group flex w-full items-center text-left transition-all duration-200",
             compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3",
             selectedFolderId === null
-              ? "border-primary bg-accent"
-              : compact
-                ? "border-transparent"
-                : "border-border"
+              ? "bg-primary/5 text-primary"
+              : "hover:bg-primary/5 hover:text-primary"
           )}
         >
-          <Home
+          <FolderIcon
             className={cn(
-              "shrink-0 text-muted-foreground",
+              "shrink-0 transition-colors",
+              selectedFolderId === null
+                ? "text-primary"
+                : "text-muted-foreground group-hover:text-primary",
               compact ? "h-4 w-4" : "h-5 w-5"
             )}
           />
           <div className="flex-1">
-            <div className={cn("font-medium", compact && "text-sm")}>
+            <div
+              className={cn(
+                "font-medium tracking-tight text-[13px]",
+                compact && "text-xs"
+              )}
+            >
               {rootLabel}
             </div>
             {!compact && rootDescription && (
-              <div className="text-sm text-muted-foreground">
-                {rootDescription}
-              </div>
+              <div className="text-sm opacity-70">{rootDescription}</div>
             )}
           </div>
         </button>
@@ -221,14 +224,12 @@ function FolderTreePickerItem({
     <div>
       <div
         className={cn(
-          "flex items-center rounded-md border transition-colors hover:bg-accent",
+          "group flex items-center transition-all duration-200",
           compact ? "gap-1.5 px-2 py-1.5" : "gap-2 px-3 py-2.5",
           isDisabled && "cursor-not-allowed opacity-50",
           isSelected
-            ? "border-primary bg-accent"
-            : compact
-              ? "border-transparent"
-              : "border-border"
+            ? "bg-primary/5 text-primary"
+            : "hover:bg-primary/5 hover:text-primary"
         )}
         style={{ paddingLeft: `${indentPx}px` }}
       >
@@ -239,7 +240,10 @@ function FolderTreePickerItem({
             onToggle(folder.id);
           }}
           className={cn(
-            "flex shrink-0 items-center justify-center rounded-sm hover:bg-muted",
+            "flex shrink-0 items-center justify-center rounded-sm transition-colors",
+            isSelected
+              ? "text-primary/70 hover:text-primary hover:bg-primary/10"
+              : "text-muted-foreground group-hover:text-primary hover:bg-primary/10",
             compact ? "h-4 w-4" : "h-5 w-5"
           )}
         >
@@ -258,13 +262,18 @@ function FolderTreePickerItem({
         >
           <span
             className={cn(
-              "flex shrink-0 items-center justify-center text-muted-foreground",
+              "flex shrink-0 items-center justify-center transition-colors",
+              isSelected
+                ? "text-primary"
+                : "text-muted-foreground group-hover:text-primary",
               iconSize
             )}
           >
             <FolderIcon className={iconSize} />
           </span>
-          <span className="truncate text-sm font-medium">{folder.name}</span>
+          <span className="truncate text-xs font-medium tracking-tight">
+            {folder.name}
+          </span>
           {isDisabled && (
             <span className="shrink-0 text-xs text-muted-foreground">
               (Current)

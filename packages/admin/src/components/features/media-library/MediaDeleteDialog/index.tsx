@@ -41,11 +41,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  toast,
 } from "@revnixhq/ui";
 import { useState, useCallback, useRef } from "react";
 
 import { Loader2, AlertTriangle } from "@admin/components/icons";
-import { toast } from "@admin/components/ui";
 import type { Media } from "@admin/types/media";
 
 /**
@@ -174,7 +174,9 @@ export function MediaDeleteDialog({
           </Button>
           <Button
             variant="destructive"
-            onClick={() => { void handleConfirm(); }}
+            onClick={() => {
+              void handleConfirm();
+            }}
             disabled={isPending}
             ref={deleteButtonRef}
           >

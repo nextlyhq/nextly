@@ -67,17 +67,13 @@ import type React from "react";
 import { useState } from "react";
 
 import {
-  Copy,
-  Download,
-  Edit,
   File,
   FileText,
   Image as ImageIcon,
   Music,
-  Trash2,
   Video,
 } from "@admin/components/icons";
-import { getMediaType } from "@admin/lib/media-utils";
+import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { MediaCardProps } from "@admin/types/ui/media-card";
 
@@ -135,10 +131,6 @@ export function MediaCard({
   isSelected = false,
   onSelectionChange,
   onClick,
-  onEdit,
-  onDelete,
-  onCopyUrl,
-  onDownload,
   className = "",
 }: MediaCardProps) {
   const [imageError, setImageError] = useState(false);
@@ -162,34 +154,6 @@ export function MediaCard({
 
   // Determine if checkbox should be shown
   const showCheckbox = onSelectionChange !== undefined;
-
-  const handleDownloadClick = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!media.url) return;
-    try {
-      const response = await fetch(media.url);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = media.originalFilename || media.filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-
-      // Successfully downloaded, no need to call parent onDownload which might duplicate action
-    } catch {
-      window.open(media.url, "_blank");
-    }
-  };
-
-  const handleEditClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onEdit?.(media);
-  };
-
   return (
     <div
       role="button"
@@ -199,113 +163,75 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-xl overflow-hidden cursor-pointer flex items-center justify-center",
-        "bg-white dark:bg-slate-900/50",
-        "transition-all duration-200",
-        "border",
+        "group relative aspect-square rounded-xl overflow-hidden bg-white dark:bg-slate-950 transition-all duration-300 border border-border/50 flex flex-col",
         isSelected
-          ? "border-primary ring-1 ring-primary/40 ring-offset-2"
-          : "border-border/50 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/10",
-        "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
+          ? "ring-2 ring-primary/30 ring-offset-2 border-primary/30 cursor-pointer"
+          : "hover:border-primary/40 cursor-pointer",
         className
       )}
     >
-      {!imageError && media.url ? (
-        <img
-          src={media.url}
-          alt={media.altText || media.filename}
-          loading="lazy"
-          onLoad={() => setImageLoading(false)}
-          onError={() => {
-            setImageError(true);
-            setImageLoading(false);
-          }}
-          className={cn(
-            "max-w-full max-h-full object-contain",
-            imageLoading ? "opacity-0" : "opacity-100",
-            "transition-opacity duration-150"
-          )}
-        />
-      ) : null}
+      {/* Image Preview Container - Flex-1 to push info bar down */}
+      <div className="relative flex-1 flex items-center justify-center p-4 min-h-0">
+        {!imageError && media.url ? (
+          <img
+            src={media.url}
+            alt={media.altText || media.originalFilename || media.filename}
+            loading="lazy"
+            onLoad={() => setImageLoading(false)}
+            onError={() => {
+              setImageError(true);
+              setImageLoading(false);
+            }}
+            className={cn(
+              "max-w-full max-h-full object-contain drop-shadow-sm",
+              imageLoading ? "opacity-0" : "opacity-100",
+              "transition-all duration-500 group-hover:scale-105"
+            )}
+          />
+        ) : null}
 
-      {/* Loading State */}
-      {imageLoading && !imageError && (
-        <div className="absolute inset-0 bg-accent animate-pulse" />
-      )}
+        {/* Loading/Error states */}
+        {imageLoading && !imageError && (
+          <div className="absolute inset-0 bg-accent/50 animate-pulse" />
+        )}
+        {imageError && (
+          <div className="absolute inset-0 bg-accent/50 flex items-center justify-center">
+            <MediaTypeIcon className="w-12 h-12 text-muted-foreground/40" />
+          </div>
+        )}
+      </div>
 
-      {/* Error State - Fallback Icon */}
-      {imageError && (
-        <div className="absolute inset-0 bg-accent flex items-center justify-center">
-          <MediaTypeIcon className="w-12 h-12 text-muted-foreground" />
-        </div>
-      )}
-
-      {/* Checkbox Overlay (top-left) */}
+      {/* Checkbox Overlay (top-left) - Higher Z for interaction */}
       {showCheckbox && (
-        <div className="absolute top-2 left-2 z-10">
+        <div className="absolute top-3 left-3 z-30">
           <Checkbox
             checked={isSelected}
             onCheckedChange={() => onSelectionChange?.(media.id)}
             aria-label={`Select ${media.filename}`}
-            className="h-5 w-5 bg-white/10 backdrop-blur-sm data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground border-white/60 hover:border-white shadow-lg"
+            className="h-5 w-5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm data-[state=checked]:bg-primary border-primary/20 transition-all"
             onClick={e => e.stopPropagation()}
           />
         </div>
       )}
 
-      {/* Actions Overlay (Bottom Slide-up) */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-6 py-4 bg-background/95 backdrop-blur-md border-t border-border translate-y-full group-hover:translate-y-0 opacity-0 group-hover:opacity-100 transition-all duration-300 ease-out shadow-sm">
-        {onEdit && (
-          <button
-            onClick={handleEditClick}
-            className="text-muted-foreground hover:text-foreground hover:scale-110 transition-all cursor-pointer"
-            aria-label="Edit"
-            title="Edit"
-          >
-            <Edit className="h-4 w-4" />
-          </button>
-        )}
-        {onCopyUrl && (
-          <button
-            onClick={e => {
-              e.stopPropagation();
-              onCopyUrl(media.url);
-            }}
-            className="text-muted-foreground hover:text-foreground hover:scale-110 transition-all cursor-pointer"
-            aria-label="Copy URL"
-            title="Copy URL"
-          >
-            <Copy className="h-4 w-4" />
-          </button>
-        )}
-        {onDownload && (
-          <button
-            onClick={e => {
-              void handleDownloadClick(e);
-            }}
-            className="text-muted-foreground hover:text-foreground hover:scale-110 transition-all cursor-pointer"
-            aria-label="Download"
-            title="Download"
-          >
-            <Download className="h-4 w-4" />
-          </button>
-        )}
-        {onDelete && (
-          <button
-            onClick={e => {
-              e.stopPropagation();
-              onDelete(media);
-            }}
-            className="text-muted-foreground hover:text-destructive hover:scale-110 transition-all cursor-pointer"
-            aria-label="Delete"
-            title="Delete"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
-        )}
+      {/* Information Bar - Integrated at bottom of aspect-square */}
+      <div className="bg-primary/5 dark:bg-primary/10 border-t border-border/40 p-3 shrink-0">
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate leading-none tracking-tight">
+            {media.originalFilename || media.filename}
+          </p>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+              {media.width && media.height
+                ? `${media.width}×${media.height}`
+                : "No Size"}
+            </span>
+            <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">
+              {formatFileSize(media.size)}
+            </span>
+          </div>
+        </div>
       </div>
-
-      {/* Bottom Overlay removed as requested */}
     </div>
   );
 }
