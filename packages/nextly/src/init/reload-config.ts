@@ -148,22 +148,10 @@ export async function reloadNextlyConfig(opts?: {
         ? `${msg} (context: ${logContext})`
         : msg;
 
-    // The "expression is too dynamic" failure is Turbopack's static
-    // analyzer rejecting `bundle-require`'s internal `import(file)`
-    // call. Existing scaffolds (created before bundle-require was
-    // added to the scaffolder's serverExternalPackages list) hit this
-    // on every code-first HMR / boot-time apply. The fix is a one-line
-    // edit to `next.config.ts`. New scaffolds (create-nextly-app
-    // 0.0.141+) include it automatically.
-    const isTurbopackDynamicImport =
-      typeof cause === "string" &&
-      /Cannot find module as expression is too dynamic/.test(cause);
-    const guidance = isTurbopackDynamicImport
-      ? `Add "bundle-require" to your next.config.ts serverExternalPackages array. Example:\n\n  serverExternalPackages: [\n    "@revnixhq/nextly",\n    ...,\n    "bundle-require",\n  ],\n\nThen restart the dev server.`
-      : `Keeping the previously-loaded config. Fix the syntax error and save again to retry.`;
-
     console.warn(
-      `[Nextly HMR] Could not reload nextly.config.ts: ${detail}. ${guidance}`
+      `[Nextly HMR] Could not reload nextly.config.ts: ${detail}. ` +
+        `Keeping the previously-loaded config. Fix the syntax error and ` +
+        `save again to retry.`
     );
     return;
   }

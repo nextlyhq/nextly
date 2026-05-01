@@ -10,12 +10,6 @@ import fs from "fs-extra";
  *   1. Missing optional drivers (e.g. mysql2 when using PostgreSQL) don't
  *      cause "Module not found" build errors.
  *   2. Native addons (better-sqlite3, pg-native) aren't processed by webpack.
- *   3. `bundle-require` (used by Nextly's CLI config-loader) does an
- *      internal `import(file)` that Turbopack's static analyzer rejects
- *      as "Cannot find module as expression is too dynamic". Marking it
- *      external makes Node load it directly, bypassing the analyzer.
- *      Without this, code-first HMR + boot-time apply fail silently with
- *      "Failed to load Nextly configuration."
  */
 const SERVER_EXTERNAL_PACKAGES = [
   "@revnixhq/nextly",
@@ -31,7 +25,6 @@ const SERVER_EXTERNAL_PACKAGES = [
   "bcryptjs",
   "sharp",
   "esbuild",
-  "bundle-require",
 ];
 
 /**
