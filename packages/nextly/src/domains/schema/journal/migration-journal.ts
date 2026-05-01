@@ -88,6 +88,12 @@ export class DrizzleMigrationJournal implements MigrationJournal {
     source: "ui" | "code";
     statementsPlanned: number;
     scope?: MigrationJournalScope;
+    // Phase 5 (2026-05-01): batch sentinel. -1 = HMR/dev push;
+    // 0+ = production migration batch (currently unused). Pipeline
+    // sets -1 when source=="code". Default 0 keeps the column
+    // cleanly partitioned: WHERE batch < 0 → dev pushes, WHERE
+    // batch >= 0 → prod migrations.
+    batch?: number;
   }): Promise<string> {
     // Wrapped in try/catch: crypto.randomUUID() is sync and only throws
     // if the runtime lacks a CSPRNG (extremely rare TypeError on niche
@@ -135,6 +141,12 @@ export class DrizzleMigrationJournal implements MigrationJournal {
         if (args.scope.slug !== undefined) {
           insertValues.scopeSlug = args.scope.slug;
         }
+      }
+      // Phase 5: batch sentinel. Always written (column has NOT NULL +
+      // default 0 so omitting would still work, but explicit beats
+      // implicit). Pipeline passes -1 for HMR/dev pushes.
+      if (typeof args.batch === "number") {
+        insertValues.batch = args.batch;
       }
 
       await inserter.values(insertValues);

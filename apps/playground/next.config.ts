@@ -77,6 +77,8 @@ const nextConfig: NextConfig = {
     "mysql2",
     "sharp",
     "drizzle-orm",
+    "drizzle-kit",
+    "bcryptjs",
     "esbuild",
     "bundle-require",
     "nodemailer",

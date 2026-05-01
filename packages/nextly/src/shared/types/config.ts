@@ -263,6 +263,39 @@ export interface SecurityConfig {
    * All features enabled by default.
    */
   sanitization?: SanitizationConfigInput;
+
+  /**
+   * Audit H13 (T-012): request body / multipart size caps. Each
+   * numeric field accepts either a byte count or a human-readable
+   * suffix (`"1mb"`, `"500kb"`). Defaults: json 1mb / multipart
+   * 50mb / fileSize 10mb / fileCount 10 / fieldCount 50 / fieldSize
+   * 100kb.
+   */
+  limits?: {
+    json?: string | number;
+    multipart?: string | number;
+    fileSize?: string | number;
+    fileCount?: number;
+    fieldCount?: number;
+    fieldSize?: string | number;
+  };
+
+  /**
+   * Trust reverse-proxy headers when resolving the client IP.
+   *
+   * When `true`, `X-Forwarded-For` (filtered through the
+   * `TRUSTED_PROXY_IPS` env-var CIDR list) is used to determine the
+   * client IP for rate limiting, refresh-token binding, and audit
+   * logging. When `false` (default), proxy headers are ignored —
+   * direct-internet deployments fall back to a single `unknown`
+   * bucket so an attacker cannot rotate `X-Forwarded-For` to bypass
+   * per-IP throttles.
+   *
+   * Audit: closes C4 (XFF blindly trusted across rate-limit / auth flows).
+   *
+   * @default false
+   */
+  trustProxy?: boolean;
 }
 
 // ============================================================

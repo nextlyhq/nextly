@@ -8,6 +8,8 @@
  * @since 0.1.0
  */
 
+import { safeFetch, ExternalUrlError } from "@revnixhq/nextly";
+
 import type {
   FormDocument,
   SubmissionDocument,
@@ -191,11 +193,12 @@ async function sendWebhook(
     const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
 
     try {
-      const response = await fetch(webhook.url, {
+      const response = await safeFetch(webhook.url, {
         method: webhook.method || "POST",
         headers,
         body: payloadString,
         signal: controller.signal,
+        allowLocalhost: process.env.NODE_ENV !== "production",
       });
 
       clearTimeout(timeoutId);
@@ -231,6 +234,18 @@ async function sendWebhook(
         url: webhook.url,
         success: false,
         error: `Timeout after ${WEBHOOK_TIMEOUT_MS}ms`,
+        durationMs,
+      };
+    }
+
+    // Audit C3/H8 (T-008): the webhook URL pointed at an internal/
+    // non-public address and was refused before the request left the
+    // host. Surface as a distinct delivery failure.
+    if (error instanceof ExternalUrlError) {
+      return {
+        url: webhook.url,
+        success: false,
+        error: `Webhook URL rejected for SSRF safety: ${error.message}`,
         durationMs,
       };
     }

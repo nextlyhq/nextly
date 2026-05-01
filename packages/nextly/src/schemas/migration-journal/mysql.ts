@@ -61,6 +61,14 @@ export const nextlyMigrationJournalMysql = mysqlTable(
     summaryRemoved: int("summary_removed"),
     summaryRenamed: int("summary_renamed"),
     summaryChanged: int("summary_changed"),
+
+    // Phase 5 (2026-05-01): batch sentinel for distinguishing dev-time
+    // pushes from production migrations. -1 = HMR/dev push (the
+    // pipeline sets this when source=="code"); 0+ = production migration
+    // batch numbers (reserved for symmetry with Payload's pattern).
+    // Default 0 keeps existing audit queries simple: `WHERE batch >= 0`
+    // returns production migrations, `WHERE batch < 0` returns dev pushes.
+    batch: int("batch").notNull().default(0),
   },
   table => [
     index("nextly_migration_journal_status_idx").on(table.status),

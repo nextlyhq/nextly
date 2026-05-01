@@ -10,6 +10,7 @@
  * 4. Displaying success/error states
  */
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 // ============================================================================
@@ -344,7 +345,7 @@ function FieldRenderer({
         </div>
       );
 
-    case "state":
+    case "state": {
       const countryValue = field.countryField
         ? (formData[field.countryField] as string)
         : "";
@@ -377,6 +378,7 @@ function FieldRenderer({
           {error && <p className="mt-1 text-sm text-red-500">{error}</p>}
         </div>
       );
+    }
 
     default:
       return (
@@ -479,7 +481,7 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
           });
         }
       }
-    } catch (error) {
+    } catch (_error) {
       setSubmitResult({
         success: false,
         message: "An error occurred while submitting the form",
@@ -520,7 +522,11 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form
+      onSubmit={e => {
+        void handleSubmit(e);
+      }}
+    >
       {submitResult && !submitResult.success && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-red-700">{submitResult.message}</p>
@@ -640,7 +646,7 @@ export default function FormsPage() {
       } else {
         setError("Failed to fetch forms");
       }
-    } catch (err) {
+    } catch (_err) {
       setError("Failed to connect to API");
     } finally {
       setIsLoading(false);
@@ -688,7 +694,7 @@ export default function FormsPage() {
   };
 
   useEffect(() => {
-    fetchForms();
+    void fetchForms();
   }, [fetchForms]);
 
   return (
@@ -707,7 +713,9 @@ export default function FormsPage() {
             </div>
             <div className="flex gap-3">
               <button
-                onClick={seedForms}
+                onClick={() => {
+                  void seedForms();
+                }}
                 disabled={isSeeding}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isSeeding
@@ -717,12 +725,12 @@ export default function FormsPage() {
               >
                 {isSeeding ? "Creating..." : "Create Demo Forms"}
               </button>
-              <a
+              <Link
                 href="/admin/collections/forms"
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-200 text-gray-700 hover:bg-gray-300"
               >
                 Open Admin
-              </a>
+              </Link>
             </div>
           </div>
         </div>
@@ -740,7 +748,9 @@ export default function FormsPage() {
             <div className="text-4xl mb-3">⚠️</div>
             <p className="text-red-600 mb-4">{error}</p>
             <button
-              onClick={fetchForms}
+              onClick={() => {
+                void fetchForms();
+              }}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
             >
               Retry
@@ -756,7 +766,9 @@ export default function FormsPage() {
               Click the button below to create demo Contact and Register forms.
             </p>
             <button
-              onClick={seedForms}
+              onClick={() => {
+                void seedForms();
+              }}
               disabled={isSeeding}
               className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
@@ -817,12 +829,12 @@ export default function FormsPage() {
               <h2 className="text-lg font-semibold text-gray-900">
                 View Submissions
               </h2>
-              <a
+              <Link
                 href="/admin/collections/form-submissions"
                 className="text-blue-600 hover:text-blue-700 text-sm font-medium"
               >
                 View All in Admin →
-              </a>
+              </Link>
             </div>
             <p className="text-gray-500 text-sm">
               After submitting forms above, you can view all submissions in the
@@ -839,12 +851,12 @@ export default function FormsPage() {
           <div className="flex items-center justify-between text-sm text-gray-500">
             <p>Form Builder Plugin Demo - Nextly CMS</p>
             <div className="flex gap-4">
-              <a href="/admin" className="hover:text-gray-700">
+              <Link href="/admin" className="hover:text-gray-700">
                 Admin Panel
-              </a>
-              <a href="/" className="hover:text-gray-700">
+              </Link>
+              <Link href="/" className="hover:text-gray-700">
                 Home
-              </a>
+              </Link>
             </div>
           </div>
         </div>

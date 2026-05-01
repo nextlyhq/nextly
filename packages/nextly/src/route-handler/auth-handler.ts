@@ -157,6 +157,15 @@ async function ensureServicesInitialized(): Promise<void> {
     } else {
       console.log("[Auth Handler] Services auto-initialized with defaults");
     }
+
+    // Boot-time auto-apply for code-first schema changes (dev only).
+    // The route-handler path (here) and the direct-API path
+    // (`init.ts:getNextly`) both must call this so dev restart correctly
+    // applies code-first field renames/drops to the actual table columns,
+    // not just to `dynamic_collections.fields` JSON. See
+    // `init/boot-apply.ts` for full rationale.
+    const { runBootTimeApplyIfDev } = await import("../init/boot-apply");
+    await runBootTimeApplyIfDev({ caller: "auth-handler" });
   }
 }
 

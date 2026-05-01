@@ -44,6 +44,11 @@
 import type { IStorageAdapter } from "../storage/adapters/base-adapter";
 import type { FileMetadata, UploadResult } from "../storage/types";
 
+// Audit C5 (T-006): magic-byte detection (file-type) and SVG
+// sanitization (isomorphic-dompurify). Both are server-side; no
+// browser-bundle concerns since this module is only imported by the
+// upload route handler, which is server-only.
+
 /**
  * Configuration options for the UploadService
  */
@@ -151,6 +156,50 @@ const BLOCKED_MIME_TYPES = [
   "text/javascript",
 ];
 
+/**
+ * Audit C5 (T-006): file extensions whose execution is potentially
+ * dangerous when served from the same origin as the admin UI.
+ * Rejected unconditionally regardless of the client-claimed MIME type.
+ * SVG is intentionally NOT blocked here — it's allowed but sanitized
+ * via DOMPurify before storage (see sanitizeSvgIfNeeded).
+ */
+const BLOCKED_EXTENSIONS = new Set([
+  // HTML / template
+  "html",
+  "htm",
+  "xhtml",
+  "xht",
+  "shtml",
+  "xml",
+  // Server-side scripts
+  "php",
+  "php3",
+  "php4",
+  "php5",
+  "phtml",
+  "asp",
+  "aspx",
+  "jsp",
+  "jspx",
+  // Client-side scripts that bypass MIME sniffing
+  "js",
+  "mjs",
+  "cjs",
+  // OS-level executables
+  "exe",
+  "dll",
+  "sh",
+  "bat",
+  "cmd",
+  "com",
+  "scr",
+  "vbs",
+  "msi",
+  "pif",
+  "cpl",
+  "hta",
+]);
+
 const DEFAULT_CONFIG: Required<UploadConfig> = {
   maxSize: 10 * 1024 * 1024, // 10MB
   allowedMimeTypes: DEFAULT_ALLOWED_MIME_TYPES,
@@ -257,6 +306,31 @@ export class UploadService {
     file: Buffer,
     options: UploadOptions
   ): Promise<UploadServiceResult<UploadedFile>> {
+    // Audit C5 (T-006): filename + extension hygiene. Reject path
+    // separators and null bytes BEFORE anything else looks at the
+    // filename — defends against directory traversal and the classic
+    // "filename.jpg\0.html" trick.
+    const filenameValidation = validateFilename(options.filename);
+    if (!filenameValidation.valid) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: filenameValidation.message,
+        errors: [{ field: "file", message: filenameValidation.message! }],
+      };
+    }
+
+    const extension = getExtension(options.filename);
+    if (extension && BLOCKED_EXTENSIONS.has(extension)) {
+      const message = `File extension '.${extension}' is blocked for security reasons.`;
+      return {
+        success: false,
+        statusCode: 400,
+        message,
+        errors: [{ field: "file", message }],
+      };
+    }
+
     const mimeValidation = this.validateMimeType(options.mimeType);
     if (!mimeValidation.valid) {
       return {
@@ -275,6 +349,33 @@ export class UploadService {
         message: sizeValidation.message,
         errors: [{ field: "file", message: sizeValidation.message! }],
       };
+    }
+
+    // Audit C5 (T-006): magic-byte vs claimed-MIME mismatch.
+    // file-type sniffs the actual bytes; we reject when a client
+    // claims `image/jpeg` but the bytes are `text/html` (a classic
+    // polyglot / forged-extension trick). Some text-only formats
+    // (CSV, plain JSON, etc.) cannot be detected by signature —
+    // file-type returns null in that case and we let those through.
+    const magicByteCheck = await detectAndCompareMime(
+      file,
+      options.mimeType
+    );
+    if (!magicByteCheck.valid) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: magicByteCheck.message,
+        errors: [{ field: "file", message: magicByteCheck.message! }],
+      };
+    }
+
+    // Audit C5 (T-006): SVG sanitization. Allow SVG uploads but strip
+    // <script>, on*-handlers, and javascript: URLs from the markup
+    // before storage. Replaces the input buffer with the cleaned bytes.
+    const sanitized = await sanitizeSvgIfNeeded(file, options.mimeType);
+    if (sanitized) {
+      file = sanitized;
     }
 
     try {
@@ -605,4 +706,98 @@ export class UploadService {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
+}
+
+// ============================================================
+// Audit C5 (T-006) — file-name / extension / magic-byte / SVG
+// ============================================================
+
+function getExtension(filename: string): string {
+  const lower = filename.toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  if (dot < 0 || dot === lower.length - 1) return "";
+  return lower.slice(dot + 1);
+}
+
+function validateFilename(filename: string): {
+  valid: boolean;
+  message?: string;
+} {
+  if (!filename || filename.length === 0) {
+    return { valid: false, message: "Filename is required." };
+  }
+  if (filename.length > 255) {
+    return { valid: false, message: "Filename is too long (max 255 chars)." };
+  }
+  if (filename.includes("\0")) {
+    return {
+      valid: false,
+      message: "Filename contains a null byte (likely a polyglot attack).",
+    };
+  }
+  if (filename.includes("/") || filename.includes("\\")) {
+    return {
+      valid: false,
+      message:
+        "Filename contains a path separator. Submit just the basename — the storage adapter handles paths.",
+    };
+  }
+  if (/^\.+$/.test(filename)) {
+    return {
+      valid: false,
+      message: "Filename cannot consist solely of dots.",
+    };
+  }
+  return { valid: true };
+}
+
+async function detectAndCompareMime(
+  buffer: Buffer,
+  claimedMime: string
+): Promise<{ valid: boolean; message?: string }> {
+  // Lazy-import: file-type is server-only and ~half a meg of regex tables.
+  // Keep it out of any consumer's hot path until an actual upload happens.
+  const { fileTypeFromBuffer } = await import("file-type");
+  const detected = await fileTypeFromBuffer(buffer);
+  if (!detected) {
+    // Some legitimate text formats (CSV, plain JSON) have no magic
+    // bytes. Trust the claimed MIME for those — the extension
+    // blocklist already rejected the dangerous text cases.
+    return { valid: true };
+  }
+  const claimed = claimedMime.toLowerCase().trim();
+  const sniffed = detected.mime.toLowerCase();
+  if (claimed !== sniffed) {
+    // Allow image/jpeg vs image/jpg fluff and similar near-misses by
+    // comparing the type half only.
+    const claimedType = claimed.split("/")[0];
+    const sniffedType = sniffed.split("/")[0];
+    if (claimedType === sniffedType && claimed.includes("jpeg") && sniffed.includes("jpeg")) {
+      return { valid: true };
+    }
+    return {
+      valid: false,
+      message: `File contents (${detected.mime}) do not match the declared type (${claimedMime}). Likely a polyglot or forged extension.`,
+    };
+  }
+  return { valid: true };
+}
+
+async function sanitizeSvgIfNeeded(
+  buffer: Buffer,
+  mimeType: string
+): Promise<Buffer | null> {
+  const isSvg =
+    mimeType.toLowerCase().trim() === "image/svg+xml" ||
+    /^<\?xml[\s\S]*?<svg[\s>]/.test(buffer.subarray(0, 2048).toString("utf8")) ||
+    /^<svg[\s>]/.test(buffer.subarray(0, 2048).toString("utf8").trimStart());
+  if (!isSvg) return null;
+
+  // Lazy-import: pulls jsdom transitively. Big.
+  const { default: DOMPurify } = await import("isomorphic-dompurify");
+  const dirty = buffer.toString("utf8");
+  const clean = DOMPurify.sanitize(dirty, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+  });
+  return Buffer.from(clean, "utf8");
 }

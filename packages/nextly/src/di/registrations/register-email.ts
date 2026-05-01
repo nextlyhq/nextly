@@ -11,6 +11,7 @@ import { EmailService } from "../../services/email/email-service";
 import { EmailTemplateService } from "../../services/email/email-template-service";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { SYSTEM_CONTEXT } from "../../shared/types";
+import { safeFetch } from "../../utils/validate-external-url";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
@@ -75,10 +76,14 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           //    Vercel Blob (and similar adapters) store the full public
           //    URL as the media filename, so storagePath may already be
           //    a URL. Only call getPublicUrl for relative paths.
+          //    Audit C3 (T-008): use safeFetch to reject URLs that
+          //    resolve to private/loopback/link-local/cloud-metadata
+          //    addresses — closes SSRF when an attacker controls the
+          //    `storagePath` field.
           const url = storagePath.startsWith("http")
             ? storagePath
             : storage.getPublicUrl(storagePath);
-          const response = await fetch(url);
+          const response = await safeFetch(url);
           if (!response.ok) {
             throw new Error(
               `Failed to fetch attachment from ${url}: HTTP ${response.status}`

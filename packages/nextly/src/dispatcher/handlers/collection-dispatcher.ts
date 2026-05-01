@@ -516,6 +516,71 @@ const COLLECTIONS_METHODS: Record<
         throw new Error(result.error.message);
       }
 
+      // Phase 6 follow-up (2026-05-01): pipeline.apply mutated the live
+      // DB (renamed/added/dropped columns) but does NOT persist the
+      // updated `fields` JSON on `dynamic_collections`. Without this
+      // post-apply write, subsequent admin queries (entry list, entry
+      // create form, etc.) build their column references from the STALE
+      // metadata and fail with `no such column: <oldName>`. End-user
+      // symptom: rename succeeds in the DB but the collection looks
+      // empty in the admin UI because every list query 500s.
+      //
+      // Use `adapter.update` directly (not `registry.updateCollection`)
+      // because the registry helper auto-bumps `schema_version` and
+      // resets `migration_status` to `"pending"` on any `fields` change
+      // — both wrong here. The pipeline already bumped the schema
+      // version (see bumpSchemaVersion below + the journal record),
+      // and the migration status is now `applied`, not `pending`.
+      // Surgical write of just the `fields` column keeps invariants
+      // intact.
+      try {
+        await adapter.update(
+          "dynamic_collections",
+          {
+            fields: JSON.stringify(fields),
+            updated_at: new Date(),
+          },
+          { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Non-fatal: the schema apply itself already succeeded. If the
+        // metadata write fails, the actual DB column was already
+        // renamed and the collection is in a good state structurally;
+        // only the admin's view of the field name is stale. Log so an
+        // operator can diagnose, but don't block the response.
+        // eslint-disable-next-line no-console -- intentional operator-visible warning
+        console.warn(
+          `[applySchemaChanges] Post-apply metadata write failed for ` +
+            `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
+            `but admin UI may show stale field names until next reload.`
+        );
+      }
+
+      // Phase 6 follow-up #6 (2026-05-01): the FileManager caches the
+      // runtime Drizzle schema in an in-memory Map keyed by slug. After
+      // a rename/drop/add the DB column shape and `dynamic_collections.fields`
+      // are both correct, but the Map still holds the OLD shape. The
+      // next entry list/get/create query reads the stale schema and
+      // generates SQL referencing the old column name, returning 500
+      // `no such column: "<oldName>"` until the server restarts.
+      // Invalidating the slug here forces the next loadDynamicSchema()
+      // to rebuild via the metadata fetcher (which reads the freshly
+      // written fields JSON above).
+      try {
+        getCollectionsHandlerFromDI()?.invalidateCollectionSchema(
+          p.collectionName
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- intentional operator-visible warning
+        console.warn(
+          `[applySchemaChanges] Schema-cache invalidation failed for ` +
+            `'${p.collectionName}': ${msg}. Field changes may not be ` +
+            `visible to entry queries until next reload.`
+        );
+      }
+
       // F8 PR 3: bumpSchemaVersion was previously wired via
       // SchemaChangeService.setOnApplySuccess in di/register.ts. With the
       // legacy service gone, the dispatcher fires it directly after a

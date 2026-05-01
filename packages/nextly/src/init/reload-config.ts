@@ -126,9 +126,30 @@ export async function reloadNextlyConfig(opts?: {
     newConfig = (result as { config?: { collections?: CollectionDef[] } })
       .config;
   } catch (err) {
+    // NextlyError wraps the underlying loader/bundler error in
+    // `cause` (and surfaces a generic public message like "Failed to
+    // load Nextly configuration."). Surface BOTH the public message
+    // and the cause so an operator can actually diagnose the
+    // problem instead of seeing the bare wrapper text.
     const msg = err instanceof Error ? err.message : String(err);
+    const cause =
+      err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : err instanceof Error && typeof err.cause === "string"
+          ? err.cause
+          : undefined;
+    const logContext =
+      err && typeof err === "object" && "logContext" in err
+        ? JSON.stringify((err as { logContext: unknown }).logContext)
+        : undefined;
+    const detail = cause
+      ? `${msg} (cause: ${cause})`
+      : logContext
+        ? `${msg} (context: ${logContext})`
+        : msg;
+
     console.warn(
-      `[Nextly HMR] Could not reload nextly.config.ts: ${msg}. ` +
+      `[Nextly HMR] Could not reload nextly.config.ts: ${detail}. ` +
         `Keeping the previously-loaded config. Fix the syntax error and ` +
         `save again to retry.`
     );
@@ -149,7 +170,14 @@ export async function reloadNextlyConfig(opts?: {
   let migrationJournal: MigrationJournal | undefined;
   try {
     logger = (await resolve("logger")) as LoggerLike;
-    adapter = (await resolve("databaseAdapter")) as AdapterLike;
+    // The adapter is registered under the key "adapter" in
+    // packages/nextly/src/di/register.ts. A stale "databaseAdapter"
+    // key here used to silently throw, which the catch below swallowed,
+    // so reloadNextlyConfig returned without doing anything. End result:
+    // code-first HMR + boot-time auto-apply silently never fired,
+    // and renames/drops in `nextly.config.ts` never propagated to the
+    // DB until the user manually ran `nextly db:sync`.
+    adapter = (await resolve("adapter")) as AdapterLike;
     migrationJournal = (await resolve("migrationJournal")) as
       | MigrationJournal
       | undefined;
@@ -310,16 +338,40 @@ export async function reloadNextlyConfig(opts?: {
   });
 
   if (!applyResult.success) {
-    // CONFIRMATION_REQUIRED_NO_TTY is the expected outcome when a rename
-    // is detected on a non-TTY runtime (CI, IDE task runner). Surface it
-    // as a warn (actionable for the user) rather than an error (which
-    // implies a bug). All other codes still go through error.
     const code = applyResult.error.code;
-    const msg = `[Nextly HMR] Batch apply failed (${code}): ${applyResult.error.message}`;
+
     if (code === "CONFIRMATION_REQUIRED_NO_TTY") {
-      logger?.warn(msg);
+      // Boot-time + HMR runs in a request-handler context where the
+      // dev server's TTY is not directly attached to the prompt
+      // dispatcher's stdin. Renames + drops can't be confirmed
+      // safely from here. The pure-additive pipeline already
+      // applied any safe changes; only structural changes are
+      // pending. Surface a top-level, scannable instruction so the
+      // user knows exactly what to do, rather than burying it in
+      // a "FAILED" line that reads like a bug.
+      const detail = applyResult.error.message
+        .replace(/^TTY required for schema confirmation\.\s*/i, "")
+        .replace(
+          /\s*Run from an interactive terminal,.*$/i,
+          ""
+        )
+        .trim();
+      console.warn(
+        `\n[Nextly] Schema change needs your confirmation:\n` +
+          `  ${detail}\n\n` +
+          `Renames + drops auto-apply only when you confirm them.\n` +
+          `To apply, run one of:\n` +
+          `  • pnpm nextly db:sync         (prompts in this terminal)\n` +
+          `  • pnpm nextly migrate:create  (generates a committable migration)\n` +
+          `  • Use the admin UI Schema Builder at /admin\n\n` +
+          `Pure-additive changes (new fields, new collections) apply\n` +
+          `automatically on dev start; only structural changes need\n` +
+          `explicit confirmation.\n`
+      );
     } else {
-      logger?.error(msg);
+      logger?.error(
+        `[Nextly HMR] Batch apply failed (${code}): ${applyResult.error.message}`
+      );
     }
   }
 }

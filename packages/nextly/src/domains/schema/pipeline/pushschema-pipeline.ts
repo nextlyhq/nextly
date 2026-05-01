@@ -22,7 +22,13 @@
 // foreign_keys = OFF/ON wrapping per F3 PR-4.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
+import { dequal } from "dequal";
 
+import { getDialectTables } from "../../../database/index";
+import {
+  getCachedSnapshot,
+  setCachedSnapshot,
+} from "../../../init/schema-snapshot-cache";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import {
@@ -43,6 +49,7 @@ import {
   PromptCancelledError,
   TTYRequiredError,
 } from "./prompt-dispatcher/errors";
+import { withCapturedStdout } from "./stdout-capture";
 import type {
   Classifier,
   DrizzleStatementExecutor,
@@ -164,9 +171,20 @@ interface PushSchemaPassResult {
 }
 
 interface DrizzleKitLike {
+  // Phase C (2026-05-01): added optional tablesFilter so PG pushSchema
+  // can scope drizzle-kit's internal introspection to only the desired
+  // tables. Without this, drizzle-kit walks the full live DB and emits
+  // DROP TABLE for any managed table absent from the partial pipeline
+  // desired schema (boot-time sync only knows code-first collections,
+  // so admin-UI tables get DROPped). SQLite/MySQL drizzle-kit upstream
+  // does NOT accept tablesFilter — those branches discard it. The
+  // post-emission `filterUnsafeStatements` is the second line of
+  // defense and the ONLY defense for SQLite/MySQL until upstream adds
+  // tablesFilter or we move to generateMigration.
   pushSchema: (
     schema: Record<string, unknown>,
-    db: unknown
+    db: unknown,
+    tablesFilter?: string[]
   ) => Promise<PushSchemaPassResult>;
 }
 
@@ -359,10 +377,62 @@ export class PushSchemaPipeline {
     // the notification event surfaces duration even when the journal
     // write best-effort-fails. Cheap (one Date.now()).
     const startMs = Date.now();
+
+    // Phase 5 (2026-05-01) — dequal short-circuit.
+    //
+    // If the desired-schema snapshot is byte-for-byte equal to the last
+    // successfully-applied one, skip the entire pipeline. Avoids the
+    // work + TTY exposure of re-introspecting + re-diffing when nothing
+    // changed. Particularly valuable on Next.js HMR where any
+    // server-side file save triggers `serverComponentChanges` (not just
+    // nextly.config.ts), which previously made the pipeline run on
+    // every route-handler save.
+    //
+    // Cache key: the entire `desired` object. dequal walks deeply, so
+    // any nested change (a new field, a renamed table, a tweaked
+    // required flag) bypasses the short-circuit. Cosmetic-only
+    // properties (admin-display labels, hooks, etc.) WOULD also bypass
+    // — accepted false-positive cost vs. risking a missed real change.
+    //
+    // Skipping recordStart means no-op cycles don't pollute the
+    // migration journal. The successful PipelineResult below mimics
+    // the full-success shape with statementsExecuted=0.
+    //
+    // Reference: Payload's pushDevSchema pattern in
+    // packages/drizzle/src/utilities/pushDevSchema.ts.
+    const cachedSnapshot = getCachedSnapshot();
+    if (cachedSnapshot !== undefined && dequal(desired, cachedSnapshot)) {
+      // eslint-disable-next-line no-console -- intentionally surfacing
+      // to operators so they understand why the pipeline didn't run.
+      console.log(
+        "[Nextly schema] No changes detected since last apply; skipping push (dequal cache hit)."
+      );
+      return {
+        success: true,
+        statementsExecuted: 0,
+        renamesApplied: 0,
+        // Zero-count summary — same shape as the full-success branch,
+        // so the dispatcher's notification rendering doesn't have to
+        // distinguish "no-op" from "real-success-with-no-ops".
+        summary: {
+          added: 0,
+          removed: 0,
+          renamed: 0,
+          changed: 0,
+        },
+      };
+    }
+
+    // Phase 5: pass `batch: -1` for HMR/dev pushes so audit queries
+    // can filter them out (`WHERE batch >= 0` shows production
+    // migrations only). UI-driven pushes count as "intentional"
+    // changes a user committed via the admin and don't need the
+    // sentinel; they default to 0.
     const journalId = await this.deps.migrationJournal.recordStart({
       source,
       statementsPlanned: 0,
       scope,
+      batch: source === "code" ? -1 : undefined,
     });
 
     try {
@@ -529,9 +599,32 @@ export class PushSchemaPipeline {
         //
         // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
         // SQLite (it's the same handle).
+        //
+        // Phase C (2026-05-01): pass desired-table names to PG drizzle-kit
+        // as `tablesFilter` so its introspection is scoped to just our
+        // managed tables. SQLite/MySQL discard this; their data-loss
+        // safety relies entirely on `filterUnsafeStatements` below.
+        //
+        // Phase 5 (2026-05-01): wrap the call in `withCapturedStdout`
+        // so any chatter drizzle-kit writes to process.stdout / stderr
+        // during introspection gets rerouted to logger.debug instead
+        // of leaking into the dev console. See stdout-capture.ts for
+        // the scope-caveat (we use the sync-return path, not .apply()).
+        const desiredTableNames = Object.keys(drizzleSchema);
         let pushResult: PushSchemaPassResult;
         try {
-          pushResult = await kit.pushSchema(drizzleSchema, tx);
+          // Phase 5: PushSchemaPipelineDeps doesn't currently include a
+          // logger field — drop captured output silently. Operators
+          // wanting drizzle-kit's chatter set DEBUG_SCHEMA=1 (planned
+          // follow-up) or wire a console.debug shim here. Adding a
+          // logger to deps is a contract change; keep it for a separate
+          // PR if real demand surfaces.
+          pushResult = await withCapturedStdout(
+            () => kit.pushSchema(drizzleSchema, tx, desiredTableNames),
+            process.env.DEBUG_SCHEMA === "1"
+              ? { debug: (msg: string) => console.debug(msg) }
+              : undefined
+          );
         } catch (err) {
           throw new PushSchemaError(
             err instanceof Error ? err.message : String(err),
@@ -539,7 +632,8 @@ export class PushSchemaPipeline {
           );
         }
         const safe = this.filterUnsafeStatements(
-          pushResult.statementsToExecute
+          pushResult.statementsToExecute,
+          desiredTableNames
         );
 
         try {
@@ -578,6 +672,13 @@ export class PushSchemaPipeline {
       // post-resolution ops so the journal row carries audit-friendly
       // counts ("1 added, 1 renamed") for the admin NotificationCenter.
       const summary = computeJournalSummaryFromOperations(resolvedOps);
+
+      // Phase 5: cache the desired snapshot now that the apply succeeded.
+      // Future apply() calls with an unchanged desired short-circuit at
+      // the top of this method. We only set the cache on the success
+      // path — failed applies leave the cache untouched so the next
+      // call retries the full pipeline.
+      setCachedSnapshot(desired);
 
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: true,
@@ -642,13 +743,77 @@ export class PushSchemaPipeline {
     }
   }
 
-  private filterUnsafeStatements(statements: string[]): string[] {
+  private filterUnsafeStatements(
+    statements: string[],
+    desiredTableNames: string[]
+  ): string[] {
+    // Phase 6 follow-up (2026-05-01): the original Phase C strict
+    // block-all-DROPs rule turned out too aggressive — it broke
+    // SQLite's table-rebuild pattern.
+    //
+    // SQLite can't ALTER COLUMN type, so drizzle-kit emits a
+    // CREATE/COPY/DROP/RENAME sequence for type changes (renames
+    // included):
+    //   1. CREATE TABLE __new_dc_job (...)
+    //   2. INSERT INTO __new_dc_job SELECT ... FROM dc_job
+    //   3. DROP TABLE dc_job          ← intentional, NOT accidental
+    //   4. ALTER TABLE __new_dc_job RENAME TO dc_job
+    //
+    // The original strict filter blocked step 3, so step 4 then
+    // failed with "table dc_job already exists". Result: the rename
+    // never completed; the dynamic_collections.fields JSON updated
+    // to the new name but the actual column kept the old name; every
+    // subsequent query against the collection failed with "no such
+    // column".
+    //
+    // Refined rule:
+    //   - DROP TABLE for tables IN the desired schema → ALLOW
+    //     (drizzle-kit's emit is part of an intentional rebuild —
+    //     the table will be recreated by a subsequent CREATE/RENAME)
+    //   - DROP TABLE for tables NOT in the desired schema → BLOCK
+    //     (drizzle-kit thinks it's orphaned — original Phase C
+    //     scenario where boot-time partial desired would otherwise
+    //     destroy admin-UI tables)
+    //
+    // The Phase C goal — preventing accidental drops of admin-UI
+    // tables on restart — is preserved because such tables are not
+    // in the boot-path's partial desired schema and therefore still
+    // hit the BLOCK branch. PR #118's "include system tables in
+    // desired" change makes system tables hit the ALLOW branch
+    // (their DROPs during rebuilds are now intended).
+    const desiredSet = new Set(
+      desiredTableNames.map(t => t.toLowerCase())
+    );
+
     return statements.filter(stmt => {
       const dropMatch = stmt.match(
         /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
       if (!dropMatch) return true;
-      return isManagedTable(dropMatch[1]);
+
+      const tableName = dropMatch[1] ?? "<unknown>";
+      const isInDesired = desiredSet.has(tableName.toLowerCase());
+
+      if (isInDesired) {
+        // Intentional drop — rebuild pattern, system-table refresh,
+        // etc. Pass through and let executor run it.
+        return true;
+      }
+
+      // Accidental drop — table not in desired schema. Block and
+      // log so operators see the protection.
+      // eslint-disable-next-line no-console -- structured warning is
+      // the primary signal an operator has that Nextly just
+      // protected their data. Logger is not on the deps interface
+      // for this pipeline.
+      console.warn(
+        `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
+          `drizzle-kit pushSchema (table not in current desired schema). ` +
+          `If this drop was intentional, route it through the ` +
+          `pre-resolution executor with explicit user confirmation. ` +
+          `(managed=${isManagedTable(tableName)})`
+      );
+      return false;
     });
   }
 
@@ -666,6 +831,34 @@ export class PushSchemaPipeline {
     dialect: SupportedDialect
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
+
+    // Phase 6 follow-up (2026-05-01): include Nextly's system tables in
+    // the schema handed to drizzle-kit. Without this, drizzle-kit's
+    // introspection sees system tables on disk but NOT in the desired
+    // schema we pass — its diff treats those as "dropped tables" and
+    // pairs them with new dc_* tables for rename detection. Rename
+    // detection fires the TTY prompt, which crashes on non-TTY
+    // environments (CI, `next dev`'s server thread). Result:
+    // dc_* tables never get created on SQLite.
+    //
+    // SQLite's drizzle-kit doesn't accept tablesFilter (only PG does),
+    // so the only way to suppress false-positive rename ambiguity is
+    // to make the desired schema complete from drizzle-kit's POV.
+    // System tables are already managed via drizzle-kit migration
+    // files (database/migrations/<dialect>/*.sql); declaring them here
+    // is informational — drizzle-kit emits zero statements for them
+    // when disk matches the schema definition. Phase C's strict
+    // filterUnsafeStatements is the safety net.
+    for (const [exportKey, value] of Object.entries(
+      getDialectTables(dialect)
+    )) {
+      if (this.isDrizzleTable(value)) {
+        const sqlName = this.getDrizzleTableName(value, exportKey);
+        out[sqlName] = value;
+      }
+    }
+
+    // User-defined collections override system entries on conflict.
     for (const c of Object.values(desired.collections)) {
       const { table } = generateRuntimeSchema(
         c.tableName,
@@ -675,6 +868,24 @@ export class PushSchemaPipeline {
       out[c.tableName] = table;
     }
     return out;
+  }
+
+  // Phase 6 follow-up: cheap structural check for Drizzle tables.
+  // Mirrors SchemaRegistry.isDrizzleTable but inlined to avoid
+  // pulling SchemaRegistry's DI graph into the pipeline module.
+  private isDrizzleTable(value: unknown): boolean {
+    if (!value || typeof value !== "object") return false;
+    // Drizzle tables carry Symbol.for("drizzle:Name") — the simplest
+    // stable cross-dialect check.
+    return Symbol.for("drizzle:Name") in (value as object);
+  }
+
+  // Phase 6 follow-up: extract a Drizzle table's SQL name.
+  private getDrizzleTableName(value: unknown, fallback: string): string {
+    const named = (value as Record<symbol, unknown>)[
+      Symbol.for("drizzle:Name")
+    ];
+    return typeof named === "string" ? named : fallback;
   }
 
   private async importDrizzleKit(
@@ -688,7 +899,12 @@ export class PushSchemaPipeline {
       case "postgresql": {
         const kit = await getPgDrizzleKit();
         return {
-          pushSchema: (schema, db) => kit.pushSchema(schema, db, ["public"]),
+          // PG drizzle-kit accepts tablesFilter (4th arg) — pass through
+          // so introspection is scoped to just the current pipeline's
+          // desired tables. Eliminates spurious DROP TABLE / RENAME
+          // emissions for managed tables outside the pipeline's scope.
+          pushSchema: (schema, db, tablesFilter) =>
+            kit.pushSchema(schema, db, ["public"], tablesFilter),
         };
       }
       case "mysql": {
@@ -701,12 +917,17 @@ export class PushSchemaPipeline {
         }
         const kit = await getMySQLDrizzleKit();
         return {
+          // MySQL drizzle-kit upstream takes (schema, db, databaseName) —
+          // no tablesFilter slot. Discard the arg here; the post-emission
+          // filterUnsafeStatements is the data-loss safeguard.
           pushSchema: (schema, db) => kit.pushSchema(schema, db, databaseName),
         };
       }
       case "sqlite": {
         const kit = await getSQLiteDrizzleKit();
         return {
+          // SQLite drizzle-kit upstream takes only (schema, db) — no
+          // tablesFilter. Same caveat as MySQL.
           pushSchema: (schema, db) => kit.pushSchema(schema, db),
         };
       }

@@ -1,12 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- framework adapter passes through Next.js App Router context */
+import { getNextly } from "@revnixhq/nextly";
 import {
   createDynamicHandlers,
-  getCollectionsHandler,  
+  getCollectionsHandler,
 } from "@revnixhq/nextly/runtime";
-import { getNextly } from "@revnixhq/nextly";
-
-import nextlyConfig from "../../../../../nextly.config";
 
 import * as dynamicSchemas from "@/db/schemas/dynamic";
+
+import nextlyConfig from "../../../../../nextly.config";
 
 const handlers = createDynamicHandlers({ config: nextlyConfig });
 

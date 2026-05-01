@@ -177,7 +177,7 @@ export async function createNextly(
         return;
       }
 
-      approach = selected as ProjectApproach;
+      approach = selected;
     }
   }
 
@@ -237,7 +237,7 @@ export async function createNextly(
       return;
     }
 
-    databaseType = db as DatabaseType;
+    databaseType = db;
   }
 
   const database: DatabaseConfig = {
@@ -351,7 +351,7 @@ export async function createNextly(
       s.stop("Scaffolding failed");
       if (!installInCwd) {
         // Clean up partial copy
-        const targetDir = path.join(cwd, projectName!);
+        const targetDir = path.join(cwd, projectName);
         if (await fs.pathExists(targetDir)) {
           await fs.remove(targetDir);
         }

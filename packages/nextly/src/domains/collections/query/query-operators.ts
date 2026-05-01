@@ -190,15 +190,25 @@ function buildCondition(
     };
   }
 
-  // Special handling for 'like', 'contains', and 'search' - wrap with wildcards
-  // 'search' is an alias for 'contains' (case-insensitive ILIKE)
+  // Special handling for 'like', 'contains', and 'search' - wrap with wildcards.
+  // 'search' is an alias for 'contains' (case-insensitive ILIKE).
+  // Audit H15 (T-014): escape backslash, percent, and underscore in the
+  // user-supplied value so they are matched as literals rather than as
+  // SQL LIKE wildcards. Backslash escape MUST come first or it will
+  // double-escape the % / _ replacements that follow. Mirrors the
+  // logic in buildSearchCondition (collection-query-service.ts:1196).
   if (operator === "like" || operator === "contains" || operator === "search") {
-    const searchValue =
-      typeof value === "string" ? `%${value}%` : String(value);
+    const escaped =
+      typeof value === "string"
+        ? value
+            .replace(/\\/g, "\\\\")
+            .replace(/%/g, "\\%")
+            .replace(/_/g, "\\_")
+        : String(value);
     return {
       column: field,
       op: OPERATOR_MAP[operator],
-      value: searchValue,
+      value: `%${escaped}%`,
     };
   }
 

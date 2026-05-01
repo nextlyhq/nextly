@@ -13,11 +13,12 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+
 import {
   jsonResponse,
   stallResponse,
   buildCookieHeaders,
-  getClientIp,
 } from "./handler-utils";
 
 export interface LoginHandlerDeps {
@@ -54,6 +55,10 @@ export interface LoginHandlerDeps {
     ipAddress: string | null;
     expiresAt: Date;
   }) => Promise<void>;
+  /** Audit C4 / T-005: gate XFF parsing on this. Default false. */
+  trustProxy: boolean;
+  /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
+  trustedProxyIps: string[];
 }
 
 /**
@@ -155,7 +160,10 @@ export async function handleLogin(
       userId: verifiedUser.id,
       tokenHash: refreshTokenHash,
       userAgent: request.headers.get("user-agent"),
-      ipAddress: getClientIp(request),
+      ipAddress: getTrustedClientIp(request, {
+        trustProxy: deps.trustProxy,
+        trustedProxyIps: deps.trustedProxyIps,
+      }),
       expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
     });
 

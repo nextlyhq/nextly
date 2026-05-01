@@ -762,6 +762,13 @@ export class PostgresAdapter extends DrizzleAdapter {
       if (typeof this.config.ssl === "boolean") {
         config.ssl = this.config.ssl;
       } else {
+        if (this.config.ssl.rejectUnauthorized === false) {
+          console.warn(
+            "[nextly/adapter-postgres] ssl.rejectUnauthorized is set to false — " +
+              "TLS certificates will not be validated. This is unsafe on untrusted networks. " +
+              "Provide a trusted `ca` cert instead, or remove the rejectUnauthorized override."
+          );
+        }
         config.ssl = {
           rejectUnauthorized: this.config.ssl.rejectUnauthorized,
           ca: this.config.ssl.ca,
@@ -770,8 +777,10 @@ export class PostgresAdapter extends DrizzleAdapter {
         };
       }
     } else if (this.providerDefaults.ssl) {
-      // Provider requires SSL but user didn't explicitly configure it
-      config.ssl = { rejectUnauthorized: false };
+      // Provider requires SSL but user didn't explicitly configure it.
+      // Default to validating certs; the user can opt out by setting
+      // `ssl: { rejectUnauthorized: false }` explicitly (which logs a warning above).
+      config.ssl = { rejectUnauthorized: true };
     }
 
     // PostgreSQL-specific options
