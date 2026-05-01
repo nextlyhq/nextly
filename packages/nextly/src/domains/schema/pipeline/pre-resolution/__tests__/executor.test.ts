@@ -6,8 +6,8 @@ import type {
   Operation,
   RenameColumnOp,
   RenameTableOp,
-} from "../../diff/types.js";
-import { executePreResolutionOps } from "../executor.js";
+} from "../../diff/types";
+import { executePreResolutionOps } from "../executor";
 
 // Mock tx that records the SQL strings it executed.
 function makeRecordingTx() {

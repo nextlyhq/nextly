@@ -3,11 +3,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { Operation } from "../diff/types.js";
+import type { Operation } from "../diff/types";
 import {
   computeJournalScope,
   computeJournalSummaryFromOperations,
-} from "../pushschema-pipeline.js";
+} from "../pushschema-pipeline";
 
 // Tiny constructors so the tests don't need the full op shapes. Each
 // returns an `Operation` of the discriminated kind under test; only the

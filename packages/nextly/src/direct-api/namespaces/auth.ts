@@ -8,8 +8,8 @@
  * @packageDocumentation
  */
 
-import { buildClaims } from "../../auth/jwt/claims.js";
-import { signAccessToken } from "../../auth/jwt/sign.js";
+import { buildClaims } from "../../auth/jwt/claims";
+import { signAccessToken } from "../../auth/jwt/sign";
 import { NextlyError } from "../../errors/nextly-error";
 import { env } from "../../lib/env";
 import type {

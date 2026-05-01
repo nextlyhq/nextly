@@ -8,18 +8,18 @@
  * @module cli/commands/dev-watcher
  */
 
-import type { CommandContext } from "../program.js";
-import type { CLIDatabaseAdapter } from "../utils/adapter.js";
-import type { LoadConfigResult } from "../utils/config-loader.js";
+import type { CommandContext } from "../program";
+import type { CLIDatabaseAdapter } from "../utils/adapter";
+import type { LoadConfigResult } from "../utils/config-loader";
 
-import type { ResolvedDevOptions } from "./db-sync.js";
+import type { ResolvedDevOptions } from "./db-sync";
 import {
   performPermissionSeeding,
   syncCollections,
   syncComponents,
   syncSingles,
   syncUserFields,
-} from "./dev-build.js";
+} from "./dev-build";
 
 /** Debounce delay in milliseconds */
 const DEBOUNCE_DELAY_MS = 500;

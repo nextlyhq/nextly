@@ -30,7 +30,7 @@ import { describe, it } from "vitest";
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db.js";
+import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 
 const dialectsToCover: SupportedDialect[] = ["postgresql", "sqlite"];
 

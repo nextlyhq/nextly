@@ -10,7 +10,7 @@ import type {
   MigrationScope,
   MigrationSummary,
   NotificationChannel,
-} from "../types.js";
+} from "../types";
 
 interface TerminalChannelOpts {
   writer?: (chunk: string) => void;

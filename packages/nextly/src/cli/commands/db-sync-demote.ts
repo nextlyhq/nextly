@@ -11,16 +11,16 @@ import { createHash } from "node:crypto";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import { serializeCollection } from "../../domains/schema/services/code-generator.js";
-import { CollectionRegistryService } from "../../services/collections/collection-registry-service.js";
-import type { CommandContext } from "../program.js";
-import { createAdapter, validateDatabaseEnv } from "../utils/adapter.js";
+import { serializeCollection } from "../../domains/schema/services/code-generator";
+import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import type { CommandContext } from "../program";
+import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
 // F1 PR 4: switched from the deleted wrapper/config-loader (jiti-based,
 // took a positional cwd arg) to the canonical cli/utils/config-loader
 // (bundle-require-based, takes an options object). The wrapper helper
 // kept its own signature, so wrap the call here to preserve the
 // downstream code's expectation of `{ config, configPath, ... }`.
-import { loadConfig } from "../utils/config-loader.js";
+import { loadConfig } from "../utils/config-loader";
 
 async function loadNextlyConfig(cwd: string) {
   return loadConfig({ cwd });

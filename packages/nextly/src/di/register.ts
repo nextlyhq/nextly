@@ -543,11 +543,11 @@ async function resolveAdapter(
 async function initializeSchemaRegistry(
   adapter: DrizzleAdapter
 ): Promise<
-  import("../database/schema-registry.js").SchemaRegistry | undefined
+  import("../database/schema-registry").SchemaRegistry | undefined
 > {
   try {
-    const { SchemaRegistry } = await import("../database/schema-registry.js");
-    const { getDialectTables } = await import("../database/index.js");
+    const { SchemaRegistry } = await import("../database/schema-registry");
+    const { getDialectTables } = await import("../database/index");
     const dialect = adapter.getCapabilities().dialect;
     const registry = new SchemaRegistry(dialect);
 
@@ -564,7 +564,7 @@ async function initializeSchemaRegistry(
     // which doesn't exist on a brand-new DB. Failure-safe (logs but
     // doesn't throw); see init/first-run.ts.
     try {
-      const { ensureFirstRunSetup } = await import("../init/first-run.js");
+      const { ensureFirstRunSetup } = await import("../init/first-run");
       // initializeSchemaRegistry doesn't have resolvedLogger in scope;
       // console is the right fallback because first-run is a one-time
       // user-visible event and the boot logger wiring isn't done yet.
@@ -659,7 +659,7 @@ type DynamicTableRow = {
  * No-op for tables that are already registered (e.g. from the DB pass).
  */
 async function registerConfigTablesInResolver(
-  registry: import("../database/schema-registry.js").SchemaRegistry,
+  registry: import("../database/schema-registry").SchemaRegistry,
   config: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   logger: Partial<Logger>
@@ -913,7 +913,7 @@ async function syncCodeFirstCollections(
       "../domains/schema/services/runtime-schema-generator.js"
     );
     type DesiredCollection =
-      import("../domains/schema/pipeline/types.js").DesiredCollection;
+      import("../domains/schema/pipeline/types").DesiredCollection;
 
     const collectionsToSyncSet = new Set(collectionsNeedingTableSync);
     const desiredCollections: Record<string, DesiredCollection> = {};

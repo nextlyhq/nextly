@@ -1,7 +1,7 @@
 // Unit tests for F5+F6 resolution + classifier event types.
 import { describe, it, expect } from "vitest";
 
-import { formatEventId, parseEventId } from "../types.js";
+import { formatEventId, parseEventId } from "../types";
 
 describe("eventId helpers", () => {
   it("formats not-null event id from kind, table, column", () => {

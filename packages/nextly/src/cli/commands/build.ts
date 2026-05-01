@@ -34,31 +34,31 @@ import { dirname, resolve, basename } from "node:path";
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import type { CollectionConfig } from "../../collections/config/define-collection.js";
-import { assertValidCollectionConfig } from "../../collections/config/validate-config.js";
+import type { CollectionConfig } from "../../collections/config/define-collection";
+import { assertValidCollectionConfig } from "../../collections/config/validate-config";
 import {
   SchemaGenerator,
   type SupportedDialect,
-} from "../../domains/schema/services/schema-generator.js";
+} from "../../domains/schema/services/schema-generator";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
-} from "../../domains/schema/services/type-generator.js";
-import { ZodGenerator } from "../../domains/schema/services/zod-generator.js";
-import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types.js";
+} from "../../domains/schema/services/type-generator";
+import { ZodGenerator } from "../../domains/schema/services/zod-generator";
+import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import {
   toSingularLabel,
   toPluralLabel,
-} from "../../shared/lib/pluralization.js";
-import { createContext, type CommandContext } from "../program.js";
+} from "../../shared/lib/pluralization";
+import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
-} from "../utils/adapter.js";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader.js";
-import { formatDuration, formatCount } from "../utils/logger.js";
+} from "../utils/adapter";
+import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { formatDuration, formatCount } from "../utils/logger";
 
 // ============================================================================
 // Types

@@ -5,8 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { Operation } from "../../diff/types.js";
-import { generateSQL, SqliteUnsupportedOperationError } from "../index.js";
+import type { Operation } from "../../diff/types";
+import { generateSQL, SqliteUnsupportedOperationError } from "../index";
 
 const sl = (op: Operation) => generateSQL(op, "sqlite");
 

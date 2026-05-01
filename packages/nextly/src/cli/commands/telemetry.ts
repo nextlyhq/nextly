@@ -7,7 +7,7 @@
 import * as telemetry from "@nextly/telemetry";
 import { Command } from "commander";
 
-import { CLI_VERSION } from "../program.js";
+import { CLI_VERSION } from "../program";
 
 const REASONS: Record<string, string> = {
   DO_NOT_TRACK: "DO_NOT_TRACK=1 is set",

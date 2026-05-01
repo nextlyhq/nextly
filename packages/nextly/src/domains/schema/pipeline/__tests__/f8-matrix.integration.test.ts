@@ -39,24 +39,24 @@ import {
   it,
 } from "vitest";
 
-import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db.js";
+import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 
-import { RealClassifier } from "../classifier/classifier.js";
-import { RealPreCleanupExecutor } from "../pre-cleanup/executor.js";
-import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor.js";
+import { RealClassifier } from "../classifier/classifier";
+import { RealPreCleanupExecutor } from "../pre-cleanup/executor";
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import {
   noopMigrationJournal,
   noopNotifier,
   noopPreRenameExecutor,
-} from "../pushschema-pipeline-stubs.js";
-import { PushSchemaPipeline } from "../pushschema-pipeline.js";
+} from "../pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "../pushschema-pipeline";
 import type {
   PromptDispatcher,
   RenameCandidate,
-} from "../pushschema-pipeline-interfaces.js";
-import { RegexRenameDetector } from "../rename-detector.js";
-import type { Resolution } from "../resolution/types.js";
-import type { DesiredSchema } from "../types.js";
+} from "../pushschema-pipeline-interfaces";
+import { RegexRenameDetector } from "../rename-detector";
+import type { Resolution } from "../resolution/types";
+import type { DesiredSchema } from "../types";
 
 // ---------------------------------------------------------------------------
 // SQLite test infrastructure

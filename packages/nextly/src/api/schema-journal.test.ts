@@ -38,7 +38,7 @@ vi.mock("../domains/schema/journal/read-journal.js", () => ({
 
 import { requireAuthentication, isErrorResponse } from "../auth/middleware";
 import { container } from "../di";
-import { readJournal } from "../domains/schema/journal/read-journal.js";
+import { readJournal } from "../domains/schema/journal/read-journal";
 import { isSuperAdmin } from "../services/lib/permissions";
 
 import { getSchemaJournal } from "./schema-journal";

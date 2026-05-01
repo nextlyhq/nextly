@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
-import { generateCsrfToken } from "../generate.js";
-import { csrfTokensMatch, validateOrigin } from "../validate.js";
+import { generateCsrfToken } from "../generate";
+import { csrfTokensMatch, validateOrigin } from "../validate";
 
 describe("generateCsrfToken", () => {
   it("should generate a 64-character hex string", () => {

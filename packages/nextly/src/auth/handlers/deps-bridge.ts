@@ -9,11 +9,11 @@
  * we delegate directly. For new operations (refresh tokens, brute-force tracking),
  * we use the database adapter directly.
  */
-import { getDialectTables } from "../../database/index.js";
+import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
 import { env } from "../../lib/env";
 
-import type { AuthRouterDeps } from "./router.js";
+import type { AuthRouterDeps } from "./router";
 
 /**
  * Build AuthRouterDeps from the DI container services.
@@ -139,7 +139,7 @@ export function buildAuthRouterDeps(
         // fields are configured via defineConfig({ users: { fields: [...] } }).
         // We use the same approach as the old Auth.js JWT callback:
         // generate the Drizzle table schema at runtime and query with it.
-        const { container } = await import("../../di/container.js");
+        const { container } = await import("../../di/container");
         if (
           !container.has("config") ||
           !container.has("userExtSchemaService")

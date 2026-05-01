@@ -19,22 +19,22 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db.js";
-import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor.js";
+import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
-import { PushSchemaPipeline } from "../pushschema-pipeline.js";
+import { PushSchemaPipeline } from "../pushschema-pipeline";
 import type {
   PromptDispatcher,
   RenameCandidate,
-} from "../pushschema-pipeline-interfaces.js";
+} from "../pushschema-pipeline-interfaces";
 import {
   noopClassifier,
   noopMigrationJournal,
   noopNotifier,
   noopPreRenameExecutor,
-} from "../pushschema-pipeline-stubs.js";
-import { RegexRenameDetector } from "../rename-detector.js";
-import type { DesiredSchema } from "../types.js";
+} from "../pushschema-pipeline-stubs";
+import { RegexRenameDetector } from "../rename-detector";
+import type { DesiredSchema } from "../types";
 
 const ctx = makeTestContext("postgresql");
 

@@ -8,7 +8,7 @@ import {
   serializeCookie,
   serializeClearCookie,
   parseCookie,
-} from "./cookie-config.js";
+} from "./cookie-config";
 
 /**
  * Create a Set-Cookie header for the refresh token.

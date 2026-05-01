@@ -21,9 +21,9 @@ import type {
   Operation,
   RenameColumnOp,
   RenameTableOp,
-} from "../diff/types.js";
+} from "../diff/types";
 
-import { quoteIdent } from "./identifier-quoting.js";
+import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "mysql");
 

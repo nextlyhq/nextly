@@ -14,7 +14,7 @@ import type {
   DesiredComponent,
   DesiredSchema,
   DesiredSingle,
-} from "./types.js";
+} from "./types";
 
 interface RegistryRecord {
   slug: string;

@@ -26,8 +26,8 @@
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
-import type { FieldConfig } from "../../../collections/fields/types/index.js";
-import type { Logger } from "../../../shared/types/index.js";
+import type { FieldConfig } from "../../../collections/fields/types/index";
+import type { Logger } from "../../../shared/types/index";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
 // Mirrors the original helper from SchemaPushService.

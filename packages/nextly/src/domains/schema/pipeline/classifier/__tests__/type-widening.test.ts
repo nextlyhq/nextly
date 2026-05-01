@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { isWideningChange } from "../type-widening.js";
+import { isWideningChange } from "../type-widening";
 
 describe("isWideningChange — Postgres", () => {
   it("varchar(50) -> varchar(255) is widening", () => {

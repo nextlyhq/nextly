@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { ensureFirstRunSetup } from "../first-run.js";
+import { ensureFirstRunSetup } from "../first-run";
 
 interface FakeAdapter {
   dialect: "postgresql" | "mysql" | "sqlite";

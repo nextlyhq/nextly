@@ -13,13 +13,13 @@
  */
 // CSRF double-submit cookie + origin check. Prevents cross-site forced
 // account creation. See docs/auth/csrf.md.
-import { readOrGenerateRequestId } from "../../api/request-id.js";
-import { NextlyError } from "../../errors/nextly-error.js";
-import { getNextlyLogger } from "../../observability/logger.js";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
+import { readOrGenerateRequestId } from "../../api/request-id";
+import { NextlyError } from "../../errors/nextly-error";
+import { getNextlyLogger } from "../../observability/logger";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils.js";
+import { jsonResponse } from "./handler-utils";
 
 export interface RegisterHandlerDeps {
   allowedOrigins: string[];

@@ -1,11 +1,11 @@
-export { getSession, hasRole, hasAnyRole, hasAllRoles } from "./get-session.js";
+export { getSession, hasRole, hasAnyRole, hasAllRoles } from "./get-session";
 export type {
   SessionUser,
   AuthContext,
   RefreshTokenRecord,
-} from "./session-types.js";
+} from "./session-types";
 export {
   generateRefreshToken,
   hashRefreshToken,
   generateRefreshTokenId,
-} from "./refresh.js";
+} from "./refresh";

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DesiredSchema } from "../types.js";
+import type { DesiredSchema } from "../types";
 
-import { createApplyDesiredSchema } from "../apply.js";
+import { createApplyDesiredSchema } from "../apply";
 
 // Build a stub deps object. Each dep is a vi.fn() the tests can shape
 // per scenario. F3 PR-2: replaced applySingleResource with applyPipeline

@@ -11,7 +11,7 @@
 import type {
   FieldConfig,
   IndexConfig,
-} from "../../../collections/config/define-collection.js";
+} from "../../../collections/config/define-collection";
 
 export interface DesiredSchema {
   collections: Record<string, DesiredCollection>;

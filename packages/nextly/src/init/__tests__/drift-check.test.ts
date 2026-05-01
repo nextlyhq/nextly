@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { runDriftCheck } from "../drift-check.js";
+import { runDriftCheck } from "../drift-check";
 
 interface FakeAdapter {
   dialect: "postgresql" | "mysql" | "sqlite";

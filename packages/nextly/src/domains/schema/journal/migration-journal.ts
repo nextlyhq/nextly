@@ -18,12 +18,12 @@ import {
   nextlyMigrationJournalMysql,
   nextlyMigrationJournalPg,
   nextlyMigrationJournalSqlite,
-} from "../../../schemas/migration-journal/index.js";
+} from "../../../schemas/migration-journal/index";
 import type {
   MigrationJournal,
   MigrationJournalScope,
   MigrationJournalSummary,
-} from "../pipeline/pushschema-pipeline-interfaces.js";
+} from "../pipeline/pushschema-pipeline-interfaces";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 

@@ -2,8 +2,8 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import type { Operation } from "../../diff/types.js";
-import { RealClassifier } from "../classifier.js";
+import type { Operation } from "../../diff/types";
+import { RealClassifier } from "../classifier";
 
 const noopWarnings: string[] = [];
 

@@ -14,12 +14,12 @@
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";
 
-import type { AddColumnOp, DropColumnOp, Operation } from "./diff/types.js";
+import type { AddColumnOp, DropColumnOp, Operation } from "./diff/types";
 import type {
   RenameCandidate,
   RenameDetector,
-} from "./pushschema-pipeline-interfaces.js";
-import { isTypesCompatible } from "./rename-detector-type-families.js";
+} from "./pushschema-pipeline-interfaces";
+import { isTypesCompatible } from "./rename-detector-type-families";
 
 export class RegexRenameDetector implements RenameDetector {
   detect(

@@ -1,24 +1,24 @@
-import { readOrGenerateRequestId } from "../../api/request-id.js";
-import { NextlyError } from "../../errors/nextly-error.js";
-import { setAccessTokenCookie } from "../cookies/access-token-cookie.js";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie.js";
-import { verifyCredentials } from "../credentials/verify-credentials.js";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie.js";
-import { validateCsrf } from "../csrf/validate.js";
-import { buildClaims } from "../jwt/claims.js";
-import { signAccessToken } from "../jwt/sign.js";
+import { readOrGenerateRequestId } from "../../api/request-id";
+import { NextlyError } from "../../errors/nextly-error";
+import { setAccessTokenCookie } from "../cookies/access-token-cookie";
+import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { verifyCredentials } from "../credentials/verify-credentials";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
+import { buildClaims } from "../jwt/claims";
+import { signAccessToken } from "../jwt/sign";
 import {
   generateRefreshToken,
   hashRefreshToken,
   generateRefreshTokenId,
-} from "../session/refresh.js";
+} from "../session/refresh";
 
 import {
   jsonResponse,
   stallResponse,
   buildCookieHeaders,
   getClientIp,
-} from "./handler-utils.js";
+} from "./handler-utils";
 
 export interface LoginHandlerDeps {
   secret: string;

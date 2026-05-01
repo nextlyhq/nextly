@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   findPendingMigrationsForTest,
   recordMigrationForTest,
-} from "./migrate.js";
+} from "./migrate";
 
 interface StubAdapter {
   executeQuery: ReturnType<typeof vi.fn>;

@@ -20,42 +20,42 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getMigrationJournalFromDI,
-} from "../../../dispatcher/helpers/di.js";
-import { getProductionNotifier } from "../../../runtime/notifications/index.js";
-import { DrizzleStatementExecutor } from "../services/drizzle-statement-executor.js";
+} from "../../../dispatcher/helpers/di";
+import { getProductionNotifier } from "../../../runtime/notifications/index";
+import { DrizzleStatementExecutor } from "../services/drizzle-statement-executor";
 
 import {
   createApplyDesiredSchema,
   type ApplyDesiredSchemaDeps,
   type ApplyDesiredSchemaFn,
-} from "./apply.js";
-import { RealClassifier } from "./classifier/classifier.js";
-import { RealPreCleanupExecutor } from "./pre-cleanup/executor.js";
-import { ClackTerminalPromptDispatcher } from "./prompt-dispatcher/clack-terminal.js";
+} from "./apply";
+import { RealClassifier } from "./classifier/classifier";
+import { RealPreCleanupExecutor } from "./pre-cleanup/executor";
+import { ClackTerminalPromptDispatcher } from "./prompt-dispatcher/clack-terminal";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
-} from "./pushschema-pipeline-stubs.js";
-import { PushSchemaPipeline } from "./pushschema-pipeline.js";
-import { RegexRenameDetector } from "./rename-detector.js";
-import type { DesiredSchema } from "./types.js";
+} from "./pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "./pushschema-pipeline";
+import { RegexRenameDetector } from "./rename-detector";
+import type { DesiredSchema } from "./types";
 
 export type {
   DesiredCollection,
   DesiredComponent,
   DesiredSchema,
   DesiredSingle,
-} from "./types.js";
+} from "./types";
 
-export type { SchemaApplyErrorCode } from "./errors.js";
+export type { SchemaApplyErrorCode } from "./errors";
 
-export type { ApplyResult } from "./apply.js";
+export type { ApplyResult } from "./apply";
 
 export {
   buildDesiredSchemaFromRegistry,
   buildDesiredSchemaFromRegistryAsync,
   type DesiredSchemaOverrides,
-} from "./snapshot.js";
+} from "./snapshot";
 
 // Lazy DI binding — the deps object is built on first call so the
 // DI container has finished registration before resolution.

@@ -29,7 +29,7 @@
 import type {
   DesiredCollection,
   DesiredSchema,
-} from "../domains/schema/pipeline/types.js";
+} from "../domains/schema/pipeline/types";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";

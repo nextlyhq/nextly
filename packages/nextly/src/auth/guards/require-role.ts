@@ -2,9 +2,9 @@
 // deleted and the public messages that used to leak role identity (e.g.
 // "Role 'admin' required") collapse into the canonical FORBIDDEN response
 // per spec §13.7. The role names move to logContext for operators only.
-import { NextlyError } from "../../errors/nextly-error.js";
-import { hasRole, hasAnyRole, hasAllRoles } from "../session/get-session.js";
-import type { SessionUser } from "../session/session-types.js";
+import { NextlyError } from "../../errors/nextly-error";
+import { hasRole, hasAnyRole, hasAllRoles } from "../session/get-session";
+import type { SessionUser } from "../session/session-types";
 
 /**
  * Require a specific role. Throws `NextlyError.forbidden()` if missing.

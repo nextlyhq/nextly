@@ -18,8 +18,8 @@ import {
   buildDesiredSnapshotFromConfigForTest,
   generateMigration,
   type MinimalConfigEntity,
-} from "../generate.js";
-import { writeSnapshot } from "../snapshot-io.js";
+} from "../generate";
+import { writeSnapshot } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
 
@@ -215,7 +215,7 @@ describe("generateMigration", () => {
     expect(snapshot.version).toBe(1);
     expect(snapshot.migrationHash).toMatch(/^[a-f0-9]{64}$/);
     // Recompute and verify
-    const { computeMigrationHash } = await import("../snapshot-io.js");
+    const { computeMigrationHash } = await import("../snapshot-io");
     expect(snapshot.migrationHash).toBe(computeMigrationHash(sqlContent));
   });
 

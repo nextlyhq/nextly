@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { introspectLiveSnapshot } from "../introspect-live.js";
+import { introspectLiveSnapshot } from "../introspect-live";
 
 describe("introspectLiveSnapshot - postgresql", () => {
   it("builds snapshot from information_schema.columns rows", async () => {
