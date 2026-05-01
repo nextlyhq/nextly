@@ -293,7 +293,7 @@ pnpm test:integration:postgres17
 - **Files:** [packages/storage-s3/src/adapter.ts:116](packages/storage-s3/src/adapter.ts#L116)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`1ebea04`)
 
 **Fix:** `acl: config.acl ?? "private"`. Update [packages/storage-s3/README.md](packages/storage-s3/README.md) and the playground example to set `acl: "public-read"` explicitly when public buckets are intended. Add a short migration note explaining when to flip ACL vs use signed URLs.
 
