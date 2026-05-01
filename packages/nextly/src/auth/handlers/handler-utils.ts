@@ -60,9 +60,3 @@ export async function parseJsonBody(
   }
 }
 
-/**
- * Extract the client IP address from request headers.
- */
-export function getClientIp(request: Request): string | null {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
-}

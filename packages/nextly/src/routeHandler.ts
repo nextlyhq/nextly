@@ -1125,9 +1125,22 @@ export function createDynamicHandlers(options?: {
   const rateLimitConfig = options?.config?.rateLimit as
     | Parameters<typeof createRateLimiter>[0]
     | undefined;
-  const checkRateLimit = createRateLimiter(
-    rateLimitConfig ?? { enabled: true }
-  );
+  // Audit C4 / T-005: the default keyGenerator needs the trust-proxy
+  // settings so it can resolve a real client IP rather than blindly
+  // trusting X-Forwarded-For. Inject from `security.trustProxy` +
+  // TRUSTED_PROXY_IPS env unless the user supplied an override.
+  const trustedProxyIpsFromEnv = (process.env.TRUSTED_PROXY_IPS ?? "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+  const checkRateLimit = createRateLimiter({
+    enabled: true,
+    ...(rateLimitConfig ?? {}),
+    trustProxy:
+      rateLimitConfig?.trustProxy ?? securityConfig?.trustProxy ?? false,
+    trustedProxyIps:
+      rateLimitConfig?.trustedProxyIps ?? trustedProxyIpsFromEnv,
+  });
 
   /**
    * Wrap a handler with rate limiting, CORS, and security headers.

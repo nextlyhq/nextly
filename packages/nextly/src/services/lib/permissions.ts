@@ -1,3 +1,14 @@
+// Audit C7 (T-004): hard runtime guard. The previous form was a
+// try/catch'd dynamic `await import("server-only")` that silently
+// allowed the module to load in client bundles. The audit recommended
+// adding a static `import "server-only"` on top of the runtime
+// check, but `server-only` always throws unless imported under
+// React Server Components — including plain Node, which breaks
+// nextly's package-level build-guard (which sanity-imports the root
+// entry to confirm it loads). The runtime window check below catches
+// the actual misuse path (a client component bundle that ends up
+// running in a browser) without breaking server-side build/test.
+// The verify-server-only.mjs CI script asserts the runtime throw.
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
@@ -8,11 +19,13 @@ import { container } from "../../di/container";
 import { PermissionCacheService } from "../auth/permission-cache-service";
 import type { Logger } from "../shared";
 
-void (async () => {
-  try {
-    await import("server-only");
-  } catch {}
-})();
+if (typeof window !== "undefined") {
+  throw new Error(
+    "[nextly] Direct API permissions module loaded in a browser context. " +
+      "Direct API is server-only — import only from Server Components, " +
+      "Route Handlers, or Server Actions, never from client components."
+  );
+}
 
 function getDb(): unknown {
   const adapter = container.get("adapter") as DrizzleAdapter;

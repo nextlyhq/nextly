@@ -113,7 +113,7 @@ export class S3StorageAdapter implements IStorageAdapter {
       region: config.region,
       endpoint: config.endpoint,
       forcePathStyle: config.forcePathStyle ?? false,
-      acl: config.acl ?? "public-read",
+      acl: config.acl ?? "private",
       publicUrl: config.publicUrl,
       cacheControl: config.cacheControl ?? "public, max-age=31536000",
       contentDisposition: config.contentDisposition,

@@ -19,7 +19,7 @@ import { getNextlyLogger } from "../../observability/logger";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils";
+import { jsonResponse, stallResponse } from "./handler-utils";
 
 export interface RegisterHandlerDeps {
   allowedOrigins: string[];
@@ -28,6 +28,14 @@ export interface RegisterHandlerDeps {
    * them and return generic silent-success (false, the spec default).
    */
   revealRegistrationConflict: boolean;
+  /**
+   * Audit H11 (T-010): minimum response time in milliseconds. The
+   * handler stalls every response path to this floor so an attacker
+   * cannot distinguish "fresh account created" (slow — bcrypt + DB
+   * inserts) from "conflict swallowed" (fast — just a DB read) by
+   * timing.
+   */
+  loginStallTimeMs: number;
   /**
    * Throws NextlyError on failure (validation, DUPLICATE on email conflict,
    * etc.). Returns the new user record on success.
@@ -62,6 +70,7 @@ export async function handleRegister(
   request: Request,
   deps: RegisterHandlerDeps
 ): Promise<Response> {
+  const startTime = Date.now();
   const requestId = readOrGenerateRequestId(request);
 
   try {
@@ -76,6 +85,7 @@ export async function handleRegister(
       deps.allowedOrigins
     );
     if (!csrfResult.valid) {
+      await stallResponse(startTime, deps.loginStallTimeMs);
       // CSRF stays as a discrete code — it's a configuration / origin issue,
       // not an account-state leak. Keep the existing wire shape.
       return jsonResponse(
@@ -112,6 +122,7 @@ export async function handleRegister(
       // email." When `revealRegistrationConflict` is true, real success
       // includes the user object; otherwise the generic message stays.
       if (deps.revealRegistrationConflict) {
+        await stallResponse(startTime, deps.loginStallTimeMs);
         return new Response(
           JSON.stringify({
             data: {
@@ -127,6 +138,7 @@ export async function handleRegister(
           }
         );
       }
+      await stallResponse(startTime, deps.loginStallTimeMs);
       return new Response(
         JSON.stringify({ data: { message: SILENT_SUCCESS_MESSAGE } }),
         {
@@ -155,6 +167,7 @@ export async function handleRegister(
         // TODO: send the "someone tried to register your account" courtesy
         // email to the existing user once email subsystem template support
         // lands (spec §19 follow-up).
+        await stallResponse(startTime, deps.loginStallTimeMs);
         return new Response(
           JSON.stringify({ data: { message: SILENT_SUCCESS_MESSAGE } }),
           {
@@ -169,6 +182,7 @@ export async function handleRegister(
       throw err;
     }
   } catch (err) {
+    await stallResponse(startTime, deps.loginStallTimeMs);
     if (NextlyError.is(err)) {
       return buildRegisterErrorResponse(err, requestId);
     }

@@ -93,6 +93,8 @@
     "UPLOADTHING_TOKEN", // @revnixhq/storage-uploadthing runtime config
     "TEST_DATABASE_URL_POSTGRES", // @revnixhq/adapter-postgres integration tests
     "TEST_DATABASE_URL_MYSQL", // @revnixhq/adapter-mysql integration tests
+    "TRUSTED_PROXY_IPS", // @revnixhq/nextly trust-proxy CIDR list (T-005 / audit C4)
+    "ALLOWED_REDIRECT_HOSTS", // @revnixhq/nextly forgot-password redirect allowlist (T-011 / audit H2)
     "DB_PROVIDER", // @revnixhq/adapter-postgres runtime driver selection
     "TMPDIR", // @revnixhq/create-nextly-app temp dir override
     "PORT", // @revnixhq/nextly HMR listener: Next.js dev port

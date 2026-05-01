@@ -46,6 +46,7 @@
  * @module api/uploads
  */
 
+import { container } from "../di/container";
 import { isServicesRegistered, getService } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -56,12 +57,34 @@ import {
   type UploadServiceResult,
 } from "../services/upload-service";
 import { getMediaStorage } from "../storage/storage";
+import {
+  checkRequestSize,
+  resolveSecurityLimits,
+  type ResolvedSecurityLimits,
+} from "../utils/parse-byte-size";
 
 import {
   createPaginatedResponse,
   createSuccessResponse,
 } from "./create-success-response";
 import { withErrorHandler } from "./with-error-handler";
+
+/**
+ * Audit H13 (T-012): pull `security.limits` from the registered config
+ * via DI. Falls back to defaults if config isn't initialized (test
+ * harness) or has no `limits` block.
+ */
+function resolveSecurityLimitsFromContainer(): ResolvedSecurityLimits {
+  try {
+    if (!container.has("config")) return resolveSecurityLimits(undefined);
+    const cfg = container.get<{
+      security?: { limits?: Parameters<typeof resolveSecurityLimits>[0] };
+    }>("config");
+    return resolveSecurityLimits(cfg?.security?.limits);
+  } catch {
+    return resolveSecurityLimits(undefined);
+  }
+}
 
 interface UploadRouteParams {
   slug: string;
@@ -225,6 +248,13 @@ export const POST = withErrorHandler(
     const { slug } = await extractParams(context.params);
     requireSlug(slug);
 
+    // Audit H13 (T-012): cheap Content-Length guard. Reject obvious
+    // DoS bodies before they get buffered. Per-file size + per-request
+    // file-count caps are still enforced after parse below.
+    const limits = resolveSecurityLimitsFromContainer();
+    const tooLarge = checkRequestSize(request, limits.multipart);
+    if (tooLarge) return tooLarge;
+
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
 
@@ -235,6 +265,21 @@ export const POST = withErrorHandler(
         ],
         logContext: { reason: "missing-file" },
       });
+    }
+
+    // Audit H13 (T-012): per-file size cap. Cheap multipart bodies can
+    // pass the Content-Length check yet still ship one giant file; cap
+    // each file individually.
+    if (file.size > limits.fileSize) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "PAYLOAD_TOO_LARGE",
+            message: `File "${file.name}" (${file.size} bytes) exceeds the configured per-file limit of ${limits.fileSize} bytes.`,
+          },
+        }),
+        { status: 413, headers: { "content-type": "application/json" } }
+      );
     }
 
     // `_payload` is optional metadata. Invalid JSON is tolerated to

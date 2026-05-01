@@ -129,6 +129,26 @@ export const SanitizationConfigSchema = z.object({
 });
 
 /**
+ * Audit H13 (T-012): request body / multipart size caps. Each field
+ * accepts a byte count or a human-readable suffix (`"1mb"`, `"500kb"`).
+ * String shorthand is parsed at runtime; the schema stays permissive.
+ */
+export const SecurityLimitsConfigSchema = z.object({
+  /** Max `application/json` body size. @default "1mb" */
+  json: z.union([z.string(), z.number().int().positive()]).optional(),
+  /** Max total `multipart/form-data` body size. @default "50mb" */
+  multipart: z.union([z.string(), z.number().int().positive()]).optional(),
+  /** Per-file size cap inside multipart uploads. @default "10mb" */
+  fileSize: z.union([z.string(), z.number().int().positive()]).optional(),
+  /** Max files per multipart request. @default 10 */
+  fileCount: z.number().int().positive().optional(),
+  /** Max non-file form fields per request. @default 50 */
+  fieldCount: z.number().int().positive().optional(),
+  /** Max size of a single non-file form field. @default "100kb" */
+  fieldSize: z.union([z.string(), z.number().int().positive()]).optional(),
+});
+
+/**
  * Validates the full `security` namespace in `defineConfig()`.
  *
  * @example
@@ -139,6 +159,8 @@ export const SanitizationConfigSchema = z.object({
  *   headers: { contentSecurityPolicy: "default-src 'self'" },
  *   cors: { origin: ['https://example.com'] },
  *   sanitization: { enabled: true },
+ *   trustProxy: true,
+ *   limits: { multipart: "100mb" },
  * });
  * ```
  */
@@ -147,6 +169,23 @@ export const SecurityConfigSchema = z.object({
   cors: CorsConfigSchema.optional(),
   uploads: UploadSecurityConfigSchema.optional(),
   sanitization: SanitizationConfigSchema.optional(),
+  limits: SecurityLimitsConfigSchema.optional(),
+  /**
+   * When the application sits behind a reverse proxy (Vercel, Cloudflare,
+   * Nginx, ALB, etc.), set this to `true` so client-IP resolution honors
+   * `X-Forwarded-For`. Pair with the `TRUSTED_PROXY_IPS` env var (a
+   * comma-separated CIDR list of your proxy fleet) so the framework
+   * can identify which hops in the chain are proxies vs the real client.
+   *
+   * When `false` (default), proxy headers are ignored entirely. Use
+   * this when the application is exposed directly to clients with no
+   * trusted intermediary, or during local development.
+   *
+   * Audit: closes C4 (XFF blindly trusted across rate-limit / auth flows).
+   *
+   * @default false
+   */
+  trustProxy: z.boolean().optional(),
 });
 
 export type SecurityConfigInput = z.infer<typeof SecurityConfigSchema>;
@@ -158,3 +197,6 @@ export type UploadSecurityConfigInput = z.infer<
   typeof UploadSecurityConfigSchema
 >;
 export type SanitizationConfigInput = z.infer<typeof SanitizationConfigSchema>;
+export type SecurityLimitsConfigInput = z.infer<
+  typeof SecurityLimitsConfigSchema
+>;
