@@ -18,6 +18,7 @@
  */
 
 import { createAdapterFromEnv } from "../database/factory";
+import { NextlyError } from "../errors/nextly-error";
 import { ServiceContainer } from "../services";
 import { ServiceResult } from "../types/auth";
 
@@ -168,14 +169,30 @@ export class ServiceDispatcher {
 
     const validation = this.validateRequest(request);
     if (!validation.valid) {
-      return { success: false, error: validation.error, status: 400 };
+      return {
+        success: false,
+        error: NextlyError.validation({
+          errors: [
+            {
+              path: "request",
+              code: "INVALID_REQUEST",
+              message: validation.error ?? "Invalid request.",
+            },
+          ],
+        }),
+        status: 400,
+      };
     }
 
     try {
       const result = await this.executeServiceMethod(request);
 
       // Normalize ServiceResult-shaped responses so every dispatch
-      // exits via the same DispatchResult contract.
+      // exits via the same DispatchResult contract. Phase 4: every
+      // migrated dispatcher returns a Response from respondX helpers,
+      // which the routeHandler unwraps via DispatchResult.data. The
+      // smart-extract path below stays for unmigrated handlers (Tasks
+      // 6-12) that still return ServiceResult-shaped objects.
       if (
         result &&
         typeof result === "object" &&
@@ -185,7 +202,15 @@ export class ServiceDispatcher {
         return {
           success: r.success ?? true,
           message: r.success ? r.message : undefined,
-          error: !r.success ? r.message : undefined,
+          // Phase 4: even for legacy ServiceResult errors, propagate as
+          // NextlyError so the route wrapper can build a canonical
+          // response. Wrap the legacy string message in INTERNAL_ERROR.
+          error:
+            !r.success && r.message
+              ? NextlyError.internal({
+                  logContext: { legacyServiceResultMessage: r.message },
+                })
+              : undefined,
           status: r.statusCode ?? r.status ?? 200,
           data: r.data,
           meta: (r as Record<string, unknown>).meta,
@@ -194,12 +219,20 @@ export class ServiceDispatcher {
 
       return { success: true, data: result, status: 200 };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      // Phase 4: propagate the original NextlyError (not a stringified
+      // message) so the route wrapper rebuilds the response with the
+      // correct status, code, publicData, and headers. Pre-Phase-4
+      // this stringified via `error.message` and a heuristic
+      // text-match (`getErrorStatus`) to recover a status — lossy.
+      const nextlyErr = NextlyError.is(error)
+        ? error
+        : NextlyError.internal({
+            cause: error instanceof Error ? error : undefined,
+          });
       return {
         success: false,
-        error: errorMessage,
-        status: this.getErrorStatus(errorMessage),
+        error: nextlyErr,
+        status: nextlyErr.statusCode,
       };
     }
   }
@@ -236,15 +269,8 @@ export class ServiceDispatcher {
     }
   }
 
-  private getErrorStatus(errorMessage: string): number {
-    const msg = errorMessage.toLowerCase();
-    if (msg.includes("not found") || msg.includes("role_not_found")) return 404;
-    if (msg.includes("unauthorized")) return 401;
-    if (msg.includes("forbidden")) return 403;
-    if (msg.includes("required") || msg.includes("invalid")) return 400;
-    if (msg.includes("duplicate") || msg.includes("already exists")) return 409;
-    return 500;
-  }
+  // Phase 4: getErrorStatus heuristic deleted. Status now comes from
+  // NextlyError.statusCode, propagated through DispatchResult.error.
 
   /** Registers a new service type. */
   addService(service: ServiceType): void {

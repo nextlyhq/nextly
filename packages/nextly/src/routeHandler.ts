@@ -54,8 +54,10 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
+import { readOrGenerateRequestId } from "./api/request-id";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { NextlyError } from "./errors/nextly-error";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -793,32 +795,67 @@ async function handleServiceRequest(
     headers["X-Nextly-Schema-Version"] = String(schemaVersion);
   }
 
-  // Task 24 phase 4: collapse the dispatcher's triple-wrap to the
-  // canonical envelope. Pre-task-24 the wire was
-  //   { data: { success, status, data: <T>, message?, meta? } }
-  // which forced consumers to read `result.data.<field>` after the
-  // fetcher's single-`data` peel — and most of them got it wrong.
-  // Now success responses follow the Task-21 spec (§10.2) shape:
-  //   { data: <T>, meta?: <M> }                 // success
-  //   { errors: [{ code, message }] }           // failure
-  // Status code carries success/failure on the wire. Consumers read
-  // `result.<field>` directly (or `.docs` / `.meta` for paginated
-  // lists once those endpoints get migrated to PaginatedDocs<T>).
+  // Phase 4: align dispatcher error path with withErrorHandler. Both API
+  // surfaces emit the canonical Task 21 §10.1 singular shape:
+  //
+  //   { error: { code, message, messageKey?, data?, requestId } }
+  //
+  // Pre-Phase-4 the dispatcher emitted plural { errors: [...] } and
+  // parseApiError on the admin client only read singular `error`,
+  // silently degrading to "Unexpected response from server." See spec §6.4.
+  //
+  // The original NextlyError flows through DispatchResult.error
+  // (Task 5 — propagated, not stringified), so we can rebuild the response
+  // with the correct status, code, publicData, and headers (Retry-After
+  // for rate limits, X-Request-Id always).
   if (!result.success) {
-    const errorBody = {
-      errors: [
-        {
-          code: "INTERNAL_ERROR",
-          message: result.error ?? "An unexpected error occurred.",
-        },
-      ],
+    const requestId = readOrGenerateRequestId(req);
+    // The dispatcher (post-Phase-4) always sets `error` to a NextlyError
+    // when `success` is false. The fallback covers a paranoid corner.
+    const nextlyErr = NextlyError.is(result.error)
+      ? result.error
+      : NextlyError.internal();
+    const errorHeaders: Record<string, string> = {
+      "content-type": "application/problem+json",
+      "x-request-id": requestId,
     };
-    return new Response(JSON.stringify(errorBody), {
-      status: result.status,
-      headers,
-    });
+    if (schemaVersion !== undefined) {
+      errorHeaders["X-Nextly-Schema-Version"] = String(schemaVersion);
+    }
+    if (nextlyErr.code === "RATE_LIMITED") {
+      const data = nextlyErr.publicData;
+      if (
+        data &&
+        typeof data === "object" &&
+        "retryAfterSeconds" in data &&
+        typeof (data as { retryAfterSeconds?: unknown }).retryAfterSeconds ===
+          "number"
+      ) {
+        errorHeaders["retry-after"] = String(
+          (data as { retryAfterSeconds: number }).retryAfterSeconds
+        );
+      }
+    }
+    return new Response(
+      JSON.stringify({ error: nextlyErr.toResponseJSON(requestId) }),
+      {
+        status: nextlyErr.statusCode,
+        headers: errorHeaders,
+      }
+    );
   }
 
+  // Phase 4: dispatcher handlers now return canonical shapes directly
+  // via the respondX helpers in api/response-shapes.ts. The dispatcher
+  // result.data already IS the wire body shape — no more { data: ... }
+  // wrapping at this layer.
+  //
+  // Migration is staged commit-by-commit in Tasks 6-12. Until every
+  // dispatcher is migrated, this layer keeps the legacy { data, meta }
+  // wrap so unmigrated handlers don't break. The `if (result.data &&
+  // ...)` check below detects already-canonical bodies (which set
+  // result.data to the full body via respondX → DispatchResult.data
+  // path) and passes them through unchanged.
   const successBody: Record<string, unknown> = { data: result.data };
   if (result.meta !== undefined) {
     successBody.meta = result.meta;
