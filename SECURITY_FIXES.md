@@ -14,7 +14,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
-| 1 — Pre-beta           | 6    | 0         | 0       | 0       | 8       |
+| 1 — Pre-beta           | 7    | 0         | 0       | 0       | 7       |
 | 2 — Pre-1.0            | 0    | 0         | 0       | 0       | 14      |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
@@ -648,7 +648,7 @@ pnpm test --filter @nextly/storage-vercel-blob
 - **Files:** [packages/nextly/src/domains/collections/query/query-operators.ts:193-203](packages/nextly/src/domains/collections/query/query-operators.ts#L193-L203)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** pending
+- **Status:** done (`<sha-pending>`)
 
 **Fix:** Mirror the escape logic that already exists correctly in `buildSearchCondition` ([collection-query-service.ts:1196-1237](packages/nextly/src/domains/collections/services/collection-query-service.ts#L1196-L1237)):
 
