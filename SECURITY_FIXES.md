@@ -443,7 +443,7 @@ pnpm test
 - **Files:** [packages/nextly/src/domains/email/services/providers/smtp-provider.ts:58-66](packages/nextly/src/domains/email/services/providers/smtp-provider.ts#L58-L66)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`7a118e9`)
 
 **Fix:** Default `secure: true`. Add startup validation: if `host` is not localhost AND `secure: false` AND port ≠ 587 (STARTTLS), throw with a clear message pointing at the SMTP docs.
 
@@ -564,7 +564,7 @@ pnpm --filter auth-e2e test
 - **Files:** [packages/nextly/src/auth/handlers/forgot-password.ts:47-56](packages/nextly/src/auth/handlers/forgot-password.ts#L47-L56)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`e4eba99`)
 
 **Fix:**
 
@@ -627,7 +627,7 @@ pnpm test
 - **Files:** [packages/storage-vercel-blob/src/adapter.ts:106-117](packages/storage-vercel-blob/src/adapter.ts#L106-L117)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`013a583`)
 
 **Fix:** Replace the one-time console warning with a thrown error for `image/svg+xml` and `text/html` uploads. Update the adapter README to explain the platform limitation and point to S3 as the alternative.
 
@@ -648,7 +648,7 @@ pnpm test --filter @nextly/storage-vercel-blob
 - **Files:** [packages/nextly/src/domains/collections/query/query-operators.ts:193-203](packages/nextly/src/domains/collections/query/query-operators.ts#L193-L203)
 - **Blocked by:** —
 - **Blocks:** —
-- **Status:** done (`<sha-pending>`)
+- **Status:** done (`7c05fae`)
 
 **Fix:** Mirror the escape logic that already exists correctly in `buildSearchCondition` ([collection-query-service.ts:1196-1237](packages/nextly/src/domains/collections/services/collection-query-service.ts#L1196-L1237)):
 
