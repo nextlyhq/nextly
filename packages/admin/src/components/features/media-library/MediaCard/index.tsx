@@ -163,15 +163,15 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-xl overflow-hidden bg-white dark:bg-slate-950 transition-all duration-300 border border-border/50",
+        "group relative aspect-square rounded-xl overflow-hidden bg-white dark:bg-slate-950 transition-all duration-300 border border-border/50 flex flex-col",
         isSelected
-          ? "ring-2 ring-primary ring-offset-2 border-primary"
-          : "hover:border-primary/40",
+          ? "ring-2 ring-primary/30 ring-offset-2 border-primary/30 cursor-pointer"
+          : "hover:border-primary/40 cursor-pointer",
         className
       )}
     >
-      {/* Image Preview Container */}
-      <div className="absolute inset-0 flex items-center justify-center p-4">
+      {/* Image Preview Container - Flex-1 to push info bar down */}
+      <div className="relative flex-1 flex items-center justify-center p-4 min-h-0">
         {!imageError && media.url ? (
           <img
             src={media.url}
@@ -214,8 +214,8 @@ export function MediaCard({
         </div>
       )}
 
-      {/* Information Bar - Primary Tinted Layout */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-primary/5 dark:bg-primary/10 border-t border-border/40 p-3 pointer-events-none">
+      {/* Information Bar - Integrated at bottom of aspect-square */}
+      <div className="bg-primary/5 dark:bg-primary/10 border-t border-border/40 p-3 shrink-0">
         <div className="flex flex-col gap-1.5">
           <p className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}

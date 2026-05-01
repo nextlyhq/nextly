@@ -23,6 +23,9 @@ import {
   DialogTitle,
   Input,
   Label,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   toast,
 } from "@revnixhq/ui";
 import * as React from "react";
@@ -34,7 +37,6 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
-  Home,
   Folder as FolderIcon,
   Copy,
   Check,
@@ -390,18 +392,8 @@ export function MediaEditDialog({
       >
         <DialogHeader className="p-6 pb-2">
           <DialogTitle>Edit Media</DialogTitle>
-          <DialogDescription>
-            {media.originalFilename}
-            <span className="text-muted-foreground">
-              {" "}
-              &middot; {formatFileSize(media.size)}
-            </span>
-            {media.width && media.height && (
-              <span className="text-muted-foreground">
-                {" "}
-                &middot; {media.width} x {media.height}
-              </span>
-            )}
+          <DialogDescription className="sr-only">
+            Edit the metadata for {media.originalFilename}
           </DialogDescription>
         </DialogHeader>
 
@@ -423,6 +415,13 @@ export function MediaEditDialog({
 
               {/* Right Panel - Metadata Form + Sizes */}
               <div className="flex-1 space-y-4 min-w-0">
+                {/* Filename */}
+                <div className="pb-2 border-b border-border/50">
+                  <div className="text-sm font-semibold truncate text-foreground/90">
+                    {media.originalFilename}
+                  </div>
+                </div>
+
                 {/* Alt Text */}
                 <div className="space-y-1.5">
                   <Label htmlFor="altText" className="text-sm">
@@ -473,43 +472,79 @@ export function MediaEditDialog({
                 {/* Folder */}
                 <div className="space-y-1.5">
                   <Label className="text-sm">Folder</Label>
-                  <button
-                    type="button"
-                    onClick={() => setIsFolderPickerOpen(!isFolderPickerOpen)}
-                    className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent"
+                  <Popover
+                    open={isFolderPickerOpen}
+                    onOpenChange={setIsFolderPickerOpen}
                   >
-                    {selectedFolderId ? (
-                      <FolderIcon className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <Home className="h-4 w-4 text-muted-foreground" />
-                    )}
-                    <span className="flex-1 text-left truncate">
-                      {selectedFolderId
-                        ? rootFolders?.find(f => f.id === selectedFolderId)
-                            ?.name ||
-                          (media?.folderId === selectedFolderId
-                            ? "Current Folder"
-                            : "Selected folder")
-                        : "Root (No Folder)"}
-                    </span>
-                    {isFolderPickerOpen ? (
-                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    )}
-                  </button>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
+                      >
+                        <FolderIcon className="h-4 w-4 text-muted-foreground" />
+                        <span className="flex-1 text-left truncate">
+                          {selectedFolderId
+                            ? rootFolders?.find(f => f.id === selectedFolderId)
+                                ?.name ||
+                              (media?.folderId === selectedFolderId
+                                ? "Current Folder"
+                                : "Selected folder")
+                            : "Root (No Folder)"}
+                        </span>
+                        {isFolderPickerOpen ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="p-0 !w-[var(--radix-popover-trigger-width)] !max-w-none !max-h-[120px] overflow-hidden !shadow-none"
+                      align="start"
+                      sideOffset={4}
+                      style={{
+                        width: "var(--radix-popover-trigger-width)",
+                        maxHeight: "120px",
+                      }}
+                      onOpenAutoFocus={e => e.preventDefault()}
+                    >
+                      <div
+                        className="overflow-y-auto p-1"
+                        style={{ maxHeight: "120px", minHeight: "80px" }}
+                        onWheel={e => e.stopPropagation()}
+                      >
+                        <FolderTreePicker
+                          selectedFolderId={selectedFolderId}
+                          onSelect={folder => {
+                            setSelectedFolderId(folder?.id ?? null);
+                            setIsFolderPickerOpen(false);
+                          }}
+                          rootLabel="Root (No Folder)"
+                          compact
+                        />
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
 
-                  {isFolderPickerOpen && (
-                    <div className="max-h-[150px] overflow-y-auto rounded-md border border-border p-2">
-                      <FolderTreePicker
-                        selectedFolderId={selectedFolderId}
-                        onSelect={folder => {
-                          setSelectedFolderId(folder?.id ?? null);
-                          setIsFolderPickerOpen(false);
-                        }}
-                        rootLabel="Root (No Folder)"
-                        compact
-                      />
+                {/* File Info Row */}
+                <div className="grid grid-cols-2 gap-6 pt-1">
+                  <div className="space-y-1">
+                    <div className="text-xs font-semibold text-muted-foreground">
+                      File Size
+                    </div>
+                    <div className="text-sm font-medium text-foreground/80">
+                      {formatFileSize(media.size)}
+                    </div>
+                  </div>
+                  {media.width && media.height && (
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        Dimensions
+                      </div>
+                      <div className="text-sm font-medium text-foreground/80">
+                        {media.width} &times; {media.height}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -544,7 +579,7 @@ export function MediaEditDialog({
                   className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
-                  <span className="text-xs font-bold tracking-tight">
+                  <span className="text-xs font-semibold tracking-tight">
                     Delete
                   </span>
                 </Button>
@@ -558,7 +593,7 @@ export function MediaEditDialog({
                   className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
                 >
                   <Copy className="mr-2 h-4 w-4" />
-                  <span className="text-xs font-bold tracking-tight">
+                  <span className="text-xs font-semibold tracking-tight">
                     Copy URL
                   </span>
                 </Button>
@@ -572,7 +607,7 @@ export function MediaEditDialog({
                   className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
                 >
                   <Download className="mr-2 h-4 w-4" />
-                  <span className="text-xs font-bold tracking-tight">
+                  <span className="text-xs font-semibold tracking-tight">
                     Download
                   </span>
                 </Button>
@@ -586,14 +621,14 @@ export function MediaEditDialog({
                 variant="outline"
                 onClick={() => onOpenChange(false)}
                 disabled={isPending}
-                className="h-10 px-6 font-bold tracking-tight bg-white dark:bg-slate-900 border-border/50"
+                className="h-9 px-4 text-xs font-semibold tracking-tight bg-white dark:bg-slate-900 border-border/50"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isPending}
-                className="h-10 px-8 bg-primary text-primary-foreground font-bold tracking-tight hover:opacity-90 shadow-sm"
+                className="h-9 px-6 bg-primary text-primary-foreground text-xs font-semibold tracking-tight hover:opacity-90 shadow-sm"
               >
                 {isPending ? (
                   <>

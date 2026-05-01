@@ -184,6 +184,7 @@ function FolderTreeItem({
   onDelete,
   onKeyDown,
 }: FolderTreeItemProps) {
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   // Fetch subfolders to determine if we have children and for expansion
   const { data: subfoldersData } = useSubfolders(folder.id);
   const hasSubfolders = (subfoldersData?.length ?? 0) > 0;
@@ -223,7 +224,7 @@ function FolderTreeItem({
                 onToggle(folder.id);
               }}
               className={cn(
-                "flex h-8 w-6 items-center justify-center transition-colors rounded-md",
+                "flex h-8 w-6 items-center justify-center transition-colors rounded-md cursor-pointer",
                 isActive
                   ? "text-primary/40 group-hover:text-primary"
                   : "text-muted-foreground/40 group-hover:text-foreground"
@@ -253,7 +254,7 @@ function FolderTreeItem({
               className={cn(
                 "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-[9px] font-bold tabular-nums transition-all duration-200",
                 isActive
-                  ? "bg-primary text-primary-foreground shadow-sm"
+                  ? "bg-primary/20 text-primary"
                   : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
               )}
             >
@@ -266,14 +267,16 @@ function FolderTreeItem({
         <div
           className={cn(
             "pr-2 transition-opacity",
-            isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            isActive || isMenuOpen
+              ? "opacity-100 cursor-pointer"
+              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100 cursor-pointer"
           )}
         >
-          <DropdownMenu>
+          <DropdownMenu onOpenChange={setIsMenuOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer"
                 tabIndex={-1}
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-slate-400" />
@@ -281,7 +284,7 @@ function FolderTreeItem({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="w-48 shadow-lg border-border/50"
+              className="w-48 shadow-none border-border/50"
             >
               <DropdownMenuItem
                 onClick={() => onCreateSubfolder(folder.id)}
@@ -299,9 +302,9 @@ function FolderTreeItem({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDelete(folder.id, folder.name)}
-                className="gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
+                className="gap-2"
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-4 w-4 text-slate-500" />
                 <span>Delete</span>
               </DropdownMenuItem>
             </DropdownMenuContent>

@@ -49,8 +49,7 @@ interface MediaListViewProps {
   onCopyUrl?: (url: string) => void;
   onDownload?: (media: Media) => void;
   onRetry?: () => void;
-  className?: string;
-  emptyStateMessage?: React.ReactNode;
+  hiddenColumns?: Set<string>;
 }
 
 // Get the right icon for a media type
@@ -100,6 +99,7 @@ export function MediaListView({
   isLoading = false,
   error = null,
   selectedIds = new Set(),
+  hiddenColumns = new Set(),
   onSelectionChange,
   onToggleAll,
   onEdit,
@@ -115,10 +115,10 @@ export function MediaListView({
     return "indeterminate";
   }, [media, selectedIds]);
 
-  const columnDefs: Column<Media>[] = useMemo(
-    () => [
+  const columnDefs: Column<Media>[] = useMemo(() => {
+    const allColumns: Column<Media>[] = [
       {
-        key: "id" as keyof Media,
+        key: "id",
         label: (
           <BulkSelectCheckbox
             checked={selectAllState}
@@ -141,7 +141,7 @@ export function MediaListView({
         ),
       },
       {
-        key: "originalFilename" as keyof Media,
+        key: "originalFilename",
         label: "NAME",
         headerClassName: "text-left pl-0",
         cellClassName: "text-left pl-0",
@@ -186,7 +186,7 @@ export function MediaListView({
         },
       },
       {
-        key: "mimeType" as keyof Media,
+        key: "mimeType",
         label: "TYPE",
         headerClassName: "text-center",
         cellClassName: "text-center",
@@ -203,7 +203,7 @@ export function MediaListView({
         },
       },
       {
-        key: "size" as keyof Media,
+        key: "size",
         label: "SIZE",
         headerClassName: "text-right",
         cellClassName: "text-right font-medium",
@@ -214,7 +214,7 @@ export function MediaListView({
         ),
       },
       {
-        key: "width" as keyof Media,
+        key: "width",
         label: "DIMENSIONS",
         hideOnMobile: true,
         headerClassName: "text-right",
@@ -226,7 +226,7 @@ export function MediaListView({
         ),
       },
       {
-        key: "uploadedAt" as keyof Media,
+        key: "uploadedAt",
         label: "UPLOADED",
         hideOnMobile: true,
         headerClassName: "text-right",
@@ -237,9 +237,16 @@ export function MediaListView({
           </span>
         ),
       },
-    ],
-    [selectAllState, onToggleAll, selectedIds, onSelectionChange]
-  );
+    ];
+
+    return allColumns.filter(col => !hiddenColumns.has(col.key as string));
+  }, [
+    selectAllState,
+    onToggleAll,
+    selectedIds,
+    onSelectionChange,
+    hiddenColumns,
+  ]);
 
   // Loading state
   if (isLoading) {

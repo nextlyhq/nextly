@@ -107,6 +107,7 @@ export {
   LayoutGrid, // Collection Builder: blocks field
   Layers,
   LayoutDashboard,
+  Library,
   Link,
   Link2, // useFields: relation
   List, // useFields: select

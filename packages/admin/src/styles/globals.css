@@ -1910,26 +1910,28 @@ button[data-slot="radio-group-item"][data-state="checked"],
 .adminapp .admin-dropdown-item[data-active="true"],
 .adminapp .admin-dropdown-item:focus,
 .adminapp .admin-dropdown-item:focus-visible {
-  background-color: #000000 !important;
-  color: #ffffff !important;
+  background-color: hsl(var(--primary) / 0.05) !important;
+  color: hsl(var(--primary)) !important;
 }
 
 .adminapp .admin-dropdown-item:focus svg,
-.adminapp .admin-dropdown-item[data-active="true"] svg {
-  color: #ffffff !important;
+.adminapp .admin-dropdown-item[data-active="true"] svg,
+.adminapp .admin-dropdown-item[data-highlighted] svg {
+  color: hsl(var(--primary)) !important;
 }
 
 .adminapp.dark .admin-dropdown-item[data-highlighted],
 .adminapp.dark .admin-dropdown-item[data-active="true"],
 .adminapp.dark .admin-dropdown-item:focus,
 .adminapp.dark .admin-dropdown-item:focus-visible {
-  background-color: #000000 !important;
-  color: #ffffff !important;
+  background-color: hsl(var(--primary) / 0.1) !important;
+  color: hsl(var(--primary)) !important;
 }
 
 .adminapp.dark .admin-dropdown-item:focus svg,
-.adminapp.dark .admin-dropdown-item[data-active="true"] svg {
-  color: #ffffff !important;
+.adminapp.dark .admin-dropdown-item[data-active="true"] svg,
+.adminapp.dark .admin-dropdown-item[data-highlighted] svg {
+  color: hsl(var(--primary)) !important;
 }
 
 /* Destructive Dropdown Item */

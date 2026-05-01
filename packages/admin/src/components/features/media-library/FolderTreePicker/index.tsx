@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   Folder as FolderIcon,
-  Home,
 } from "@admin/components/icons";
 import {
   useFolderById,
@@ -140,14 +139,14 @@ export function FolderTreePicker({
           type="button"
           onClick={() => onSelect(null)}
           className={cn(
-            "group flex w-full items-center rounded-md border text-left transition-all duration-200",
+            "group flex w-full items-center text-left transition-all duration-200",
             compact ? "gap-2 px-3 py-2" : "gap-3 px-4 py-3",
             selectedFolderId === null
-              ? "border-primary/20 bg-primary/5 text-primary"
-              : "border-border hover:bg-primary/5 hover:text-primary"
+              ? "bg-primary/5 text-primary"
+              : "hover:bg-primary/5 hover:text-primary"
           )}
         >
-          <Home
+          <FolderIcon
             className={cn(
               "shrink-0 transition-colors",
               selectedFolderId === null
@@ -158,7 +157,10 @@ export function FolderTreePicker({
           />
           <div className="flex-1">
             <div
-              className={cn("font-bold tracking-tight", compact && "text-sm")}
+              className={cn(
+                "font-medium tracking-tight text-[13px]",
+                compact && "text-xs"
+              )}
             >
               {rootLabel}
             </div>
@@ -222,12 +224,12 @@ function FolderTreePickerItem({
     <div>
       <div
         className={cn(
-          "group flex items-center rounded-md border transition-all duration-200",
+          "group flex items-center transition-all duration-200",
           compact ? "gap-1.5 px-2 py-1.5" : "gap-2 px-3 py-2.5",
           isDisabled && "cursor-not-allowed opacity-50",
           isSelected
-            ? "border-primary/20 bg-primary/5 text-primary"
-            : "border-transparent hover:bg-primary/5 hover:text-primary"
+            ? "bg-primary/5 text-primary"
+            : "hover:bg-primary/5 hover:text-primary"
         )}
         style={{ paddingLeft: `${indentPx}px` }}
       >
@@ -269,7 +271,7 @@ function FolderTreePickerItem({
           >
             <FolderIcon className={iconSize} />
           </span>
-          <span className="truncate text-sm font-bold tracking-tight">
+          <span className="truncate text-xs font-medium tracking-tight">
             {folder.name}
           </span>
           {isDisabled && (
