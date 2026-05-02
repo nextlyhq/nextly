@@ -243,7 +243,7 @@ export function useComponent(
 export function useCreateComponent() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ data: ApiComponent }, Error, CreateComponentPayload>({
+  return useMutation<ApiComponent, Error, CreateComponentPayload>({
     mutationFn: async (componentData: CreateComponentPayload) => {
       return await componentApi.create(componentData);
     },
@@ -294,7 +294,7 @@ export function useUpdateComponent() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    { data: ApiComponent },
+    ApiComponent,
     Error,
     { componentSlug: string; updates: UpdateComponentPayload }
   >({
