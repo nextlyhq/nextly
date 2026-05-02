@@ -1,9 +1,10 @@
 import type { TableParams, TableResponse } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 import type {
   Collection,
   CreateCollectionPayload,
@@ -25,18 +26,21 @@ const buildQuery = (params: TableParams): string => {
   });
 };
 
+/**
+ * Fetch collections with pagination.
+ *
+ * Phase 4 (Task 19): server returns `ListResponse<ApiCollection>`
+ * (`{ items, meta }`); we map to the table-component shape locally.
+ */
 export const fetchCollections = async (
   params: TableParams
 ): Promise<TableResponse<ApiCollection>> => {
   const query = buildQuery(params);
   const url = `/collections${query ? `?${query}` : ""}`;
 
-  const result = await enhancedFetcher<
-    ApiCollection[],
-    Record<string, unknown>
-  >(url, {}, true);
+  const result = await fetcher<ListResponse<ApiCollection>>(url, {}, true);
 
-  const collections = result.data;
+  const collections = result.items;
   if (process.env.NODE_ENV === "development") {
     const withSG = collections.filter(
       (c: ApiCollection) => c.admin?.sidebarGroup
@@ -65,8 +69,14 @@ export const fetchCollections = async (
   return { data: collections, meta };
 };
 
+/**
+ * Delete a collection.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiCollection>`;
+ * we discard the body.
+ */
 export const deleteCollection = async (collectionId: string): Promise<void> => {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<ApiCollection>>(
     `/collections/${collectionId}`,
     {
       method: "DELETE",
@@ -75,11 +85,23 @@ export const deleteCollection = async (collectionId: string): Promise<void> => {
   );
 };
 
+/**
+ * Collection API client surface.
+ *
+ * Phase 4 (Task 19): the `protectedApi.*` calls below now receive the raw
+ * canonical body straight from `fetcher`. List endpoints return
+ * `ListResponse<T>`; bare reads (get, getSchema, listEntries) return the
+ * doc directly; create/update/remove/createEntry/deleteEntry return
+ * `MutationResponse<T>`. The legacy `{ message }` projection is preserved
+ * by mapping `response.message` from the canonical mutation envelope.
+ */
 export const collectionApi = {
   fetchCollections,
   deleteCollection,
   list: async (): Promise<Collection[]> => {
-    return protectedApi.get<Collection[]>("/collections");
+    const result =
+      await protectedApi.get<ListResponse<Collection>>("/collections");
+    return result.items;
   },
 
   get: async (collectionName: string): Promise<Collection> => {
@@ -95,45 +117,58 @@ export const collectionApi = {
   create: async (
     payload: CreateCollectionPayload
   ): Promise<{ message: string }> => {
-    return protectedApi.post<{ message: string }>("/collections", payload);
+    const result = await protectedApi.post<MutationResponse<ApiCollection>>(
+      "/collections",
+      payload
+    );
+    return { message: result.message };
   },
 
   update: async (
     collectionName: string,
     payload: UpdateCollectionPayload
   ): Promise<{ message: string }> => {
-    return protectedApi.patch<{ message: string }>(
+    const result = await protectedApi.patch<MutationResponse<ApiCollection>>(
       `/collections/${collectionName}`,
       payload
     );
+    return { message: result.message };
   },
 
   remove: async (collectionName: string): Promise<{ message: string }> => {
-    return protectedApi.delete<{ message: string }>(
+    const result = await protectedApi.delete<MutationResponse<ApiCollection>>(
       `/collections/${collectionName}`
     );
+    return { message: result.message };
   },
 
   listEntries: async (collectionName: string): Promise<Entry[]> => {
-    return protectedApi.get<Entry[]>(`/collections/${collectionName}/entries`);
+    // Sub-resource list endpoints return ListResponse<Entry> (`{ items, meta }`);
+    // the legacy callers expect a bare array, so we project items.
+    const result = await protectedApi.get<ListResponse<Entry>>(
+      `/collections/${collectionName}/entries`
+    );
+    return result.items;
   },
 
   createEntry: async (
     collectionName: string,
     data: Record<string, unknown>
   ): Promise<{ message: string }> => {
-    return protectedApi.post<{ message: string }>(
+    const result = await protectedApi.post<MutationResponse<Entry>>(
       `/collections/${collectionName}/entries`,
       data
     );
+    return { message: result.message };
   },
 
   deleteEntry: async (
     collectionName: string,
     entryId: string
   ): Promise<{ message: string }> => {
-    return protectedApi.delete<{ message: string }>(
+    const result = await protectedApi.delete<MutationResponse<Entry>>(
       `/collections/${collectionName}/entries/${entryId}`
     );
+    return { message: result.message };
   },
 } as const;

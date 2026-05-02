@@ -98,6 +98,11 @@ export async function fetcher<T = unknown>(
     return undefined as T;
   }
 
-  // Canonical wire shape (per spec §10.2): { data: <T> }.
-  return json.data as T;
+  // Phase 4 (Task 18): server now returns canonical shapes directly
+  // (no `{ data }` wrapper). Callers type the generic with the canonical
+  // envelope (ListResponse<T>, MutationResponse<T>, ActionResponse<R>,
+  // CountResponse) or, for findByID and non-CRUD reads, the bare `T`.
+  // See packages/admin/src/lib/api/response-types.ts and
+  // docs/superpowers/specs/2026-05-01-phase-4-envelope-migration-design.md §5.1.
+  return json as T;
 }

@@ -21,9 +21,10 @@
 
 import type { TableResponse } from "@revnixhq/ui";
 
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
+import type { ListResponse } from "../lib/api/response-types";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
 
 // ============================================================================
@@ -143,16 +144,12 @@ export interface BulkOperationResult<T = Entry> {
   }>;
 }
 
-/**
- * Legacy pagination meta format (for internal table component compatibility)
- * @internal
- */
-interface LegacyPaginationMeta {
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}
+// Phase 4 (Task 19): the LegacyPaginationMeta interface that mirrored the
+// pre-canonical `{ total, page, pageSize, totalPages }` shape was removed
+// because the dispatcher now emits canonical PaginationMeta exclusively
+// (via respondList). The fetchEntries legacy adapter below still produces
+// the pageSize-shaped output via normalizePagination so the table component
+// keeps working.
 
 // ============================================================================
 // Query Keys (TanStack Query v5 Pattern)
@@ -269,12 +266,15 @@ function parseSort(
 export const buildFindQuery = (params: FindParams): string => {
   const query = new URLSearchParams();
 
-  // Pagination (convert to backend format)
+  // Pagination (convert to backend format).
+  // Phase 4 (Task 19): backend now reads `limit` (canonical name) instead of
+  // the legacy `pageSize`. Send `limit` directly so we don't have to rename
+  // again in Task 23 cleanup.
   if (params.page !== undefined) {
     query.set("page", String(params.page));
   }
   if (params.limit !== undefined) {
-    query.set("pageSize", String(params.limit));
+    query.set("limit", String(params.limit));
   }
 
   // Search
@@ -399,32 +399,22 @@ export const entryApi = {
     }
 
     try {
-      const result = await enhancedFetcher<
-        Entry[] | PaginatedDocs<Entry>,
-        LegacyPaginationMeta
-      >(url, {}, true);
+      // Phase 4 (Task 19): server returns canonical `ListResponse<Entry>`
+      // (`{ items, meta }`). The dispatcher emits `respondList(items, meta)`
+      // for collection list endpoints (and the system /users alias).
+      const result = await fetcher<ListResponse<Entry>>(url, {}, true);
 
       const page = params.page ?? 1;
       const limit = params.limit ?? 10;
 
-      // Check if response is already in paginated format (has docs property)
-      if (
-        result.data &&
-        typeof result.data === "object" &&
-        "docs" in result.data
-      ) {
-        // Response is already PaginatedDocs format from backend
-        return result.data;
-      }
-
-      // Legacy format: result.data is Entry[] directly
-      const docs = result.data;
+      const docs = result.items;
 
       if (result.meta) {
+        // Canonical meta carries `limit` (renamed from legacy `pageSize`).
         return buildPaginatedDocs(docs, {
           totalDocs: result.meta.total,
           page: result.meta.page,
-          limit: result.meta.pageSize,
+          limit: result.meta.limit,
         });
       }
 
@@ -440,17 +430,15 @@ export const entryApi = {
       const status = (error as Record<string, unknown> | undefined)?.status;
       if (status === 404 && collectionSlug !== "users") {
         try {
-          // Try fetching as a Single
+          // Phase 4 (Task 19): the singles getDocument endpoint returns the
+          // bare document via respondDoc; type the fetcher generic with the
+          // Entry shape directly.
           const singleUrl = `/singles/${collectionSlug}`;
-          const singleResult = await enhancedFetcher<Entry>(
-            singleUrl,
-            {},
-            true
-          );
+          const singleResult = await fetcher<Entry>(singleUrl, {}, true);
 
-          if (singleResult.data) {
+          if (singleResult) {
             // Return as a "list" of 1 item
-            return buildPaginatedDocs([singleResult.data], {
+            return buildPaginatedDocs([singleResult], {
               totalDocs: 1,
               page: 1,
               limit: params.limit ?? 10,
@@ -548,7 +536,12 @@ export const entryApi = {
     const queryString = query.toString();
     const url = `/collections/${collectionSlug}/entries/count${queryString ? `?${queryString}` : ""}`;
 
-    return protectedApi.get<CountResult>(url);
+    // Phase 4 (Task 19): server emits canonical `respondCount(total)`
+    // (`{ total }`). The legacy admin contract surfaces the count as
+    // `{ totalDocs }`, so we map the canonical field to the existing key
+    // without renaming the public CountResult type used by callers.
+    const result = await protectedApi.get<{ total: number }>(url);
+    return { totalDocs: result.total };
   },
 
   /**
@@ -571,10 +564,14 @@ export const entryApi = {
     collectionSlug: string,
     data: CreateEntryPayload
   ): Promise<Entry> => {
-    return protectedApi.post<Entry>(
+    // Phase 4 (Task 19): server returns `MutationResponse<Entry>`
+    // (`{ message, item }`); existing callers expect a bare Entry, so we
+    // project `item`.
+    const result = await protectedApi.post<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries`,
       data
     );
+    return result.item;
   },
 
   /**
@@ -598,10 +595,13 @@ export const entryApi = {
     id: string,
     data: UpdateEntryPayload
   ): Promise<Entry> => {
-    return protectedApi.patch<Entry>(
+    // Phase 4 (Task 19): mutations return `MutationResponse<Entry>`; project
+    // `item` to keep the bare-Entry public signature.
+    const result = await protectedApi.patch<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries/${id}`,
       data
     );
+    return result.item;
   },
 
   /**
@@ -628,10 +628,17 @@ export const entryApi = {
       data: UpdateEntryPayload;
     }
   ): Promise<BulkOperationResult> => {
-    return protectedApi.patch<BulkOperationResult>(
+    // Phase 4 (Task 19): bulk operations are deferred to Phase 4.5. The
+    // dispatcher still returns a CollectionServiceResult through the legacy
+    // smart-extract path, so the wire body is the legacy `{ data, meta? }`
+    // envelope (per routeHandler.ts:868). Peel `.data` here; this projection
+    // disappears in Phase 4.5 once bulk endpoints adopt their own respondX
+    // shape.
+    const result = await protectedApi.patch<{ data: BulkOperationResult }>(
       `/collections/${collectionSlug}/entries`,
       params
     );
+    return result.data;
   },
 
   /**
@@ -647,9 +654,12 @@ export const entryApi = {
    * ```
    */
   delete: async (collectionSlug: string, id: string): Promise<Entry> => {
-    return protectedApi.delete<Entry>(
+    // Phase 4 (Task 19): mutations return `MutationResponse<Entry>`; project
+    // `item` so callers continue to receive the deleted entry.
+    const result = await protectedApi.delete<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries/${id}`
     );
+    return result.item;
   },
 
   /**
@@ -673,10 +683,14 @@ export const entryApi = {
       where: Record<string, unknown>;
     }
   ): Promise<BulkOperationResult> => {
-    return protectedApi.delete<BulkOperationResult>(
+    // Phase 4 (Task 19): bulk-delete is on the legacy ServiceResult path
+    // (Phase 4.5 will give it a canonical shape). Peel `.data` from the
+    // legacy `{ data, meta? }` envelope until then.
+    const result = await protectedApi.delete<{ data: BulkOperationResult }>(
       `/collections/${collectionSlug}/entries`,
       params
     );
+    return result.data;
   },
 
   /**
@@ -695,7 +709,9 @@ export const entryApi = {
     collectionSlug: string,
     ids: string[]
   ): Promise<BulkOperationResult> => {
-    return protectedApi.delete<BulkOperationResult>(
+    // Phase 4 (Task 19): same legacy ServiceResult path as deleteMany. Peel
+    // `.data` from the legacy envelope.
+    const result = await protectedApi.delete<{ data: BulkOperationResult }>(
       `/collections/${collectionSlug}/entries`,
       {
         where: {
@@ -703,6 +719,7 @@ export const entryApi = {
         },
       }
     );
+    return result.data;
   },
 
   /**
@@ -734,10 +751,14 @@ export const entryApi = {
     id: string,
     overrides?: Record<string, unknown>
   ): Promise<Entry> => {
-    return protectedApi.post<Entry>(
+    // Phase 4 (Task 19): duplicate emits `respondMutation(message, entry, 201)`;
+    // peel `item` from the canonical envelope to keep the bare-Entry public
+    // signature.
+    const result = await protectedApi.post<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries/${id}/duplicate`,
       overrides ? { overrides } : {}
     );
+    return result.item;
   },
 
   // ===========================================================================

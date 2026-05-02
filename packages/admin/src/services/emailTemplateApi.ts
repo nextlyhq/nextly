@@ -14,7 +14,11 @@
  * ```
  */
 
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
+import type {
+  ActionResponse,
+  MutationResponse,
+} from "../lib/api/response-types";
 
 // ============================================================
 // Types
@@ -88,63 +92,74 @@ export interface EmailTemplatePreviewResult {
 
 /**
  * List all email templates.
- * Backend returns a flat array (no server-side pagination).
+ *
+ * Phase 4 (Task 19): server emits `respondData({ templates })` (the email
+ * dispatcher avoids respondList because the underlying service is
+ * non-paginated). We project `templates` to keep the bare-array public
+ * signature callers expect.
  */
 export async function listTemplates(): Promise<EmailTemplateRecord[]> {
-  const result = await enhancedFetcher<EmailTemplateRecord[]>(
+  const result = await fetcher<{ templates: EmailTemplateRecord[] }>(
     "/email-templates",
     {},
     true
   );
-  return result.data;
+  return result.templates ?? [];
 }
 
 /**
  * Get a single email template by ID.
+ *
+ * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
-  const result = await enhancedFetcher<EmailTemplateRecord>(
-    `/email-templates/${id}`,
-    {},
-    true
-  );
-  return result.data;
+  return fetcher<EmailTemplateRecord>(`/email-templates/${id}`, {}, true);
 }
 
 /**
  * Create a new email template.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<EmailTemplateRecord>`;
+ * project `item` for the bare-record public signature.
  */
 export async function createTemplate(
   data: CreateEmailTemplatePayload
 ): Promise<EmailTemplateRecord> {
-  const result = await enhancedFetcher<EmailTemplateRecord>(
+  const result = await fetcher<MutationResponse<EmailTemplateRecord>>(
     "/email-templates",
     { method: "POST", body: JSON.stringify(data) },
     true
   );
-  return result.data;
+  return result.item;
 }
 
 /**
  * Update an existing email template.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<EmailTemplateRecord>`;
+ * project `item` for the bare-record public signature.
  */
 export async function updateTemplate(
   id: string,
   data: UpdateEmailTemplatePayload
 ): Promise<EmailTemplateRecord> {
-  const result = await enhancedFetcher<EmailTemplateRecord>(
+  const result = await fetcher<MutationResponse<EmailTemplateRecord>>(
     `/email-templates/${id}`,
     { method: "PATCH", body: JSON.stringify(data) },
     true
   );
-  return result.data;
+  return result.item;
 }
 
 /**
  * Delete an email template.
+ *
+ * Phase 4 (Task 19): server returns `ActionResponse` (delete is an action
+ * because the dispatcher's templateService returns void); we discard the
+ * body since the caller expects void.
  */
 export async function deleteTemplate(id: string): Promise<void> {
-  await enhancedFetcher<null>(
+  await fetcher<ActionResponse>(
     `/email-templates/${id}`,
     { method: "DELETE" },
     true
@@ -153,21 +168,22 @@ export async function deleteTemplate(id: string): Promise<void> {
 
 /**
  * Get the shared email layout (header and footer HTML).
+ *
+ * Phase 4 (Task 19): the dispatcher emits `respondData(layout)` so the
+ * wire body IS the EmailLayout `{ header, footer }`; type the generic
+ * with the bare shape directly.
  */
 export async function getLayout(): Promise<EmailLayout> {
-  const result = await enhancedFetcher<EmailLayout>(
-    "/email-templates/layout",
-    {},
-    true
-  );
-  return result.data;
+  return fetcher<EmailLayout>("/email-templates/layout", {}, true);
 }
 
 /**
  * Update the shared email layout.
+ *
+ * Phase 4 (Task 19): server returns `ActionResponse`; we discard.
  */
 export async function updateLayout(data: Partial<EmailLayout>): Promise<void> {
-  await enhancedFetcher<null>(
+  await fetcher<ActionResponse>(
     "/email-templates/layout",
     { method: "PATCH", body: JSON.stringify(data) },
     true
@@ -177,6 +193,9 @@ export async function updateLayout(data: Partial<EmailLayout>): Promise<void> {
 /**
  * Preview a template with sample data.
  * Returns rendered subject and HTML.
+ *
+ * Phase 4 (Task 19): server emits `respondData(preview)` (the bare
+ * `{ subject, html }` shape).
  */
 export async function previewTemplate(
   id: string,
@@ -185,12 +204,11 @@ export async function previewTemplate(
   // The preview route's schema expects `{ data: <sampleData> }` (wrapped);
   // sending the raw sampleData under the top-level body fails the zod parse
   // with a 400 (handoff F14 — pre-existing wire mismatch picked up here).
-  const result = await enhancedFetcher<EmailTemplatePreviewResult>(
+  return fetcher<EmailTemplatePreviewResult>(
     `/email-templates/${id}/preview`,
     { method: "POST", body: JSON.stringify({ data: sampleData }) },
     true
   );
-  return result.data;
 }
 
 export const emailTemplateApi = {

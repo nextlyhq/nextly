@@ -1,15 +1,25 @@
 import { publicApi } from "../lib/api/publicApi";
+import type { ActionResponse } from "../lib/api/response-types";
+
+// Phase 4 (Task 19): the auth dispatcher emits `respondAction(message)` for
+// these flows (no result payload). We type the fetcher with ActionResponse
+// for clarity even though the body is discarded; typing keeps the shape
+// contract explicit and gives a sensible signature when callers want to
+// surface the server-supplied message in a toast.
 
 /**
  * Request a password reset email for the given address.
  * The backend always returns success regardless of whether the email exists
- * (security best practice — never reveal user existence).
+ * (security best practice, never reveal user existence).
  */
 export async function requestPasswordReset(
   email: string,
   csrfToken: string
 ): Promise<void> {
-  await publicApi.post("/auth/forgot-password", { email, csrfToken });
+  await publicApi.post<ActionResponse>("/auth/forgot-password", {
+    email,
+    csrfToken,
+  });
 }
 
 /**
@@ -20,7 +30,7 @@ export async function resetPassword(
   newPassword: string,
   csrfToken: string
 ): Promise<void> {
-  await publicApi.post("/auth/reset-password", {
+  await publicApi.post<ActionResponse>("/auth/reset-password", {
     token,
     newPassword,
     csrfToken,
@@ -33,7 +43,7 @@ export async function resetPassword(
  * See docs/auth/csrf.md.
  */
 export async function verifyEmail(token: string): Promise<void> {
-  await publicApi.post("/auth/verify-email", { token });
+  await publicApi.post<ActionResponse>("/auth/verify-email", { token });
 }
 
 export const authApi = {

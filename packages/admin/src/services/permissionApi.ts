@@ -1,8 +1,9 @@
 import type { TableParams, TableResponse } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 import type { Permission } from "../types/entities";
 
 /**
@@ -15,13 +16,6 @@ interface ApiPermissionEntry {
   action: string;
   resource: string;
   description: string | null;
-}
-
-interface ApiPermissionMeta {
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
 }
 
 /**
@@ -52,7 +46,9 @@ const buildQuery = (params: TableParams): string => {
 
 /**
  * Fetch permissions with pagination, search, and sorting.
- * Calls GET /api/permissions with query parameters derived from TableParams.
+ *
+ * Phase 4 (Task 19): server returns `ListResponse<ApiPermissionEntry>`
+ * (`{ items, meta }`); we map to the table-component shape locally.
  */
 export const fetchPermissions = async (
   params: TableParams
@@ -60,48 +56,44 @@ export const fetchPermissions = async (
   const query = buildQuery(params);
   const url = `/permissions${query ? `?${query}` : ""}`;
 
-  const result = await enhancedFetcher<ApiPermissionEntry[], ApiPermissionMeta>(
-    url,
-    {},
-    true
-  );
+  const result = await fetcher<ListResponse<ApiPermissionEntry>>(url, {}, true);
 
-  const data = (result.data ?? []).map(toPermission);
+  const data = (result.items ?? []).map(toPermission);
   const { pageSize } = params.pagination;
-  const meta = normalizePagination(
-    result.meta as Record<string, unknown> | undefined,
-    pageSize,
-    data.length
-  );
+  const meta = normalizePagination(result.meta, pageSize, data.length);
 
   return { data, meta };
 };
 
 /**
  * Get a single permission by ID.
- * Calls GET /api/permissions/:id
+ *
+ * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export const getPermissionById = async (
   permissionId: string
 ): Promise<Permission> => {
-  const result = await enhancedFetcher<ApiPermissionEntry>(
+  const result = await fetcher<ApiPermissionEntry>(
     `/permissions/${permissionId}`,
     {},
     true
   );
 
-  return toPermission(result.data);
+  return toPermission(result);
 };
 
 /**
  * Update a permission's fields.
- * Calls PATCH /api/permissions/:id, then fetches the updated record.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiPermissionEntry>`;
+ * we still re-fetch via getPermissionById to surface any server-derived
+ * fields the mutation result may not include.
  */
 export const updatePermission = async (
   permissionId: string,
   updates: Partial<Permission>
 ): Promise<Permission> => {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<ApiPermissionEntry>>(
     `/permissions/${permissionId}`,
     {
       method: "PATCH",
@@ -116,10 +108,12 @@ export const updatePermission = async (
 
 /**
  * Delete a permission by ID.
- * Calls DELETE /api/permissions/:id
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiPermissionEntry>`;
+ * we discard the body.
  */
 export const deletePermission = async (permissionId: string): Promise<void> => {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<ApiPermissionEntry>>(
     `/permissions/${permissionId}`,
     { method: "DELETE" },
     true

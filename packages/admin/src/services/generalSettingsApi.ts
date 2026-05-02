@@ -7,7 +7,8 @@
  * @since 1.0.0
  */
 
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
+import type { MutationResponse } from "../lib/api/response-types";
 
 // ============================================================
 // Types
@@ -41,25 +42,31 @@ export interface UpdateGeneralSettingsPayload {
 
 /**
  * Retrieve the current general settings.
+ *
+ * Phase 4 (Task 19): server emits `respondData(settings)` so the wire
+ * body is the bare settings record; type the fetcher generic directly.
  */
 export async function getGeneralSettings(): Promise<GeneralSettingsRecord> {
-  const result = await enhancedFetcher<GeneralSettingsRecord>(
+  return fetcher<GeneralSettingsRecord>(
     `/general-settings`,
     {
       cache: "no-store",
     },
     true
   );
-  return result.data;
 }
 
 /**
  * Update the general settings.
+ *
+ * Phase 4 (Task 19): server emits
+ * `respondMutation("General settings updated.", settings)`; project
+ * `item` for the bare-record public signature.
  */
 export async function updateGeneralSettings(
   data: UpdateGeneralSettingsPayload
 ): Promise<GeneralSettingsRecord> {
-  const result = await enhancedFetcher<GeneralSettingsRecord>(
+  const result = await fetcher<MutationResponse<GeneralSettingsRecord>>(
     `/general-settings`,
     {
       method: "PATCH",
@@ -67,5 +74,5 @@ export async function updateGeneralSettings(
     },
     true
   );
-  return result.data;
+  return result.item;
 }

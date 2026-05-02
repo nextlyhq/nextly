@@ -12,9 +12,10 @@ import type { TableParams, TableResponse } from "@revnixhq/ui";
 import type { ApiComponent } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 
 /**
  * Payload for creating a new Component via API
@@ -63,10 +64,10 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
- * Fetch paginated list of Component definitions
+ * Fetch paginated list of Component definitions.
  *
- * @param params - Table parameters for pagination, search, and sorting
- * @returns Promise with Component list and pagination metadata
+ * Phase 4 (Task 19): server returns `ListResponse<ApiComponent>`
+ * (`{ items, meta }`); we map to the table-component shape locally.
  */
 export const fetchComponents = async (
   params: TableParams
@@ -74,13 +75,9 @@ export const fetchComponents = async (
   const query = buildQuery(params);
   const url = `/components${query ? `?${query}` : ""}`;
 
-  const result = await enhancedFetcher<ApiComponent[], Record<string, unknown>>(
-    url,
-    {},
-    true
-  );
+  const result = await fetcher<ListResponse<ApiComponent>>(url, {}, true);
 
-  const components = result.data;
+  const components = result.items;
   const { pageSize = 10 } = params.pagination;
   const meta = normalizePagination(result.meta, pageSize, components.length);
 
@@ -88,12 +85,14 @@ export const fetchComponents = async (
 };
 
 /**
- * Delete a Component definition by slug
+ * Delete a Component definition by slug.
  *
- * @param componentSlug - The unique slug of the Component to delete
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiComponent>` or
+ * `ActionResponse` (delete may be either depending on whether the dispatcher
+ * surfaces the deleted record); we discard the body.
  */
 export const deleteComponent = async (componentSlug: string): Promise<void> => {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<unknown>>(
     `/components/${componentSlug}`,
     {
       method: "DELETE",
@@ -103,54 +102,68 @@ export const deleteComponent = async (componentSlug: string): Promise<void> => {
 };
 
 /**
- * Component API service object
+ * Component API service object.
+ *
+ * Phase 4 (Task 19): list returns `ListResponse<T>`; bare reads return the
+ * doc directly; create/update return `MutationResponse<T>`. We preserve
+ * the legacy `{ data: ApiComponent }` projection for create/update because
+ * the existing callers destructure `data`.
  */
 export const componentApi = {
   fetchComponents,
   deleteComponent,
 
   /**
-   * List all Component definitions (simple list, no pagination)
+   * List all Component definitions (simple list, no pagination).
    */
   list: async (): Promise<ApiComponent[]> => {
-    return protectedApi.get<ApiComponent[]>("/components");
+    const result =
+      await protectedApi.get<ListResponse<ApiComponent>>("/components");
+    return result.items;
   },
 
   /**
-   * Get a single Component definition by slug
+   * Get a single Component definition by slug.
    */
   get: async (componentSlug: string): Promise<ApiComponent> => {
     return protectedApi.get<ApiComponent>(`/components/${componentSlug}`);
   },
 
   /**
-   * Create a new Component definition
+   * Create a new Component definition.
    */
   create: async (
     payload: CreateComponentPayload
   ): Promise<{ data: ApiComponent }> => {
-    return protectedApi.post<{ data: ApiComponent }>("/components", payload);
+    const result = await protectedApi.post<MutationResponse<ApiComponent>>(
+      "/components",
+      payload
+    );
+    // Map canonical `item` to legacy `data` projection.
+    return { data: result.item };
   },
 
   /**
-   * Update an existing Component definition
+   * Update an existing Component definition.
    */
   update: async (
     componentSlug: string,
     payload: UpdateComponentPayload
   ): Promise<{ data: ApiComponent }> => {
-    return protectedApi.patch<{ data: ApiComponent }>(
+    const result = await protectedApi.patch<MutationResponse<ApiComponent>>(
       `/components/${componentSlug}`,
       payload
     );
+    return { data: result.item };
   },
 
   /**
-   * Remove a Component definition
+   * Remove a Component definition.
    */
   remove: async (componentSlug: string): Promise<{ message: string }> => {
-    return protectedApi.delete<{ message: string }>(
+    const result = await protectedApi.delete<MutationResponse<ApiComponent>>(
       `/components/${componentSlug}`
     );
+    return { message: result.message };
   },
 } as const;

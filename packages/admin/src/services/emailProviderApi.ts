@@ -13,8 +13,11 @@
  * ```
  */
 
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
+import { fetcher } from "../lib/api/fetcher";
+import type {
+  ActionResponse,
+  MutationResponse,
+} from "../lib/api/response-types";
 
 // ============================================================
 // Types
@@ -78,18 +81,34 @@ export interface TestProviderResult {
 // ============================================================
 
 /**
- * List email providers with pagination and search.
- * Backend returns 1-based pages; this function converts to/from 0-based.
+ * List email providers (no server-side pagination).
+ *
+ * Phase 4 (Task 19): the email-provider dispatcher emits
+ * `respondData({ providers })` (not respondList) because the underlying
+ * service returns the full unpaginated array. We therefore type the
+ * fetcher with the bare `{ providers }` shape and synthesise a
+ * single-page PaginationMeta locally so the existing callers keep
+ * receiving `{ data, meta }`.
  */
 export async function listProviders(params: {
   page: number;
-  pageSize: number;
+  /** Deprecated: use `limit`. Kept for callers not yet updated (removed in Task 23). */
+  pageSize?: number;
+  /** New (Phase 4): canonical name. */
+  limit?: number;
   search: string;
   type?: EmailProviderType | "all";
 }): Promise<EmailProviderListResponse> {
+  // Phase 4 (Task 19): the email-provider list endpoint is unpaginated on
+  // the server (the dispatcher returns the full array via respondData);
+  // page/pageSize remain in the query string for forward compatibility
+  // and as visual indicators in network logs. We keep emitting `pageSize`
+  // (rather than canonical `limit`) because the auth-style dispatchers
+  // still read `p.pageSize`; the server-side rename is queued for Task 23.
+  const effectiveLimit = params.limit ?? params.pageSize ?? 10;
   const queryParts: string[] = [
-    `pageSize=${params.pageSize}`,
-    `page=${params.page + 1}`, // Backend is 1-based
+    `pageSize=${effectiveLimit}`,
+    `page=${params.page + 1}`, // Backend is 1-based when it does paginate
   ];
   if (params.search) {
     queryParts.push(`search=${encodeURIComponent(params.search)}`);
@@ -99,40 +118,44 @@ export async function listProviders(params: {
   }
   const query = queryParts.join("&");
 
-  const result = await enhancedFetcher<
-    EmailProviderRecord[],
-    Record<string, unknown>
-  >(`/email-providers?${query}`, {}, true);
-
-  const providers = result.data;
-  const meta = normalizePagination(
-    result.meta,
-    params.pageSize,
-    providers.length
+  const result = await fetcher<{ providers: EmailProviderRecord[] }>(
+    `/email-providers?${query}`,
+    {},
+    true
   );
+
+  const providers = result.providers ?? [];
+  // Synthesize a single-page PaginationMeta so the table component keeps
+  // working until the page is ported to the unpaginated shape.
+  const meta: PaginationMeta = {
+    page: 0,
+    pageSize: effectiveLimit,
+    total: providers.length,
+    totalPages: 1,
+  };
 
   return { data: providers, meta };
 }
 
 /**
  * Get a single email provider by ID.
+ *
+ * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export async function getProvider(id: string): Promise<EmailProviderRecord> {
-  const result = await enhancedFetcher<EmailProviderRecord>(
-    `/email-providers/${id}`,
-    {},
-    true
-  );
-  return result.data;
+  return fetcher<EmailProviderRecord>(`/email-providers/${id}`, {}, true);
 }
 
 /**
  * Create a new email provider.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<EmailProviderRecord>`;
+ * project `item` to keep the public bare-record signature.
  */
 export async function createProvider(
   data: CreateEmailProviderPayload
 ): Promise<EmailProviderRecord> {
-  const result = await enhancedFetcher<EmailProviderRecord>(
+  const result = await fetcher<MutationResponse<EmailProviderRecord>>(
     `/email-providers`,
     {
       method: "POST",
@@ -140,17 +163,20 @@ export async function createProvider(
     },
     true
   );
-  return result.data;
+  return result.item;
 }
 
 /**
  * Update an existing email provider.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<EmailProviderRecord>`;
+ * project `item` to keep the public bare-record signature.
  */
 export async function updateProvider(
   id: string,
   data: UpdateEmailProviderPayload
 ): Promise<EmailProviderRecord> {
-  const result = await enhancedFetcher<EmailProviderRecord>(
+  const result = await fetcher<MutationResponse<EmailProviderRecord>>(
     `/email-providers/${id}`,
     {
       method: "PATCH",
@@ -158,14 +184,17 @@ export async function updateProvider(
     },
     true
   );
-  return result.data;
+  return result.item;
 }
 
 /**
  * Delete an email provider.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<EmailProviderRecord>`;
+ * we discard the body since the caller expects void.
  */
 export async function deleteProvider(id: string): Promise<void> {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<EmailProviderRecord>>(
     `/email-providers/${id}`,
     { method: "DELETE" },
     true
@@ -174,9 +203,12 @@ export async function deleteProvider(id: string): Promise<void> {
 
 /**
  * Set an email provider as the default.
+ *
+ * Phase 4 (Task 19): non-CRUD mutation returning `ActionResponse`; we
+ * discard the body.
  */
 export async function setDefaultProvider(id: string): Promise<void> {
-  await enhancedFetcher<null>(
+  await fetcher<ActionResponse>(
     `/email-providers/${id}/default`,
     { method: "PATCH" },
     true
@@ -187,12 +219,17 @@ export async function setDefaultProvider(id: string): Promise<void> {
  * Send a test email using the specified provider.
  * When `email` is supplied it is used as the destination; otherwise the
  * server falls back to the provider's configured fromEmail.
+ *
+ * Phase 4 (Task 19): the test endpoint emits
+ * `respondAction("Test email dispatched.", { result })`, so the wire body
+ * is `{ message, result: TestProviderResult }`. Project `result` to keep
+ * the legacy public signature.
  */
 export async function testProvider(
   id: string,
   email?: string
 ): Promise<TestProviderResult> {
-  const result = await enhancedFetcher<TestProviderResult>(
+  const body = await fetcher<ActionResponse<{ result: TestProviderResult }>>(
     `/email-providers/${id}/test`,
     {
       method: "POST",
@@ -201,7 +238,7 @@ export async function testProvider(
     },
     true
   );
-  return result.data;
+  return body.result;
 }
 
 export const emailProviderApi = {
