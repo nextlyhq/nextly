@@ -5,6 +5,13 @@ import { BASE_URL } from "./fetcher";
 // echo it back on the following POST. Both halves must match server-side.
 // Returns an empty string on failure so callers can still send the request
 // and let the server respond with a structured CSRF_FAILED error.
+//
+// Phase 4 wire shape (spec section 7.6): the /auth/csrf endpoint now
+// emits `{ token: "..." }` directly via respondData. The two legacy
+// fallbacks (`data.data?.csrfToken` and `data.csrfToken`) are kept for
+// one release cycle so any in-flight clients running an older admin
+// build keep working; remove them in Phase 4.7+ once we drop the
+// transitional compat surface (parallels `pageSize` -> `limit`).
 export async function getCsrfToken(): Promise<string> {
   try {
     const res = await fetch(`${BASE_URL}/auth/csrf`, {
@@ -17,7 +24,7 @@ export async function getCsrfToken(): Promise<string> {
       return "";
     }
     const data = await res.json();
-    const token = data.data?.csrfToken || data.csrfToken || "";
+    const token = data.token || data.data?.csrfToken || data.csrfToken || "";
     if (!token) {
       console.warn("CSRF token not found in response");
     }
