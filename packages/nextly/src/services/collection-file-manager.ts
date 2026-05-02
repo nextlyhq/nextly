@@ -83,23 +83,19 @@ export class CollectionFileManager {
     );
   }
 
-  // Drop a single collection's cached runtime schema so the next
-  // `loadDynamicSchema(...)` rebuilds it from the (already-updated)
-  // `dynamic_collections.fields` JSON via the metadata fetcher.
+  // Replace the cached runtime Drizzle schema for one collection with a
+  // freshly-generated table object. Called after an admin-UI schema apply
+  // so that the very next entry-list / entry-get query uses the correct
+  // column names without a DB roundtrip or server restart.
   //
-  // Called after an admin-UI schema apply that mutates field shape
-  // (rename, drop, add). Without this invalidation, the stale cached
-  // schema generates queries against columns that no longer exist on
-  // the live DB, e.g. `SELECT salary FROM dc_job` after `salary` was
-  // renamed to `amount`. Symptom: entry list 500s with
-  // `no such column: "<oldName>"` until server restart.
-  invalidateSchema(collectionName: string): void {
-    const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
-    if (this.schemaRegistry.delete(schemaKey)) {
-      console.log(
-        `[FileManager] Invalidated cached schema for "${collectionName}" (key: ${schemaKey})`
-      );
-    }
+  // Replaces the old `invalidateSchema` (delete + lazy rebuild) approach.
+  // That approach had a race: the rebuild read `dynamic_collections.fields`
+  // from the DB, so if that write was still in flight the rebuild would
+  // produce the stale schema again. Pushing the fresh table in directly
+  // eliminates the race — the caller already has the correct table object
+  // (built from the apply payload's `fields` list).
+  refreshSchema(tableName: string, freshTable: unknown): void {
+    this.schemaRegistry.set(tableName, freshTable);
   }
 
   async saveArtifacts(artifacts: CollectionArtifacts): Promise<void> {
