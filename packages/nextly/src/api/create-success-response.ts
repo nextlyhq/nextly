@@ -23,6 +23,17 @@ function buildHeaders(extra?: HeadersInit): Headers {
   return headers;
 }
 
+/**
+ * @deprecated Phase 4 follow-up: prefer the canonical respond helpers in
+ * `./response-shapes` (`respondDoc`, `respondMutation`, `respondAction`,
+ * `respondData`, `respondCount`). Phase 4 (Tasks 6-23) migrated every
+ * collection / single / auth / dashboard endpoint, but ~27 non-Phase-4
+ * endpoints (uploads, media, collections-schema, email-providers,
+ * email-templates, user-fields, components, image-sizes, storage-upload-url)
+ * still call this helper because their shape semantics were out of scope.
+ * Tracked for a Phase 4.5+ followup. The helper is retained until those
+ * endpoints are migrated; once they are, delete it along with this file.
+ */
 export function createSuccessResponse<T>(
   data: T,
   opts?: { status?: number; headers?: HeadersInit }

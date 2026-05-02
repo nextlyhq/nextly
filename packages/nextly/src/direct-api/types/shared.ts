@@ -67,15 +67,6 @@ export interface MutationResult<T> {
 }
 
 /**
- * @deprecated Phase 4 (Task 13): use `ListResult<T>` instead. This alias
- * is removed in Task 23 cleanup. The body has been re-pointed to
- * `ListResult<T>` so types remain valid during the migration window, but
- * the runtime shape has changed: callers must now read `.items` / `.meta`
- * (not `.docs` / `.totalDocs`).
- */
-export type PaginatedDocs<T> = ListResult<T>;
-
-/**
  * Interface augmented by generated types.
  *
  * Running `nextly generate:types` creates a `Config` interface mapping
