@@ -1018,6 +1018,40 @@ export class CollectionMutationService extends BaseService {
       // internally during serialization. Passing a string causes
       // "value.toISOString is not a function".
 
+      // Phase 4 follow-up (post-merge): when updateEntry hits a SQLite
+      // "Too few parameter values were provided" error, this debug log
+      // is the only way to see what finalData looks like at the bind
+      // boundary. Set DEBUG_ENTRY_UPDATE=1 to enable. Logs keys and
+      // value types only (never values) so user data never leaks to
+      // operator logs even with the flag on.
+      if (process.env.DEBUG_ENTRY_UPDATE === "1") {
+        const keyTypes = Object.fromEntries(
+          Object.entries(finalData).map(([k, v]) => [
+            k,
+            v === null
+              ? "null"
+              : v === undefined
+                ? "undefined"
+                : Array.isArray(v)
+                  ? `array(len=${v.length})`
+                  : typeof v === "object"
+                    ? `object(keys=${Object.keys(v as object).length})`
+                    : typeof v,
+          ])
+        );
+        // eslint-disable-next-line no-console
+        console.log(
+          "[updateEntry debug]",
+          JSON.stringify({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            finalDataKeys: Object.keys(finalData),
+            finalDataKeyTypes: keyTypes,
+            schemaColumns: Object.keys(schema as unknown as object),
+          })
+        );
+      }
+
       await this.db
         .update(schema)
         .set({
