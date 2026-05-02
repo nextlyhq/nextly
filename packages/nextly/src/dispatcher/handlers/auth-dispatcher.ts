@@ -22,6 +22,8 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { ServiceContainer } from "../../services";
+// Phase 4.9: shared `toPaginationMeta` (previously a local copy here).
+import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,
   requireParam,
@@ -32,28 +34,6 @@ import type { MethodHandler, Params } from "../types";
 
 type AuthService = ServiceContainer["auth"];
 type RbacContainer = ServiceContainer;
-
-/**
- * Translate the legacy service `{ data, meta: {total,page,pageSize,totalPages} }`
- * shape to the canonical `PaginationMeta` shape expected by `respondList`.
- * Same helper as user-dispatcher; kept local for now (refactor to a shared
- * helper post-Phase-4 once every dispatcher uses it).
- */
-function toPaginationMeta(meta: {
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}) {
-  return {
-    total: meta.total,
-    page: meta.page,
-    limit: meta.pageSize,
-    totalPages: meta.totalPages,
-    hasNext: meta.page < meta.totalPages,
-    hasPrev: meta.page > 1,
-  };
-}
 
 // ============================================================
 // Auth methods

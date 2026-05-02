@@ -26,7 +26,6 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
-import { NextlyError } from "../../errors";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -65,6 +64,15 @@ import {
   getCollectionsHandlerFromDI,
   getMigrationJournalFromDI,
 } from "../helpers/di";
+// Phase 4.9: shared dispatcher helpers. Previously this file kept local
+// copies of toPaginationMeta / paginatedResponseToMeta / unwrapServiceResult
+// because Phase 4 was migrating dispatchers in parallel; with Phase 4
+// merged we import the canonical versions from one module.
+import {
+  paginatedResponseToMeta,
+  toPaginationMeta,
+  unwrapServiceResult,
+} from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
   parseSelectParam,
@@ -76,114 +84,6 @@ import {
 import type { MethodHandler, Params } from "../types";
 
 type CollectionsHandlerType = CollectionsHandler;
-
-/**
- * Translate the legacy `{ total, page, pageSize, totalPages }` shape
- * (used by the metadata service) into the canonical `PaginationMeta`
- * shape that `respondList` expects. Mirrors the helper in
- * `user-dispatcher.ts` and `auth-dispatcher.ts`; we keep it local for
- * now and dedupe in a follow-up once every dispatcher uses it.
- */
-function toPaginationMeta(meta: {
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}) {
-  return {
-    total: meta.total,
-    page: meta.page,
-    limit: meta.pageSize,
-    totalPages: meta.totalPages,
-    hasNext: meta.page < meta.totalPages,
-    hasPrev: meta.page > 1,
-  };
-}
-
-/**
- * Translate a `PaginatedResponse<T>` from the entry-query service into
- * the canonical `PaginationMeta`. The query service uses a different
- * field set (`docs`, `totalDocs`, `limit`, `page`, `totalPages`,
- * `hasNextPage`, `hasPrevPage`) than the metadata service, so we have
- * a second small translator instead of forcing one shape to bend.
- */
-function paginatedResponseToMeta(p: {
-  totalDocs: number;
-  limit: number;
-  page: number;
-  totalPages: number;
-  hasNextPage: boolean;
-  hasPrevPage: boolean;
-}) {
-  return {
-    total: p.totalDocs,
-    page: p.page,
-    limit: p.limit,
-    totalPages: p.totalPages,
-    hasNext: p.hasNextPage,
-    hasPrev: p.hasPrevPage,
-  };
-}
-
-/**
- * Unwrap a legacy `{ success, statusCode, message, data, meta? }`
- * envelope and throw a NextlyError on failure. The migrated handlers
- * use this so that the wire path matches the canonical shape contract:
- * success branches reach respondX with bare data, failures throw and
- * the dispatcher's NextlyError catch block builds the error response.
- *
- * We pass the legacy `message` through as `logMessage` (operator-facing
- * only, never serialised to the wire per §13.8). The wire sees the
- * canonical publicMessage from NextlyError.notFound / .internal.
- */
-function unwrapServiceResult<T>(
-  result: {
-    success: boolean;
-    statusCode?: number;
-    message?: string;
-    data?: T | null;
-  },
-  logContext?: Record<string, unknown>
-): T {
-  if (result.success) {
-    // Casting through unknown is safe here: success === true contract
-    // guarantees `data` is the T value (the metadata + entry services
-    // never set data to null on success).
-    return result.data as T;
-  }
-  // Map known status codes to specific NextlyError factories so the
-  // wire response carries the right code + statusCode. Unknown status
-  // codes fall through to internal so we never mask an unexpected
-  // failure as a 200/404.
-  const status = result.statusCode ?? 500;
-  const ctx = { legacyMessage: result.message, ...logContext };
-  if (status === 404) throw NextlyError.notFound({ logContext: ctx });
-  if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
-  if (status === 409) throw NextlyError.conflict({ logContext: ctx });
-  // Phase 4 follow-up (post-merge): map 400 to validation. Previously
-  // 400 fell through to internal (500), which masked legitimate
-  // validation failures as "An unexpected error occurred." behind a
-  // 500. Spec section 13.8 requires the public message stay generic;
-  // we surface a non-leaking message and route the legacy service
-  // message into the operator log via logContext.
-  if (status === 400) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "request",
-          code: "INVALID",
-          message: "The submitted data is invalid.",
-        },
-      ],
-      logContext: ctx,
-    });
-  }
-  // 500 + everything else: internal-shaped public message keeps
-  // the section 13.8 rubric (no driver text, no identifier echo).
-  // Log line gets the legacy service message so operators can still
-  // diagnose.
-  throw NextlyError.internal({ logContext: ctx });
-}
 
 // F14 v1: decides whether the apply payload carries actionable rename
 // hints we should log a debug receipt for. Pulled out as a pure helper

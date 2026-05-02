@@ -33,7 +33,6 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
-import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
@@ -45,71 +44,21 @@ import {
   getSingleEntryServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+// Phase 4.9: shared dispatcher helpers. Previously this file kept local
+// copies of offsetPaginationToMeta + unwrapSingleResult; the latter was
+// a near-duplicate of unwrapServiceResult elsewhere. Consolidating onto
+// `unwrapServiceResult` also brings the Bug 6 fix (status 400 to
+// NextlyError.validation) to single-dispatcher's error mapping for free.
+import {
+  offsetPaginationToMeta,
+  unwrapServiceResult,
+} from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
   requireParam,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
-
-// ============================================================
-// Pagination + envelope helpers
-// ============================================================
-
-/**
- * Translate the registry's `limit/offset/total` triple into the canonical
- * `PaginationMeta` shape that `respondList` expects.
- *
- * The Singles + Components registries use limit/offset semantics (not
- * page/pageSize). We synthesize page numbers here so the wire shape
- * matches every other dispatcher. When `limit` is unset we fall back to
- * `total` so a single-page response still carries valid meta.
- */
-function offsetPaginationToMeta(args: {
-  total: number;
-  limit?: number;
-  offset?: number;
-}) {
-  const total = args.total;
-  const limit = args.limit && args.limit > 0 ? args.limit : total || 1;
-  const offset = args.offset ?? 0;
-  const page = Math.floor(offset / limit) + 1;
-  const totalPages = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
-  return {
-    total,
-    page,
-    limit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1,
-  };
-}
-
-/**
- * Unwrap a `SingleResult` legacy envelope and throw a NextlyError on
- * failure. Mirrors `unwrapServiceResult` in `collection-dispatcher.ts`
- * (kept local so each dispatcher is self-contained until a follow-up
- * extracts a shared helper).
- */
-function unwrapSingleResult<T>(
-  result: {
-    success: boolean;
-    statusCode?: number;
-    message?: string;
-    data?: T;
-  },
-  logContext?: Record<string, unknown>
-): T {
-  if (result.success) {
-    return result.data as T;
-  }
-  const status = result.statusCode ?? 500;
-  const ctx = { legacyMessage: result.message, ...logContext };
-  if (status === 404) throw NextlyError.notFound({ logContext: ctx });
-  if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
-  if (status === 409) throw NextlyError.conflict({ logContext: ctx });
-  throw NextlyError.internal({ logContext: ctx });
-}
 
 // ============================================================
 // Default field helpers
@@ -441,7 +390,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      const doc = unwrapSingleResult(result, { slug });
+      const doc = unwrapServiceResult(result, { slug });
       return respondDoc(doc);
     },
   },
@@ -472,7 +421,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           overrideAccess: !!user,
         }
       );
-      const doc = unwrapSingleResult(result, { slug });
+      const doc = unwrapServiceResult(result, { slug });
       return respondMutation(
         result.message ?? `Single "${slug}" updated.`,
         doc

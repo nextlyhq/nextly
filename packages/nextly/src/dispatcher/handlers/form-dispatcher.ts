@@ -24,70 +24,20 @@ import { NextlyError } from "../../errors";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { getCollectionsHandlerFromDI } from "../helpers/di";
+// Phase 4.9: shared dispatcher helpers. Previously this file kept local
+// copies of paginatedResponseToMeta + unwrapServiceResult. The local
+// unwrap also lacked the Bug 6 fix (status 400 to NextlyError.validation);
+// the shared version has it, so consolidating here brings form-dispatcher
+// into spec compliance without per-call-site changes.
+import {
+  paginatedResponseToMeta,
+  unwrapServiceResult,
+} from "../helpers/service-envelope";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
 interface FormsServices {
   collectionsHandler: CollectionsHandler;
-}
-
-// ============================================================
-// Pagination + envelope helpers
-// ============================================================
-
-/**
- * Translate a `PaginatedResponse<T>` from the entry-query service into
- * the canonical `PaginationMeta`. Mirrors `paginatedResponseToMeta` in
- * `collection-dispatcher.ts` because forms list goes through the same
- * underlying `listEntries`.
- */
-function paginatedResponseToMeta(p: {
-  totalDocs: number;
-  limit: number;
-  page: number;
-  totalPages: number;
-  hasNextPage: boolean;
-  hasPrevPage: boolean;
-}) {
-  return {
-    total: p.totalDocs,
-    page: p.page,
-    limit: p.limit,
-    totalPages: p.totalPages,
-    hasNext: p.hasNextPage,
-    hasPrev: p.hasPrevPage,
-  };
-}
-
-/**
- * Unwrap a legacy `CollectionServiceResult` envelope and throw a
- * NextlyError on failure. Mirrors the helper in `collection-dispatcher.ts`
- * (kept local so the forms dispatcher is self-contained until a
- * follow-up extracts a shared helper).
- *
- * `T` is the narrowed payload shape the caller expects on success.
- * `result.data` is widened to `unknown` so callers can pass a
- * `CollectionServiceResult<unknown>` without first narrowing the data
- * field at the call site (the legacy service is generic-untyped).
- */
-function unwrapServiceResult<T>(
-  result: {
-    success: boolean;
-    statusCode?: number;
-    message?: string;
-    data?: unknown;
-  },
-  logContext?: Record<string, unknown>
-): T {
-  if (result.success) {
-    return result.data as T;
-  }
-  const status = result.statusCode ?? 500;
-  const ctx = { legacyMessage: result.message, ...logContext };
-  if (status === 404) throw NextlyError.notFound({ logContext: ctx });
-  if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
-  if (status === 409) throw NextlyError.conflict({ logContext: ctx });
-  throw NextlyError.internal({ logContext: ctx });
 }
 
 interface FormRecord {

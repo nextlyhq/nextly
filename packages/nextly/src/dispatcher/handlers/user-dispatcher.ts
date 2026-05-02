@@ -25,6 +25,8 @@ import {
   listEffectivePermissions,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
+// Phase 4.9: shared `toPaginationMeta` (previously a local copy here).
+import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,
   requireParam,
@@ -35,28 +37,6 @@ import {
 import type { MethodHandler, Params } from "../types";
 
 type UsersService = ServiceContainer["users"];
-
-/**
- * Translate the legacy service `{ data, meta: {total,page,pageSize,totalPages} }`
- * shape to the canonical `PaginationMeta` shape expected by `respondList`.
- * Service-internal field names (e.g. `pageSize`) stay where they are
- * for now; renaming them is a separate refactor (out of scope for Phase 4).
- */
-function toPaginationMeta(meta: {
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}) {
-  return {
-    total: meta.total,
-    page: meta.page,
-    limit: meta.pageSize,
-    totalPages: meta.totalPages,
-    hasNext: meta.page < meta.totalPages,
-    hasPrev: meta.page > 1,
-  };
-}
 
 const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   listUsers: {
