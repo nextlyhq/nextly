@@ -819,6 +819,38 @@ async function handleServiceRequest(
     const nextlyErr = NextlyError.is(result.error)
       ? result.error
       : NextlyError.internal();
+
+    // Phase 4 follow-up (post-merge): emit an operator-facing log line
+    // mirroring withErrorHandler's pattern (api/with-error-handler.ts).
+    // Without this, dispatcher errors leave nothing in the terminal
+    // beyond `PATCH ... 500`, making 5xx triage essentially impossible.
+    // Skip logging for benign expected errors (NOT_FOUND, RATE_LIMITED,
+    // AUTH_REQUIRED) so the log doesn't get flooded by unauth probes.
+    const benignCodes = new Set([
+      "NOT_FOUND",
+      "RATE_LIMITED",
+      "AUTH_REQUIRED",
+    ]);
+    if (!benignCodes.has(String(nextlyErr.code))) {
+      try {
+        // Lazy-import the logger to avoid pulling it onto the cold path
+        // for paths that never error.
+        const { getNextlyLogger } = await import("./observability/logger");
+        getNextlyLogger().error({
+          kind: "dispatcher-error",
+          ...nextlyErr.toLogJSON(requestId),
+          route: new URL(req.url).pathname,
+          method: req.method,
+          service: dispatchRequest.service,
+          operation: dispatchRequest.operation,
+          dispatchMethod: dispatchRequest.method,
+        });
+      } catch {
+        // If the logger itself throws, swallow; we still want to emit
+        // the user-facing error response below.
+      }
+    }
+
     const errorHeaders: Record<string, string> = {
       "content-type": "application/problem+json",
       "x-request-id": requestId,

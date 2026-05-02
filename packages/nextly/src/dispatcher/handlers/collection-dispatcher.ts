@@ -160,9 +160,28 @@ function unwrapServiceResult<T>(
   if (status === 404) throw NextlyError.notFound({ logContext: ctx });
   if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
   if (status === 409) throw NextlyError.conflict({ logContext: ctx });
-  // 400 + 500 + everything else: internal-shaped public message keeps
-  // the §13.8 rubric (no driver text, no identifier echo). Log line
-  // gets the legacy service message so operators can still diagnose.
+  // Phase 4 follow-up (post-merge): map 400 to validation. Previously
+  // 400 fell through to internal (500), which masked legitimate
+  // validation failures as "An unexpected error occurred." behind a
+  // 500. Spec section 13.8 requires the public message stay generic;
+  // we surface a non-leaking message and route the legacy service
+  // message into the operator log via logContext.
+  if (status === 400) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "request",
+          code: "INVALID",
+          message: "The submitted data is invalid.",
+        },
+      ],
+      logContext: ctx,
+    });
+  }
+  // 500 + everything else: internal-shaped public message keeps
+  // the section 13.8 rubric (no driver text, no identifier echo).
+  // Log line gets the legacy service message so operators can still
+  // diagnose.
   throw NextlyError.internal({ logContext: ctx });
 }
 
