@@ -15,7 +15,7 @@ This document is the day-to-day execution tracker for security audit findings. I
 | Phase                  | Done | In review | Claimed | Blocked | Pending |
 | ---------------------- | ---- | --------- | ------- | ------- | ------- |
 | 1 — Pre-beta           | 13   | 0         | 0       | 0       | 0       |
-| 2 — Pre-1.0            | 9    | 0         | 0       | 0       | 5       |
+| 2 — Pre-1.0            | 14   | 0         | 0       | 0       | 0       |
 | 3 — Roadmap (post-1.0) | 0    | 0         | 0       | 0       | 11      |
 
 **Phase 1 note:** T-003 (default-deny on collection access) was implemented and then reverted per maintainer decision — default-allow is the framework's intended behavior. Audit C6 reclassified as accepted-risk; integrators are still advised to declare explicit `access` rules per-collection. Phase-1 task count is therefore 13 shipped + 1 explicitly-declined.
@@ -720,11 +720,11 @@ pnpm test
 | **T-021** | Zod schema on `/auth/register`               | M9        | S      | —          | done (`deef8e6`) | Email format, password strength, name length checks at the route layer.                                                                                        |
 | **T-022** | Audit log subsystem                          | M10       | L      | —          | done (`6b8b5bd`) | Log failed CSRF, failed login, password change, role assignment, user delete with timestamp/actor/IP/UA. Tamper-evident table or append-only file.             |
 | **T-023** | Row-level ownership filter                   | M11       | M      | —          | done (`95335bb`) | Enforce `owner-only` rules via WHERE clauses, not post-retrieval filtering. Row-scoped only — field-scoped is intentionally out of scope (former H6).          |
-| **T-024** | Pre-commit secret scan                       | M13       | S      | —          | pending          | Add `gitleaks` or `detect-secrets` to husky pre-commit + GitHub Action.                                                                                        |
-| **T-025** | `Cache-Control: no-store` on auth            | M19       | S      | —          | pending          | Patch `jsonResponse()` to default `no-store` when path matches `/auth/*`.                                                                                      |
-| **T-026** | Query depth + pagination caps                | M21       | S      | —          | pending          | Cap nesting depth (5), conditions per query (50), `limit` (200) in the parser. Make configurable.                                                              |
-| **T-027** | Vercel Blob folder sanitization              | M22       | S      | —          | pending          | Reject `..`, `/`, `\` in folder; same pattern as the (yet-to-be-fixed) S3 finding M5.                                                                          |
-| **T-028** | UploadThing default `attachment` disposition | M23       | S      | —          | pending          | Flip `contentDisposition` default in adapter from `inline` to `attachment`.                                                                                    |
+| **T-024** | Pre-commit secret scan                       | M13       | S      | —          | done (`76724c5`) | Add `gitleaks` or `detect-secrets` to husky pre-commit + GitHub Action.                                                                                        |
+| **T-025** | `Cache-Control: no-store` on auth            | M19       | S      | —          | done (`8e34126`) | Patch `jsonResponse()` to default `no-store` when path matches `/auth/*`.                                                                                      |
+| **T-026** | Query depth + pagination caps                | M21       | S      | —          | done (`d772304`) | Cap nesting depth (5), conditions per query (50), `limit` (200) in the parser. Make configurable.                                                              |
+| **T-027** | Vercel Blob folder sanitization              | M22       | S      | —          | done (`2e81003`) | Reject `..`, `/`, `\` in folder; same pattern as the (yet-to-be-fixed) S3 finding M5.                                                                          |
+| **T-028** | UploadThing default `attachment` disposition | M23       | S      | —          | done (`fff1a69`) | Flip `contentDisposition` default in adapter from `inline` to `attachment`.                                                                                    |
 
 ### Phase 2 suggested order
 
