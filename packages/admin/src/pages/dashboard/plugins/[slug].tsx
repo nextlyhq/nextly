@@ -12,8 +12,9 @@ import {
 import type React from "react";
 
 import * as Icons from "@admin/components/icons";
-import { ChevronRight, Home, Package, Puzzle } from "@admin/components/icons";
+import { Package, Puzzle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -59,25 +60,21 @@ export default function PluginSettingsPage({
 function PluginsContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
   const plugins = branding?.plugins ?? [];
+  const activePlugin = activeSlug
+    ? plugins.find(p => toSlug(p.name) === activeSlug)
+    : null;
+  const pluginTitle = activePlugin?.appearance?.label ?? activePlugin?.name;
 
   return (
     <div className="space-y-8">
-      {/* Breadcrumb */}
-      <nav aria-label="Breadcrumb">
-        <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-          <li className="flex items-center gap-2">
-            <Link
-              href={ROUTES.DASHBOARD}
-              className="flex items-center gap-1 hover-unified"
-            >
-              <Home className="h-4 w-4" />
-              <span>Dashboard</span>
-            </Link>
-            <ChevronRight className="h-4 w-4" />
-          </li>
-          <li className="text-foreground font-medium">Plugins</li>
-        </ol>
-      </nav>
+      {/* Breadcrumb navigation */}
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: "Plugins", href: ROUTES.PLUGINS },
+          ...(activePlugin ? [{ label: pluginTitle! }] : []),
+        ]}
+      />
 
       {/* Page header */}
       <div className="flex items-start gap-4">

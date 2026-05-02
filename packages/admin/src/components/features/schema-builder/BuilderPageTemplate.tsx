@@ -26,9 +26,12 @@ import {
   type PaletteDragData,
 } from "@admin/components/features/schema-builder";
 import * as Icons from "@admin/components/icons";
+import {
+  Breadcrumbs,
+  type BreadcrumbItem as SharedBreadcrumbItem,
+} from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
-import { Link } from "@admin/components/ui/link";
 import type { UseFieldBuilderReturn } from "@admin/hooks/useFieldBuilder";
 import { nestedFieldPriorityCollision } from "@admin/lib/builder";
 
@@ -121,18 +124,12 @@ function DragOverlayContent({
 // Props
 // ---------------------------------------------------------------------------
 
-export interface BreadcrumbItem {
-  href?: string;
-  label: string;
-  icon?: ReactNode;
-}
-
 export interface BuilderPageTemplateProps<T extends FieldValues = FieldValues> {
   /** All state and handlers from useFieldBuilder */
   builder: UseFieldBuilderReturn<T>;
 
   /** Breadcrumb trail leading up to the current page */
-  breadcrumbItems: BreadcrumbItem[];
+  breadcrumbItems: SharedBreadcrumbItem[];
   /** Current page label shown at the end of the breadcrumb */
   breadcrumbCurrentLabel: string;
 
@@ -218,36 +215,12 @@ export function BuilderPageTemplate<T extends FieldValues = FieldValues>({
                 <div className="w-full py-6 sm:py-8 px-4 sm:px-6 lg:px-8">
                   <div className="space-y-8 mb-8">
                     {/* Breadcrumb */}
-                    <nav
-                      className="flex items-center gap-2 text-sm text-muted-foreground"
-                      aria-label="Breadcrumb"
-                    >
-                      {breadcrumbItems.map((item, index) => (
-                        <React.Fragment key={index}>
-                          {index > 0 && (
-                            <Icons.ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-                          )}
-                          {item.href ? (
-                            <Link
-                              href={item.href}
-                              className="flex items-center gap-1.5 hover:text-foreground transition-colors duration-150"
-                            >
-                              {item.icon}
-                              <span>{item.label}</span>
-                            </Link>
-                          ) : (
-                            <span className="flex items-center gap-1.5">
-                              {item.icon}
-                              <span>{item.label}</span>
-                            </span>
-                          )}
-                        </React.Fragment>
-                      ))}
-                      <Icons.ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-                      <span className="text-foreground font-medium">
-                        {breadcrumbCurrentLabel}
-                      </span>
-                    </nav>
+                    <Breadcrumbs
+                      items={[
+                        ...breadcrumbItems,
+                        { label: breadcrumbCurrentLabel },
+                      ]}
+                    />
 
                     {/* Page Header */}
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

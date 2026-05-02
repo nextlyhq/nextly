@@ -19,8 +19,8 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { ChevronRight, Home } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -53,7 +53,7 @@ interface CreateEntryPageProps {
 /**
  * Breadcrumb navigation for the create entry page.
  */
-function EntryBreadcrumbs({
+function CreateEntryBreadcrumbs({
   collectionSlug,
   collectionLabel,
 }: {
@@ -61,32 +61,16 @@ function EntryBreadcrumbs({
   collectionLabel: string;
 }) {
   return (
-    <nav aria-label="Breadcrumb" className="mb-2">
-      <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-        <li className="flex items-center gap-2">
-          <Link
-            href={ROUTES.DASHBOARD}
-            className="flex items-center gap-1 hover-unified"
-          >
-            <Home className="h-4 w-4" />
-            <span>Dashboard</span>
-          </Link>
-          <ChevronRight className="h-4 w-4" />
-        </li>
-        <li className="flex items-center gap-2">
-          <Link
-            href={buildRoute(ROUTES.COLLECTION_ENTRIES, {
-              slug: collectionSlug,
-            })}
-            className="hover-unified"
-          >
-            {collectionLabel}
-          </Link>
-          <ChevronRight className="h-4 w-4" />
-        </li>
-        <li className="text-foreground font-medium">Create New</li>
-      </ol>
-    </nav>
+    <Breadcrumbs
+      items={[
+        { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+        {
+          label: collectionLabel,
+          href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collectionSlug }),
+        },
+        { label: "Create New Entry" },
+      ]}
+    />
   );
 }
 
@@ -288,7 +272,7 @@ export default function CreateEntryPage({
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <PageContainer>
-          <EntryBreadcrumbs
+          <CreateEntryBreadcrumbs
             collectionSlug={slug}
             collectionLabel={collectionLabel}
           />
@@ -309,7 +293,7 @@ export default function CreateEntryPage({
           onSuccess={handleSuccess}
           onCancel={handleCancel}
           headerContent={
-            <EntryBreadcrumbs
+            <CreateEntryBreadcrumbs
               collectionSlug={slug}
               collectionLabel={collectionLabel}
             />

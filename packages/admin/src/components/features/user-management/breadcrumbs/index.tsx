@@ -1,13 +1,11 @@
-import { ChevronRight, Home } from "@admin/components/icons";
-import { Link } from "@admin/components/ui/link";
+import React from "react";
+
+import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 
 interface UserBreadcrumbsProps {
   /**
    * Current page in the user management flow
-   * - "list": Users list page
-   * - "create": Create user page
-   * - "edit": Edit user page
    */
   currentPage:
     | "list"
@@ -34,65 +32,29 @@ const PAGE_LABELS = {
  * UserBreadcrumbs Component
  *
  * Consistent breadcrumb navigation for user management pages.
- * Shows the navigation path: Dashboard → Users → [Current Page]
- *
- * @example
- * ```tsx
- * <UserBreadcrumbs currentPage="create" />
- * <UserBreadcrumbs currentPage="edit" />
- * ```
+ * Utilizes the shared Breadcrumbs component for unified styling.
  */
 export function UserBreadcrumbs({ currentPage }: UserBreadcrumbsProps) {
   const currentLabel = PAGE_LABELS[currentPage];
 
-  return (
-    <nav aria-label="Breadcrumb" className="mb-2">
-      <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-        <li className="flex items-center gap-2">
-          <Link
-            href={ROUTES.DASHBOARD}
-            className="flex items-center gap-1 hover:text-foreground transition-colors"
-          >
-            <Home className="h-4 w-4" />
-            <span>Dashboard</span>
-          </Link>
-          <ChevronRight className="h-4 w-4" />
-        </li>
+  const items: BreadcrumbItem[] = [
+    { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+  ];
 
-        {currentPage !== "list" && (
-          <>
-            <li className="flex items-center gap-2">
-              <Link
-                href={ROUTES.USERS}
-                className="hover:text-foreground transition-colors"
-              >
-                Users
-              </Link>
-              <ChevronRight className="h-4 w-4" />
-            </li>
-            {["fields-create", "fields-edit"].includes(currentPage) ? (
-              <>
-                <li className="flex items-center gap-2">
-                  <Link
-                    href={ROUTES.USERS_FIELDS}
-                    className="hover:text-foreground transition-colors"
-                  >
-                    User Fields
-                  </Link>
-                  <ChevronRight className="h-4 w-4" />
-                </li>
-                <li className="text-foreground font-medium">{currentLabel}</li>
-              </>
-            ) : (
-              <li className="text-foreground font-medium">{currentLabel}</li>
-            )}
-          </>
-        )}
+  if (currentPage === "list") {
+    items.push({ label: "Users" });
+  } else {
+    items.push({ label: "Users", href: ROUTES.USERS });
 
-        {currentPage === "list" && (
-          <li className="text-foreground font-medium">Users</li>
-        )}
-      </ol>
-    </nav>
-  );
+    if (["fields-create", "fields-edit"].includes(currentPage)) {
+      items.push({ label: "User Fields", href: ROUTES.USERS_FIELDS });
+    } else if (currentPage === "fields") {
+      // fields is already covered by the label mapping if it was the last item
+      // but here it's treated as a leaf if it's the current page
+    }
+
+    items.push({ label: currentLabel });
+  }
+
+  return <Breadcrumbs items={items} />;
 }

@@ -19,11 +19,10 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { ChevronRight, Home } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
-import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
@@ -54,7 +53,7 @@ interface EditEntryPageProps {
 /**
  * Breadcrumb navigation for the edit entry page.
  */
-function EntryBreadcrumbs({
+function EditEntryBreadcrumbs({
   collectionSlug,
   collectionLabel,
   entryTitle,
@@ -64,32 +63,16 @@ function EntryBreadcrumbs({
   entryTitle: string;
 }) {
   return (
-    <nav aria-label="Breadcrumb" className="mb-2">
-      <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-        <li className="flex items-center gap-2">
-          <Link
-            href={ROUTES.DASHBOARD}
-            className="flex items-center gap-1 hover-unified"
-          >
-            <Home className="h-4 w-4" />
-            <span>Dashboard</span>
-          </Link>
-          <ChevronRight className="h-4 w-4" />
-        </li>
-        <li className="flex items-center gap-2">
-          <Link
-            href={buildRoute(ROUTES.COLLECTION_ENTRIES, {
-              slug: collectionSlug,
-            })}
-            className="hover-unified"
-          >
-            {collectionLabel}
-          </Link>
-          <ChevronRight className="h-4 w-4" />
-        </li>
-        <li className="text-foreground font-medium">{entryTitle}</li>
-      </ol>
-    </nav>
+    <Breadcrumbs
+      items={[
+        { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+        {
+          label: collectionLabel,
+          href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collectionSlug }),
+        },
+        { label: entryTitle },
+      ]}
+    />
   );
 }
 
@@ -367,11 +350,7 @@ export default function EditEntryPage({
   const collectionLabel = collection.label || collection.name || slug;
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
-  const entryTitle = getEntryTitle(
-    entryData,
-    id,
-    collection.admin?.useAsTitle
-  );
+  const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
 
   // Check for custom Edit view component from plugins
   const customEditViewPath =
@@ -410,7 +389,7 @@ export default function EditEntryPage({
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <PageContainer>
-          <EntryBreadcrumbs
+          <EditEntryBreadcrumbs
             collectionSlug={slug}
             collectionLabel={collectionLabel}
             entryTitle={entryTitle}
@@ -434,7 +413,7 @@ export default function EditEntryPage({
           onDelete={handleDelete}
           onCancel={handleCancel}
           headerContent={
-            <EntryBreadcrumbs
+            <EditEntryBreadcrumbs
               collectionSlug={slug}
               collectionLabel={collectionLabel}
               entryTitle={entryTitle}

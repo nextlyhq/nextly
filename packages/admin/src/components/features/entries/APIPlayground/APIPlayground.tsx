@@ -41,6 +41,7 @@ import {
   RotateCcw,
 } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
+import { cn } from "@admin/lib/utils";
 
 import { QueryBuilder } from "./QueryBuilder";
 import { ResponseViewer } from "./ResponseViewer";
@@ -438,32 +439,34 @@ export function APIPlayground({
     !isSingle && currentAction.requiresEntryId && !entryId.trim();
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full bg-slate-50/30 p-2">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full min-h-[600px]">
       {/* Request Builder Panel - 5 columns */}
-      <Card className="lg:col-span-5 flex flex-col rounded-none border-border shadow-none bg-background">
-        <CardHeader className="pb-3 border-b border-border">
-          <div className="flex items-center justify-between h-8">
-            <CardTitle className="text-fluid-base font-bold uppercase tracking-[-0.02em] text-foreground/90">
-              Request
-            </CardTitle>
+      <Card className="lg:col-span-5 flex flex-col rounded-none border-border shadow-none bg-card overflow-hidden">
+        <CardHeader className="p-8 pb-4" noBorder>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/80">
+                Request Configuration
+              </CardTitle>
+            </div>
             <Button
               variant="ghost"
               size="sm"
               onClick={handleReset}
-              className="gap-2 h-7 text-[10px] uppercase font-bold tracking-tighter"
+              className="gap-2 h-8 px-4 rounded-none text-[10px] uppercase font-bold tracking-widest text-primary/60 hover:text-primary transition-colors"
             >
               <RotateCcw className="h-3 w-3" />
               Reset
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="flex-1 space-y-6 pt-6">
+        <CardContent className="flex-1 space-y-8 px-8 pb-8">
           {/* Base Path (read-only) */}
-          <div className="space-y-2 group">
-            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+          <div className="space-y-3 group">
+            <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1 group-hover:text-primary transition-colors">
               Base Endpoint
             </Label>
-            <div className="flex items-center gap-2 p-3 bg-muted/30 border border-border/40 rounded-none font-mono text-xs transition-colors group-hover-unified">
+            <div className="flex items-center gap-2 p-4 bg-muted/10 border border-border/20 rounded-none font-mono text-xs transition-colors">
               <span className="text-muted-foreground">
                 {isSingle ? "/admin/api/singles/" : "/admin/api/collections/"}
               </span>
@@ -477,19 +480,19 @@ export function APIPlayground({
           </div>
 
           {/* Action Selector */}
-          <div className="space-y-2">
-            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
-              Action
+          <div className="space-y-3 group">
+            <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1 group-hover:text-primary transition-colors">
+              Endpoint Action
             </Label>
             <Select
               value={action}
               onValueChange={v => setAction(v as EndpointAction)}
               disabled={isSingle}
             >
-              <SelectTrigger className="rounded-none border-border h-11 bg-background focus:ring-0 focus:ring-offset-0 focus:border-foreground">
+              <SelectTrigger className="rounded-none border-border/40 h-12 bg-muted/5 focus:ring-2 focus:ring-primary/10 transition-all">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="rounded-none border-border">
+              <SelectContent className="rounded-none border-border/60 shadow-xl">
                 {ENDPOINT_ACTIONS.filter(a =>
                   isSingle ? ["get", "update"].includes(a.value) : true
                 ).map(a => (
@@ -517,15 +520,15 @@ export function APIPlayground({
 
           {/* Entry ID Input (conditional) */}
           {!isSingle && currentAction.requiresEntryId && (
-            <div className="space-y-2">
-              <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <div className="space-y-3 group">
+              <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1 group-hover:text-primary transition-colors">
                 Entry ID <span className="text-destructive">*</span>
               </Label>
               <Input
                 value={entryId}
                 onChange={e => setEntryId(e.target.value)}
                 placeholder="Enter entry ID (e.g., abc123)"
-                className="font-mono text-xs rounded-none border-border h-11 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-foreground"
+                className="font-mono text-xs rounded-none border-border/40 h-12 bg-muted/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all"
               />
               {entryIdMissing && (
                 <p className="text-[10px] text-destructive font-medium ml-1">
@@ -536,17 +539,20 @@ export function APIPlayground({
           )}
 
           {/* Tabs for Query Params and Body */}
-          <Tabs defaultValue="params" className="flex-1">
-            <TabsList className="bg-transparent border-b border-border p-0 w-full justify-start rounded-none h-10">
+          <Tabs
+            defaultValue="params"
+            className="flex-1 flex flex-col min-h-0 pt-2"
+          >
+            <TabsList className="bg-muted/10 border-none p-1 w-full justify-start rounded-none h-11">
               <TabsTrigger
                 value="params"
-                className="rounded-none border-b-2 border-transparent px-6 font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-transparent data-[state=active]:border-foreground data-[state=active]:shadow-none"
+                className="flex-1 rounded-none font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-card data-[state=active]:text-primary data-[state=active]:shadow-sm transition-all"
               >
                 Query Params
               </TabsTrigger>
               <TabsTrigger
                 value="body"
-                className="rounded-none border-b-2 border-transparent px-6 font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-transparent data-[state=active]:border-foreground data-[state=active]:shadow-none"
+                className="flex-1 rounded-none font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-card data-[state=active]:text-primary data-[state=active]:shadow-sm transition-all"
               >
                 Body
               </TabsTrigger>
@@ -561,59 +567,56 @@ export function APIPlayground({
               />
             </TabsContent>
 
-            <TabsContent value="body" className="mt-6">
-              <div className="space-y-3">
-                <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+            <TabsContent value="body" className="mt-6 flex-1 min-h-0">
+              <div className="space-y-4 h-full flex flex-col">
+                <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1">
                   Request Body (JSON)
                 </Label>
                 <textarea
                   value={requestBody}
                   onChange={e => setRequestBody(e.target.value)}
-                  className="w-full h-48 font-mono text-xs p-4 border border-border rounded-none bg-background resize-none focus:outline-none focus:border-foreground transition-colors"
+                  className="w-full flex-1 font-mono text-xs p-4 border border-border/40 rounded-none bg-muted/5 resize-none focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/5 transition-all"
                   placeholder={getBodyPlaceholder()}
                   disabled={!actionRequiresBody}
                 />
-                {!actionRequiresBody && (
-                  <p className="text-[10px] text-muted-foreground ml-1 italic">
-                    Request body is not used for this action.
-                  </p>
-                )}
               </div>
             </TabsContent>
           </Tabs>
 
           {/* Request URL Display */}
-          <div className="pt-6 border-t border-border">
-            <Label className="text-fluid-xs uppercase font-bold tracking-widest text-muted-foreground/60 ml-1">
+          <div className="pt-8 border-t border-border/10">
+            <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1">
               Full Request URL
             </Label>
-            <div className="flex items-center gap-2 mt-2 group">
-              <code className="flex-1 text-[10px] bg-muted/40 p-3 border border-border/40 rounded-none break-all font-mono group-hover-unified transition-colors">
+            <div className="flex items-center gap-2 mt-4 group">
+              <code className="flex-1 text-[10px] bg-muted/10 p-4 border border-border/10 rounded-none break-all font-mono transition-colors">
                 <span className={METHOD_COLORS[method]}>{method}</span>{" "}
                 {fullUrl}
               </code>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  void handleCopyUrl();
-                }}
-                className="shrink-0 h-10 w-10 rounded-none border-border"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-green-500" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={handleOpenInNewTab}
-                className="shrink-0 h-10 w-10 rounded-none border-border"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </Button>
+              <div className="flex flex-col gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => {
+                    void handleCopyUrl();
+                  }}
+                  className="shrink-0 h-9 w-9 rounded-none border-border/40 hover:bg-primary/5 hover:text-primary transition-all"
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleOpenInNewTab}
+                  className="shrink-0 h-9 w-9 rounded-none border-border/40 hover:bg-primary/5 hover:text-primary transition-all"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
 
@@ -623,42 +626,56 @@ export function APIPlayground({
               void executeRequest();
             }}
             disabled={isLoading || entryIdMissing}
-            className="w-full gap-2 h-11 rounded-none text-xs font-bold uppercase tracking-widest active:scale-[0.98] transition-all shadow-neo hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px]"
+            className="w-full gap-3 h-14 rounded-none text-[11px] font-black uppercase tracking-[0.2em] active:scale-[0.98] transition-all bg-primary hover:opacity-90"
           >
             {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-5 w-5 animate-spin" />
             ) : (
-              <Play className="h-4 w-4" />
+              <Play className="h-5 w-5 fill-current" />
             )}
-            {isLoading ? "Sending..." : "Send Request"}
+            {isLoading ? "Sending Request..." : "Send Request"}
           </Button>
         </CardContent>
       </Card>
 
       {/* Response Panel - 7 columns */}
-      <Card className="lg:col-span-7 flex flex-col rounded-none border-border shadow-none bg-background">
-        <CardHeader className="pb-3 border-b border-border">
-          <div className="flex items-center justify-between h-8">
-            <CardTitle className="text-fluid-base font-bold uppercase tracking-[-0.02em] text-foreground/90">
-              Response
-            </CardTitle>
+      <Card className="lg:col-span-7 flex flex-col rounded-none border-border shadow-none bg-card overflow-hidden">
+        <CardHeader className="p-8 pb-4" noBorder>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/80">
+                API Response
+              </CardTitle>
+            </div>
             {response && (
-              <div className="flex items-center gap-6 text-[10px] font-bold tracking-wider">
-                <div className="flex items-center gap-2">
-                  <span className="text-fluid-2xs uppercase font-bold tracking-widest text-muted-foreground/40">
-                    Status:
+              <div className="flex items-center gap-6">
+                <div className="flex flex-col items-end">
+                  <span className="text-[8px] text-muted-foreground/40 font-black uppercase tracking-wider mb-1">
+                    Status
                   </span>
-                  <span
-                    className={`${getStatusColor(response.status)} font-mono text-fluid-xs`}
-                  >
-                    {response.status} {response.statusText}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        response.status < 300 ? "bg-emerald-500" : "bg-rose-500"
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "font-mono text-[11px] font-bold",
+                        getStatusColor(response.status)
+                      )}
+                    >
+                      {response.status}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-fluid-2xs uppercase font-bold tracking-widest text-muted-foreground/40">
-                    Time:
+                <div className="h-8 w-px bg-border/10" />
+                <div className="flex flex-col items-end">
+                  <span className="text-[8px] text-muted-foreground/40 font-black uppercase tracking-wider mb-1">
+                    Latency
                   </span>
-                  <span className="text-foreground font-mono text-fluid-xs">
+                  <span className="text-foreground font-mono text-[11px] font-bold">
                     {response.time}ms
                   </span>
                 </div>

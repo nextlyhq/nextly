@@ -53,7 +53,7 @@ export function JsonViewer({ value }: JsonViewerProps) {
     setIsMounted(true);
   }, []);
 
-  const extensions = useMemo(() => [json()], []);
+  const extensions = useMemo(() => [json(), EditorView.lineWrapping], []);
 
   const editorTheme = useMemo(
     () =>
@@ -67,7 +67,7 @@ export function JsonViewer({ value }: JsonViewerProps) {
         ".cm-scroller": {
           fontFamily:
             "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
-          padding: "16px 0",
+          padding: "16px 12px",
         },
         ".cm-gutters": {
           borderRight: "1px solid hsl(var(--border) / 0.5)",
