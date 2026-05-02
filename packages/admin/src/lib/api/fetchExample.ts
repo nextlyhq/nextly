@@ -31,9 +31,15 @@ export async function fetchMultipleUsers() {
   const { api } = useApi();
 
   try {
-    // Fetch an array of users
-    const users = await api.public.get<UserResponse[]>("/users");
-    console.log("First User's Name:", users?.[0].name);
+    // Phase 4 wire shape (spec section 5.1): list endpoints return
+    // `{ items, meta }`, not a bare array. Type the response with the
+    // canonical envelope so the example mirrors what real consumers see.
+    const response = await api.public.get<{
+      items: UserResponse[];
+      meta: { total: number; page: number; limit: number };
+    }>("/users");
+    console.log("First user's name:", response.items?.[0]?.name);
+    console.log("Total users:", response.meta.total);
   } catch (error) {
     if (error instanceof Error) {
       console.error("API error:", error.message);

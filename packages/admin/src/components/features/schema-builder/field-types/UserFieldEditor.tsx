@@ -116,8 +116,14 @@ export function UserFieldEditor({
       );
       const data = await response.json();
 
-      if (data.success && data.data) {
-        setUserRoles(data.data);
+      // Phase 4 (post-merge follow-up): /admin/api/roles emits
+      // `respondList({ items, meta })` (spec section 5.1). Pre-Phase-4
+      // the legacy wire was `{ success, data }`; the canonical envelope
+      // dropped `success` (HTTP status carries it) and renamed the
+      // payload field from `data` to `items`. Read `items` and gate on
+      // response.ok instead of an in-body success flag.
+      if (response.ok && Array.isArray(data?.items)) {
+        setUserRoles(data.items);
       }
     } catch (error) {
       console.error("Error fetching user roles:", error);

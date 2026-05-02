@@ -67,7 +67,16 @@ async function fetchImageSizes(): Promise<ImageSize[]> {
   });
   if (!res.ok) return [];
   const data = await res.json();
-  return data.data ?? data ?? [];
+  // Phase 4 (post-merge follow-up): /admin/api/image-sizes emits
+  // `respondList({ items, meta })` (spec section 5.1). Pre-Phase-4 the
+  // legacy fallback `data.data ?? data` accommodated either `{data}` or
+  // bare arrays. After Phase 4 we read `.items` first; legacy fallbacks
+  // kept for one release as a transitional shim (parallels csrf and
+  // pageSize -> limit transition shims).
+  if (Array.isArray(data?.items)) return data.items as ImageSize[];
+  if (Array.isArray(data?.data)) return data.data as ImageSize[];
+  if (Array.isArray(data)) return data as ImageSize[];
+  return [];
 }
 
 async function createImageSize(input: Partial<ImageSize>): Promise<void> {
