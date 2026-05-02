@@ -10,6 +10,7 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import { container } from "../../di/container";
+import type { SchemaRegistry } from "../../database/schema-registry";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { DrizzleMigrationJournal } from "../../domains/schema/journal/migration-journal";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
@@ -174,6 +175,17 @@ export function getCollectionRegistryFromDI():
       return container.get<CollectionRegistryService>(
         "collectionRegistryService"
       );
+    }
+  } catch {
+    // DI not initialized
+  }
+  return undefined;
+}
+
+export function getSchemaRegistryFromDI(): SchemaRegistry | undefined {
+  try {
+    if (container.has("schemaRegistry")) {
+      return container.get<SchemaRegistry>("schemaRegistry");
     }
   } catch {
     // DI not initialized

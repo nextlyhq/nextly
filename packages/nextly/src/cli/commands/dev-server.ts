@@ -34,6 +34,7 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type {
   DesiredCollection,
   DesiredSchema,
+  DesiredSingle,
 } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -266,9 +267,35 @@ export async function performAutoSync(
     }
   }
 
+  // Build the desired-singles bucket the same way collections are built.
+  // Without this, the pipeline never introspects single_* tables and
+  // treats them as "not managed" — renames become drop+add and new fields
+  // never propagate on `nextly dev` restart.
+  const { resolveSingleTableName } = await import(
+    "../../domains/singles/services/resolve-single-table-name"
+  );
+  const desiredSingles: Record<string, DesiredSingle> = {};
+  for (const single of config.singles ?? []) {
+    if (!single.slug) continue;
+    const singleTableName = resolveSingleTableName({
+      slug: single.slug,
+      dbName: single.dbName,
+    });
+    const singleFields = (single.fields ?? []) as FieldDefinition[];
+    desiredSingles[single.slug] = {
+      slug: single.slug,
+      tableName: singleTableName,
+      fields: singleFields as DesiredSingle["fields"],
+    };
+    if (singleFields.length > 0) {
+      const { table } = generateRuntimeSchema(singleTableName, singleFields, dialect);
+      schemaRegistry.registerDynamicSchema(singleTableName, table);
+    }
+  }
+
   const desired: DesiredSchema = {
     collections: desiredCollections,
-    singles: {},
+    singles: desiredSingles,
     components: {},
   };
 

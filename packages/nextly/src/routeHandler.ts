@@ -1047,6 +1047,30 @@ async function handleGet(req: Request, params: string[]) {
   if (params[0] === "admin-meta") {
     return handleAdminMetaRequest();
   }
+  if (params[0] === "dev-reload" && process.env.NODE_ENV === "development") {
+    const { subscribeDevReload } = await import(
+      "./runtime/dev-reload-broadcaster"
+    );
+    let unsub: (() => void) | undefined;
+    const stream = new ReadableStream<string>({
+      start(ctrl) {
+        unsub = subscribeDevReload(ctrl);
+        ctrl.enqueue(": keepalive\n\n");
+      },
+      cancel() {
+        unsub?.();
+      },
+    });
+    return new Response(stream as unknown as BodyInit, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
   return handleServiceRequest(req, params, "GET");
 }
 
