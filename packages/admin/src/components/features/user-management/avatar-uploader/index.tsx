@@ -5,7 +5,7 @@ import { useState, type ReactElement } from "react";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import { Pencil, X } from "@admin/components/icons";
-import { cn, getAvatarColor, getInitial } from "@admin/lib/utils";
+import { cn, getInitial } from "@admin/lib/utils";
 
 export interface AvatarUploaderProps {
   /** Current avatar URL. Empty string means "no avatar". */
