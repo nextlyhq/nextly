@@ -377,10 +377,12 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @param filename - Original filename (will be sanitized)
    * @param folder - Optional folder/prefix for organizing uploads
    * @returns Generated pathname
+   * @throws Error if folder fails sanitization (Audit M22 / T-027)
    */
   private buildPathname(filename: string, folder?: string): string {
     const sanitized = this.sanitizeFilename(filename);
-    return folder ? `${folder}/${sanitized}` : sanitized;
+    if (!folder) return sanitized;
+    return `${this.sanitizeFolder(folder)}/${sanitized}`;
   }
 
   /**
@@ -392,6 +394,50 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
   private sanitizeFilename(filename: string): string {
     const basename = filename.split(/[/\\]/).pop() || filename;
     return basename.replace(/[^a-zA-Z0-9._-]/g, "-");
+  }
+
+  /**
+   * Audit M22 (T-027). Reject folder values that would let a caller
+   * escape the configured prefix via path traversal or weird
+   * separators. Vercel Blob is flat-keyed so `/` is just part of the
+   * pathname, but an attacker who controls `folder` could still:
+   *
+   *   - Use `..` to chain a relative-traversal-style key.
+   *   - Use `\` (Windows separator) to confuse downstream tooling.
+   *   - Use control chars / null bytes to truncate the key.
+   *   - Use a leading `/` to look like an absolute path.
+   *
+   * Internal `/` segments stay allowed because callers legitimately
+   * use nested folders (`docs/2026/...`); a leading `/`, empty
+   * segments (`docs//x`), or `..` segments are rejected.
+   *
+   * @throws Error with a stable message so the storage facade can
+   *   surface a 400 instead of a 500.
+   */
+  private sanitizeFolder(folder: string): string {
+    const trimmed = folder.replace(/\/+$/, ""); // tolerate one trailing `/`
+    if (!trimmed) {
+      throw new Error("Folder must be a non-empty string.");
+    }
+    // eslint-disable-next-line no-control-regex -- the whole point is to reject control chars
+    if (/[\\\0\x01-\x1f\x7f]/.test(trimmed)) {
+      throw new Error(
+        "Folder contains forbidden characters (backslash, control chars, or null bytes)."
+      );
+    }
+    if (trimmed.startsWith("/")) {
+      throw new Error("Folder must not start with `/`.");
+    }
+    const segments = trimmed.split("/");
+    for (const segment of segments) {
+      if (segment === "") {
+        throw new Error("Folder must not contain empty segments (`//`).");
+      }
+      if (segment === "..") {
+        throw new Error("Folder must not contain `..` segments.");
+      }
+    }
+    return trimmed;
   }
 
   // ============================================================
