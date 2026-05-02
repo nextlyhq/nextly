@@ -25,6 +25,7 @@
 import { z } from "zod";
 
 import { getService } from "../di";
+import { clampLimit } from "../domains/collections/query/query-parser";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -96,9 +97,8 @@ export const GET = withErrorHandler(async (request: Request) => {
 
   const source = searchParams.get("source") as "code" | "ui" | null;
   const search = searchParams.get("search") || undefined;
-  const limit = searchParams.get("limit")
-    ? parseInt(searchParams.get("limit")!, 10)
-    : 50;
+  // Audit M21 / T-026: clamp `limit` to MAX_QUERY_LIMIT.
+  const limit = clampLimit(searchParams.get("limit"), { defaultLimit: 50 });
   const offset = searchParams.get("offset")
     ? parseInt(searchParams.get("offset")!, 10)
     : 0;

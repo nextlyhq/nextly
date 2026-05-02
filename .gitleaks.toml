@@ -1,0 +1,25 @@
+# gitleaks configuration (Audit M13 / T-024).
+#
+# Extends the default ruleset rather than replacing it — that way new
+# upstream rules (new cloud providers, new SaaS API key formats) keep
+# applying automatically.
+#
+# Add entries to [allowlist] only when a finding is genuinely a false
+# positive (e.g. a documentation example, a test fixture, a generated
+# fingerprint that pattern-matches the AWS-secret-key regex). Always
+# leave a comment so reviewers know why the exception exists.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "False-positive allowlist for the Nextly repo"
+
+# Lockfiles never contain real secrets but their dependency hashes
+# can pattern-match generic high-entropy rules. Treat them as data,
+# not code.
+paths = [
+  '''pnpm-lock\.yaml$''',
+  '''package-lock\.json$''',
+  '''yarn\.lock$''',
+]
