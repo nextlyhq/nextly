@@ -86,11 +86,17 @@ describe("reloadNextlyConfig", () => {
 
   // Build a service resolver fake. Returns the service or undefined per
   // service name. Tests pass this into reloadNextlyConfig via opts.resolver.
-  function buildResolver(opts?: { withAdapter?: boolean }) {
+  function buildResolver(opts?: {
+    withAdapter?: boolean;
+  }) {
     const withAdapter = opts?.withAdapter ?? true;
+    const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
+    const registerDynamicSchemaSpy = vi.fn();
     const services: Record<string, unknown> = {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
-      databaseAdapter: withAdapter
+      // The DI key is "adapter" (renamed from "databaseAdapter" — see the
+      // comment in reload-config.ts line ~205 for the history).
+      adapter: withAdapter
         ? {
             // dialect is a readonly property on DrizzleAdapter, not a
             // method. Fakes must match.
@@ -98,8 +104,24 @@ describe("reloadNextlyConfig", () => {
             getDrizzle: () => ({}),
           }
         : undefined,
+      collectionRegistryService: {
+        syncCodeFirstCollections: vi.fn().mockResolvedValue({}),
+      },
+      singleRegistryService: {
+        syncCodeFirstSingles: vi.fn().mockResolvedValue({}),
+      },
+      componentRegistryService: {
+        syncCodeFirstComponents: syncCodeFirstComponentsSpy,
+      },
+      schemaRegistry: {
+        registerDynamicSchema: registerDynamicSchemaSpy,
+      },
+      migrationJournal: undefined,
     };
-    return (name: string) => services[name];
+    return Object.assign((name: string) => services[name], {
+      syncCodeFirstComponentsSpy,
+      registerDynamicSchemaSpy,
+    });
   }
 
   // SQLite reserved-column live state (matches buildReservedColumns output
@@ -469,13 +491,20 @@ describe("reloadNextlyConfig", () => {
       },
     });
 
+    // The CONFIRMATION_REQUIRED_NO_TTY path uses console.warn (not
+    // logger.warn) to surface a top-level, scannable instruction in the
+    // dev terminal without a logger prefix.
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
     expect(errorSpy).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
-    const warningArg = warnSpy.mock.calls[0]?.[0] as string;
-    expect(warningArg).toContain("CONFIRMATION_REQUIRED_NO_TTY");
+    expect(consoleSpy).toHaveBeenCalled();
+    const warningArg = consoleSpy.mock.calls[0]?.[0] as string;
+    expect(warningArg).toContain("confirmation");
+
+    consoleSpy.mockRestore();
   });
 
   it("passes the injected dispatcher straight into the pipeline", async () => {
@@ -512,5 +541,182 @@ describe("reloadNextlyConfig", () => {
       promptDispatcher: PromptDispatcher;
     };
     expect(deps.promptDispatcher).toBe(fakeDispatcher);
+  });
+
+  describe("component support", () => {
+    it("includes component table names in the batched introspect call", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            { slug: "hero", fields: [{ name: "title", type: "text" }] },
+            { slug: "seo-meta", fields: [{ name: "description", type: "text" }] },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          { name: "comp_hero", columns: SQLITE_RESERVED },
+          { name: "comp_seo_meta", columns: SQLITE_RESERVED },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(introspectSpy).toHaveBeenCalledTimes(1);
+      const tableNames = (introspectSpy.mock.calls[0] as [unknown, string, string[]])[2];
+      expect(tableNames).toContain("comp_hero");
+      expect(tableNames).toContain("comp_seo_meta");
+    });
+
+    it("normalises slug to comp_<snake_case> table name (hyphens → underscores)", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            { slug: "seo-meta", fields: [{ name: "title", type: "text" }] },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([{ name: "comp_seo_meta", columns: SQLITE_RESERVED }])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      const tableNames = (introspectSpy.mock.calls[0] as [unknown, string, string[]])[2];
+      expect(tableNames).toContain("comp_seo_meta");
+      expect(tableNames).not.toContain("comp_seo-meta");
+    });
+
+    it("flows an additive component field change through to the pipeline", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            { slug: "hero", fields: [{ name: "subtitle", type: "text" }] },
+          ],
+        },
+      });
+      // Live table exists with only reserved columns — subtitle is a new add.
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([{ name: "comp_hero", columns: SQLITE_RESERVED }])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      const call = pipelineApplySpy.mock.calls[0]?.[0] as {
+        desired: { components: Record<string, unknown> };
+      };
+      expect(Object.keys(call.desired.components)).toContain("hero");
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("skips a standalone drop on a component table and logs a warning", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            { slug: "hero", fields: [] }, // removed `headline` field
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          {
+            name: "comp_hero",
+            columns: [
+              ...SQLITE_RESERVED,
+              { name: "headline", type: "text", nullable: true },
+            ],
+          },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain("hero");
+      expect(msg).toContain("data loss");
+    });
+
+    it("calls syncCodeFirstComponents after a successful apply", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            {
+              slug: "hero",
+              label: { singular: "Hero" },
+              fields: [{ name: "subtitle", type: "text" }],
+            },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([{ name: "comp_hero", columns: SQLITE_RESERVED }])
+      );
+
+      const resolver = buildResolver();
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver });
+
+      expect(resolver.syncCodeFirstComponentsSpy).toHaveBeenCalledTimes(1);
+      const configs = resolver.syncCodeFirstComponentsSpy.mock
+        .calls[0]?.[0] as Array<{ slug: string; label: string }>;
+      expect(configs[0]?.slug).toBe("hero");
+      expect(configs[0]?.label).toBe("Hero");
+    });
+
+    it("calls registerDynamicSchema for the component table after a successful apply", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            { slug: "hero", fields: [{ name: "subtitle", type: "text" }] },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([{ name: "comp_hero", columns: SQLITE_RESERVED }])
+      );
+
+      const resolver = buildResolver();
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver });
+
+      expect(resolver.registerDynamicSchemaSpy).toHaveBeenCalledWith(
+        "comp_hero",
+        expect.anything()
+      );
+    });
+
+    it("does not call the pipeline when all component diffs are empty", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            { slug: "hero", fields: [{ name: "title", type: "text" }] },
+          ],
+        },
+      });
+      // Live already matches desired.
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          {
+            name: "comp_hero",
+            columns: [
+              ...SQLITE_RESERVED,
+              { name: "title", type: "text", nullable: true },
+            ],
+          },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+    });
   });
 });
