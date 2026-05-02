@@ -49,48 +49,38 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
       >
         <CardContent className={isCompact ? "p-5" : "p-8"}>
           {isCompact ? (
-            <div className="flex items-center justify-between gap-4 relative z-10">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2.5 mb-2">
-                  {icon && (
-                    <div className="text-primary/50 shrink-0 group-hover:text-primary transition-colors">
-                      {icon}
-                    </div>
-                  )}
-                  <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-primary/50 truncate group-hover:text-primary transition-colors">
-                    {title}
-                  </span>
-                </div>
+            <div className="flex items-start justify-between gap-4 relative z-10">
+              <div className="space-y-1">
                 <p className="text-2xl font-bold tracking-[-0.03em] text-primary/50 leading-none group-hover:text-primary transition-colors">
                   {typeof value === "number" ? value.toLocaleString() : value}
                 </p>
+                <span className="block text-[11px] font-semibold tracking-tight text-primary/50 truncate group-hover:text-primary transition-colors pt-1">
+                  {title}
+                </span>
               </div>
+              {icon && (
+                <div className="text-primary/50 shrink-0 group-hover:text-primary transition-colors pt-1">
+                  {icon}
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-6 relative z-10">
               <div className="flex items-start justify-between">
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2.5 mb-1.5">
-                    <div className="text-primary/50 group-hover:text-primary transition-colors duration-500">
-                      {icon}
-                    </div>
+                  <p className="text-fluid-4xl font-bold tracking-[-0.05em] text-primary/50 leading-[0.9] transition-all duration-500 group-hover:text-primary group-hover:translate-x-0.5">
+                    {typeof value === "number" ? value.toLocaleString() : value}
+                  </p>
+                  <div className="flex items-center gap-2.5 pt-2">
                     <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-primary/50 group-hover:text-primary transition-colors">
                       {title}
                     </span>
                   </div>
-                  <p className="text-fluid-4xl font-bold tracking-[-0.05em] text-primary/50 leading-[0.9] transition-all duration-500 group-hover:text-primary group-hover:translate-x-0.5">
-                    {typeof value === "number" ? value.toLocaleString() : value}
-                  </p>
                 </div>
 
-                {sparklineData && (
-                  <div className="pt-1 pr-1 group-hover:scale-110 transition-transform duration-700">
-                    <Sparkline
-                      data={sparklineData}
-                      width={120}
-                      height={40}
-                      className="text-primary/20 group-hover-unified transition-colors duration-700"
-                    />
+                {icon && (
+                  <div className="text-primary/50 shrink-0 group-hover:text-primary transition-all duration-500 pt-1">
+                    {icon}
                   </div>
                 )}
               </div>
@@ -124,6 +114,17 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                       </span>
                     )}
                   </div>
+
+                  {sparklineData && (
+                    <div className="group-hover:scale-110 transition-transform duration-700">
+                      <Sparkline
+                        data={sparklineData}
+                        width={80}
+                        height={30}
+                        className="text-primary/20 group-hover-unified transition-colors duration-700"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

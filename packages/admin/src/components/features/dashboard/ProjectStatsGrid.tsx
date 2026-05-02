@@ -61,49 +61,49 @@ export const ProjectStatsGrid: React.FC = () => {
         {
           title: "Entries",
           value: data.content.totalEntries,
-          icon: <FileText className="h-3.5 w-3.5" />,
+          icon: <FileText className="h-5 w-5" />,
           href: ROUTES.COLLECTIONS,
         },
         {
           title: "Media",
           value: data.content.totalMedia,
-          icon: <Image className="h-3.5 w-3.5" />,
+          icon: <Image className="h-5 w-5" />,
           href: ROUTES.MEDIA,
         },
         {
           title: "Models",
           value: data.content.contentTypes,
-          icon: <Layers className="h-3.5 w-3.5" />,
+          icon: <Layers className="h-5 w-5" />,
           href: ROUTES.COLLECTIONS,
         },
         {
           title: "Plugins",
           value: data.components,
-          icon: <Puzzle className="h-3.5 w-3.5" />,
+          icon: <Puzzle className="h-5 w-5" />,
           href: ROUTES.COMPONENTS,
         },
         {
           title: "Singles",
           value: data.singles,
-          icon: <Globe className="h-3.5 w-3.5" />,
+          icon: <Globe className="h-5 w-5" />,
           href: ROUTES.SINGLES,
         },
         {
           title: "Users",
           value: data.users,
-          icon: <Users className="h-3.5 w-3.5" />,
+          icon: <Users className="h-5 w-5" />,
           href: ROUTES.USERS,
         },
         {
           title: "Security",
           value: data.apiKeys,
-          icon: <Key className="h-3.5 w-3.5" />,
+          icon: <Key className="h-5 w-5" />,
           href: ROUTES.SETTINGS_API_KEYS,
         },
         {
           title: "Locales",
           value: 1,
-          icon: <Languages className="h-3.5 w-3.5" />,
+          icon: <Languages className="h-5 w-5" />,
         },
       ];
     }, [data]);
