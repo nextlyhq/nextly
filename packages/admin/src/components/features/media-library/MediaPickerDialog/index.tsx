@@ -45,6 +45,7 @@ import { cn } from "@admin/lib/utils";
 import type { Media, MediaFolder, MediaType } from "@admin/types/media";
 import type { MediaPickerDialogProps } from "@admin/types/ui/media-picker-dialog";
 
+import { FolderBreadcrumbs } from "../FolderBreadcrumbs";
 import { MediaGrid } from "../MediaGrid";
 import { MediaUploadDropzone } from "../MediaUploadDropzone";
 

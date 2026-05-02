@@ -13,7 +13,8 @@
 
 import { DndContext, DragOverlay } from "@dnd-kit/core";
 import { Button, Spinner } from "@revnixhq/ui";
-import React, { type ReactNode } from "react";
+import type React from "react";
+import type { ReactNode } from "react";
 import { FormProvider, type FieldValues } from "react-hook-form";
 
 import {

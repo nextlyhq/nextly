@@ -1,5 +1,3 @@
-import React from "react";
-
 import { Folder as FolderIcon } from "@admin/components/icons";
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { useFolderContents } from "@admin/hooks/queries/useMedia";

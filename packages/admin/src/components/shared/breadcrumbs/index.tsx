@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import type React from "react";
 
 import { ChevronRight, LayoutDashboard } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";

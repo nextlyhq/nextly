@@ -1,5 +1,3 @@
-import React from "react";
-
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 
