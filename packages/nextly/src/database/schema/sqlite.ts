@@ -185,6 +185,35 @@ export const refreshTokens = sqliteTable(
   ]
 );
 
+// Audit log for security-sensitive events (Audit M10 / T-022).
+// Append-only by application convention — operators should revoke
+// UPDATE/DELETE GRANTs on this table in production for stricter
+// integrity. metadata is JSON-encoded text since SQLite has no native
+// JSON column. NULL actor_user_id covers events with no authenticated
+// actor (failed login, failed CSRF). NULL target_user_id covers
+// non-target events (failed CSRF on a non-account-scoped path).
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    actorUserId: text("actor_user_id"),
+    targetUserId: text("target_user_id"),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    metadata: text("metadata"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  t => [
+    index("audit_log_kind_idx").on(t.kind),
+    index("audit_log_actor_user_id_idx").on(t.actorUserId),
+    index("audit_log_target_user_id_idx").on(t.targetUserId),
+    index("audit_log_created_at_idx").on(t.createdAt),
+  ]
+);
+
 // -----------------------------
 // RBAC tables (roles/permissions)
 // -----------------------------

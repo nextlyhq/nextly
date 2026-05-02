@@ -231,4 +231,47 @@ export class CollectionAccessService extends BaseService {
       return null;
     }
   }
+
+  /**
+   * Audit M11 (T-023). Resolve the owner-only constraint for a single
+   * operation as a flat `{ field, value }` pair so callers can fold it
+   * directly into a Drizzle `WHERE` clause. Returns `null` when the
+   * rule is not `owner-only`, when the caller is bypassing access via
+   * `overrideAccess`, or when no user context is present.
+   *
+   * Read uses get the constraint from the access-control service's
+   * `query` channel; mutate operations (update / delete) read the rule
+   * directly because the access service only emits the `query` channel
+   * for reads. The result is the same for the consumer either way:
+   * if non-null, the entry fetch / mutate must include this predicate
+   * in its WHERE clause so a non-owner sees a 404, not a 403, and IDOR
+   * by id-iteration returns nothing.
+   *
+   * Use the existing `evaluateAccess` flow for the boolean
+   * (allowed / denied) decision; this helper is purely about the
+   * predicate that goes into SQL.
+   */
+  async getOwnerConstraint(
+    collectionName: string,
+    operation: AccessOperation,
+    user?: UserContext,
+    overrideAccess?: boolean
+  ): Promise<{ field: string; value: string } | null> {
+    if (overrideAccess || !user) return null;
+
+    try {
+      const collection =
+        await this.collectionService.getCollection(collectionName);
+      const accessRules = this.getAccessRules(
+        collection as Record<string, unknown>
+      );
+      const rule = accessRules?.[operation];
+      if (!rule || rule.type !== "owner-only") return null;
+
+      const field = rule.ownerField ?? "createdBy";
+      return { field, value: user.id };
+    } catch {
+      return null;
+    }
+  }
 }

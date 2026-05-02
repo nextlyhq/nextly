@@ -47,7 +47,28 @@ export interface SecurityHeadersConfig {
    * Content-Security-Policy header value.
    * Set to `false` to disable.
    *
-   * @default "default-src 'none'; frame-ancestors 'none'"
+   * Audit M3 (T-020): the previous default `default-src 'none'; frame-
+   * ancestors 'none'` was a hard "block everything" — fine on a pure
+   * JSON response (CSP doesn't enforce on JSON) but instantly broke any
+   * HTML response, including the admin SPA. The new default is
+   * restrictive but lets a self-hosted Nextly admin UI run end-to-end:
+   *
+   *   default-src 'self';
+   *   script-src 'self';
+   *   style-src 'self' 'unsafe-inline';
+   *   img-src 'self' data: blob:;
+   *   font-src 'self' data:;
+   *   connect-src 'self';
+   *   frame-ancestors 'none';
+   *   base-uri 'self';
+   *   form-action 'self';
+   *   object-src 'none'
+   *
+   * To extend (e.g. for a CDN, analytics, or third-party fonts), pass
+   * an explicit string here — your value replaces the default entirely.
+   * To disable CSP entirely, set to `false`.
+   *
+   * @default see above
    */
   contentSecurityPolicy?: string | false;
 
@@ -98,15 +119,34 @@ export interface SecurityHeadersConfig {
 // ============================================================================
 
 /**
+ * Audit M3 (T-020). The default CSP is restrictive but lets a self-
+ * hosted Nextly admin SPA run without an override. See the doc on
+ * `SecurityHeadersConfig.contentSecurityPolicy` for the rationale and
+ * the override path.
+ */
+const DEFAULT_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join("; ");
+
+/**
  * Default security header values.
  *
- * These defaults are appropriate for JSON API responses:
- * - CSP blocks all content loading and frame embedding
- * - HSTS enforces HTTPS in production
- * - X-Frame-Options prevents clickjacking (legacy browser fallback)
- * - X-Content-Type-Options prevents MIME sniffing
- * - Referrer-Policy limits referrer leakage
- * - Permissions-Policy disables sensitive browser APIs
+ * - CSP allows self-hosted SPA assets and blocks frame embedding /
+ *   plugins / cross-origin form posts (Audit M3 / T-020).
+ * - HSTS enforces HTTPS in production.
+ * - X-Frame-Options prevents clickjacking (legacy browser fallback).
+ * - X-Content-Type-Options prevents MIME sniffing.
+ * - Referrer-Policy limits referrer leakage.
+ * - Permissions-Policy disables sensitive browser APIs.
  */
 const DEFAULT_HEADERS: Record<
   keyof SecurityHeadersConfig,
@@ -114,7 +154,7 @@ const DEFAULT_HEADERS: Record<
 > = {
   contentSecurityPolicy: {
     header: "Content-Security-Policy",
-    value: "default-src 'none'; frame-ancestors 'none'",
+    value: DEFAULT_CSP,
   },
   xContentTypeOptions: {
     header: "X-Content-Type-Options",

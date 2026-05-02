@@ -22,7 +22,105 @@
  * @packageDocumentation
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import type { WhereFilter } from "./query-operators";
+
+/**
+ * Audit M21 (T-026): default caps for the REST query parser.
+ *
+ *   - `MAX_QUERY_DEPTH`      — deepest `and` / `or` nesting accepted.
+ *   - `MAX_QUERY_CONDITIONS` — total leaf conditions (a single
+ *     `field: { op: value }` pair is one condition).
+ *   - `MAX_QUERY_LIMIT`      — server-side ceiling on `?limit=` so a
+ *     client can't yank an entire collection in one round-trip.
+ *
+ * The functions below accept opts so a future operator-supplied
+ * `security.queryLimits` config can override; for now the defaults
+ * are hardcoded and the validators throw `NextlyError.validation`
+ * when exceeded.
+ */
+export const MAX_QUERY_DEPTH = 5;
+export const MAX_QUERY_CONDITIONS = 50;
+export const MAX_QUERY_LIMIT = 200;
+
+export interface QueryLimitOpts {
+  maxDepth?: number;
+  maxConditions?: number;
+}
+
+/**
+ * Walk a parsed `WhereFilter` and reject queries that exceed the
+ * configured caps. Counts every `and`/`or` array as one nesting level
+ * and every `field: { op: value }` as one condition. Throws
+ * `NextlyError.validation` so the route layer surfaces a 422 with the
+ * cap violation reason.
+ */
+export function validateWhereFilter(
+  filter: WhereFilter | undefined,
+  opts: QueryLimitOpts = {}
+): void {
+  if (!filter) return;
+  const maxDepth = opts.maxDepth ?? MAX_QUERY_DEPTH;
+  const maxConditions = opts.maxConditions ?? MAX_QUERY_CONDITIONS;
+
+  let conditionCount = 0;
+
+  function walk(node: unknown, depth: number): void {
+    if (node === null || typeof node !== "object") return;
+    if (depth > maxDepth) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "where",
+            code: "TOO_DEEP",
+            message: `Query nesting depth exceeds the limit of ${maxDepth}.`,
+          },
+        ],
+      });
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if ((key === "and" || key === "or") && Array.isArray(value)) {
+        for (const child of value) walk(child, depth + 1);
+        continue;
+      }
+      // Anything else is a leaf field condition like
+      // `status: { equals: "published" }`. Count it once per field.
+      conditionCount++;
+      if (conditionCount > maxConditions) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "where",
+              code: "TOO_MANY_CONDITIONS",
+              message: `Query has more than ${maxConditions} conditions.`,
+            },
+          ],
+        });
+      }
+    }
+  }
+
+  walk(filter, 1);
+}
+
+/**
+ * Audit M21 (T-026). Resolve a raw `limit` query parameter to a
+ * server-side-clamped integer. Falls back to the supplied default
+ * when missing / NaN; clamps the upper bound so a client cannot
+ * request more than `max` rows in one call.
+ */
+export function clampLimit(
+  raw: string | number | null | undefined,
+  defaults: { defaultLimit: number; max?: number }
+): number {
+  const max = defaults.max ?? MAX_QUERY_LIMIT;
+  if (raw === null || raw === undefined || raw === "") return defaults.defaultLimit;
+  const parsed = typeof raw === "number" ? raw : parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaults.defaultLimit;
+  return Math.min(parsed, max);
+}
 
 /**
  * Parse a single value from query string.
@@ -210,7 +308,12 @@ export function parseWhereQuery(
     hasConditions = true;
   }
 
-  return hasConditions ? where : undefined;
+  const result = hasConditions ? where : undefined;
+  // Audit M21 / T-026: refuse to return a parsed filter that exceeds
+  // the depth or condition cap. The validator throws so the caller's
+  // error handler turns it into a 422.
+  validateWhereFilter(result);
+  return result;
 }
 
 /**

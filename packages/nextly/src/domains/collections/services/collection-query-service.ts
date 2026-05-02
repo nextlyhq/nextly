@@ -1031,11 +1031,27 @@ export class CollectionQueryService extends BaseService {
 
       await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
 
+      // Audit M11 / T-023: when read access is `owner-only`, fold the
+      // ownership predicate into the SQL WHERE clause. A non-owner gets
+      // a 404 (same response shape as a non-existent ID), not a 403,
+      // so IDOR-by-iteration leaks nothing about which IDs exist.
+      const ownerConstraint = await this.accessService.getOwnerConstraint(
+        params.collectionName,
+        "read",
+        accessUser,
+        params.overrideAccess
+      );
+
+      const idCondition = eq(schema.id, entryId);
+      const whereCondition = ownerConstraint
+        ? and(idCondition, eq(schema[ownerConstraint.field], ownerConstraint.value))
+        : idCondition;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const [entry] = await (this.db as any)
         .select()
         .from(schema)
-        .where(eq(schema.id, entryId))
+        .where(whereCondition)
         .limit(1);
 
       if (!entry) {

@@ -447,6 +447,56 @@ export const nextlyTables: TableDefinition[] = [
     ],
   },
 
+  {
+    name: "audit_log",
+    comment:
+      "Audit M10 / T-022. Append-only event store for security-sensitive auth events. Operators should revoke UPDATE/DELETE GRANTs in production.",
+    columns: [
+      {
+        name: "id",
+        type: "text",
+        primaryKey: true,
+      },
+      {
+        name: "kind",
+        type: "varchar(64)",
+        nullable: false,
+      },
+      {
+        name: "actor_user_id",
+        type: "text",
+      },
+      {
+        name: "target_user_id",
+        type: "text",
+      },
+      {
+        name: "ip_address",
+        type: "varchar(45)",
+      },
+      {
+        name: "user_agent",
+        type: "text",
+      },
+      {
+        name: "metadata",
+        type: "jsonb",
+      },
+      {
+        name: "created_at",
+        type: "timestamp",
+        nullable: false,
+        default: { sql: "CURRENT_TIMESTAMP" },
+      },
+    ],
+    indexes: [
+      { name: "audit_log_kind_idx", columns: ["kind"] },
+      { name: "audit_log_actor_user_id_idx", columns: ["actor_user_id"] },
+      { name: "audit_log_target_user_id_idx", columns: ["target_user_id"] },
+      { name: "audit_log_created_at_idx", columns: ["created_at"] },
+    ],
+  },
+
   // ============================================================
   // RBAC (Role-Based Access Control) TABLES
   // ============================================================

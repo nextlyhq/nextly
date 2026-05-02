@@ -1,5 +1,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { verifyCredentials } from "../credentials/verify-credentials";
@@ -12,8 +14,6 @@ import {
   hashRefreshToken,
   generateRefreshTokenId,
 } from "../session/refresh";
-
-import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 
 import {
   jsonResponse,
@@ -59,6 +59,8 @@ export interface LoginHandlerDeps {
   trustProxy: boolean;
   /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
+  /** Audit M10 / T-022: writer for security-sensitive auth events. */
+  auditLog: AuditLogWriter;
 }
 
 /**
@@ -205,6 +207,23 @@ export async function handleLogin(
     // toResponseJSON; everything else collapses to a single INTERNAL_ERROR
     // response so we never leak internals to the wire.
     await stallResponse(startTime, deps.loginStallTimeMs);
+    // Audit M10 / T-022: every login failure (bad password, locked,
+    // unverified, inactive, internal) records a single 'login-failed'
+    // event. We deliberately do not split by reason here — that would
+    // re-introduce the account-state leak PR 5 collapsed at the wire.
+    // The internal `logContext` on the NextlyError still carries the
+    // specific cause for operators reading the audit row's metadata.
+    await deps.auditLog.write({
+      kind: "login-failed",
+      ipAddress: getTrustedClientIp(request, {
+        trustProxy: deps.trustProxy,
+        trustedProxyIps: deps.trustedProxyIps,
+      }),
+      userAgent: request.headers.get("user-agent"),
+      metadata: NextlyError.is(err)
+        ? { code: err.code, ...(err.logContext ?? {}) }
+        : { code: "INTERNAL_ERROR" },
+    });
     if (NextlyError.is(err)) {
       return buildLoginErrorResponse(err, requestId);
     }
