@@ -15,10 +15,10 @@ let setupStatusCache: boolean | null = null;
 async function checkSetupStatus(): Promise<boolean> {
   if (setupStatusCache !== null) return setupStatusCache;
   try {
-    const result = await publicApi.get<{ isSetupComplete: boolean }>(
+    const result = await publicApi.get<{ isSetup: boolean }>(
       "/auth/setup-status"
     );
-    setupStatusCache = result.isSetupComplete;
+    setupStatusCache = result.isSetup;
     return setupStatusCache;
   } catch {
     // If setup-status fails (e.g. 429), assume setup is complete and cache it
@@ -34,15 +34,15 @@ export function resetSetupStatusCache(): void {
 }
 
 async function verifyAuth(): Promise<{
-  isSetupComplete: boolean;
+  isSetup: boolean;
   isAuthenticated: boolean;
 }> {
-  const isSetupComplete = await checkSetupStatus();
-  if (!isSetupComplete) {
-    return { isSetupComplete: false, isAuthenticated: false };
+  const isSetup = await checkSetupStatus();
+  if (!isSetup) {
+    return { isSetup: false, isAuthenticated: false };
   }
   const authenticated = await checkIsAuthenticated();
-  return { isSetupComplete: true, isAuthenticated: authenticated };
+  return { isSetup: true, isAuthenticated: authenticated };
 }
 
 interface PrivateRouteProps {
@@ -70,7 +70,7 @@ export function PrivateRoute({ children }: PrivateRouteProps) {
   useEffect(() => {
     if (status !== "success") return;
 
-    if (!data.isSetupComplete) {
+    if (!data.isSetup) {
       navigateTo(ROUTES.SETUP);
       return;
     }
@@ -91,7 +91,7 @@ export function PrivateRoute({ children }: PrivateRouteProps) {
     );
   }
 
-  if (!data.isSetupComplete) {
+  if (!data.isSetup) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
         <p className="text-gray-600 dark:text-gray-400">

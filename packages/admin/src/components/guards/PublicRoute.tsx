@@ -26,7 +26,7 @@ export function PublicRoute({ children }: PublicRouteProps) {
     const checkAuth = async () => {
       try {
         // Check if initial setup has been completed
-        const setupStatus = await publicApi.get<{ isSetupComplete: boolean }>(
+        const setupStatus = await publicApi.get<{ isSetup: boolean }>(
           "/auth/setup-status"
         );
 
@@ -35,7 +35,7 @@ export function PublicRoute({ children }: PublicRouteProps) {
         const currentPath = window.location.pathname;
         const isOnSetupPage = currentPath === ROUTES.SETUP;
 
-        if (!setupStatus.isSetupComplete) {
+        if (!setupStatus.isSetup) {
           // No users exist yet — redirect to setup page (unless already there)
           if (!isOnSetupPage) {
             navigateTo(ROUTES.SETUP);
