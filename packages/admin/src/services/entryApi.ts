@@ -24,7 +24,7 @@ import type { TableResponse } from "@revnixhq/ui";
 import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
-import type { ListResponse } from "../lib/api/response-types";
+import type { BulkResponse, ListResponse } from "../lib/api/response-types";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
 
 // ============================================================================
@@ -133,16 +133,12 @@ export type CreateEntryPayload = Record<string, EntryValue>;
  */
 export type UpdateEntryPayload = Record<string, EntryValue>;
 
-/**
- * Bulk operation result
- */
-export interface BulkOperationResult<T = Entry> {
-  docs: T[];
-  errors: Array<{
-    id?: string;
-    message: string;
-  }>;
-}
+// Phase 4.5: the local `BulkOperationResult` admin shape was deleted in
+// favor of the canonical `BulkResponse<T>` from `lib/api/response-types`,
+// which mirrors the server's respondBulk envelope `{ message, items, errors }`
+// (errors[] carries `{ id, code, message }` per item, with `code` a
+// canonical NextlyErrorCode string). Single source of truth + single
+// round-trip + structured per-item failure surface.
 
 // Phase 4 (Task 19): the LegacyPaginationMeta interface that mirrored the
 // pre-canonical `{ total, page, pageSize, totalPages }` shape was removed
@@ -605,12 +601,16 @@ export const entryApi = {
   },
 
   /**
-   * Bulk update entries with where clause
+   * Bulk update entries matching a where clause (Phase 4.5).
+   *
+   * Hits `PATCH /api/collections/{slug}/entries` (server `bulkUpdateByQuery`).
+   * Single round-trip; server runs per-row updates concurrently with full
+   * hook + access-control pipeline; partial failures returned in `errors[]`.
    *
    * @param collectionSlug - The collection identifier
-   * @param params - Where clause to match entries
-   * @param data - The data to update on all matched entries
-   * @returns Bulk operation result
+   * @param params - Where clause + data to update
+   * @returns BulkResponse<Entry> with successful records in `items` and
+   *          structured `errors[]` (each `{ id, code, message }`)
    *
    * @example
    * ```typescript
@@ -618,7 +618,9 @@ export const entryApi = {
    *   where: { status: { equals: 'draft' } },
    *   data: { status: 'archived' },
    * });
-   * console.log(result.docs.length); // Number of updated entries
+   * toast(result.message);
+   * console.log(result.items.length, 'updated');
+   * console.log(result.errors.length, 'failed');
    * ```
    */
   updateMany: async (
@@ -627,18 +629,43 @@ export const entryApi = {
       where: Record<string, unknown>;
       data: UpdateEntryPayload;
     }
-  ): Promise<BulkOperationResult> => {
-    // Phase 4 (Task 19): bulk operations are deferred to Phase 4.5. The
-    // dispatcher still returns a CollectionServiceResult through the legacy
-    // smart-extract path, so the wire body is the legacy `{ data, meta? }`
-    // envelope (per routeHandler.ts:868). Peel `.data` here; this projection
-    // disappears in Phase 4.5 once bulk endpoints adopt their own respondX
-    // shape.
-    const result = await protectedApi.patch<{ data: BulkOperationResult }>(
+  ): Promise<BulkResponse<Entry>> => {
+    return protectedApi.patch<BulkResponse<Entry>>(
       `/collections/${collectionSlug}/entries`,
       params
     );
-    return result.data;
+  },
+
+  /**
+   * Bulk update entries by id list (Phase 4.5).
+   *
+   * Hits `POST /api/collections/{slug}/entries/bulk-update` (server
+   * `bulkUpdateEntries`). Same shape as updateMany; preferred when the
+   * caller already has a list of ids (e.g. multi-select in admin tables).
+   *
+   * @param collectionSlug - The collection identifier
+   * @param params - Array of ids + data to update on each
+   * @returns BulkResponse<Entry>
+   *
+   * @example
+   * ```typescript
+   * const result = await entryApi.updateByIDs('posts', {
+   *   ids: ['id1', 'id2'],
+   *   data: { status: 'published' },
+   * });
+   * ```
+   */
+  updateByIDs: async (
+    collectionSlug: string,
+    params: {
+      ids: string[];
+      data: UpdateEntryPayload;
+    }
+  ): Promise<BulkResponse<Entry>> => {
+    return protectedApi.post<BulkResponse<Entry>>(
+      `/collections/${collectionSlug}/entries/bulk-update`,
+      params
+    );
   },
 
   /**
@@ -663,63 +690,37 @@ export const entryApi = {
   },
 
   /**
-   * Bulk delete entries with where clause
+   * Bulk delete entries by id list (Phase 4.5).
    *
-   * @param collectionSlug - The collection identifier
-   * @param params - Where clause to match entries
-   * @returns Bulk operation result
+   * Hits `POST /api/collections/{slug}/entries/bulk-delete` (server
+   * `bulkDeleteEntries`). Single round-trip; server runs per-row deletes
+   * concurrently with full hook + access-control pipeline; partial
+   * failures returned in `errors[]`.
    *
-   * @example
-   * ```typescript
-   * const result = await entryApi.deleteMany('posts', {
-   *   where: { status: { equals: 'archived' } },
-   * });
-   * console.log(result.docs.length); // Number of deleted entries
-   * ```
-   */
-  deleteMany: async (
-    collectionSlug: string,
-    params: {
-      where: Record<string, unknown>;
-    }
-  ): Promise<BulkOperationResult> => {
-    // Phase 4 (Task 19): bulk-delete is on the legacy ServiceResult path
-    // (Phase 4.5 will give it a canonical shape). Peel `.data` from the
-    // legacy `{ data, meta? }` envelope until then.
-    const result = await protectedApi.delete<{ data: BulkOperationResult }>(
-      `/collections/${collectionSlug}/entries`,
-      params
-    );
-    return result.data;
-  },
-
-  /**
-   * Bulk delete entries by IDs (convenience method)
+   * `items` contains `[{id}, ...]` for the successfully deleted ids
+   * (no full record, since the entries are gone).
    *
    * @param collectionSlug - The collection identifier
    * @param ids - Array of entry IDs to delete
-   * @returns Bulk operation result
+   * @returns BulkResponse<{ id: string }>
    *
    * @example
    * ```typescript
-   * const result = await entryApi.deleteByIDs('posts', ['id1', 'id2', 'id3']);
+   * const result = await entryApi.deleteByIDs('posts', ['id1', 'id2']);
+   * toast(result.message);
+   * if (result.errors.length > 0) {
+   *   // Surface per-item failures; each has { id, code, message }.
+   * }
    * ```
    */
   deleteByIDs: async (
     collectionSlug: string,
     ids: string[]
-  ): Promise<BulkOperationResult> => {
-    // Phase 4 (Task 19): same legacy ServiceResult path as deleteMany. Peel
-    // `.data` from the legacy envelope.
-    const result = await protectedApi.delete<{ data: BulkOperationResult }>(
-      `/collections/${collectionSlug}/entries`,
-      {
-        where: {
-          id: { in: ids },
-        },
-      }
+  ): Promise<BulkResponse<{ id: string }>> => {
+    return protectedApi.post<BulkResponse<{ id: string }>>(
+      `/collections/${collectionSlug}/entries/bulk-delete`,
+      { ids }
     );
-    return result.data;
   },
 
   /**

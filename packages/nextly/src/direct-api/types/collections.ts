@@ -400,23 +400,37 @@ export interface DeleteResult {
 
 /**
  * Result of a bulk operation with partial success support.
+ *
+ * Phase 4.5: redesigned to carry full success records (not just ids) and
+ * structured per-item failures keyed by canonical NextlyErrorCode. The
+ * direct-API surface mirrors the wire shape emitted by respondBulk so
+ * direct-API callers and HTTP callers see the same data on the success
+ * path.
+ *
+ * Generic over T:
+ *   - For delete: T is `{ id: string }`.
+ *   - For update/create: T is the full record.
  */
-export interface BulkOperationResult {
-  /** IDs of successfully processed documents */
-  success: string[];
+export interface BulkOperationResult<T = { id: string }> {
+  /** Records successfully processed. */
+  successes: T[];
 
-  /** Details of failed operations */
-  failed: Array<{
+  /** Structured per-item failures. */
+  failures: Array<{
+    /** Identifier of the entry that failed. */
     id: string;
-    error: string;
+    /** Canonical NextlyErrorCode value. */
+    code: string;
+    /** Public-safe message (no identifier or value echo). */
+    message: string;
   }>;
 
-  /** Total number of documents processed */
+  /** Total number of documents processed. */
   total: number;
 
-  /** Number of successful operations */
+  /** Number of successful operations. */
   successCount: number;
 
-  /** Number of failed operations */
+  /** Number of failed operations. */
   failedCount: number;
 }

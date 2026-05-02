@@ -243,9 +243,12 @@ export async function update<TSlug extends CollectionSlug>(
       });
     }
 
+    // Phase 4.5: BulkOperationResult.successes carries minimal {id} records
+    // for delete and full records for update. bulkUpdateByQuery returns
+    // updated records, so we read .id off the first one.
     const updated = await findByID<TSlug>(ctx, {
       collection: args.collection,
-      id: bulkResult.success[0],
+      id: (bulkResult.successes[0] as { id: string }).id,
     });
 
     if (!updated) {
@@ -330,9 +333,12 @@ export async function deleteEntry<TSlug extends CollectionSlug = CollectionSlug>
     // multi-row delete returns N ids. Callers needing canonical envelopes
     // for batch ops can switch to bulkDelete (which returns
     // `BulkOperationResult` with per-id success/failure detail).
+    //
+    // Phase 4.5: BulkOperationResult.successes carries `{id}` records for
+    // delete; map to a flat string[] for the legacy DeleteResult contract.
     return {
       deleted: true,
-      ids: bulkResult.success,
+      ids: bulkResult.successes.map(s => s.id),
     };
   }
 

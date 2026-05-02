@@ -82,6 +82,7 @@ import type {
   UpdateFolderInput,
   FolderContents,
   BulkOperationResult,
+  BulkUploadOperationResult,
 } from "../types";
 
 export type {
@@ -95,6 +96,7 @@ export type {
   UpdateFolderInput,
   FolderContents,
   BulkOperationResult,
+  BulkUploadOperationResult,
 } from "../types";
 
 /**
@@ -445,78 +447,195 @@ export class MediaService {
   }
 
   /**
-   * Upload multiple files
+   * Upload multiple files.
+   *
+   * Phase 4.5: returns BulkUploadOperationResult<MediaFile>. Successes
+   * carry the newly-created MediaFile records (with assigned ids); failures
+   * are positional (no id, since the upload never made it that far) and
+   * carry canonical NextlyErrorCode + public-safe message.
    *
    * @param inputs - Array of files to upload
    * @param context - Request context
-   * @returns Bulk operation result
+   * @returns Bulk-upload operation result with full MediaFile on success
    */
   async bulkUpload(
     inputs: UploadMediaInput[],
     context: RequestContext
-  ): Promise<BulkOperationResult> {
+  ): Promise<BulkUploadOperationResult<MediaFile>> {
     this.logger.debug("Bulk uploading media files", { count: inputs.length });
 
-    const results: BulkOperationResult["results"] = [];
+    // Phase 4.5: per-file uploads run concurrently via Promise.allSettled
+    // so the wall time matches today's client-side fan-out pattern. Each
+    // closure resolves to a discriminated outcome (success|failure); we
+    // partition into successes/failures arrays after all settle. The
+    // db connection pool and storage adapter throttle real concurrency.
+    type UploadOutcome =
+      | { kind: "success"; file: MediaFile }
+      | {
+          kind: "failure";
+          index: number;
+          filename: string;
+          code: string;
+          message: string;
+        };
 
-    for (const input of inputs) {
-      try {
-        const file = await this.upload(input, context);
-        results.push({ id: file.id, success: true });
-      } catch (error) {
-        results.push({
-          id: input.filename,
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
+    const outcomes = await Promise.allSettled(
+      inputs.map(async (input, i): Promise<UploadOutcome> => {
+        try {
+          const file = await this.upload(input, context);
+          return { kind: "success", file };
+        } catch (error) {
+          // NextlyError thrown from below the boundary preserves canonical
+          // code + publicMessage. Anything else maps to INTERNAL_ERROR; the
+          // operator log carries full detail (no public leak per spec section 13.8).
+          if (NextlyError.is(error)) {
+            return {
+              kind: "failure",
+              index: i,
+              filename: input.filename,
+              code: String(error.code),
+              message: error.publicMessage,
+            };
+          }
+          this.logger.warn("Bulk upload item failed (non-NextlyError)", {
+            filename: input.filename,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            kind: "failure",
+            index: i,
+            filename: input.filename,
+            code: "INTERNAL_ERROR",
+            message: "An unexpected error occurred.",
+          };
+        }
+      })
+    );
+
+    const successes: MediaFile[] = [];
+    const failures: BulkUploadOperationResult<MediaFile>["failures"] = [];
+
+    outcomes.forEach((outcome, i) => {
+      if (outcome.status === "fulfilled") {
+        const value = outcome.value;
+        if (value.kind === "success") {
+          successes.push(value.file);
+        } else {
+          failures.push({
+            index: value.index,
+            filename: value.filename,
+            code: value.code,
+            message: value.message,
+          });
+        }
+      } else {
+        // Defensive: per-item closure rejected unexpectedly (the closure
+        // already has a catch, so this should not happen). Surface as
+        // INTERNAL_ERROR rather than swallowing.
+        const filename = inputs[i]?.filename ?? `file-${i}`;
+        failures.push({
+          index: i,
+          filename,
+          code: "INTERNAL_ERROR",
+          message: "An unexpected error occurred.",
         });
       }
-    }
-
-    const successCount = results.filter(r => r.success).length;
+    });
 
     return {
-      totalItems: inputs.length,
-      successCount,
-      failureCount: inputs.length - successCount,
-      results,
+      successes,
+      failures,
+      total: inputs.length,
+      successCount: successes.length,
+      failedCount: failures.length,
     };
   }
 
   /**
-   * Delete multiple media files
+   * Delete multiple media files.
+   *
+   * Phase 4.5: returns BulkOperationResult<{id}>. Successes carry the
+   * deleted ids; failures are id-keyed with canonical NextlyErrorCode.
    *
    * @param mediaIds - Array of media IDs to delete
    * @param context - Request context
-   * @returns Bulk operation result
+   * @returns Bulk operation result with id-only successes
    */
   async bulkDelete(
     mediaIds: string[],
     context: RequestContext
-  ): Promise<BulkOperationResult> {
+  ): Promise<BulkOperationResult<{ id: string }>> {
     this.logger.debug("Bulk deleting media files", { count: mediaIds.length });
 
-    const results: BulkOperationResult["results"] = [];
+    // Phase 4.5: per-id deletions run concurrently via Promise.allSettled.
+    // Same rationale as bulkUpload: HTTP single round-trip plus parallel
+    // server-side processing matches today's wall-time. Per-row hooks
+    // and access control still fire (each closure calls the single-item
+    // delete method which preserves the full pipeline).
+    type DeleteOutcome =
+      | { kind: "success"; id: string }
+      | { kind: "failure"; id: string; code: string; message: string };
 
-    for (const mediaId of mediaIds) {
-      try {
-        await this.delete(mediaId, context);
-        results.push({ id: mediaId, success: true });
-      } catch (error) {
-        results.push({
-          id: mediaId,
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
+    const outcomes = await Promise.allSettled(
+      mediaIds.map(async (mediaId): Promise<DeleteOutcome> => {
+        try {
+          await this.delete(mediaId, context);
+          return { kind: "success", id: mediaId };
+        } catch (error) {
+          if (NextlyError.is(error)) {
+            return {
+              kind: "failure",
+              id: mediaId,
+              code: String(error.code),
+              message: error.publicMessage,
+            };
+          }
+          this.logger.warn("Bulk delete item failed (non-NextlyError)", {
+            mediaId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            kind: "failure",
+            id: mediaId,
+            code: "INTERNAL_ERROR",
+            message: "An unexpected error occurred.",
+          };
+        }
+      })
+    );
+
+    const successes: Array<{ id: string }> = [];
+    const failures: BulkOperationResult<{ id: string }>["failures"] = [];
+
+    outcomes.forEach((outcome, i) => {
+      if (outcome.status === "fulfilled") {
+        const value = outcome.value;
+        if (value.kind === "success") {
+          successes.push({ id: value.id });
+        } else {
+          failures.push({
+            id: value.id,
+            code: value.code,
+            message: value.message,
+          });
+        }
+      } else {
+        // Defensive: per-item closure rejected unexpectedly. Surface as
+        // INTERNAL_ERROR rather than swallowing.
+        failures.push({
+          id: mediaIds[i] ?? "",
+          code: "INTERNAL_ERROR",
+          message: "An unexpected error occurred.",
         });
       }
-    }
-
-    const successCount = results.filter(r => r.success).length;
+    });
 
     return {
-      totalItems: mediaIds.length,
-      successCount,
-      failureCount: mediaIds.length - successCount,
-      results,
+      successes,
+      failures,
+      total: mediaIds.length,
+      successCount: successes.length,
+      failedCount: failures.length,
     };
   }
 

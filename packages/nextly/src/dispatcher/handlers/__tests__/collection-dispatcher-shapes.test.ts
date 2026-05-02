@@ -50,6 +50,7 @@ vi.mock("../../../domains/schema/legacy-preview/translate", () => ({
 }));
 
 import type { ServiceContainer } from "../../../services";
+import type { BulkOperationResult } from "../../../domains/collections/services/collection-types";
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
@@ -456,23 +457,20 @@ describe("dispatchCollections, counts (respondCount)", () => {
   });
 });
 
-describe("dispatchCollections, bulk ops are NOT migrated (Phase 4.5 deferral)", () => {
-  // Pin the deferral: bulk ops still return the legacy plain object so the
-  // dispatcher's smart-extract path keeps working until Phase 4.5 lands.
-  // If someone migrates them prematurely, this test fires and they'll see
-  // the comment in collection-dispatcher.ts directing them to Phase 4.5.
-  it("bulkDeleteEntries does NOT return a Response (still legacy shape)", async () => {
-    const fakeServiceResult = {
-      success: true,
-      statusCode: 200,
-      message: "Deleted",
-      data: {
-        success: ["e1", "e2"],
-        failed: [],
-        total: 2,
-        successCount: 2,
-        failureCount: 0,
-      },
+describe("dispatchCollections, bulk ops migrated to respondBulk (Phase 4.5)", () => {
+  // Phase 4.5: bulk ops emit the canonical respondBulk envelope
+  // `{ message, items, errors }` with HTTP 200 even on partial success.
+  // Per-item failures live in `errors[]` with structured `{ id, code, message }`
+  // (canonical NextlyErrorCode). Status 4xx is reserved for malformed
+  // request envelopes (no ids, missing data); partial success is normal data.
+
+  it("bulkDeleteEntries returns respondBulk with all-success body", async () => {
+    const fakeServiceResult: BulkOperationResult<{ id: string }> = {
+      successes: [{ id: "e1" }, { id: "e2" }],
+      failures: [],
+      total: 2,
+      successCount: 2,
+      failedCount: 0,
     };
     const container = makeContainer({
       bulkDeleteEntries: vi.fn().mockResolvedValue(fakeServiceResult),
@@ -485,8 +483,124 @@ describe("dispatchCollections, bulk ops are NOT migrated (Phase 4.5 deferral)", 
       { ids: ["e1", "e2"] }
     );
 
-    expect(result).not.toBeInstanceOf(Response);
-    expect(result).toEqual(fakeServiceResult);
+    expect(result).toBeInstanceOf(Response);
+    const response = result as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    // All-success message uses singular/plural noun without "of M";
+    // partial-success messages add "of M" for clarity (asserted below).
+    expect(body).toEqual({
+      message: "Deleted 2 entries.",
+      items: [{ id: "e1" }, { id: "e2" }],
+      errors: [],
+    });
+    // Regression guards: legacy fields must not appear on the wire.
+    expect(body).not.toHaveProperty("success");
+    expect(body).not.toHaveProperty("failed");
+    expect(body).not.toHaveProperty("data");
+  });
+
+  it("bulkDeleteEntries surfaces partial failures as { id, code, message } in errors[]", async () => {
+    const fakeServiceResult: BulkOperationResult<{ id: string }> = {
+      successes: [{ id: "e1" }],
+      failures: [
+        {
+          id: "e2",
+          code: "FORBIDDEN",
+          message: "You do not have permission to perform this action.",
+        },
+      ],
+      total: 2,
+      successCount: 1,
+      failedCount: 1,
+    };
+    const container = makeContainer({
+      bulkDeleteEntries: vi.fn().mockResolvedValue(fakeServiceResult),
+    });
+
+    const result = await dispatchCollections(
+      container,
+      "bulkDeleteEntries",
+      { collectionName: "posts" },
+      { ids: ["e1", "e2"] }
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    const response = result as Response;
+    // Partial-success returns 200, not 207 or 4xx; per-item failures are data.
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.message).toBe("Deleted 1 of 2 entries.");
+    expect(body.items).toEqual([{ id: "e1" }]);
+    expect(body.errors).toEqual([
+      {
+        id: "e2",
+        code: "FORBIDDEN",
+        message: "You do not have permission to perform this action.",
+      },
+    ]);
+  });
+
+  it("bulkUpdateEntries returns respondBulk with full-record items[]", async () => {
+    // Phase 4.5: update returns FULL records in items[] (not just ids) so
+    // the admin client can refresh local state without a re-fetch.
+    const updatedRecord = { id: "e1", title: "Updated", status: "published" };
+    const fakeServiceResult: BulkOperationResult<typeof updatedRecord> = {
+      successes: [updatedRecord],
+      failures: [],
+      total: 1,
+      successCount: 1,
+      failedCount: 0,
+    };
+    const container = makeContainer({
+      bulkUpdateEntries: vi.fn().mockResolvedValue(fakeServiceResult),
+    });
+
+    const result = await dispatchCollections(
+      container,
+      "bulkUpdateEntries",
+      { collectionName: "posts" },
+      { ids: ["e1"], data: { status: "published" } }
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    const response = result as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.message).toBe("Updated 1 entry.");
+    expect(body.items).toEqual([updatedRecord]);
+    expect(body.errors).toEqual([]);
+  });
+
+  it("bulkUpdateByQuery returns respondBulk envelope", async () => {
+    const fakeServiceResult: BulkOperationResult<{ id: string; status: string }> = {
+      successes: [
+        { id: "e1", status: "published" },
+        { id: "e2", status: "published" },
+      ],
+      failures: [],
+      total: 2,
+      successCount: 2,
+      failedCount: 0,
+    };
+    const container = makeContainer({
+      bulkUpdateByQuery: vi.fn().mockResolvedValue(fakeServiceResult),
+    });
+
+    const result = await dispatchCollections(
+      container,
+      "bulkUpdateByQuery",
+      { collectionName: "posts" },
+      { where: { status: { equals: "draft" } }, data: { status: "published" } }
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    const response = result as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.message).toBe("Updated 2 entries.");
+    expect(body.items).toHaveLength(2);
+    expect(body.errors).toEqual([]);
   });
 });
 

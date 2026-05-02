@@ -328,8 +328,13 @@ export function MediaLibrary({
   }, [selectedIds]);
 
   const handleConfirmBulkDelete = React.useCallback(() => {
+    // Phase 4.5: server-bulk pattern. `bulkDeleteMedia` now wraps
+    // `useMutation` (vanilla TanStack Query), so the call signature is
+    // `mutate(variables, options)` with two args. The hook itself shows
+    // a server-authored toast (e.g. "Deleted 4 of 5 files."); we just
+    // close the dialog + clear selection on either success or error.
     const idsArray = Array.from(selectedIds);
-    void bulkDeleteMedia(idsArray, undefined, {
+    bulkDeleteMedia(idsArray, {
       onSuccess: () => {
         setSelectedIds(new Set());
         setIsBulkDeleteDialogOpen(false);

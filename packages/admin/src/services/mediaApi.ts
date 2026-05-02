@@ -33,6 +33,7 @@ import {
   redirectToLogin,
   refreshAccessToken,
 } from "../lib/api/refreshInterceptor";
+import type { BulkResponse } from "../lib/api/response-types";
 import type {
   Media,
   MediaListResponse,
@@ -272,15 +273,28 @@ export async function deleteMedia(mediaId: string): Promise<void> {
 }
 
 /**
- * Bulk delete multiple media files
+ * Bulk delete multiple media files (Phase 4.5).
+ *
+ * Hits `DELETE /api/media/bulk` (server `media-bulk.ts` DELETE handler).
+ * Single round-trip; server runs per-id deletes concurrently with full
+ * access-control + storage-cleanup pipeline; partial failures returned
+ * in `errors[]` with structured `{ id, code, message }`.
+ *
+ * `items` contains `[{id}, ...]` for the successfully deleted ids
+ * (no full record, since the entries are gone).
+ *
+ * @example
+ * ```typescript
+ * const result = await bulkDeleteMedia(['m1', 'm2', 'm3']);
+ * toast(result.message);
+ * if (result.errors.length > 0) {
+ *   // each error has { id, code, message } with canonical NextlyErrorCode
+ * }
+ * ```
  */
-export async function bulkDeleteMedia(mediaIds: string[]): Promise<{
-  success: boolean;
-  total: number;
-  successCount: number;
-  failureCount: number;
-  failed: string[];
-}> {
+export async function bulkDeleteMedia(
+  mediaIds: string[]
+): Promise<BulkResponse<{ id: string }>> {
   const response = await authFetch("/api/media/bulk", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
@@ -292,28 +306,7 @@ export async function bulkDeleteMedia(mediaIds: string[]): Promise<{
     throw parseApiError(json, response.status);
   }
 
-  // Canonical wire shape per spec §10.2:
-  //   { data: { totalFiles, successCount, failureCount, results: [...] } }.
-  // The legacy code read the bulk-result fields at the top level, which
-  // returned undefined under the canonical shape and silently reported a
-  // zero-success false-positive.
-  const json = (await response.json()) as {
-    data?: {
-      totalFiles?: number;
-      successCount?: number;
-      failureCount?: number;
-      results?: Array<{ success: boolean; mediaId: string }>;
-    };
-  };
-  const data = json.data ?? {};
-
-  return {
-    success: (data.failureCount ?? 0) === 0,
-    total: data.totalFiles ?? mediaIds.length,
-    successCount: data.successCount ?? 0,
-    failureCount: data.failureCount ?? 0,
-    failed: data.results?.filter(r => !r.success).map(r => r.mediaId) ?? [],
-  };
+  return (await response.json()) as BulkResponse<{ id: string }>;
 }
 
 // ============================================================

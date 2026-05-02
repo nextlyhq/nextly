@@ -202,28 +202,18 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     async bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult> {
       if (!args.ids || args.ids.length === 0) {
         return {
-          success: [],
-          failed: [],
+          successes: [],
+          failures: [],
           total: 0,
           successCount: 0,
           failedCount: 0,
         };
       }
 
-      const result = await ctx.mediaService.bulkDelete(
-        args.ids,
-        createRequestContext(args)
-      );
-
-      return {
-        success: result.results.filter(r => r.success).map(r => r.id),
-        failed: result.results
-          .filter(r => !r.success)
-          .map(r => ({ id: r.id, error: r.error ?? "Unknown error" })),
-        total: result.totalItems,
-        successCount: result.successCount,
-        failedCount: result.failureCount,
-      };
+      // Phase 4.5: mediaService.bulkDelete now returns the canonical
+      // BulkOperationResult shape (successes + failures) directly. No
+      // translation needed at the direct-api boundary anymore.
+      return ctx.mediaService.bulkDelete(args.ids, createRequestContext(args));
     },
 
     folders,

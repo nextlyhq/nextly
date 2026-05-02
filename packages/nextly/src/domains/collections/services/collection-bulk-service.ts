@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import type { TransactionContext } from "@revnixhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -33,6 +34,131 @@ import type {
   CollectionServiceResult,
   UserContext,
 } from "./collection-types";
+
+/**
+ * Phase 4.5: decompose a legacy `{success, statusCode, message, data}`
+ * service envelope into the new structured per-item failure shape.
+ *
+ * Mirrors the status-code-to-NextlyErrorCode mapping in
+ * `dispatcher/helpers/service-envelope.ts#unwrapServiceResult` so the
+ * single-item code path and the bulk per-item failure path agree on
+ * codes for identical underlying conditions (404 to NOT_FOUND, etc.).
+ *
+ * Public messages here follow spec section 13.8: generic per-code, no
+ * identifier echo, no value leaking. The legacy `result.message` rides
+ * to the operator log via the dispatcher's logger; it never enters the
+ * wire `failures[]` (which would defeat the §13.8 rubric).
+ */
+function legacyEnvelopeToFailureFields(result: {
+  statusCode?: number;
+  message?: string;
+}): { code: string; message: string } {
+  const status = result.statusCode ?? 500;
+  if (status === 404) {
+    return { code: "NOT_FOUND", message: "Not found." };
+  }
+  if (status === 403) {
+    return {
+      code: "FORBIDDEN",
+      message: "You don't have permission to perform this action.",
+    };
+  }
+  if (status === 409) {
+    return {
+      code: "CONFLICT",
+      message:
+        "The resource has changed since you last loaded it. Please refresh and try again.",
+    };
+  }
+  if (status === 400) {
+    return { code: "VALIDATION_ERROR", message: "Validation failed." };
+  }
+  return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
+}
+
+/**
+ * Discriminated outcome for one item inside a Promise.allSettled fan-out.
+ *
+ * Each per-id closure inside bulkDeleteEntries / bulkUpdateEntries returns
+ * one of these so we can partition into the canonical successes/failures
+ * arrays after all per-item promises settle. Keeping the side-effects out
+ * of the per-item closure is the safe pattern for concurrent execution
+ * (no shared-array mutation across N concurrent promises).
+ */
+type PerItemOutcome<T> =
+  | { kind: "success"; record: T }
+  | { kind: "failure"; failure: { id: string; code: string; message: string } };
+
+/**
+ * Build a canonical per-item failure entry from a thrown error.
+ *
+ * NextlyError preserves its code + publicMessage. Anything else is
+ * INTERNAL_ERROR with a generic public message; full detail goes to the
+ * operator log via the outer dispatcher when it logs the cause chain.
+ */
+function failureFromThrown(
+  id: string,
+  error: unknown
+): { id: string; code: string; message: string } {
+  if (NextlyError.is(error)) {
+    return {
+      id,
+      code: String(error.code),
+      message: error.publicMessage,
+    };
+  }
+  return {
+    id,
+    code: "INTERNAL_ERROR",
+    message: "An unexpected error occurred.",
+  };
+}
+
+/**
+ * Partition Promise.allSettled outcomes into the canonical
+ * BulkOperationResult shape.
+ *
+ * Order is preserved (allSettled preserves input order). Total comes
+ * from the original input length so callers can compute "succeeded N of
+ * M" messages without re-counting.
+ *
+ * If a per-item closure itself rejects (which shouldn't happen since
+ * each closure has a try/catch), we still surface it as a failure with
+ * INTERNAL_ERROR. Defensive: prevents a single bug from corrupting the
+ * whole bulk response.
+ */
+function partitionOutcomes<T>(
+  outcomes: PromiseSettledResult<PerItemOutcome<T>>[],
+  ids: string[]
+): BulkOperationResult<T> {
+  const result: BulkOperationResult<T> = {
+    successes: [],
+    failures: [],
+    total: ids.length,
+    successCount: 0,
+    failedCount: 0,
+  };
+  outcomes.forEach((outcome, index) => {
+    if (outcome.status === "fulfilled") {
+      const value = outcome.value;
+      if (value.kind === "success") {
+        result.successes.push(value.record);
+        result.successCount++;
+      } else {
+        result.failures.push(value.failure);
+        result.failedCount++;
+      }
+    } else {
+      // Per-item closure rejected unexpectedly. Defensive: report as
+      // INTERNAL_ERROR rather than silently swallowing the bug.
+      result.failures.push(
+        failureFromThrown(ids[index] ?? "", outcome.reason)
+      );
+      result.failedCount++;
+    }
+  });
+  return result;
+}
 
 export class CollectionBulkService extends BaseService {
   constructor(
@@ -159,49 +285,51 @@ export class CollectionBulkService extends BaseService {
     overrideAccess?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
-  }): Promise<BulkOperationResult> {
-    const result: BulkOperationResult = {
-      success: [],
-      failed: [],
-      total: params.ids.length,
-      successCount: 0,
-      failedCount: 0,
-    };
-
-    // Process each deletion independently (partial success pattern)
-    for (const entryId of params.ids) {
-      try {
-        const deleteResult = await this.mutationService.deleteEntry({
-          collectionName: params.collectionName,
-          entryId,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          context: params.context,
-        });
-
-        if (deleteResult.success) {
-          result.success.push(entryId);
-          result.successCount++;
-        } else {
-          result.failed.push({
-            id: entryId,
-            error: deleteResult.message || "Delete failed",
+  }): Promise<BulkOperationResult<{ id: string }>> {
+    // Phase 4.5: result carries minimal `{id}` records for delete (the
+    // entries are gone; no value in materializing more) and structured
+    // per-item failures keyed by canonical NextlyErrorCode.
+    //
+    // Concurrency: per-id deletions run via Promise.allSettled so the
+    // wall-time matches today's client-side fan-out pattern. Per-row
+    // hooks and access control still fire (each closure calls the
+    // single-item deleteEntry which preserves the full pipeline). The
+    // db connection pool naturally throttles real DB concurrency.
+    const outcomes = await Promise.allSettled(
+      params.ids.map(async (entryId): Promise<PerItemOutcome<{ id: string }>> => {
+        try {
+          const deleteResult = await this.mutationService.deleteEntry({
+            collectionName: params.collectionName,
+            entryId,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+            context: params.context,
           });
-          result.failedCount++;
-        }
-      } catch (error: unknown) {
-        result.failed.push({
-          id: entryId,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Unexpected error during deletion",
-        });
-        result.failedCount++;
-      }
-    }
 
-    return result;
+          if (deleteResult.success) {
+            return { kind: "success", record: { id: entryId } };
+          }
+          // Decompose the legacy envelope into the canonical per-item
+          // failure shape. The legacy `message` would leak driver/value
+          // text on the wire (§13.8 violation); we keep only the canonical
+          // code-to-publicMessage mapping and let the operator log carry
+          // the legacy text via the dispatcher's logger.
+          const { code, message } = legacyEnvelopeToFailureFields(deleteResult);
+          return {
+            kind: "failure",
+            failure: { id: entryId, code, message },
+          };
+        } catch (error: unknown) {
+          // NextlyError thrown from below the boundary: preserve its code +
+          // publicMessage. Anything else is INTERNAL_ERROR with a generic
+          // public message; full detail goes to the operator log via the
+          // outer dispatcher when it logs the cause chain.
+          return { kind: "failure", failure: failureFromThrown(entryId, error) };
+        }
+      })
+    );
+
+    return partitionOutcomes(outcomes, params.ids);
   }
 
   /**
@@ -221,52 +349,47 @@ export class CollectionBulkService extends BaseService {
     overrideAccess?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
-  }): Promise<BulkOperationResult> {
-    const result: BulkOperationResult = {
-      success: [],
-      failed: [],
-      total: params.ids.length,
-      successCount: 0,
-      failedCount: 0,
-    };
+  }): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Phase 4.5: successes carry full mutated records (caller needs the
+    // post-update values); failures carry canonical NextlyErrorCode.
+    // Per-id updates run concurrently via Promise.allSettled. See
+    // bulkDeleteEntries for the rationale on concurrency + per-row hooks.
+    const outcomes = await Promise.allSettled(
+      params.ids.map(
+        async (entryId): Promise<PerItemOutcome<Record<string, unknown>>> => {
+          try {
+            const updateResult = await this.mutationService.updateEntry(
+              {
+                collectionName: params.collectionName,
+                entryId,
+                user: params.user,
+                overrideAccess: params.overrideAccess,
+                context: params.context,
+              },
+              params.data
+            );
 
-    // Process each update independently (partial success pattern)
-    for (const entryId of params.ids) {
-      try {
-        const updateResult = await this.mutationService.updateEntry(
-          {
-            collectionName: params.collectionName,
-            entryId,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            context: params.context,
-          },
-          params.data
-        );
-
-        if (updateResult.success) {
-          result.success.push(entryId);
-          result.successCount++;
-        } else {
-          result.failed.push({
-            id: entryId,
-            error: updateResult.message || "Update failed",
-          });
-          result.failedCount++;
+            if (updateResult.success && updateResult.data) {
+              // Carry the full mutated record back so the dispatcher can ship
+              // it to the client without a re-fetch round-trip.
+              return {
+                kind: "success",
+                record: updateResult.data as Record<string, unknown>,
+              };
+            }
+            const { code, message } = legacyEnvelopeToFailureFields(updateResult);
+            return {
+              kind: "failure",
+              failure: { id: entryId, code, message },
+            };
+          } catch (error: unknown) {
+            return { kind: "failure", failure: failureFromThrown(entryId, error) };
+          }
         }
-      } catch (error: unknown) {
-        result.failed.push({
-          id: entryId,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Unexpected error during update",
-        });
-        result.failedCount++;
-      }
-    }
+      )
+    );
 
-    return result;
+    return partitionOutcomes(outcomes, params.ids);
   }
 
   /**
@@ -323,12 +446,15 @@ export class CollectionBulkService extends BaseService {
        */
       limit?: number;
     }
-  ): Promise<BulkOperationResult> {
+  ): Promise<BulkOperationResult<Record<string, unknown>>> {
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
 
-    // 1. Check collection-level access FIRST
+    // 1. Check collection-level access FIRST. Phase 4.5: a collection-wide
+    // access denial is a request-level authorization failure, not a per-item
+    // partial failure. Throw NextlyError.forbidden so the dispatcher emits
+    // a 403 error envelope instead of a 200 with a synthetic empty-id row.
     const accessDenied = await this.accessService.checkCollectionAccess(
       params.collectionName,
       "update",
@@ -338,17 +464,17 @@ export class CollectionBulkService extends BaseService {
       params.overrideAccess
     );
     if (accessDenied) {
-      return {
-        success: [],
-        failed: [{ id: "", error: accessDenied.message }],
-        total: 0,
-        successCount: 0,
-        failedCount: 1,
-      };
+      throw NextlyError.forbidden({
+        logContext: {
+          op: "bulkUpdateByQuery",
+          collectionName: params.collectionName,
+          legacyMessage: accessDenied.message,
+        },
+      });
     }
 
-    // 2. Find matching entries using listEntries (respects access control)
-    // Use a high limit to get all matching entries for bulk update
+    // 2. Find matching entries using listEntries (respects access control).
+    // Use a high limit to get all matching entries for bulk update.
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
       where: params.where,
@@ -360,36 +486,46 @@ export class CollectionBulkService extends BaseService {
     });
 
     if (!listResult.success || !listResult.data) {
-      return {
-        success: [],
-        failed: [
-          { id: "", error: listResult.message || "Failed to query entries" },
-        ],
-        total: 0,
-        successCount: 0,
-        failedCount: 1,
-      };
+      // Querying matched entries failed before any per-item work could
+      // happen. This is a request-level failure (no items to partially
+      // succeed on). Throw the canonical mapping so the dispatcher emits
+      // an error envelope rather than a synthetic empty-id failure row.
+      const { code, message } = legacyEnvelopeToFailureFields(listResult);
+      throw new NextlyError({
+        code,
+        publicMessage: message,
+        logContext: {
+          op: "bulkUpdateByQuery",
+          collectionName: params.collectionName,
+          legacyMessage: listResult.message,
+        },
+      });
     }
 
-    // Extract docs from paginated response
+    // Extract docs from paginated response.
     const matchingEntries = listResult.data.docs as Array<{ id: string }>;
     const totalMatching = listResult.data.totalDocs;
 
-    // 3. Apply limit safeguard - check if total exceeds allowed limit
-    // Note: We use totalMatching (totalDocs) to know if there are more entries than allowed
+    // 3. Apply limit safeguard - if the match count exceeds the configured
+    // limit, refuse the operation. This is a request-validation failure
+    // (the caller asked for too much); surface it as 400 VALIDATION_ERROR
+    // so the wire shape matches every other malformed-bulk-request path.
     if (limit > 0 && totalMatching > limit) {
-      return {
-        success: [],
-        failed: [
+      throw NextlyError.validation({
+        errors: [
           {
-            id: "",
-            error: `Bulk update limited to ${limit} entries. Found ${totalMatching} matching entries. Use limit: 0 to override or refine your where clause.`,
+            path: "where",
+            code: "BULK_LIMIT_EXCEEDED",
+            message: "Too many matching entries for a bulk operation.",
           },
         ],
-        total: totalMatching,
-        successCount: 0,
-        failedCount: 1,
-      };
+        logContext: {
+          op: "bulkUpdateByQuery",
+          collectionName: params.collectionName,
+          totalMatching,
+          limit,
+        },
+      });
     }
 
     // 4. Extract IDs and delegate to bulkUpdateEntries
@@ -397,8 +533,8 @@ export class CollectionBulkService extends BaseService {
 
     if (ids.length === 0) {
       return {
-        success: [],
-        failed: [],
+        successes: [],
+        failures: [],
         total: 0,
         successCount: 0,
         failedCount: 0,
@@ -464,12 +600,14 @@ export class CollectionBulkService extends BaseService {
        */
       limit?: number;
     }
-  ): Promise<BulkOperationResult> {
+  ): Promise<BulkOperationResult<{ id: string }>> {
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
 
-    // 1. Check collection-level access FIRST
+    // 1. Check collection-level access FIRST. Phase 4.5: collection-wide
+    // access denial is a request-level error, not a per-item failure;
+    // throw so the dispatcher emits a 403 error envelope.
     const accessDenied = await this.accessService.checkCollectionAccess(
       params.collectionName,
       "delete",
@@ -479,13 +617,13 @@ export class CollectionBulkService extends BaseService {
       params.overrideAccess
     );
     if (accessDenied) {
-      return {
-        success: [],
-        failed: [{ id: "", error: accessDenied.message }],
-        total: 0,
-        successCount: 0,
-        failedCount: 1,
-      };
+      throw NextlyError.forbidden({
+        logContext: {
+          op: "bulkDeleteByQuery",
+          collectionName: params.collectionName,
+          legacyMessage: accessDenied.message,
+        },
+      });
     }
 
     // 2. Find matching entries using listEntries (respects access control)
@@ -500,35 +638,41 @@ export class CollectionBulkService extends BaseService {
     });
 
     if (!listResult.success || !listResult.data) {
-      return {
-        success: [],
-        failed: [
-          { id: "", error: listResult.message || "Failed to query entries" },
-        ],
-        total: 0,
-        successCount: 0,
-        failedCount: 1,
-      };
+      const { code, message } = legacyEnvelopeToFailureFields(listResult);
+      throw new NextlyError({
+        code,
+        publicMessage: message,
+        logContext: {
+          op: "bulkDeleteByQuery",
+          collectionName: params.collectionName,
+          legacyMessage: listResult.message,
+        },
+      });
     }
 
     // Extract docs from paginated response
     const matchingEntries = listResult.data.docs as Array<{ id: string }>;
     const totalMatching = listResult.data.totalDocs;
 
-    // 3. Apply limit safeguard - check if total exceeds allowed limit
+    // 3. Apply limit safeguard. Match count over the configured limit is
+    // a request-validation failure (caller asked for too much); surface
+    // as 400 VALIDATION_ERROR.
     if (limit > 0 && totalMatching > limit) {
-      return {
-        success: [],
-        failed: [
+      throw NextlyError.validation({
+        errors: [
           {
-            id: "",
-            error: `Bulk delete limited to ${limit} entries. Found ${totalMatching} matching entries. Use limit: 0 to override or refine your where clause.`,
+            path: "where",
+            code: "BULK_LIMIT_EXCEEDED",
+            message: "Too many matching entries for a bulk operation.",
           },
         ],
-        total: totalMatching,
-        successCount: 0,
-        failedCount: 1,
-      };
+        logContext: {
+          op: "bulkDeleteByQuery",
+          collectionName: params.collectionName,
+          totalMatching,
+          limit,
+        },
+      });
     }
 
     // 4. Extract IDs
@@ -536,8 +680,8 @@ export class CollectionBulkService extends BaseService {
 
     if (ids.length === 0) {
       return {
-        success: [],
-        failed: [],
+        successes: [],
+        failures: [],
         total: 0,
         successCount: 0,
         failedCount: 0,

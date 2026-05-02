@@ -7,13 +7,18 @@
  * IMPORTANT: Before using these routes, you must initialize the service layer by calling
  * `registerServices()` during your application startup.
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
- * return the canonical `{ data: <result> }` envelope per spec §10.2. The
- * bulk-result payload (per-file `results`, counts, validationErrors) lives
- * inside `data`. Errors flow through the wrapper as
- * `application/problem+json`. The legacy "all-failed → status 500" branch
- * is dropped: per-file failures are normal data the caller iterates over,
- * not a server error.
+ * Wire shape (Phase 4.5 migration):
+ *   - DELETE returns the canonical respondBulk envelope:
+ *     `{ message, items, errors }` where items are minimal `{id}` records
+ *     for deleted files and errors are id-keyed PerItemError entries.
+ *   - POST returns the canonical respondBulkUpload envelope:
+ *     `{ message, items, errors }` where items are full MediaFile records
+ *     for newly-uploaded files and errors are positional BulkUploadError
+ *     entries (`{ index, filename, code, message }`).
+ *
+ * Per-item failures are first-class data in the body's `errors` array
+ * (HTTP 200). 4xx is reserved for malformed requests (e.g. empty input,
+ * all entries failed input validation before the service was reached).
  *
  * @example
  * ```typescript
@@ -30,8 +35,12 @@ import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema } from "../types/media";
 
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondBulk,
+  respondBulkUpload,
+  type BulkUploadError,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 function getMediaService(): MediaService {
@@ -68,10 +77,10 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
 }
 
 /**
- * POST handler for bulk media upload
+ * POST handler for bulk media upload.
  *
- * Uploads multiple files in parallel with a concurrency limit of 5.
- * Provides detailed results for each file (success/failure).
+ * Uploads multiple files. Provides detailed per-file results, positional
+ * (index + filename) for failures since uploads have no client-supplied id.
  *
  * Request Body (JSON):
  * {
@@ -85,11 +94,14 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
  *   uploadedBy?: string,
  * }
  *
- * Response: `{ "data": { totalFiles, successCount, failureCount, results,
- * validationErrors } }`. Status 200 even when every file failed — per-file
- * outcomes are part of the payload, not server errors. If the request
- * itself is malformed (no files, all invalid), throws
- * `VALIDATION_ERROR` (400).
+ * Response: canonical respondBulkUpload envelope `{ message, items, errors }`.
+ * Items are full MediaFile records for newly-uploaded files; errors are
+ * positional BulkUploadError entries. Pre-upload validation failures fold
+ * into the same `errors` array (no parallel `validationErrors` field;
+ * unified failure list per Phase 4.5 D3). Status 200 for partial-success.
+ *
+ * 4xx applies only to fully-malformed requests: empty `files` array, or
+ * every entry failed input validation (no useful service work to do).
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -111,20 +123,26 @@ export const POST = withErrorHandler(
       });
     }
 
+    // Validated input + the original index it occupied in `filesInput`.
+    // We carry the original index so post-upload failure entries report
+    // the slot the caller submitted, not the slot in `validatedFiles`.
     const validatedFiles: Array<{
       buffer: Buffer;
       filename: string;
       mimeType: string;
       size: number;
+      originalIndex: number;
     }> = [];
-    const validationErrors: Array<{
-      index: number;
-      filename: string;
-      error: string;
-    }> = [];
+    // Phase 4.5: pre-upload validation failures fold into the same
+    // failures list as upload failures from the service. One unified
+    // `errors[]` on the wire keeps the consumer iteration simple and
+    // honest (a failed file is a failed file, regardless of where in
+    // the pipeline it failed).
+    const failures: BulkUploadError[] = [];
 
     for (let i = 0; i < filesInput.length; i++) {
       const file = filesInput[i] as Record<string, unknown>;
+      const filename = (file.filename as string) || `file-${i}`;
 
       let buffer: Buffer;
       if (typeof file.file === "string") {
@@ -132,10 +150,15 @@ export const POST = withErrorHandler(
       } else if (Buffer.isBuffer(file.file)) {
         buffer = file.file;
       } else {
-        validationErrors.push({
+        // Generic public message per spec section 13.8. The actual
+        // discriminator (string | Buffer) goes to the operator log via
+        // logContext below if anyone wires it up later. The wire stays
+        // generic.
+        failures.push({
           index: i,
-          filename: (file.filename as string) || `file-${i}`,
-          error: "Invalid file format",
+          filename,
+          code: "VALIDATION_ERROR",
+          message: "Invalid file format.",
         });
         continue;
       }
@@ -149,10 +172,11 @@ export const POST = withErrorHandler(
       });
 
       if (!parseResult.success) {
-        validationErrors.push({
+        failures.push({
           index: i,
-          filename: (file.filename as string) || `file-${i}`,
-          error: parseResult.error.issues[0]?.message || "Validation failed",
+          filename,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed.",
         });
       } else {
         validatedFiles.push({
@@ -160,19 +184,20 @@ export const POST = withErrorHandler(
           filename: file.filename as string,
           mimeType: file.mimeType as string,
           size: (file.size as number) || buffer.length,
+          originalIndex: i,
         });
       }
     }
 
     if (validatedFiles.length === 0) {
-      // Every entry failed validation. Surface as the canonical
-      // VALIDATION_ERROR with per-file detail in `data.errors[]` so the
-      // admin client can render inline messages keyed to `path`.
+      // Every entry failed input validation. No service work would
+      // succeed; raise a request-level 400 with per-file detail so the
+      // admin client can render inline messages.
       throw NextlyError.validation({
-        errors: validationErrors.map(v => ({
-          path: `files[${v.index}]`,
+        errors: failures.map(f => ({
+          path: `files[${f.index}]`,
           code: "INVALID_FILE",
-          message: v.error,
+          message: f.message,
         })),
         logContext: { totalFiles: filesInput.length },
       });
@@ -182,30 +207,51 @@ export const POST = withErrorHandler(
     const userId = (firstFile.uploadedBy as string) || uploadedBy || null;
     const context = createAuthenticatedContext(userId);
 
-    const result = await mediaService.bulkUpload(validatedFiles, context);
+    // Strip originalIndex before handing to the service. The service
+    // doesn't need it, but we use it below to remap service failures
+    // (which are 0-indexed in validatedFiles) back to the caller's
+    // original payload indices.
+    const serviceInputs = validatedFiles.map(({ originalIndex: _, ...rest }) => rest);
+    const result = await mediaService.bulkUpload(serviceInputs, context);
 
-    return createSuccessResponse({
-      totalFiles: result.totalItems,
-      successCount: result.successCount,
-      failureCount: result.failureCount,
-      results: result.results,
-      validationErrors,
-    });
+    // Remap service-side failure indices back to the caller's original
+    // payload indices so all `errors[].index` values address the same
+    // input array.
+    for (const f of result.failures) {
+      const original = validatedFiles[f.index];
+      failures.push({
+        index: original?.originalIndex ?? f.index,
+        filename: f.filename,
+        code: f.code,
+        message: f.message,
+      });
+    }
+
+    const totalRequested = filesInput.length;
+    const successCount = result.successCount;
+    const message =
+      failures.length === 0
+        ? `Uploaded ${successCount} ${
+            successCount === 1 ? "file" : "files"
+          }.`
+        : `Uploaded ${successCount} of ${totalRequested} files.`;
+
+    return respondBulkUpload(message, result.successes, failures);
   }
 );
 
 /**
- * DELETE handler for bulk media deletion
+ * DELETE handler for bulk media deletion.
  *
- * Deletes multiple media files in parallel with a concurrency limit of 10.
+ * Response: canonical respondBulk envelope `{ message, items, errors }`.
+ * Items are minimal `{id}` records (the files are gone); errors are
+ * id-keyed PerItemError entries. Status 200 for partial-success; 400
+ * only for an empty/malformed `mediaIds` array.
  *
  * Request Body (JSON):
  * {
  *   mediaIds: string[]
  * }
- *
- * Response: `{ "data": { totalFiles, successCount, failureCount,
- * results } }`. Status 200 regardless of per-file outcomes (see POST note).
  */
 export const DELETE = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -228,11 +274,13 @@ export const DELETE = withErrorHandler(
     const context: RequestContext = {};
     const result = await mediaService.bulkDelete(mediaIds as string[], context);
 
-    return createSuccessResponse({
-      totalFiles: result.totalItems,
-      successCount: result.successCount,
-      failureCount: result.failureCount,
-      results: result.results,
-    });
+    const message =
+      result.failures.length === 0
+        ? `Deleted ${result.successCount} ${
+            result.successCount === 1 ? "file" : "files"
+          }.`
+        : `Deleted ${result.successCount} of ${result.total} files.`;
+
+    return respondBulk(message, result.successes, result.failures);
   }
 );

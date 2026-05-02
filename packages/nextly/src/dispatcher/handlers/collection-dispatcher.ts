@@ -9,17 +9,21 @@
  *
  * Phase 4 Task 8: every non-bulk handler returns a Response built via
  * the respondX helpers in `../../api/response-shapes.ts`. The
- * dispatcher passes the Response through unchanged. See spec §5.1 for
+ * dispatcher passes the Response through unchanged. See spec section 5.1 for
  * the canonical shape contract.
  *
- * Bulk operations (`bulkDeleteEntries`, `bulkUpdateEntries`,
- * `bulkUpdateByQuery`) are deferred to Phase 4.5 and intentionally
- * keep their legacy `CollectionServiceResult` shape, and the dispatcher's
- * smart-extract path still handles them until that follow-up lands.
+ * Phase 4.5: bulk operations (`bulkDeleteEntries`, `bulkUpdateEntries`,
+ * `bulkUpdateByQuery`) now emit canonical `respondBulk` envelopes
+ * (`{ message, items, errors }`). Per-item failures decompose to
+ * `{ id, code, message }` keyed by canonical NextlyErrorCode. The
+ * service-layer BulkOperationResult was reshaped to carry these directly,
+ * so the dispatcher hands service output to respondBulk without per-call
+ * translation.
  */
 
 import {
   respondAction,
+  respondBulk,
   respondCount,
   respondData,
   respondDoc,
@@ -876,14 +880,16 @@ const COLLECTIONS_METHODS: Record<
       return respondMutation(result.message ?? "Entry deleted.", entry);
     },
   },
-  // PHASE 4.5: bulk operations migrate in a follow-up. Their current
-  // shape is intentionally unchanged (they still return the legacy
-  // CollectionServiceResult envelope which the dispatcher's
-  // smart-extract path handles). Do NOT migrate to respondX helpers
-  // here: the bulk wire shape needs its own design pass (partial
-  // success + per-id error surface) that's outside Task 8's scope.
+  // Phase 4.5: bulk delete by ids. Service returns BulkOperationResult
+  // with structured per-item failures; the dispatcher hands successes +
+  // failures straight to respondBulk. HTTP 200 for partial success
+  // (per-item failures are first-class data in the body's `errors`
+  // array, not server errors). Malformed-request validation (missing
+  // collectionName, empty ids) raises in the service envelope path
+  // upstream; the legacy `throw new Error("...")` lines below stay as
+  // pre-existing baseline per Phase 4.5 scope.
   bulkDeleteEntries: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       const b = body as { ids?: string[] } | undefined;
       if (!p.collectionName) {
         throw new Error("collectionName parameter is required");
@@ -891,7 +897,7 @@ const COLLECTIONS_METHODS: Record<
       if (!b?.ids || !Array.isArray(b.ids) || b.ids.length === 0) {
         throw new Error("ids must be a non-empty array");
       }
-      return svc.bulkDeleteEntries({
+      const result = await svc.bulkDeleteEntries({
         collectionName: p.collectionName,
         ids: b.ids,
         userId: p._authenticatedUserId
@@ -904,11 +910,22 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
       });
+      // Compose a server-authored toast string. Total here is the
+      // request's id count, not just the success count, so the message
+      // accurately conveys partial-success when failures.length > 0.
+      const message =
+        result.failures.length === 0
+          ? `Deleted ${result.successCount} ${
+              result.successCount === 1 ? "entry" : "entries"
+            }.`
+          : `Deleted ${result.successCount} of ${result.total} entries.`;
+      return respondBulk(message, result.successes, result.failures);
     },
   },
-  // PHASE 4.5: see bulkDeleteEntries comment above.
+  // Phase 4.5: bulk update by ids. Successes carry full mutated records
+  // so the admin client can refresh its cache without a re-fetch.
   bulkUpdateEntries: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       const b = body as
         | { ids?: string[]; data?: Record<string, unknown> }
         | undefined;
@@ -921,7 +938,7 @@ const COLLECTIONS_METHODS: Record<
       if (!b?.data || typeof b.data !== "object") {
         throw new Error("data must be an object with update values");
       }
-      return svc.bulkUpdateEntries({
+      const result = await svc.bulkUpdateEntries({
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
@@ -935,11 +952,22 @@ const COLLECTIONS_METHODS: Record<
           ? String(p._authenticatedUserEmail)
           : undefined,
       });
+      const message =
+        result.failures.length === 0
+          ? `Updated ${result.successCount} ${
+              result.successCount === 1 ? "entry" : "entries"
+            }.`
+          : `Updated ${result.successCount} of ${result.total} entries.`;
+      return respondBulk(message, result.successes, result.failures);
     },
   },
-  // PHASE 4.5: see bulkDeleteEntries comment above.
+  // Phase 4.5: bulk update by query. The service throws NextlyError on
+  // request-level failures (collection-wide forbidden, limit exceeded,
+  // failed match-list query), which the dispatcher's catch path turns
+  // into the canonical error envelope. Per-entry failures during the
+  // update phase land in result.failures and are surfaced via respondBulk.
   bulkUpdateByQuery: {
-    execute: (svc, p, body) => {
+    execute: async (svc, p, body) => {
       const b = body as
         | {
             where?: Record<string, unknown>;
@@ -956,7 +984,7 @@ const COLLECTIONS_METHODS: Record<
       if (!b?.data || typeof b.data !== "object") {
         throw new Error("data must be an object with update values");
       }
-      return svc.bulkUpdateByQuery(
+      const result = await svc.bulkUpdateByQuery(
         {
           collectionName: p.collectionName,
           where: b.where as WhereFilter,
@@ -964,6 +992,13 @@ const COLLECTIONS_METHODS: Record<
         },
         { limit: b.limit }
       );
+      const message =
+        result.failures.length === 0
+          ? `Updated ${result.successCount} ${
+              result.successCount === 1 ? "entry" : "entries"
+            }.`
+          : `Updated ${result.successCount} of ${result.total} entries.`;
+      return respondBulk(message, result.successes, result.failures);
     },
   },
   duplicateEntry: {

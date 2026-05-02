@@ -130,15 +130,53 @@ export interface FolderContents {
 }
 
 /**
- * Bulk operation result
+ * Bulk-by-id operation result for media (e.g. bulkDelete).
+ *
+ * Phase 4.5: redesigned to mirror the collection-domain shape so the
+ * media-bulk dispatcher can hand it directly to respondBulk without a
+ * second translation pass. Successes carry minimal `{id}` records for
+ * delete (the file is gone); failures carry canonical NextlyErrorCode
+ * + public-safe message per spec section 13.8.
+ *
+ * Generic over T so a future bulk-update-media op could carry full
+ * MediaFile records on success without changing the shape.
  */
-export interface BulkOperationResult {
-  totalItems: number;
-  successCount: number;
-  failureCount: number;
-  results: Array<{
+export interface BulkOperationResult<T = { id: string }> {
+  successes: T[];
+  failures: Array<{
+    /** Identifier of the media item that failed. */
     id: string;
-    success: boolean;
-    error?: string;
+    /** Canonical NextlyErrorCode value. */
+    code: string;
+    /** Public-safe message (no identifier or value echo). */
+    message: string;
   }>;
+  total: number;
+  successCount: number;
+  failedCount: number;
+}
+
+/**
+ * Bulk-upload operation result (positional, no client ids).
+ *
+ * Phase 4.5: distinct from BulkOperationResult because failed uploads
+ * have no id by construction. Failures are positional (`index`,
+ * `filename`); successes carry the newly-created MediaFile (or whatever
+ * the upload service returns).
+ */
+export interface BulkUploadOperationResult<T> {
+  successes: T[];
+  failures: Array<{
+    /** Positional index in the input payload. */
+    index: number;
+    /** Filename from the input. UX context only, not an identifier. */
+    filename: string;
+    /** Canonical NextlyErrorCode value. */
+    code: string;
+    /** Public-safe message. */
+    message: string;
+  }>;
+  total: number;
+  successCount: number;
+  failedCount: number;
 }

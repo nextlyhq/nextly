@@ -51,6 +51,66 @@ export type CountResponse = {
 };
 
 /**
+ * Per-item failure entry inside a `BulkResponse<T>` (Phase 4.5).
+ *
+ * `code` is a canonical NextlyErrorCode value (`NOT_FOUND`, `FORBIDDEN`,
+ * `VALIDATION_ERROR`, `CONFLICT`, `INTERNAL_ERROR`, etc.) so the admin
+ * UI can branch on it the same way it does for single-item errors.
+ * `message` is the public-safe NextlyError.publicMessage (no identifier
+ * echo; specifics live on the server in `logContext`).
+ */
+export type PerItemError = {
+  id: string;
+  code: string;
+  message: string;
+};
+
+/**
+ * Per-item failure entry inside a `BulkUploadResponse<T>` (Phase 4.5).
+ *
+ * Distinct from `PerItemError` because failed uploads do not have an id
+ * (the record was never created). The canonical key is `index`, the
+ * positional offset in the input array; `filename` is included for UX
+ * so the admin can render "couldn't upload <filename>" without lookup.
+ */
+export type BulkUploadError = {
+  index: number;
+  filename: string;
+  code: string;
+  message: string;
+};
+
+/**
+ * Bulk response for operations on existing records keyed by id.
+ *
+ * Matches server's `respondBulk(message, items, errors)`. Status is
+ * always 200 even on partial success: per-item failures are first-class
+ * data in `errors[]`, not server errors. Generic over `T` because the
+ * delete path returns `T = { id: string }` (no point materializing the
+ * full record after delete) while update/create return the full record
+ * (so the admin can refresh local state without a re-fetch).
+ */
+export type BulkResponse<T> = {
+  message: string;
+  items: T[];
+  errors: PerItemError[];
+};
+
+/**
+ * Bulk response for upload-style operations creating new records from
+ * positional input. Matches server's `respondBulkUpload(message, items, errors)`.
+ *
+ * Distinct from `BulkResponse<T>` because failure entries are keyed by
+ * `index` + `filename`, not `id` (the record never got created). Same
+ * partial-success semantics: HTTP 200 with `errors[]` carrying failures.
+ */
+export type BulkUploadResponse<T> = {
+  message: string;
+  items: T[];
+  errors: BulkUploadError[];
+};
+
+/**
  * Error response shape (canonical Task 21 §10.1). Both `withErrorHandler`
  * and the dispatcher path emit this shape after Phase 4. The admin client's
  * `parseApiError.ts` already reads this shape; no client work needed beyond
