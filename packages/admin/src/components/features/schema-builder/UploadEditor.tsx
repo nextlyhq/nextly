@@ -255,7 +255,7 @@ export function UploadEditor({
                     <button
                       type="button"
                       onClick={() => handleRemoveCollection(slug)}
-                      className="ml-0.5 rounded-full p-0.5 hover-subtle-row"
+                      className="ml-0.5 rounded-none p-0.5 hover-subtle-row"
                     >
                       <Icons.X className="h-3 w-3" />
                     </button>
@@ -316,7 +316,7 @@ export function UploadEditor({
                         key={collection.slug}
                         type="button"
                         onClick={() => handleCollectionToggle(collection.slug)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left hover-subtle-row transition-colors"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-none text-left hover-subtle-row transition-colors"
                       >
                         <Checkbox
                           checked={isSelected}
@@ -523,7 +523,7 @@ export function UploadEditor({
 
       {/* Info Box */}
       {selectedCollections.length === 0 && (
-        <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 border border-amber-500/20">
+        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
           <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-amber-600 dark:text-amber-400">
             <p className="font-medium">No media collection selected</p>

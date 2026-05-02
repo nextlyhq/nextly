@@ -191,7 +191,7 @@ export function RichTextTablePlugin({
           </label>
 
           {/* Preview */}
-          <div className="p-3 rounded-md bg-muted/50">
+          <div className="p-3 rounded-none bg-primary/5">
             <p className="text-xs text-muted-foreground mb-2">Preview:</p>
             <div className="overflow-auto">
               <table className="w-full border-collapse text-xs">
@@ -206,7 +206,7 @@ export function RichTextTablePlugin({
                             key={colIdx}
                             className={`border border-border px-2 py-1 ${
                               isHeader
-                                ? "bg-muted font-medium"
+                                ? "bg-primary/5 font-medium"
                                 : "bg-background"
                             }`}
                           >

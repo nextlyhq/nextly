@@ -76,7 +76,7 @@ export function BuilderSettings({
                         : "e.g., Blog Post"
                   }
                   disabled={isSaving}
-                  className="bg-muted/30 border-border/50 focus:bg-background transition-all"
+                  className="bg-primary/5 border-border/50 focus:bg-background transition-all"
                 />
               </FormControl>
               <FormMessage className="text-[11px]" />
@@ -99,7 +99,7 @@ export function BuilderSettings({
                     {...field}
                     placeholder="e.g., Blog Posts"
                     disabled={isSaving}
-                    className="bg-muted/30 border-border/50 focus:bg-background transition-all"
+                    className="bg-primary/5 border-border/50 focus:bg-background transition-all"
                   />
                 </FormControl>
                 <FormMessage className="text-[11px]" />

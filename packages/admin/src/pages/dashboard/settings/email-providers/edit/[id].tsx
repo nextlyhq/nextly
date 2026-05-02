@@ -149,13 +149,13 @@ export default function EditEmailProviderPage() {
         <SettingsLayout>
           <div className="space-y-6">
             <div className="flex items-center gap-4">
-              <Skeleton className="h-9 w-9 rounded-md" />
+              <Skeleton className="h-9 w-9 rounded-none" />
               <div className="space-y-2">
                 <Skeleton className="h-6 w-48" />
                 <Skeleton className="h-4 w-72" />
               </div>
             </div>
-            <Skeleton className="h-[500px] w-full rounded-xl" />
+            <Skeleton className="h-[500px] w-full rounded-none" />
           </div>
         </SettingsLayout>
       </PageContainer>

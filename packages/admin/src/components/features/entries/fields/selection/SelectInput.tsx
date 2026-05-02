@@ -160,7 +160,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
       <SelectTrigger
         id={name}
         aria-invalid={invalid || undefined}
-        className={cn(readOnly && "bg-muted cursor-not-allowed", className)}
+        className={cn(readOnly && "bg-primary/5 cursor-not-allowed", className)}
       >
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

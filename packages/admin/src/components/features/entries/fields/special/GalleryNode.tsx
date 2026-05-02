@@ -82,7 +82,7 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
           <button
             key={index}
             type="button"
-            className="relative overflow-hidden rounded-md aspect-square bg-muted cursor-pointer hover:opacity-90 transition-opacity"
+            className="relative overflow-hidden rounded-none aspect-square bg-primary/5 cursor-pointer hover:opacity-90 transition-opacity"
             onClick={() => setLightboxIndex(index)}
           >
             <img
@@ -136,7 +136,7 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
               src={images[lightboxIndex].src}
               alt={images[lightboxIndex].alt}
               title={images[lightboxIndex].title}
-              className="max-w-full max-h-[85vh] object-contain rounded"
+              className="max-w-full max-h-[85vh] object-contain rounded-none"
               onClick={e => e.stopPropagation()}
             />
 

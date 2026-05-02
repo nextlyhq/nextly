@@ -19,7 +19,7 @@ import { cn } from "../lib/utils";
  * Design Specs:
  * - Size: 16px (h-4 w-4) - Fixed size matching Checkbox
  * - Border: 1px solid, expands to 5px when checked (visual indicator)
- * - Border radius: Full (rounded-full)
+ * - Border radius: Full (rounded-none)
  * - Transition: 150ms (consistent with design system)
  * - Focus ring: 2px ring with 2px offset
  *

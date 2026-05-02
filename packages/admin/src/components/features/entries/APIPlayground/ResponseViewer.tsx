@@ -99,11 +99,11 @@ export function ResponseViewer({
   // Loading state
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] bg-muted/2">
+      <div className="flex flex-col items-center justify-center h-full min-h-[400px] bg-primary/5">
         <div className="relative mb-6">
           <Loader2 className="h-10 w-10 animate-spin text-primary/20" />
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+            <div className="h-1.5 w-1.5 rounded-none bg-primary animate-pulse" />
           </div>
         </div>
         <p className="text-[10px] uppercase font-black tracking-[0.3em] text-primary/40 animate-pulse">
@@ -133,7 +133,7 @@ export function ResponseViewer({
   // Empty state
   if (!jsonString) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-12 text-center bg-muted/2 group">
+      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-12 text-center bg-primary/5 group">
         <div className="h-20 w-20 mb-10 relative">
           <div className="absolute inset-0 bg-primary/5 rounded-none scale-90 blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
           <div className="absolute inset-0 bg-card border border-border/40 rounded-none flex items-center justify-center shadow-none group-hover:-translate-y-1 transition-transform duration-500">
@@ -155,7 +155,7 @@ export function ResponseViewer({
   return (
     <div className="h-full min-h-[400px] flex flex-col bg-card">
       {/* Action Header */}
-      <div className="flex items-center justify-between px-8 py-3 border-b border-border/10 bg-muted/5">
+      <div className="flex items-center justify-between px-8 py-3 border-b border-border/10 bg-primary/5">
         <span className="text-[9px] font-black uppercase tracking-[0.2em] text-primary/40">
           Structured Result
         </span>

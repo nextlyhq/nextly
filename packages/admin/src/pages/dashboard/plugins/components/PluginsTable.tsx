@@ -283,7 +283,7 @@ export default function PluginsTable() {
       </div>
 
       {/* Boxed table and Pagination Card */}
-      <div className="rounded-md border border-border bg-card overflow-hidden">
+      <div className="rounded-none border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={paginatedPlugins}
           columns={columns}

@@ -104,9 +104,9 @@ export function ChipsInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "flex min-h-10 flex-wrap gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-sm",
+        "flex min-h-10 flex-wrap gap-1.5 rounded-none border border-input bg-background px-3 py-2 text-sm",
         "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0",
-        (disabled || readOnly) && "cursor-not-allowed bg-muted opacity-70",
+        (disabled || readOnly) && "cursor-not-allowed bg-primary/5 opacity-70",
         className
       )}
       onClick={() => {
@@ -127,7 +127,7 @@ export function ChipsInput<TFieldValues extends FieldValues = FieldValues>({
                 e.stopPropagation();
                 removeChip(index);
               }}
-              className="ml-0.5 rounded-full p-0.5 hover:bg-black/10 focus:outline-none"
+              className="ml-0.5 rounded-none p-0.5 hover:bg-black/10 focus:outline-none"
               tabIndex={-1}
               aria-label={`Remove ${chip}`}
             >

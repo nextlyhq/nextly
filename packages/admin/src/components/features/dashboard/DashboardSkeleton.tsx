@@ -13,7 +13,7 @@ export const StatsGridSkeleton: React.FC = () => {
                 <Skeleton className="h-8 w-32" />
                 <Skeleton className="h-4 w-36" />
               </div>
-              <Skeleton className="h-12 w-12 rounded-lg" />
+              <Skeleton className="h-12 w-12 rounded-none" />
             </div>
           </CardContent>
         </Card>
@@ -34,7 +34,7 @@ export const ActivitySkeleton: React.FC = () => {
         <div className="space-y-4">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="flex items-start gap-4">
-              <Skeleton className="h-10 w-10 rounded-full" />
+              <Skeleton className="h-10 w-10 rounded-none" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-4 w-full" />
                 <Skeleton className="h-3 w-32" />
@@ -89,7 +89,7 @@ export const ContentStatusSkeleton: React.FC = () => {
                 <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-16" />
               </div>
-              <Skeleton className="h-2 w-full rounded-full" />
+              <Skeleton className="h-2 w-full rounded-none" />
             </div>
           ))}
           <Skeleton className="h-3 w-28 mt-2" />
@@ -110,7 +110,7 @@ export const CollectionQuickLinksSkeleton: React.FC = () => {
       <CardContent className="pt-0">
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-[68px] rounded-lg" />
+            <Skeleton key={i} className="h-[68px] rounded-none" />
           ))}
         </div>
       </CardContent>
@@ -129,7 +129,7 @@ export const ProjectStatsSkeleton: React.FC = () => {
       <CardContent className="pt-0">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-[72px] rounded-lg" />
+            <Skeleton key={i} className="h-[72px] rounded-none" />
           ))}
         </div>
       </CardContent>
@@ -144,18 +144,18 @@ export const OnboardingChecklistSkeleton: React.FC = () => {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <Skeleton className="h-6 w-24" />
-        <Skeleton className="h-6 w-6 rounded-md" />
+        <Skeleton className="h-6 w-6 rounded-none" />
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-1.5 mb-4">
-          <Skeleton className="h-2 w-full rounded-full" />
+          <Skeleton className="h-2 w-full rounded-none" />
           <Skeleton className="h-3 w-28" />
         </div>
         <div className="divide-y divide-border">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="flex items-center justify-between py-2">
               <div className="flex items-center gap-3">
-                <Skeleton className="h-5 w-5 rounded-full" />
+                <Skeleton className="h-5 w-5 rounded-none" />
                 <Skeleton className="h-4 w-36" />
               </div>
               <Skeleton className="h-4 w-12" />

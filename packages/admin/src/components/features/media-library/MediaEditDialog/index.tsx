@@ -127,7 +127,7 @@ function CropPointPicker({
       <div
         ref={containerRef}
         className={cn(
-          "relative rounded-lg overflow-hidden border border-border cursor-crosshair",
+          "relative rounded-none overflow-hidden border border-border cursor-crosshair",
           disabled && "cursor-not-allowed opacity-60"
         )}
         onClick={handleClick}
@@ -138,7 +138,7 @@ function CropPointPicker({
         <img
           src={imageUrl}
           alt="Preview"
-          className="w-full h-auto max-h-[300px] object-contain bg-muted"
+          className="w-full h-auto max-h-[300px] object-contain bg-primary/5"
           draggable={false}
         />
         {/* Crosshair overlay */}
@@ -147,9 +147,9 @@ function CropPointPicker({
           style={{ left: `${focalX}%`, top: `${focalY}%` }}
         >
           {/* Outer ring */}
-          <div className="absolute inset-0 rounded-full border-2 border-white shadow-md" />
+          <div className="absolute inset-0 rounded-none border-2 border-white shadow-md" />
           {/* Inner dot */}
-          <div className="absolute inset-[7px] rounded-full bg-white shadow-sm" />
+          <div className="absolute inset-[7px] rounded-none bg-white shadow-sm" />
           {/* Crosshair lines */}
           <div className="absolute top-1/2 left-0 w-full h-px bg-white/70 -translate-y-px" />
           <div className="absolute left-1/2 top-0 h-full w-px bg-white/70 -translate-x-px" />
@@ -176,7 +176,7 @@ function CropPointPicker({
             className="flex flex-col items-center gap-1.5 group/ratio cursor-default"
           >
             <div
-              className="rounded-lg border-0 overflow-hidden bg-muted/30 transition-all duration-300 ring-0 group-hover/ratio:ring-2 group-hover/ratio:ring-primary/20"
+              className="rounded-none border-0 overflow-hidden bg-primary/5 transition-all duration-300 ring-0 group-hover/ratio:ring-2 group-hover/ratio:ring-primary/20"
               style={{ width: w, height: h }}
             >
               <img
@@ -225,7 +225,7 @@ function ImageSizesDisplay({
       <Label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
         Image Sizes
       </Label>
-      <div className="rounded-md border border-border divide-y divide-border">
+      <div className="rounded-none border border-border divide-y divide-border">
         {entries.map(([name, variant]) => (
           <div key={name} className="flex items-center gap-3 px-3 py-2 text-sm">
             <span className="font-medium min-w-[80px]">{name}</span>
@@ -238,7 +238,7 @@ function ImageSizesDisplay({
             <button
               type="button"
               onClick={() => handleCopyUrl(variant.url, name)}
-              className="p-1 rounded hover:bg-accent transition-colors"
+              className="p-1 rounded-none hover:bg-accent transition-colors"
               title={`Copy ${name} URL`}
             >
               {copiedUrl === name ? (
@@ -479,7 +479,7 @@ export function MediaEditDialog({
                     <PopoverTrigger asChild>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-none border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
                       >
                         <FolderIcon className="h-4 w-4 text-muted-foreground" />
                         <span className="flex-1 text-left truncate">
@@ -567,7 +567,7 @@ export function MediaEditDialog({
           </div>
 
           {/* Footer - Full-Width Unified Background */}
-          <div className="mt-2 flex items-center justify-between gap-4 bg-muted/50 border-t border-primary/10 px-6 py-4">
+          <div className="mt-2 flex items-center justify-between gap-4 bg-primary/5 border-t border-primary/10 px-6 py-4">
             {/* Action Buttons Group (Left) */}
             <div className="flex items-center gap-2">
               {onDelete && (

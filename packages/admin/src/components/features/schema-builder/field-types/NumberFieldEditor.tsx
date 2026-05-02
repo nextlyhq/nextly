@@ -91,7 +91,7 @@ export function NumberFieldEditor({
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">
-          <TabsList className="w-full rounded-md">
+          <TabsList className="w-full rounded-none">
             <TabsTrigger value="basic" className="flex-1">
               Basic
             </TabsTrigger>

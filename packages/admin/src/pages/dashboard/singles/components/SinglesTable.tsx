@@ -662,7 +662,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
                   {(sourceFilter !== "all" || migrationFilter !== "all") && (
-                    <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-full bg-primary" />
+                    <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
                   )}
                 </Button>
               </DropdownMenuTrigger>
@@ -761,7 +761,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       ) : (
         /* Responsive table */
         /* Responsive table and Pagination Card */
-        <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}

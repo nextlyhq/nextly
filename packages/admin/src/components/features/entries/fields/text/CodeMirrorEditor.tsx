@@ -346,7 +346,7 @@ export function CodeMirrorEditor({
         drawSelection: true,
       }}
       placeholder={placeholder}
-      className="overflow-hidden rounded-md"
+      className="overflow-hidden rounded-none"
     />
   );
 }

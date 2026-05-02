@@ -50,22 +50,22 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
       return "bg-primary/10 text-primary ring-1 ring-primary/20";
     if (t.includes("delete"))
       return "bg-rose-500/10 text-rose-500 ring-1 ring-rose-500/20";
-    return "bg-muted/50 text-muted-foreground ring-1 ring-border/50";
+    return "bg-primary/5 text-muted-foreground ring-1 ring-border/50";
   };
 
   return (
-    <div className="flex items-center gap-5 p-3 rounded-2xl hover:bg-primary/[0.03] transition-all duration-500 group/item">
+    <div className="flex items-center gap-5 p-3 rounded-none hover:bg-primary/[0.03] transition-all duration-500 group/item">
       <div className="relative">
-        <Avatar className="h-11 w-11 rounded-2xl border-2 border-background shadow-sm ring-1 ring-border/10">
+        <Avatar className="h-11 w-11 rounded-none border-2 border-background shadow-sm ring-1 ring-border/10">
           <AvatarImage src={activity.user.avatar} alt={activity.user.name} />
           <AvatarFallback className="bg-primary/5 text-primary text-xs font-black">
             {activity.user.initials}
           </AvatarFallback>
         </Avatar>
-        <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-background p-0.5 shadow-sm ring-1 ring-border/10">
+        <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-none bg-background p-0.5 shadow-sm ring-1 ring-border/10">
           <div
             className={cn(
-              "h-full w-full rounded-full ring-1 ring-inset",
+              "h-full w-full rounded-none ring-1 ring-inset",
               activity.type.toLowerCase().includes("create")
                 ? "bg-emerald-500 ring-emerald-500/40"
                 : activity.type.toLowerCase().includes("delete")
@@ -89,7 +89,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
               <span className="font-bold text-foreground tracking-tight underline decoration-primary/20 underline-offset-4">
                 {activity.entryTitle}
               </span>{" "}
-              <span className="text-muted-foreground/40 font-bold uppercase text-[9px] tracking-widest ml-1 bg-muted/30 px-1.5 py-0.5 rounded">
+              <span className="text-muted-foreground/40 font-bold uppercase text-[9px] tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-none">
                 {activity.collectionLabel}
               </span>
             </>
@@ -108,7 +108,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 
       <Badge
         className={cn(
-          "uppercase text-[9px] px-2.5 py-0.5 rounded-full font-black tracking-[0.15em] border-none shadow-none transition-all duration-500 group-hover/item:scale-105",
+          "uppercase text-[9px] px-2.5 py-0.5 rounded-none font-black tracking-[0.15em] border-none shadow-none transition-all duration-500 group-hover/item:scale-105",
           getBadgeStyle(activity.type)
         )}
       >
@@ -120,7 +120,7 @@ const ActivityItem: React.FC<{ activity: Activity }> = ({ activity }) => {
 
 const EmptyState: React.FC = () => (
   <div className="py-20 text-center space-y-4">
-    <div className="inline-flex p-6 rounded-[2rem] bg-muted/10 border border-border/5">
+    <div className="inline-flex p-6 rounded-none] bg-primary/5 border border-border/5">
       <Clock className="h-10 w-10 text-muted-foreground/10" />
     </div>
     <div className="space-y-1">
@@ -140,17 +140,17 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
   const { data, isLoading, error } = useRecentActivity(limit);
 
   return (
-    <Card className="border-border/60 bg-card/40 backdrop-blur-md rounded-[2.5rem] overflow-hidden transition-all duration-500 hover:border-primary/20">
+    <Card className="border-border/60 bg-card/40 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/20">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 px-8 py-7 border-b border-border/5">
         <div className="space-y-1">
           <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
             System Event Log
           </CardTitle>
-          <div className="h-1 w-8 bg-primary/20 rounded-full" />
+          <div className="h-1 w-8 bg-primary/20 rounded-none" />
         </div>
         <Link
           href={ROUTES.DASHBOARD}
-          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-full bg-primary/5 hover-unified"
+          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-none bg-primary/5 hover-unified"
         >
           Detailed Log <ChevronRight className="h-3 w-3" />
         </Link>
@@ -166,7 +166,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
         )}
 
         {error && (
-          <div className="flex items-center gap-3 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-3xl mx-3 mb-3">
+          <div className="flex items-center gap-3 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-none mx-3 mb-3">
             <AlertCircle className="h-4 w-4" />
             <span className="font-bold uppercase tracking-wider text-[11px]">
               Failed to fetch activity stream
@@ -186,7 +186,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
                   ))}
                 </div>
                 <div className="mt-6 pt-4 border-t border-border/5 text-center">
-                  <button className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground/30 hover-unified transition-all duration-500 py-3 px-8 rounded-full hover-unified">
+                  <button className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground/30 hover-unified transition-all duration-500 py-3 px-8 rounded-none hover-unified">
                     Sync Previous Events
                   </button>
                 </div>

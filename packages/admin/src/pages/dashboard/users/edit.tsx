@@ -298,7 +298,7 @@ export default function EditUserPage(): ReactElement {
         </div>
 
         {/* Form skeleton */}
-        <Skeleton className={`${FORM_MIN_HEIGHT} w-full rounded-xl`} />
+        <Skeleton className={`${FORM_MIN_HEIGHT} w-full rounded-none`} />
       </PageContainer>
     );
   }
@@ -353,15 +353,17 @@ export default function EditUserPage(): ReactElement {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         {/* Breadcrumbs */}
-        <UserBreadcrumbs currentPage="edit" />
+        <div className="mb-6">
+          <UserBreadcrumbs currentPage="edit" />
+        </div>
 
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight mb-2">
+            <h1 className="text-xl font-semibold tracking-tight">
               Edit User
             </h1>
-            <p className="text-muted-foreground">
+            <p className="text-sm font-normal text-primary/50 mt-1">
               Update user details, change roles, or reset the password.
             </p>
           </div>
@@ -391,7 +393,7 @@ export default function EditUserPage(): ReactElement {
         </div>
 
         {/* Form Card */}
-        <div className="bg-card border border-border rounded-xl p-6  ">
+        <div className="bg-card border border-border rounded-none p-6  ">
           {/* Avatar Section */}
           <div className="flex items-center gap-4 mb-8 pb-8 border-b border-border">
             <AvatarUploader

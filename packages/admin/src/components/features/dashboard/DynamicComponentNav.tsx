@@ -68,7 +68,7 @@ function MigrationIndicator({ status }: { status?: ComponentMigrationStatus }) {
 
   return (
     <span
-      className={`ml-auto h-2 w-2 rounded-full ${colors[status]}`}
+      className={`ml-auto h-2 w-2 rounded-none ${colors[status]}`}
       title={titles[status]}
       aria-label={titles[status]}
     />
@@ -301,7 +301,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                                 <Link
                                   key={component.id}
                                   href={href}
-                                  className={`flex items-center gap-2 py-1.5 px-2 text-sm rounded-md transition-colors ${
+                                  className={`flex items-center gap-2 py-1.5 px-2 text-sm rounded-none transition-colors ${
                                     isSubActive
                                       ? "bg-accent/20 text-accent font-medium"
                                       : "text-muted-foreground hover:text-foreground hover:bg-accent/10"

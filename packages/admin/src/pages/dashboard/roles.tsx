@@ -39,18 +39,20 @@ const RolesPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         {/* Breadcrumb navigation */}
-        <Breadcrumbs
-          items={[
-            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-            { label: "Role Management" },
-          ]}
-        />
+        <div className="mb-6">
+          <Breadcrumbs
+            items={[
+              { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+              { label: "Role Management" },
+            ]}
+          />
+        </div>
 
         {/* Page header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Roles</h1>
-            <p className="text-muted-foreground">
+            <h1 className="text-xl font-semibold tracking-tight">Roles</h1>
+            <p className="text-sm font-normal text-primary/50 mt-1">
               Manage roles and permissions
             </p>
           </div>

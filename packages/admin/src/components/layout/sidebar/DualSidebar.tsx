@@ -540,7 +540,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const renderAsLink = href !== "#" && !stayOnPageMobile;
 
             const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
+              "flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
                 ? "bg-primary/5 text-primary"
                 : "text-primary/50 hover-unified"

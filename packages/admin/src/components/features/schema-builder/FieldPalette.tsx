@@ -186,7 +186,7 @@ function DraggablePaletteItem({
           type="button"
           onClick={() => onFieldAdd(fieldType)}
           className={`
-            flex items-center gap-3 w-full px-2 py-2 rounded-lg text-left group
+            flex items-center gap-3 w-full px-2 py-2 rounded-none text-left group
             hover-subtle-row transition-all duration-150
             cursor-grab active:cursor-grabbing active:scale-[0.98]
             ${isDragging ? "opacity-50 bg-primary/5" : ""}
@@ -195,7 +195,7 @@ function DraggablePaletteItem({
           {...listeners}
         >
           {/* Blue icon box */}
-          <div className="shrink-0 flex items-center justify-center w-9 h-9 rounded-[6px] border border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80">
+          <div className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80">
             <IconComponent className="h-4 w-4" />
           </div>
           {/* Label + description */}
@@ -236,7 +236,7 @@ function CategorySection({
         type="button"
         onClick={onToggle}
         aria-expanded={isOpen}
-        className="flex items-center gap-1.5 w-full py-2 px-1 text-left select-none cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-sm"
+        className="flex items-center gap-1.5 w-full py-2 px-1 text-left select-none cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-none"
       >
         {/* Chevron — rotates on open */}
         <Icons.ChevronDown
@@ -249,7 +249,7 @@ function CategorySection({
           {name}
         </span>
         {/* Count badge — pushed to the far right */}
-        <span className="ml-auto text-[10px] font-medium leading-none bg-muted px-1.5 py-0.5 rounded-[4px] text-muted-foreground/50">
+        <span className="ml-auto text-[10px] font-medium leading-none bg-primary/5 px-1.5 py-0.5 rounded-none] text-muted-foreground/50">
           {types.length}
         </span>
       </button>
@@ -311,7 +311,7 @@ export function FieldPalette({
             placeholder="Search 18 field types..."
             value={searchQuery}
             onChange={e => onSearchChange(e.target.value)}
-            className="text-[13px] pl-9 bg-muted/20 border-border/60 rounded-[6px] h-[38px]"
+            className="text-[13px] pl-9 bg-primary/5 border-border/60 rounded-none] h-[38px]"
           />
         </div>
       </div>

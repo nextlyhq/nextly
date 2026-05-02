@@ -72,7 +72,7 @@ function DragOverlayContent({
   if (data.source === "palette") {
     const IconComponent = iconMap[data.icon] ?? Icons.FileText;
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-primary bg-background shadow-lg">
+      <div className="flex items-center gap-2 px-3 py-2 rounded-none border border-primary bg-background shadow-lg">
         <IconComponent className="h-4 w-4 text-primary shrink-0" />
         <span className="text-xs font-medium text-foreground">
           {data.label}
@@ -88,7 +88,7 @@ function DragOverlayContent({
 
   return (
     <div
-      className="flex items-center gap-3 py-3 px-4 bg-background border border-border/60 rounded-xl shadow-lg cursor-grabbing"
+      className="flex items-center gap-3 py-3 px-4 bg-background border border-border/60 rounded-none shadow-lg cursor-grabbing"
       style={{ minWidth: 320 }}
     >
       <div className="p-1.5 shrink-0">
@@ -108,11 +108,11 @@ function DragOverlayContent({
           {field.label || field.name || "Unnamed Field"}
         </span>
         <span className="text-muted-foreground/40 text-xs shrink-0">•</span>
-        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-full border border-border/60 bg-muted text-muted-foreground capitalize">
+        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-none border border-border/60 bg-primary/5 text-muted-foreground capitalize">
           {field.type}
         </span>
         {isRequired && (
-          <span className="text-[10px] px-2 py-0 leading-5 bg-red-50 text-red-600 font-normal rounded-full border border-red-200 shrink-0">
+          <span className="text-[10px] px-2 py-0 leading-5 bg-red-50 text-red-600 font-normal rounded-none border border-red-200 shrink-0">
             Required
           </span>
         )}
@@ -214,32 +214,34 @@ export function BuilderPageTemplate<T extends FieldValues = FieldValues>({
               {/* Left Column — main canvas */}
               <div className="flex-1 min-h-[500px] lg:h-full lg:overflow-y-auto admin-page-container [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                 <div className="w-full py-6 sm:py-8 px-4 sm:px-6 lg:px-8">
-                  <div className="space-y-8 mb-8">
+                  <div>
                     {/* Breadcrumb */}
-                    <Breadcrumbs
-                      items={[
-                        ...breadcrumbItems,
-                        { label: breadcrumbCurrentLabel },
-                      ]}
-                    />
+                    <div className="mb-6">
+                      <Breadcrumbs
+                        items={[
+                          ...breadcrumbItems,
+                          { label: breadcrumbCurrentLabel },
+                        ]}
+                      />
+                    </div>
 
                     {/* Page Header */}
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
                       <div
                         className={
                           headerIcon ? "flex items-center gap-3" : undefined
                         }
                       >
                         {headerIcon && (
-                          <div className="p-2 sm:p-2.5 rounded-lg bg-primary/10 text-primary shrink-0">
+                          <div className="p-2 sm:p-2.5 rounded-none bg-primary/10 text-primary shrink-0">
                             {headerIcon}
                           </div>
                         )}
                         <div>
-                          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                          <h1 className="text-xl font-semibold tracking-tight text-foreground">
                             {headerTitle}
                           </h1>
-                          <p className="text-base text-muted-foreground mt-2">
+                          <p className="text-sm font-normal text-primary/50 mt-1">
                             {headerDescription}
                           </p>
                         </div>

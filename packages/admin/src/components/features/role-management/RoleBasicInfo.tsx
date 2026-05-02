@@ -65,7 +65,7 @@ export function RoleBasicInfo({
                 {...field}
                 disabled={isLoading || isSystemRole}
                 aria-required="true"
-                className="bg-muted font-mono text-sm"
+                className="bg-primary/5 font-mono text-sm"
               />
             </FormControl>
             <p className="text-xs text-muted-foreground mt-1.5 ml-0.5">

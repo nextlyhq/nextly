@@ -22,13 +22,13 @@ export const PluginsTableSkeleton: React.FC = () => {
     <div className="space-y-4">
       {/* Toolbar Skeleton */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <Skeleton className="h-9 w-full md:max-w-sm rounded-md" />
+        <Skeleton className="h-9 w-full md:max-w-sm rounded-none" />
         <div className="flex items-center gap-2">
-          <Skeleton className="h-9 w-24 rounded-md" />
+          <Skeleton className="h-9 w-24 rounded-none" />
         </div>
       </div>
 
-      <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
         <div className="border-0 rounded-none shadow-none">
           <Table>
             {/* Header Skeleton */}
@@ -37,10 +37,10 @@ export const PluginsTableSkeleton: React.FC = () => {
                 {columns.map(col => (
                   <TableHead key={`skeleton-header-${col}`} className="py-3">
                     {col === "select" ? (
-                      <Skeleton className="h-4 w-4 rounded" />
+                      <Skeleton className="h-4 w-4 rounded-none" />
                     ) : col === "label" ? (
                       <div className="flex items-center gap-3">
-                        <Skeleton className="h-9 w-9 rounded-[6px] shrink-0" />
+                        <Skeleton className="h-9 w-9 rounded-none] shrink-0" />
                         <div className="space-y-1.5 flex-1">
                           <Skeleton className="h-4 w-[140px]" />
                           <Skeleton className="h-3 w-[100px]" />
@@ -61,10 +61,10 @@ export const PluginsTableSkeleton: React.FC = () => {
                   {columns.map(col => (
                     <TableCell key={col} className="py-3">
                       {col === "select" ? (
-                        <Skeleton className="h-4 w-4 rounded" />
+                        <Skeleton className="h-4 w-4 rounded-none" />
                       ) : col === "label" ? (
                         <div className="flex items-center gap-3">
-                          <Skeleton className="h-9 w-9 rounded-[6px] shrink-0" />
+                          <Skeleton className="h-9 w-9 rounded-none] shrink-0" />
                           <div className="space-y-1.5 flex-1">
                             <Skeleton className="h-4 w-[160px]" />
                             <Skeleton className="h-3 w-[120px]" />

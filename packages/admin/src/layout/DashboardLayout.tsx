@@ -93,7 +93,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 <ErrorBoundary
                   fallback={
                     <div className="flex h-full items-center justify-center bg-background p-6 text-center">
-                      <div className="max-w-md rounded-lg bg-card p-6 shadow-xl border border-border">
+                      <div className="max-w-md rounded-none bg-card p-6 shadow-xl border border-border">
                         <h2 className="text-xl font-bold text-foreground mb-2">
                           Something went wrong
                         </h2>

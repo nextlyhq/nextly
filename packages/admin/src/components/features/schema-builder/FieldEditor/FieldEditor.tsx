@@ -132,12 +132,12 @@ export function FieldEditor({
   const isSystemField = localField.isSystem === true;
 
   return (
-    <div className="h-full flex flex-col bg-muted/30">
+    <div className="h-full flex flex-col bg-primary/5">
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-background border border-border flex items-center justify-center">
+            <div className="w-8 h-8 rounded-none bg-background border border-border flex items-center justify-center">
               <IconComponent className="h-4 w-4 text-muted-foreground" />
             </div>
             <div>

@@ -71,7 +71,7 @@ export function GroupFieldEditor({
         </div>
 
         {nestedFields.length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 border border-amber-500/20">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
             <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <div className="text-xs text-amber-600 dark:text-amber-400">
               <p className="font-medium">No nested fields</p>
@@ -82,7 +82,7 @@ export function GroupFieldEditor({
             </div>
           </div>
         ) : (
-          <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
             <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
             <div className="text-xs text-muted-foreground">
               <p>Click on nested fields in the field list to configure them.</p>
@@ -100,7 +100,7 @@ export function GroupFieldEditor({
       </div>
 
       {/* Info about groups */}
-      <div className="flex items-start gap-2 p-3 rounded-md bg-muted/30">
+      <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
         <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
         <p className="text-xs text-muted-foreground">
           <strong>Tip:</strong> Groups organize related fields under a common

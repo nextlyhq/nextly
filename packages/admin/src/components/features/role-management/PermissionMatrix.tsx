@@ -43,19 +43,19 @@ export function PermissionMatrix({
           <TabsList className="bg-transparent h-auto p-0 border-none space-x-2 auto-cols-auto">
             <TabsTrigger
               value="collection-types"
-              className="rounded-md border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
+              className="rounded-none border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
             >
               Collection Types
             </TabsTrigger>
             <TabsTrigger
               value="single-types"
-              className="rounded-md border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
+              className="rounded-none border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
             >
               Single Types
             </TabsTrigger>
             <TabsTrigger
               value="settings"
-              className="rounded-md border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
+              className="rounded-none border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
             >
               Settings
             </TabsTrigger>

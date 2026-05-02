@@ -6,7 +6,7 @@ export function SignupLoading() {
       <div className="space-y-8">
         {/* Header */}
         <div className="text-left space-y-2 mt-12 mb-8">
-          <Skeleton className="h-12 w-12 bg-muted mb-10 rounded-none" />
+          <Skeleton className="h-12 w-12 bg-primary/5 mb-10 rounded-none" />
           <div className="space-y-3">
             <Skeleton className="h-9 w-40 rounded-none" />
             <Skeleton className="h-5 w-64 rounded-none" />

@@ -113,23 +113,25 @@ export default function APIPlaygroundPage({ params }: APIPlaygroundPageProps) {
   return (
     <PageContainer>
       <div className="flex flex-col gap-4 h-full">
-        <Breadcrumbs
-          items={[
-            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-            {
-              label: collectionLabel,
-              href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),
-            },
-            { label: "API Playground" },
-          ]}
-        />
+        <div className="mb-6">
+          <Breadcrumbs
+            items={[
+              { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+              {
+                label: collectionLabel,
+                href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),
+              },
+              { label: "API Playground" },
+            ]}
+          />
+        </div>
 
         {/* Page header */}
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+        <div className="mb-8">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
             API Playground
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm font-normal text-primary/50 mt-1">
             Test API endpoints for the <strong>{collectionLabel}</strong>{" "}
             collection. Build requests, execute them, and view responses.
           </p>

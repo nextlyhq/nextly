@@ -95,12 +95,12 @@ function CollectionCard({
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-md overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/20"
+      className="block group h-full rounded-none overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/20"
     >
       <Card
         variant="interactive"
         className={cn(
-          "h-full !border-0 !bg-transparent transition-colors duration-200 rounded-md overflow-hidden relative"
+          "h-full !border-0 !bg-transparent transition-colors duration-200 rounded-none overflow-hidden relative"
         )}
       >
         <CardContent className="p-5 relative z-10">
@@ -129,7 +129,7 @@ function LoadingSkeleton() {
       {Array.from({ length: 4 }, (_, i) => (
         <Skeleton
           key={i}
-          className="h-32 rounded-md bg-muted/10 border border-border"
+          className="h-32 rounded-none bg-primary/5 border border-border"
         />
       ))}
     </div>
@@ -170,13 +170,13 @@ export const CollectionQuickLinks: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : statsError ? (
-        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-md border border-destructive/10">
+        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none border border-destructive/10">
           <AlertCircle className="h-4 w-4" />
           <span>Connection Error</span>
         </div>
       ) : counts.length === 0 ? (
-        <div className="py-12 flex flex-col items-center gap-6 bg-muted/5 rounded-md border border-dashed border-border">
-          <div className="p-6 rounded-md bg-muted/20 border border-border/10">
+        <div className="py-12 flex flex-col items-center gap-6 bg-primary/5 rounded-none border border-dashed border-border">
+          <div className="p-6 rounded-none bg-primary/5 border border-border/10">
             <Layers className="h-8 w-8 text-muted-foreground/10" />
           </div>
           <div className="space-y-2 text-center">
@@ -202,7 +202,7 @@ export const CollectionQuickLinks: React.FC = () => {
                   </h4>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <span className="ml-4 text-[9px] font-bold tabular-nums text-muted-foreground/30 uppercase tracking-widest bg-muted/5 px-2 py-0.5 rounded-md border border-border">
+                <span className="ml-4 text-[9px] font-bold tabular-nums text-muted-foreground/30 uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-none border border-border">
                   {group.collections.length}
                 </span>
               </div>

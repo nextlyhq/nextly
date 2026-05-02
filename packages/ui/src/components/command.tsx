@@ -348,7 +348,7 @@ const CommandShortcut = forwardRef<HTMLSpanElement, CommandShortcutProps>(
           // Typography
           "text-xs font-mono",
           // Visual
-          "text-muted-foreground bg-muted",
+          "text-muted-foreground bg-primary/5",
           "border border-border rounded-none",
           // Spacing
           "px-1.5 py-0.5",

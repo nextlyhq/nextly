@@ -38,7 +38,7 @@ export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
       data-status={row.status}
       className={cn(
         "border-b border-border last:border-b-0 px-4 py-3",
-        expandable && "cursor-pointer hover:bg-muted/50"
+        expandable && "cursor-pointer hover:bg-primary/5"
       )}
       role={expandable ? "button" : undefined}
       tabIndex={expandable ? 0 : undefined}
@@ -86,7 +86,7 @@ export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
           {expanded && row.errorMessage && (
             <pre
               data-testid="notification-row-error-detail"
-              className="mt-2 text-xs whitespace-pre-wrap break-words text-destructive bg-destructive/5 rounded p-2"
+              className="mt-2 text-xs whitespace-pre-wrap break-words text-destructive bg-destructive/5 rounded-none p-2"
             >
               {row.errorMessage}
             </pre>

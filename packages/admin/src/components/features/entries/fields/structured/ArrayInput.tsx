@@ -324,7 +324,7 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
                 type="button"
                 className={cn(
                   "flex items-center gap-2 flex-1 text-left",
-                  "rounded px-1 py-0.5",
+                  "rounded-none px-1 py-0.5",
                   "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
                 )}
                 aria-expanded={isOpen}
@@ -381,7 +381,7 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
 
             {/* Empty State */}
             {items.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground border border-dashed rounded-lg bg-muted/20">
+              <div className="text-center py-8 text-muted-foreground border border-dashed rounded-none bg-primary/5">
                 <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
                 {canAdd && (
                   <p className="text-sm">Click the button below to add one.</p>

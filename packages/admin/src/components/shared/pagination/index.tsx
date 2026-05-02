@@ -21,7 +21,7 @@ import type { PaginationProps } from "./types";
  * ## Design Specifications
  * - **Button Size**: 32px (h-8 w-8) - sufficient touch target
  * - **Button Variant**: secondary (default), primary (current page)
- * - **Border Radius**: 6px (rounded-md) - matches design system
+ * - **Border Radius**: 6px (rounded-none) - matches design system
  * - **Spacing**: 8px gap (gap-2) between controls
  * - **Typography**: text-sm for page info and page size selector
  * - **Max Visible Pages**: Configurable (default: 5)

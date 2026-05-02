@@ -41,8 +41,8 @@ export function PermissionGuard({
       <div className="flex flex-col items-center justify-center min-h-[400px] h-[60vh] w-full animate-fade-in">
         <div className="flex flex-col items-center text-center">
           <div className="relative mb-6">
-            <div className="h-12 w-12 rounded-full border-t-2 border-r-2 border-primary animate-spin" />
-            <div className="absolute inset-0 rounded-full border-2 border-primary/10" />
+            <div className="h-12 w-12 rounded-none border-t-2 border-r-2 border-primary animate-spin" />
+            <div className="absolute inset-0 rounded-none border-2 border-primary/10" />
           </div>
           <p className="text-sm font-medium tracking-tight text-slate-900 dark:text-slate-100 mb-1">
             Setting up your workspace

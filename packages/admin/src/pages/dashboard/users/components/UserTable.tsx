@@ -400,9 +400,9 @@ export default function UserTable() {
           const initial = firstName.charAt(0).toUpperCase();
           return (
             <div className="flex items-center gap-3">
-              <Avatar className="h-9 w-9 rounded-full">
+              <Avatar className="h-9 w-9 rounded-none">
                 <AvatarImage src={user.image} alt={user.name} />
-                <AvatarFallback className="rounded-full bg-black/20 text-black">
+                <AvatarFallback className="rounded-none bg-primary/5 text-primary">
                   {initial}
                 </AvatarFallback>
               </Avatar>
@@ -641,7 +641,7 @@ export default function UserTable() {
       </div>
 
       {/* Responsive table and Pagination Card */}
-      <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
         {isError ? (
           <div className="p-8">
             <Alert variant="destructive">

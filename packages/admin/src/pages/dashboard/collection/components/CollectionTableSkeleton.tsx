@@ -22,7 +22,7 @@ import type React from "react";
 const GrayBar = ({ className }: { className?: string }) => (
   <div
     aria-hidden="true"
-    className={`animate-pulse rounded bg-gray-50 dark:bg-gray-400 ${className ?? ""}`}
+    className={`animate-pulse rounded-none bg-gray-50 dark:bg-gray-400 ${className ?? ""}`}
   />
 );
 
@@ -40,7 +40,7 @@ export const CollectionTableSkeleton: React.FC = () => {
   ];
 
   return (
-    <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+    <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
       <div className="border-0 rounded-none shadow-none">
         <Table>
           {/* Header Skeleton */}
@@ -51,7 +51,7 @@ export const CollectionTableSkeleton: React.FC = () => {
                   {col === "select" ? (
                     <GrayBar className="h-4 w-4" />
                   ) : col === "actions" ? (
-                    <div className="h-4 w-8 rounded opacity-0" />
+                    <div className="h-4 w-8 rounded-none opacity-0" />
                   ) : col === "label" ? (
                     <GrayBar className="h-4 w-[70%] max-w-[180px]" />
                   ) : col === "description" ? (
@@ -73,7 +73,7 @@ export const CollectionTableSkeleton: React.FC = () => {
                     {col === "select" ? (
                       <GrayBar className="h-4 w-4" />
                     ) : col === "actions" ? (
-                      <div className="h-4 w-8 rounded opacity-0" />
+                      <div className="h-4 w-8 rounded-none opacity-0" />
                     ) : col === "label" ? (
                       <GrayBar className="h-4 w-[70%] max-w-[200px]" />
                     ) : col === "description" ? (

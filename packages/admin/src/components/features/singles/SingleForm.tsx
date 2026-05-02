@@ -389,8 +389,8 @@ export function SingleForm({
 
         <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
           {/* Main Content */}
-          <div className="flex-1 space-y-6 lg:p-8 pt-6">
-            {headerContent}
+          <div className="flex-1 lg:p-8 pt-6">
+            <div className="mb-6">{headerContent}</div>
             <SingleFormHeader
               label={schema.label}
               description={schema.description}
@@ -400,28 +400,30 @@ export function SingleForm({
             />
             {/* Custom Title & Slug row */}
             {(titleField || slugField) && (
-              <Card>
-                <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                  {titleField && (
-                    <div className="w-full">
-                      <FieldRenderer
-                        field={titleField}
-                        disabled={isSubmitting}
-                        readOnly={false}
-                      />
-                    </div>
-                  )}
-                  {slugField && (
-                    <div className="w-full">
-                      <FieldRenderer
-                        field={slugField}
-                        disabled={isSubmitting}
-                        readOnly={false}
-                      />
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <div className="mb-6">
+                <Card>
+                  <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                    {titleField && (
+                      <div className="w-full">
+                        <FieldRenderer
+                          field={titleField}
+                          disabled={isSubmitting}
+                          readOnly={false}
+                        />
+                      </div>
+                    )}
+                    {slugField && (
+                      <div className="w-full">
+                        <FieldRenderer
+                          field={slugField}
+                          disabled={isSubmitting}
+                          readOnly={false}
+                        />
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             )}
 
             {mainFields.length > 0 && (

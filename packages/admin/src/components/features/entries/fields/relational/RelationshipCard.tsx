@@ -125,7 +125,7 @@ export function RelationshipCard({
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-2 rounded-md border bg-card p-2 text-card-foreground",
+        "flex items-center justify-between gap-2 rounded-none border bg-card p-2 text-card-foreground",
         disabled && "opacity-60",
         className
       )}

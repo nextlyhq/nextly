@@ -9,11 +9,11 @@ import type { OnboardingStep } from "@admin/types/dashboard/onboarding";
 
 function StepRow({ step }: { step: OnboardingStep }) {
   return (
-    <div className="flex items-center justify-between py-3.5 group transition-colors px-2 rounded-2xl hover:bg-primary/[0.03]">
+    <div className="flex items-center justify-between py-3.5 group transition-colors px-2 rounded-none hover:bg-primary/[0.03]">
       <div className="flex items-center gap-4">
         <div
           className={cn(
-            "h-6 w-6 rounded-full flex items-center justify-center transition-all duration-500",
+            "h-6 w-6 rounded-none flex items-center justify-center transition-all duration-500",
             step.isComplete
               ? "bg-emerald-500/10 border border-emerald-500/30 scale-110 shadow-glow-success"
               : "bg-primary/5 border border-primary/10 group-hover:border-primary/30 group-hover:scale-105"
@@ -22,7 +22,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
           {step.isComplete ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
           ) : (
-            <div className="h-1.5 w-1.5 rounded-full bg-primary/20 group-hover:bg-primary/60 transition-colors" />
+            <div className="h-1.5 w-1.5 rounded-none bg-primary/20 group-hover:bg-primary/60 transition-colors" />
           )}
         </div>
         <span
@@ -39,7 +39,7 @@ function StepRow({ step }: { step: OnboardingStep }) {
       {!step.isComplete && (
         <Link
           href={step.href}
-          className="text-[9px] font-black uppercase tracking-[0.2em] text-primary hover:text-white hover:bg-primary px-3 py-1.5 rounded-full ring-1 ring-primary/20 hover:ring-primary transition-all duration-500 transform active:scale-95"
+          className="text-[9px] font-black uppercase tracking-[0.2em] text-primary hover:text-white hover:bg-primary px-3 py-1.5 rounded-none ring-1 ring-primary/20 hover:ring-primary transition-all duration-500 transform active:scale-95"
         >
           Execute &rarr;
         </Link>
@@ -58,7 +58,7 @@ export const OnboardingChecklist: React.FC = () => {
   const completionPct = (progress.completedCount / progress.totalCount) * 100;
 
   return (
-    <Card className="border-primary/20 bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-[2.5rem] transition-all duration-700 hover:border-primary/40 group/card relative">
+    <Card className="border-primary/20 bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none] transition-all duration-700 hover:border-primary/40 group/card relative">
       <div className="absolute top-0 left-0 w-full h-1 bg-primary/5">
         <div
           className="h-full bg-primary shadow-glow-primary transition-all duration-1000 ease-out"
@@ -79,7 +79,7 @@ export const OnboardingChecklist: React.FC = () => {
               <span className="text-[14px] font-black text-foreground tracking-tighter">
                 {progress.completedCount} of {progress.totalCount}
               </span>
-              <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest bg-muted/30 px-2 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-none">
                 {Math.round(completionPct)}%
               </span>
             </div>
@@ -88,14 +88,14 @@ export const OnboardingChecklist: React.FC = () => {
         <button
           type="button"
           onClick={dismiss}
-          className="rounded-full h-8 w-8 flex items-center justify-center text-primary/20 hover-unified transition-all duration-500 opacity-0 group-hover/card:opacity-100"
+          className="rounded-none h-8 w-8 flex items-center justify-center text-primary/20 hover-unified transition-all duration-500 opacity-0 group-hover/card:opacity-100"
           aria-label="Dismiss sequence"
         >
           <X className="h-4 w-4" />
         </button>
       </CardHeader>
       <CardContent className="px-6 pb-8">
-        <div className="space-y-1 bg-white/40 dark:bg-slate-950/20 p-2 rounded-[2rem] border border-border/5">
+        <div className="space-y-1 bg-white/40 dark:bg-slate-950/20 p-2 rounded-none] border border-border/5">
           {progress.steps.map(step => (
             <StepRow key={step.id} step={step} />
           ))}

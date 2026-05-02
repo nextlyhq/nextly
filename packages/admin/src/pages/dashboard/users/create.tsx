@@ -8,7 +8,7 @@ import {
   Skeleton,
   Spinner,
 } from "@revnixhq/ui";
-import type { ReactElement} from "react";
+import type { ReactElement } from "react";
 import { useEffect } from "react";
 import {
   useForm,
@@ -206,7 +206,7 @@ export default function CreateUserPage(): ReactElement {
         </div>
 
         {/* Form skeleton */}
-        <Skeleton className={`${FORM_MIN_HEIGHT} w-full rounded-xl`} />
+        <Skeleton className={`${FORM_MIN_HEIGHT} w-full rounded-none`} />
       </PageContainer>
     );
   }
@@ -223,7 +223,9 @@ export default function CreateUserPage(): ReactElement {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { void refetchRoles(); }}
+              onClick={() => {
+                void refetchRoles();
+              }}
               className="ml-2"
             >
               Retry
@@ -243,15 +245,17 @@ export default function CreateUserPage(): ReactElement {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <UserBreadcrumbs currentPage="create" />
+        <div className="mb-6">
+          <UserBreadcrumbs currentPage="create" />
+        </div>
 
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">
               Create New User
             </h1>
-            <p className="text-muted-foreground">
+            <p className="text-sm font-normal text-primary/50 mt-1">
               Add a new user to the system with appropriate role and
               permissions.
             </p>
@@ -282,7 +286,7 @@ export default function CreateUserPage(): ReactElement {
         </div>
 
         {/* Form Card */}
-        <div className="bg-card border border-border rounded-xl p-6 shadow-none">
+        <div className="bg-card border border-border rounded-none p-6 shadow-none">
           {/* Avatar Section */}
           <div className="flex items-center gap-4 mb-8 pb-8 border-b border-border">
             <AvatarUploader
@@ -310,7 +314,9 @@ export default function CreateUserPage(): ReactElement {
           <FormProvider {...form}>
             <form
               id="create-user-form"
-              onSubmit={(e) => { void handleSubmit(onSubmit)(e); }}
+              onSubmit={e => {
+                void handleSubmit(onSubmit)(e);
+              }}
               className="space-y-8"
             >
               {/* Form Fields */}

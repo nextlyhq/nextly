@@ -302,7 +302,7 @@ function VariableEditor({
           {fields.map((field, index) => (
             <div
               key={field.id}
-              className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+              className="flex items-start gap-2 rounded-none border border-border bg-primary/5 p-3"
             >
               <div className="grid flex-1 gap-2 sm:grid-cols-[1fr_1.5fr]">
                 <FormField
@@ -369,7 +369,7 @@ function VariableEditor({
           ))}
         </div>
       ) : (
-        <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+        <div className="rounded-none border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
           No custom variables defined. Click &quot;Add Variable&quot; to create
           one.
         </div>
@@ -449,7 +449,7 @@ function DefaultAttachmentsSection({
           {fields.map((field, index) => (
             <div
               key={field.id}
-              className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3"
+              className="flex items-center gap-3 rounded-none border border-border bg-primary/5 p-3"
             >
               <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="flex-1 min-w-0">
@@ -476,7 +476,7 @@ function DefaultAttachmentsSection({
           ))}
         </div>
       ) : (
-        <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+        <div className="rounded-none border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
           No default attachments. Click &quot;Add Attachment&quot; to pick
           from the media library.
         </div>
@@ -507,7 +507,7 @@ function BuiltInVariablesReference() {
       <p className="text-xs text-muted-foreground">
         These variables are always available in every template.
       </p>
-      <div className="rounded-lg border border-border bg-muted/30 p-3">
+      <div className="rounded-none border border-border bg-primary/5 p-3">
         <div className="space-y-2">
           {COMMON_VARIABLES.map(v => (
             <div key={v.name} className="flex items-start gap-2">
@@ -590,15 +590,11 @@ export function EmailTemplateForm({
       {/* Form */}
       <Form {...form}>
         <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
-          <div className="bg-card border border-border rounded-xl overflow-hidden">
+          <div className="bg-card border border-border rounded-none overflow-hidden">
             {/* Page Header - Inside Card */}
-            <div className="flex items-center gap-3 border-b bg-muted/20 px-6 py-5">
+            <div className="flex items-center gap-3 border-b bg-primary/5 px-6 py-5">
               <div
-                className="shrink-0 flex items-center justify-center w-9 h-9 rounded-[6px] border border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
-                style={{
-                  borderRadius: "6px",
-                  border: "1px solid hsl(var(--primary) / 0.25)",
-                }}
+                className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary"
               >
                 <FileText className="h-4 w-4" />
               </div>
@@ -799,7 +795,7 @@ export function EmailTemplateForm({
                   control={form.control}
                   name="useLayout"
                   render={({ field }) => (
-                    <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
+                    <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
                       <div className="space-y-0.5">
                         <FormLabel>Use Layout (Header/Footer)</FormLabel>
                         <FormDescription>
@@ -823,7 +819,7 @@ export function EmailTemplateForm({
                   control={form.control}
                   name="isActive"
                   render={({ field }) => (
-                    <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
+                    <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
                       <div className="space-y-0.5">
                         <FormLabel>Active</FormLabel>
                         <FormDescription>

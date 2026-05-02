@@ -121,7 +121,7 @@ export function PermissionForm({
             )}
           </div>
 
-          <div className="mb-4 rounded-md border p-4 flex justify-between items-center">
+          <div className="mb-4 rounded-none border p-4 flex justify-between items-center">
             <label>
               <div className="text-sm font-medium">System Permission</div>
               <p className="admin-text">

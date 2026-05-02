@@ -346,7 +346,7 @@ function SingleComponentNonRepeatable({
   return (
     <div
       className={cn(
-        "border border-slate-200 dark:border-slate-800 shadow-none rounded-md overflow-hidden",
+        "border border-slate-200 dark:border-slate-800 shadow-none rounded-none overflow-hidden",
         field.admin?.className
       )}
     >
@@ -519,7 +519,7 @@ function MultiComponentNonRepeatable({
         )}
 
         {!currentType && (
-          <p className="text-sm text-muted-foreground text-center py-4 border border-dashed rounded-lg bg-muted/20">
+          <p className="text-sm text-muted-foreground text-center py-4 border border-dashed rounded-none bg-primary/5">
             Select a component type to add fields.
           </p>
         )}
@@ -703,7 +703,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Empty State */}
       {items.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground border border-dashed rounded-lg bg-muted/20">
+        <div className="text-center py-8 text-muted-foreground border border-dashed rounded-none bg-primary/5">
           <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
           {canAdd && (
@@ -916,7 +916,7 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 p-4",
+        "rounded-none border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 p-4",
         className
       )}
     >

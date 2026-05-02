@@ -189,7 +189,7 @@ export function ArrayFieldEditor({
         </Select>
 
         {labelableFields.length === 0 && nestedFields.length > 0 && (
-          <div className="flex items-start gap-2 p-2 rounded-md bg-muted/50">
+          <div className="flex items-start gap-2 p-2 rounded-none bg-primary/5">
             <Icons.Info className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
             <p className="text-xs text-muted-foreground">
               Add a text, email, number, select, date, or slug field to use as
@@ -249,7 +249,7 @@ export function ArrayFieldEditor({
         </div>
 
         {nestedFields.length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 border border-amber-500/20">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
             <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <div className="text-xs text-amber-600 dark:text-amber-400">
               <p className="font-medium">No nested fields</p>
@@ -260,7 +260,7 @@ export function ArrayFieldEditor({
             </div>
           </div>
         ) : (
-          <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
             <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
             <div className="text-xs text-muted-foreground">
               <p>Click on nested fields in the field list to configure them.</p>
@@ -278,7 +278,7 @@ export function ArrayFieldEditor({
       </div>
 
       {/* Validation Hint */}
-      <div className="flex items-start gap-2 p-3 rounded-md bg-muted/30">
+      <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
         <Icons.Settings className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
         <p className="text-xs text-muted-foreground">
           <strong>Tip:</strong> Use the Validation tab to set minimum and

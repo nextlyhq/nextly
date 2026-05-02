@@ -57,7 +57,7 @@ export function AdvancedOptionsPanel({
         <div className="space-y-0.5">
           <div className="flex items-center gap-2">
             <Label className="text-sm font-medium">Localized</Label>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-none bg-primary/5 text-muted-foreground">
               Coming Soon
             </span>
           </div>
@@ -73,7 +73,7 @@ export function AdvancedOptionsPanel({
       </div>
 
       {/* Info box */}
-      <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 mt-4">
+      <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5 mt-4">
         <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5" />
         <div className="text-xs text-muted-foreground">
           <p className="font-medium mb-1">About Advanced Options</p>

@@ -168,7 +168,7 @@ export function MediaDetailDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-7xl w-full h-[80vh] p-0 flex flex-col gap-0 overflow-hidden bg-background shadow-2xl border sm:rounded-xl">
+        <DialogContent className="max-w-7xl w-full h-[80vh] p-0 flex flex-col gap-0 overflow-hidden bg-background shadow-2xl border sm:rounded-none">
           {/* 1. Header Row (Fixed Height) */}
           <div className="h-16 border-b flex items-center justify-between px-6 bg-background shrink-0 z-10 w-full relative">
             <div className="flex items-center gap-2">
@@ -181,7 +181,7 @@ export function MediaDetailDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-8 w-8 rounded-md shadow-none hover-unified text-primary/80 border-primary/20"
+                className="h-8 w-8 rounded-none shadow-none hover-unified text-primary/80 border-primary/20"
                 onClick={onPrevious}
                 disabled={!hasPrevious}
               >
@@ -190,7 +190,7 @@ export function MediaDetailDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-8 w-8 rounded-md shadow-none hover-unified text-primary/80 border-primary/20"
+                className="h-8 w-8 rounded-none shadow-none hover-unified text-primary/80 border-primary/20"
                 onClick={onNext}
                 disabled={!hasNext}
               >
@@ -199,7 +199,7 @@ export function MediaDetailDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-8 w-8 rounded-md shadow-none hover:bg-destructive/10 hover:text-destructive text-muted-foreground border-border"
+                className="h-8 w-8 rounded-none shadow-none hover:bg-destructive/10 hover:text-destructive text-muted-foreground border-border"
                 onClick={() => onOpenChange(false)}
               >
                 <X className="h-4 w-4" />
@@ -211,7 +211,7 @@ export function MediaDetailDialog({
           <div className="flex-1 flex flex-row overflow-hidden min-h-0 bg-background w-full">
             {/* LEFT: Preview Area (Fixed 65% Width) */}
             <div
-              className="flex-[0_0_65%] bg-muted/20 flex flex-col relative overflow-hidden h-full"
+              className="flex-[0_0_65%] bg-primary/5 flex flex-col relative overflow-hidden h-full"
               style={{ width: "65%", minWidth: "65%" }}
             >
               {/* Image Container: Center the image */}
@@ -221,7 +221,7 @@ export function MediaDetailDialog({
                     <img
                       src={media.url}
                       alt={media.altText || media.filename}
-                      className="max-w-full max-h-full object-contain rounded-sm transition-opacity duration-300"
+                      className="max-w-full max-h-full object-contain rounded-none transition-opacity duration-300"
                       style={{ maxWidth: "100%", maxHeight: "100%" }}
                     />
                   </div>
@@ -229,10 +229,10 @@ export function MediaDetailDialog({
                   <video
                     src={media.url}
                     controls
-                    className="max-w-full max-h-full shadow-lg rounded-sm"
+                    className="max-w-full max-h-full shadow-lg rounded-none"
                   />
                 ) : (
-                  <div className="flex flex-col items-center gap-3 text-muted-foreground p-12 border-2 border-dashed rounded-lg bg-background/80 shadow-sm">
+                  <div className="flex flex-col items-center gap-3 text-muted-foreground p-12 border-2 border-dashed rounded-none bg-background/80 shadow-sm">
                     <FileText className="h-20 w-20 opacity-20" />
                     <div className="text-center">
                       <p className="font-medium text-foreground">
@@ -352,7 +352,7 @@ export function MediaDetailDialog({
                       value={altText}
                       onChange={e => setAltText(e.target.value)}
                       onBlur={handleSave}
-                      className="h-10 text-xs focus-visible:ring-1 bg-muted/20 hover-unified transition-colors"
+                      className="h-10 text-xs focus-visible:ring-1 bg-primary/5 hover-unified transition-colors"
                       placeholder="Describe the image..."
                     />
                   </div>
@@ -369,7 +369,7 @@ export function MediaDetailDialog({
                       value={title}
                       onChange={e => setTitle(e.target.value)}
                       onBlur={handleSave}
-                      className="h-10 text-xs focus-visible:ring-1 bg-muted/20 hover-unified transition-colors"
+                      className="h-10 text-xs focus-visible:ring-1 bg-primary/5 hover-unified transition-colors"
                     />
                   </div>
 
@@ -385,7 +385,7 @@ export function MediaDetailDialog({
                         id="file-url"
                         value={media.url}
                         readOnly
-                        className="h-10 text-[10px] font-mono bg-muted/50 text-muted-foreground"
+                        className="h-10 text-[10px] font-mono bg-primary/5 text-muted-foreground"
                       />
                       <Button
                         type="button"
@@ -405,7 +405,7 @@ export function MediaDetailDialog({
               </div>
 
               {/* Footer Actions - Premium Spacing */}
-              <div className="px-6 h-16 border-t text-xs flex items-center justify-between shrink-0 bg-muted/5 mt-auto">
+              <div className="px-6 h-16 border-t text-xs flex items-center justify-between shrink-0 bg-primary/5 mt-auto">
                 <a
                   href={media.url}
                   target="_blank"

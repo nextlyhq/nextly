@@ -17,7 +17,7 @@ import type { SearchBarProps } from "./types";
  * - **Height**: 40px (h-10) - matches Input default size
  * - **Icon Size**: 16px (h-4 w-4) - lucide-react icons
  * - **Debounce**: Configurable delay (default: 300ms)
- * - **Border Radius**: 6px (rounded-md) - matches Input component
+ * - **Border Radius**: 6px (rounded-none) - matches Input component
  * - **Spacing**: Icons have 12px padding from edges
  *
  * ## Features
@@ -158,7 +158,7 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
-          className="h-10 w-full rounded-md border border-input bg-background pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 transition-all"
+          className="h-10 w-full rounded-none border border-input bg-background pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 transition-all"
         />
 
         {/* Right side icons (clear button + loading spinner) */}
@@ -178,7 +178,7 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
                 type="button"
                 onClick={handleClear}
                 aria-label="Clear search"
-                className="text-muted-foreground/60 hover:text-foreground transition-colors p-0.5 rounded-full hover-unified"
+                className="text-muted-foreground/60 hover:text-foreground transition-colors p-0.5 rounded-none hover-unified"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

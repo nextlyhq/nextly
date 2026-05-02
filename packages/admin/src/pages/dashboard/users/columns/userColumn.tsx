@@ -25,7 +25,7 @@ export const createUserColumns = (callbacks?: ActionCallbacks) => [
         <div className="flex items-center gap-3">
           <Avatar size="md">
             <AvatarImage src={user.image} alt={user.name} />
-            <AvatarFallback>{alp}</AvatarFallback>
+            <AvatarFallback className="bg-primary/5 text-primary">{alp}</AvatarFallback>
           </Avatar>
           <div>
             <div className="font-medium">{user.name}</div>

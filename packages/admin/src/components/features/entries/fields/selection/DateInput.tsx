@@ -306,7 +306,7 @@ export function DateInput<TFieldValues extends FieldValues = FieldValues>({
       min={min}
       max={max}
       aria-invalid={invalid || undefined}
-      className={cn(readOnly && "bg-muted cursor-not-allowed", className)}
+      className={cn(readOnly && "bg-primary/5 cursor-not-allowed", className)}
     />
   );
 }

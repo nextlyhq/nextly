@@ -78,8 +78,10 @@ export default function EditUserFieldPage() {
   if (!fieldId) {
     return (
       <PageContainer>
-        <div className="space-y-8">
-          <UserBreadcrumbs currentPage="fields-edit" />
+        <div>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="fields-edit" />
+          </div>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid field ID. Please go back and try again.
@@ -99,17 +101,19 @@ export default function EditUserFieldPage() {
   if (isLoading) {
     return (
       <PageContainer>
-        <div className="space-y-8">
-          <UserBreadcrumbs currentPage="fields-edit" />
+        <div>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="fields-edit" />
+          </div>
           <div className="space-y-6">
             <div className="flex items-center gap-4">
-              <Skeleton className="h-9 w-9 rounded-md" />
+              <Skeleton className="h-9 w-9 rounded-none" />
               <div className="space-y-2">
                 <Skeleton className="h-6 w-48" />
                 <Skeleton className="h-4 w-72" />
               </div>
             </div>
-            <Skeleton className="h-[500px] w-full rounded-xl" />
+            <Skeleton className="h-[500px] w-full rounded-none" />
           </div>
         </div>
       </PageContainer>
@@ -120,14 +124,16 @@ export default function EditUserFieldPage() {
   if (fetchError) {
     return (
       <PageContainer>
-        <div className="space-y-8">
-          <UserBreadcrumbs currentPage="fields-edit" />
-          <div className="flex items-center justify-between">
+        <div>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="fields-edit" />
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">
+              <h1 className="text-xl font-semibold tracking-tight">
                 Edit User Field
               </h1>
-              <p className="mt-2 text-base text-muted-foreground">
+              <p className="text-sm font-normal text-primary/50 mt-1">
                 Modify attribute properties for user accounts
               </p>
             </div>
@@ -143,7 +149,9 @@ export default function EditUserFieldPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => { void refetch(); }}
+                onClick={() => {
+                  void refetch();
+                }}
                 className="ml-2"
               >
                 Retry
@@ -163,15 +171,17 @@ export default function EditUserFieldPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="space-y-8">
-          <UserBreadcrumbs currentPage="fields-edit" />
+        <div>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="fields-edit" />
+          </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">
+              <h1 className="text-xl font-semibold tracking-tight">
                 Edit User Field
               </h1>
-              <p className="mt-2 text-base text-muted-foreground">
+              <p className="text-sm font-normal text-primary/50 mt-1">
                 Modify attribute properties for user accounts
               </p>
             </div>

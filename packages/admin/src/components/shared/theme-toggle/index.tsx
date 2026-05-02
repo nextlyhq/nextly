@@ -29,7 +29,7 @@ export function ThemeToggle(): React.ReactElement {
         <Button
           variant="ghost"
           size="icon"
-          className="absolute top-[15px] right-[40px] h-9 w-9 rounded-md transition-colors hover:bg-accent"
+          className="absolute top-[15px] right-[40px] h-9 w-9 rounded-none transition-colors hover:bg-accent"
           aria-label="Toggle theme"
         >
           {isDark ? (
@@ -42,21 +42,21 @@ export function ThemeToggle(): React.ReactElement {
       <DropdownMenuContent align="end" className="w-40">
         <DropdownMenuItem
           onClick={() => setTheme("light")}
-          className="cursor-pointer rounded-md"
+          className="cursor-pointer rounded-none"
         >
           <Sun className="mr-2 h-4 w-4" />
           <span>Light</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => setTheme("dark")}
-          className="cursor-pointer rounded-md"
+          className="cursor-pointer rounded-none"
         >
           <Moon className="mr-2 h-4 w-4" />
           <span>Dark</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => setTheme("system")}
-          className="cursor-pointer rounded-md"
+          className="cursor-pointer rounded-none"
         >
           <Laptop className="mr-2 h-4 w-4" />
           <span>System</span>
