@@ -436,9 +436,10 @@ export class PushSchemaPipeline {
     });
 
     try {
-      const managedTableNames = Object.values(desired.collections).map(
-        c => c.tableName
-      );
+      const managedTableNames = [
+        ...Object.values(desired.collections).map(c => c.tableName),
+        ...Object.values(desired.singles).map(s => s.tableName),
+      ];
 
       // Phase A: our diff.
       const liveSnapshot = this.testHooks._introspectSnapshotOverride
@@ -450,17 +451,28 @@ export class PushSchemaPipeline {
         : await introspectLiveSnapshot(db, dialect, managedTableNames);
 
       const desiredSnapshot: NextlySchemaSnapshot = {
-        tables: Object.values(desired.collections).map(c =>
-          buildDesiredTableFromFields(
-            c.tableName,
-            // FieldConfig has the shape buildDesiredTableFromFields expects;
-            // cast through unknown for the structural-vs-nominal type gap.
-            c.fields as unknown as Parameters<
-              typeof buildDesiredTableFromFields
-            >[1],
-            dialect
-          )
-        ),
+        tables: [
+          ...Object.values(desired.collections).map(c =>
+            buildDesiredTableFromFields(
+              c.tableName,
+              // FieldConfig has the shape buildDesiredTableFromFields expects;
+              // cast through unknown for the structural-vs-nominal type gap.
+              c.fields as unknown as Parameters<
+                typeof buildDesiredTableFromFields
+              >[1],
+              dialect
+            )
+          ),
+          ...Object.values(desired.singles).map(s =>
+            buildDesiredTableFromFields(
+              s.tableName,
+              s.fields as unknown as Parameters<
+                typeof buildDesiredTableFromFields
+              >[1],
+              dialect
+            )
+          ),
+        ],
       };
 
       const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
@@ -866,6 +878,16 @@ export class PushSchemaPipeline {
         dialect
       );
       out[c.tableName] = table;
+    }
+    // Singles (single_* tables) use identical field/column logic to
+    // collections; include them so drizzle-kit sees the full desired schema.
+    for (const s of Object.values(desired.singles)) {
+      const { table } = generateRuntimeSchema(
+        s.tableName,
+        s.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
+        dialect
+      );
+      out[s.tableName] = table;
     }
     return out;
   }

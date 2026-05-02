@@ -33,6 +33,7 @@ import type {
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { ServiceContainer } from "../../services";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -45,6 +46,7 @@ import {
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
   getMigrationJournalFromDI,
+  getSchemaRegistryFromDI,
 } from "../helpers/di";
 import {
   parseRichTextFormat,
@@ -557,27 +559,37 @@ const COLLECTIONS_METHODS: Record<
         );
       }
 
-      // Phase 6 follow-up #6 (2026-05-01): the FileManager caches the
-      // runtime Drizzle schema in an in-memory Map keyed by slug. After
-      // a rename/drop/add the DB column shape and `dynamic_collections.fields`
-      // are both correct, but the Map still holds the OLD shape. The
-      // next entry list/get/create query reads the stale schema and
-      // generates SQL referencing the old column name, returning 500
-      // `no such column: "<oldName>"` until the server restarts.
-      // Invalidating the slug here forces the next loadDynamicSchema()
-      // to rebuild via the metadata fetcher (which reads the freshly
-      // written fields JSON above).
+      // After a schema apply (rename, add, drop) two independent in-memory
+      // caches hold Drizzle table objects that are now stale:
+      //
+      //   1. CollectionFileManager.schemaRegistry — used by query-service
+      //      SELECT / JOIN builders (loadDynamicSchema path).
+      //   2. SchemaRegistry.dynamicSchemas — used by adapter.insert /
+      //      update / delete / select (getTableObject path).
+      //
+      // Both must be refreshed with the same freshly-generated table built
+      // from the apply payload's `fields`. Replacing in-place (rather than
+      // invalidate + lazy-rebuild) avoids the race where a concurrent
+      // request could arrive between the invalidation and the DB write of
+      // the new `dynamic_collections.fields`, picking up the stale schema.
       try {
-        getCollectionsHandlerFromDI()?.invalidateCollectionSchema(
-          p.collectionName
+        const { table: freshTable } = generateRuntimeSchema(
+          tableName,
+          fields as FieldDefinition[],
+          dialect
         );
+        getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+          tableName,
+          freshTable
+        );
+        getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // eslint-disable-next-line no-console -- intentional operator-visible warning
         console.warn(
-          `[applySchemaChanges] Schema-cache invalidation failed for ` +
-            `'${p.collectionName}': ${msg}. Field changes may not be ` +
-            `visible to entry queries until next reload.`
+          `[applySchemaChanges] In-memory schema refresh failed for ` +
+            `'${p.collectionName}': ${msg}. Entry queries may reference ` +
+            `old column names until next server restart.`
         );
       }
 

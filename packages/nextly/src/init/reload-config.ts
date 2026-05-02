@@ -50,6 +50,7 @@ import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector"
 import type {
   DesiredCollection,
   DesiredSchema,
+  DesiredSingle,
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { getProductionNotifier } from "../runtime/notifications/index";
@@ -87,9 +88,21 @@ type CollectionDef = {
   dbName?: string;
 };
 
-// Minimal duck-typed surface of CollectionRegistryService used here.
+type SingleDef = {
+  slug?: string;
+  fields?: unknown[];
+  label?: { singular?: string } | string;
+  description?: string;
+  admin?: unknown;
+  dbName?: string;
+};
+
+// Minimal duck-typed surfaces of registry services used here.
 interface CollectionRegistrySurface {
   syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
+}
+interface SingleRegistrySurface {
+  syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
 }
 
 // Minimal field shape passed to buildDesiredTableFromFields. Mirrors the
@@ -126,15 +139,16 @@ export async function reloadNextlyConfig(opts?: {
   // nextly.config.ts mid-edit with syntax errors during dev. Without this
   // guard, the loader rejection bubbles through getNextly() and turns
   // every subsequent request into a 500.
-  let newConfig: { collections?: CollectionDef[] } | undefined;
+  let newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] } | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
     );
     clearConfigCache();
     const result = await loadConfig();
-    newConfig = (result as { config?: { collections?: CollectionDef[] } })
-      .config;
+    newConfig = (result as {
+      config?: { collections?: CollectionDef[]; singles?: SingleDef[] };
+    }).config;
   } catch (err) {
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
@@ -218,18 +232,39 @@ export async function reloadNextlyConfig(opts?: {
       fields: (c.fields ?? []) as MinimalField[],
     });
   }
-  if (targets.length === 0) return;
 
-  // ONE batched introspect for every managed table the config knows about.
-  // Replaces N per-collection round-trips. If the call fails, abort the
-  // reload entirely — it's a connection-level failure, not a per-table
-  // problem we can usefully partial-apply around.
+  // Normalize singles. Table name follows single_<slug> convention.
+  const singleTargets: Array<{
+    slug: string;
+    tableName: string;
+    fields: MinimalField[];
+  }> = [];
+  for (const s of newConfig.singles ?? []) {
+    if (!s.slug) continue;
+    const { resolveSingleTableName } = await import(
+      "../domains/singles/services/resolve-single-table-name"
+    );
+    singleTargets.push({
+      slug: s.slug,
+      tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
+      fields: (s.fields ?? []) as MinimalField[],
+    });
+  }
+
+  if (targets.length === 0 && singleTargets.length === 0) return;
+
+  // ONE batched introspect for every managed table the config knows about
+  // (collections + singles). If the call fails, abort the reload entirely —
+  // it's a connection-level failure, not a per-table problem.
   let liveSnapshot: NextlySchemaSnapshot;
   try {
     liveSnapshot = await introspectLiveSnapshot(
       db,
       dialect,
-      targets.map(t => t.tableName)
+      [
+        ...targets.map(t => t.tableName),
+        ...singleTargets.map(t => t.tableName),
+      ]
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -285,8 +320,51 @@ export async function reloadNextlyConfig(opts?: {
     }
   }
 
-  // Nothing to apply.
-  if (Object.keys(desiredCollections).length === 0) return;
+  // Per-single diff + safety classification — mirrors the collections loop.
+  const desiredSingles: Record<string, DesiredSingle> = {};
+  for (const target of singleTargets) {
+    try {
+      const live = liveByTable.has(target.tableName)
+        ? { tables: [liveByTable.get(target.tableName)!] }
+        : { tables: [] };
+      const desiredTable = buildDesiredTableFromFields(
+        target.tableName,
+        target.fields,
+        dialect
+      );
+      const operations = diffSnapshots(live, { tables: [desiredTable] });
+
+      if (operations.length === 0) continue;
+
+      const classification = classifyForCodeFirst(operations, dialect);
+      if (!classification.safe) {
+        logger?.warn(
+          `[Nextly HMR] Code-first change for single '${target.slug}' needs review ` +
+            `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
+            `Builder to confirm with resolutions, or revert the config edit.`
+        );
+        continue;
+      }
+
+      desiredSingles[target.slug] = {
+        slug: target.slug,
+        tableName: target.tableName,
+        fields: target.fields as DesiredSingle["fields"],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger?.warn(
+        `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
+      );
+    }
+  }
+
+  // Nothing to apply across collections or singles.
+  if (
+    Object.keys(desiredCollections).length === 0 &&
+    Object.keys(desiredSingles).length === 0
+  )
+    return;
 
   // One batch pipeline call with the full snapshot. The pipeline runs its
   // own introspect + diff inside (the gate's diff above is for safety
@@ -298,7 +376,7 @@ export async function reloadNextlyConfig(opts?: {
 
   const desired: DesiredSchema = {
     collections: desiredCollections,
-    singles: {},
+    singles: desiredSingles,
     components: {},
   };
 
@@ -374,6 +452,39 @@ export async function reloadNextlyConfig(opts?: {
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.
+    }
+
+    // Mirror the same metadata sync for singles — keeps dynamic_singles.fields
+    // in step with the DDL changes the pipeline just applied.
+    try {
+      const singleReg = (await resolve(
+        "singleRegistryService"
+      )) as SingleRegistrySurface;
+      const codeFirstSingleConfigs = (newConfig.singles ?? [])
+        .filter((s): s is SingleDef & { slug: string } => !!s.slug)
+        .map(s => {
+          const labelStr =
+            typeof s.label === "string"
+              ? s.label
+              : s.label?.singular ??
+                s.slug
+                  .split(/[-_]/)
+                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+                  .join(" ");
+          return {
+            slug: s.slug,
+            label: labelStr,
+            fields: s.fields ?? [],
+            description: s.description,
+            tableName: s.dbName,
+            admin: s.admin,
+          };
+        });
+      if (codeFirstSingleConfigs.length > 0) {
+        await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs);
+      }
+    } catch {
+      // Non-fatal: same reasoning as collection metadata sync above.
     }
   }
 
