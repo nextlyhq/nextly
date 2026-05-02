@@ -174,6 +174,15 @@ export async function routeAuthRequest(
   authPath: string,
   deps: AuthRouterDeps
 ): Promise<Response | null> {
+  const response = await dispatchAuthRequest(request, authPath, deps);
+  return applyNoStoreCache(response);
+}
+
+async function dispatchAuthRequest(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps
+): Promise<Response | null> {
   const method = request.method.toUpperCase();
 
   if (method === "GET") {
@@ -232,6 +241,27 @@ export async function routeAuthRequest(
   }
 
   return null;
+}
+
+/**
+ * Audit M19 / T-025: stamp `Cache-Control: no-store` (and the legacy
+ * `Pragma: no-cache`) on every `/auth/*` response, regardless of the
+ * handler that produced it. Auth responses can carry tokens, session
+ * cookies, or account-state hints — none of those should ever live
+ * in a shared / browser / proxy cache.
+ *
+ * Centralising at the router means individual handlers don't have to
+ * remember to add the header (and don't have to thread headers
+ * through `new Response(...)` literals scattered across the dir).
+ *
+ * Returns the same `Response` object with mutated headers — `Headers`
+ * is mutable on `Response.headers`, so no clone is needed.
+ */
+function applyNoStoreCache(response: Response | null): Response | null {
+  if (!response) return response;
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Pragma", "no-cache");
+  return response;
 }
 
 /**
