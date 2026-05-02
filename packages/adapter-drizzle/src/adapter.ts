@@ -1019,15 +1019,7 @@ export abstract class DrizzleAdapter {
       if (col.nullable === false) colSql += " NOT NULL";
       if (col.unique) colSql += " UNIQUE";
       if (col.default !== undefined) {
-        const defaultVal =
-          typeof col.default === "object" &&
-          col.default !== null &&
-          "sql" in col.default
-            ? col.default.sql
-            : typeof col.default === "string"
-              ? `'${col.default}'`
-              : String(col.default);
-        colSql += ` DEFAULT ${defaultVal}`;
+        colSql += ` DEFAULT ${renderDefaultValue(col.default, col.name)}`;
       }
       return colSql;
     });
@@ -1413,4 +1405,74 @@ export abstract class DrizzleAdapter {
       error instanceof Error ? error : undefined
     );
   }
+}
+
+/**
+ * Audit H9 (T-018). Render a `ColumnDefinition.default` as a SQL fragment
+ * for embedding in a `DEFAULT` clause. DDL is not protected by Drizzle's
+ * prepared statements — these expressions are concatenated into raw SQL —
+ * so we treat the default as untrusted input even though it currently
+ * flows from server-side schema definitions: an admin-defined dynamic
+ * collection would otherwise turn into RCE-on-DB instead of just CMS
+ * admin.
+ *
+ * Rules:
+ *
+ *   - **null / number / boolean** → rendered as a SQL literal.
+ *   - **string** → quoted; embedded `'` doubled; `;`, `\`, control
+ *     characters, and null bytes rejected so they can't break out of
+ *     the surrounding quote pair into adjacent DDL.
+ *   - **`{ sql: "…" }`** → only the explicit allowlist of named
+ *     functions below is honored (case-insensitive). Anything else is
+ *     a hard error: the previous code embedded the raw `sql` string
+ *     verbatim, which is the SQL injection primitive the audit flagged.
+ */
+const ALLOWED_DEFAULT_SQL_EXPRESSIONS = new Set([
+  "current_timestamp",
+  "now()",
+  "gen_random_uuid()",
+  "uuid_generate_v4()",
+  "current_date",
+  "current_time",
+]);
+
+function renderDefaultValue(value: unknown, columnName: string): string {
+  if (value === null) return "NULL";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `DEFAULT for column "${columnName}" must be a finite number (got ${value}).`
+      );
+    }
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "TRUE" : "FALSE";
+  }
+  if (typeof value === "string") {
+    if (/[;\\\n\r\0]/.test(value)) {
+      throw new Error(
+        `DEFAULT string for column "${columnName}" contains characters that are not allowed in DDL (no semicolons, backslashes, control chars, or null bytes).`
+      );
+    }
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  if (typeof value === "object" && value !== null && "sql" in value) {
+    const raw = value.sql;
+    if (typeof raw !== "string") {
+      throw new Error(
+        `DEFAULT for column "${columnName}" has a { sql } expression that is not a string.`
+      );
+    }
+    const normalized = raw.trim().toLowerCase();
+    if (!ALLOWED_DEFAULT_SQL_EXPRESSIONS.has(normalized)) {
+      throw new Error(
+        `DEFAULT for column "${columnName}" uses a SQL expression "${raw}" that is not on the allowlist. Allowed: ${[...ALLOWED_DEFAULT_SQL_EXPRESSIONS].join(", ")}.`
+      );
+    }
+    return raw.trim();
+  }
+  throw new Error(
+    `DEFAULT for column "${columnName}" has an unsupported type (${typeof value}).`
+  );
 }

@@ -19,12 +19,10 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import type React from "react";
 
-import {
-  SingleForm,
-  type SingleSchema,
-} from "@admin/components/features/singles";
-import { ChevronRight, Home, Code } from "@admin/components/icons";
+import { SingleForm } from "@admin/components/features/singles";
+import { Code } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
@@ -54,25 +52,13 @@ interface SingleEditPageProps {
  */
 function SingleBreadcrumbs({ singleLabel }: { singleLabel: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="mb-2">
-      <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-        <li className="flex items-center gap-2">
-          <Link
-            href={ROUTES.DASHBOARD}
-            className="flex items-center gap-1 hover-unified"
-          >
-            <Home className="h-4 w-4" />
-            <span>Dashboard</span>
-          </Link>
-          <ChevronRight className="h-4 w-4" />
-        </li>
-        <li className="flex items-center gap-2 text-muted-foreground">
-          Singles
-          <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-        </li>
-        <li className="text-foreground font-medium">{singleLabel}</li>
-      </ol>
-    </nav>
+    <Breadcrumbs
+      items={[
+        { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+        { label: "Singles", href: ROUTES.SINGLES },
+        { label: singleLabel },
+      ]}
+    />
   );
 }
 
@@ -307,7 +293,7 @@ export default function SingleEditPage({
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SingleForm
-          schema={schema as unknown as SingleSchema}
+          schema={schema}
           document={document}
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}

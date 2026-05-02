@@ -163,7 +163,7 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-xl overflow-hidden bg-white dark:bg-slate-950 transition-all duration-300 border border-border/50 flex flex-col",
+        "group relative aspect-square rounded-xl overflow-hidden bg-card/50 transition-all duration-300 border border-border/50 flex flex-col",
         isSelected
           ? "ring-2 ring-primary/30 ring-offset-2 border-primary/30 cursor-pointer"
           : "hover:border-primary/40 cursor-pointer",
@@ -208,14 +208,14 @@ export function MediaCard({
             checked={isSelected}
             onCheckedChange={() => onSelectionChange?.(media.id)}
             aria-label={`Select ${media.filename}`}
-            className="h-5 w-5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm data-[state=checked]:bg-primary border-primary/20 transition-all"
+            className="h-5 w-5 bg-background/80 backdrop-blur-sm data-[state=checked]:bg-primary border-primary/20 transition-all"
             onClick={e => e.stopPropagation()}
           />
         </div>
       )}
 
       {/* Information Bar - Integrated at bottom of aspect-square */}
-      <div className="bg-primary/5 dark:bg-primary/10 border-t border-border/40 p-3 shrink-0">
+      <div className="bg-muted/50 border-t border-border/40 p-3 shrink-0">
         <div className="flex flex-col gap-1.5">
           <p className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}

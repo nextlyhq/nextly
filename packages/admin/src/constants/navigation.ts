@@ -1,7 +1,7 @@
 import {
   FileText,
   Image,
-  Home,
+  LayoutDashboard,
   Key,
   Layers,
   Mail,
@@ -97,7 +97,7 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
   {
     title: "Dashboard",
     href: ROUTES.DASHBOARD,
-    icon: Home,
+    icon: LayoutDashboard,
     category: "main",
     // No requiredPermission — Dashboard is always accessible
   },

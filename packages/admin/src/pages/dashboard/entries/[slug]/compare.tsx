@@ -11,15 +11,10 @@
 import { Alert, AlertDescription, AlertTitle, Skeleton } from "@revnixhq/ui";
 
 import { EntryCompare } from "@admin/components/features/entries/EntryCompare";
-import {
-  AlertCircle,
-  ArrowLeftRight,
-  ChevronRight,
-  Home,
-} from "@admin/components/icons";
+import { AlertCircle, ArrowLeftRight } from "@admin/components/icons";
+import { Breadcrumbs } from "@admin/components/shared";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollection } from "@admin/hooks/queries";
-import { navigateTo } from "@admin/lib/navigation";
 
 // ============================================================================
 // Types
@@ -118,26 +113,16 @@ export default function CompareEntryPage({ params }: ComparePageProps) {
 
   return (
     <div className="p-6 space-y-6 h-full flex flex-col">
-      {/* Breadcrumb navigation */}
-      <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-        <button
-          onClick={() => navigateTo(ROUTES.DASHBOARD)}
-          className="flex items-center gap-1 hover-unified"
-        >
-          <Home className="h-4 w-4" />
-        </button>
-        <ChevronRight className="h-4 w-4" />
-        <button
-          onClick={() =>
-            navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }))
-          }
-          className="hover-unified"
-        >
-          {collectionLabel}
-        </button>
-        <ChevronRight className="h-4 w-4" />
-        <span className="text-foreground font-medium">Compare</span>
-      </nav>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          {
+            label: collectionLabel,
+            href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),
+          },
+          { label: "Compare Entries" },
+        ]}
+      />
 
       {/* Page header */}
       <div className="space-y-1">

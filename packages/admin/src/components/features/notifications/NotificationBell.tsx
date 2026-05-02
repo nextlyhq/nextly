@@ -62,9 +62,7 @@ export function NotificationBell({ className }: NotificationBellProps) {
           }
           data-testid="notification-bell"
           className={cn(
-            "relative flex items-center justify-center h-9 w-9 rounded-md",
-            "text-muted-foreground hover:text-foreground hover:bg-accent",
-            "transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+            "relative flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row",
             className
           )}
         >

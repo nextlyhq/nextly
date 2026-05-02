@@ -3,7 +3,11 @@
 import { Button } from "@revnixhq/ui";
 import type React from "react";
 
-import { AlertCircle, Home, RefreshCw } from "@admin/components/icons";
+import {
+  AlertCircle,
+  LayoutDashboard,
+  RefreshCw,
+} from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
@@ -152,7 +156,7 @@ export function PageErrorFallback({
                   size="lg"
                   className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold text-muted-foreground hover:text-foreground active:scale-95 transition-all duration-200"
                 >
-                  <Home className="mr-2 h-4 w-4" />
+                  <LayoutDashboard className="mr-2 h-4 w-4" />
                   Go home
                 </Button>
               </Link>

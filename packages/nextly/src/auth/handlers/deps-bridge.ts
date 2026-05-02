@@ -10,6 +10,7 @@
  * we use the database adapter directly.
  */
 import { getDialectTables } from "../../database/index";
+import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { env } from "../../lib/env";
 import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
@@ -43,6 +44,8 @@ export function buildAuthRouterDeps(
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
     trustProxy: readTrustProxy(getService),
     trustedProxyIps: parseTrustedProxyIpsEnv(process.env.TRUSTED_PROXY_IPS),
+    authRateLimit: readAuthRateLimit(getService),
+    auditLog: buildAuditLogWriter(getService),
 
     findUserByEmail: async (email: string) => {
       try {
@@ -423,5 +426,47 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
     return false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Audit H4 / T-016: read `security.authRateLimit` from the
+ * NextlyConfig registered in the DI container. Falls back to the
+ * default 30 req/IP/hour, 1-hour window when unset or the container
+ * is not yet initialised.
+ */
+function readAuthRateLimit(
+  getService: (name: string) => unknown
+): { requestsPerHour: number; windowMs: number } {
+  const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
+  try {
+    const config = getService("config");
+    if (config && typeof config === "object" && "security" in config) {
+      const security = (config as { security?: unknown }).security;
+      if (
+        security &&
+        typeof security === "object" &&
+        "authRateLimit" in security
+      ) {
+        const arl = (
+          security as {
+            authRateLimit?: { requestsPerHour?: unknown; windowMs?: unknown };
+          }
+        ).authRateLimit;
+        return {
+          requestsPerHour:
+            typeof arl?.requestsPerHour === "number"
+              ? arl.requestsPerHour
+              : fallback.requestsPerHour,
+          windowMs:
+            typeof arl?.windowMs === "number"
+              ? arl.windowMs
+              : fallback.windowMs,
+        };
+      }
+    }
+    return fallback;
+  } catch {
+    return fallback;
   }
 }

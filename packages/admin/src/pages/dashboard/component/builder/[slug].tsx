@@ -206,7 +206,7 @@ export default function ComponentBuilderEditPage({
         {
           href: ROUTES.DASHBOARD,
           label: "Dashboard",
-          icon: <Icons.Home className="w-4 h-4" />,
+          isDashboard: true,
         },
         { href: ROUTES.COMPONENTS, label: "Components" },
       ]}
@@ -214,7 +214,9 @@ export default function ComponentBuilderEditPage({
       headerIcon={<Icons.Puzzle className="h-5 w-5" />}
       headerTitle={builder.form.watch("singularName") || "Edit Component"}
       headerDescription="Define the internal structure of this component"
-      onSave={() => { void handleSave(); }}
+      onSave={() => {
+        void handleSave();
+      }}
       onCancel={() => navigateTo(ROUTES.COMPONENTS)}
       isSaving={isSaving}
       saveLabel="Update"

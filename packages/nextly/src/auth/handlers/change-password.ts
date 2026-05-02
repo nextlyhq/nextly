@@ -6,6 +6,8 @@
 // CSRF double-submit cookie + origin check. This endpoint is the highest-
 // value target for account takeover, so CSRF is non-negotiable here.
 // See docs/auth/csrf.md.
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import { clearRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
@@ -23,6 +25,12 @@ export interface ChangePasswordHandlerDeps {
     newPassword: string
   ) => Promise<{ success: boolean; error?: string }>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
+  /** Audit M10 / T-022: writer for security-sensitive auth events. */
+  auditLog: AuditLogWriter;
+  /** Audit C4 / T-005. */
+  trustProxy: boolean;
+  /** Audit C4 / T-005. */
+  trustedProxyIps: string[];
 }
 
 export async function handleChangePassword(
@@ -77,6 +85,21 @@ export async function handleChangePassword(
 
   // Revoke all sessions (force re-login on all devices)
   await deps.deleteAllRefreshTokensForUser(sessionResult.user.id);
+
+  // Audit M10 / T-022: actor and target are the same user — change-password
+  // is always self-service in this handler. (Admin-driven password reset
+  // for another user runs through reset-password and gets its own audit
+  // hook in a follow-up.)
+  await deps.auditLog.write({
+    kind: "password-changed",
+    actorUserId: sessionResult.user.id,
+    targetUserId: sessionResult.user.id,
+    ipAddress: getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }),
+    userAgent: request.headers.get("user-agent"),
+  });
 
   const clearCookies = [clearAccessTokenCookie(), clearRefreshTokenCookie()];
 

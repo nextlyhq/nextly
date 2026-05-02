@@ -111,7 +111,7 @@ export function MediaBulkActionBar({
           size="sm"
           onClick={onMoveToFolder}
           disabled={isDeleting}
-          className="gap-1.5 h-8 text-xs font-normal bg-white dark:bg-slate-950 border-primary/20 text-primary hover:bg-primary/5"
+          className="gap-1.5 h-8 text-xs font-normal bg-card border-primary/20 text-primary hover:bg-primary/5"
         >
           <FolderInput className="h-3.5 w-3.5" />
           Move
@@ -123,7 +123,7 @@ export function MediaBulkActionBar({
           size="sm"
           onClick={onDelete}
           disabled={isDeleting}
-          className="h-8 text-xs font-normal px-4 bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+          className="h-8 text-xs font-normal px-4 rounded-xl"
           aria-label={`Delete ${selectedCount} selected ${itemLabel}`}
         >
           {isDeleting ? (

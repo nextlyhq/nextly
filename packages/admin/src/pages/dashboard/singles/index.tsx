@@ -19,9 +19,9 @@
 import { Button } from "@revnixhq/ui";
 import type React from "react";
 
-import * as Icons from "@admin/components/icons";
 import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -39,21 +39,13 @@ const SinglesPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         {/* Breadcrumbs */}
-        <nav aria-label="Breadcrumb" className="mb-8">
-          <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-            <li className="flex items-center gap-2">
-              <Link
-                href={ROUTES.DASHBOARD}
-                className="flex items-center gap-1 hover-unified"
-              >
-                <Icons.Home className="h-4 w-4" />
-                <span>Dashboard</span>
-              </Link>
-              <Icons.ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-            </li>
-            <li className="text-foreground font-medium">Singles</li>
-          </ol>
-        </nav>
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Singles" },
+          ]}
+          className="mb-8"
+        />
 
         {/* Page header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
