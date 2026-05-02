@@ -1,4 +1,5 @@
-import { ChevronRight, Folder as FolderIcon } from "@admin/components/icons";
+import { Folder as FolderIcon } from "@admin/components/icons";
+import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { useFolderContents } from "@admin/hooks/queries/useMedia";
 import { cn } from "@admin/lib/utils";
 
@@ -13,6 +14,12 @@ export interface FolderBreadcrumbsProps {
   showRoot?: boolean;
 }
 
+/**
+ * FolderBreadcrumbs Component
+ *
+ * Specialized breadcrumb navigation for the Media Library folder structure.
+ * Utilizes the shared Breadcrumbs component for unified styling and interactivity.
+ */
 export function FolderBreadcrumbs({
   activeFolderId,
   onFolderSelect,
@@ -20,59 +27,27 @@ export function FolderBreadcrumbs({
   showRoot = true,
 }: FolderBreadcrumbsProps) {
   const { data: folderContents } = useFolderContents(activeFolderId);
-
   const breadcrumbs = folderContents?.breadcrumbs ?? [];
 
-  return (
-    <nav
-      aria-label="Folder breadcrumbs"
-      className={cn("flex items-center", className)}
-    >
-      <ol className="flex items-center gap-1 text-sm">
-        {showRoot && (
-          <li>
-            <button
-              type="button"
-              onClick={() => onFolderSelect(null)}
-              className={cn(
-                "flex items-center gap-1 rounded-sm px-1.5 py-0.5 transition-colors hover-unified",
-                !activeFolderId && "font-bold text-foreground",
-                activeFolderId && "text-muted-foreground"
-              )}
-            >
-              <FolderIcon className="h-3.5 w-3.5" />
-              <span>All Media</span>
-            </button>
-          </li>
-        )}
+  const items: BreadcrumbItem[] = [];
 
-        {breadcrumbs.map((crumb, index) => {
-          const isLast = index === breadcrumbs.length - 1;
-          const isRoot = crumb.id === "root";
-          if (isRoot) return null;
+  if (showRoot) {
+    items.push({
+      label: "All Media",
+      onClick: () => onFolderSelect(null),
+      icon: <FolderIcon className="h-3.5 w-3.5" />,
+      // We don't set isDashboard here because we want the FolderIcon,
+      // but we want the same styling.
+    });
+  }
 
-          return (
-            <li key={crumb.id} className="flex items-center gap-1">
-              {(index > 0 || showRoot) && (
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-              )}
-              {isLast ? (
-                <span className="rounded-sm px-1.5 py-0.5 font-medium text-foreground">
-                  {crumb.name}
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onFolderSelect(crumb.id)}
-                  className="rounded-sm px-1.5 py-0.5 text-muted-foreground transition-colors hover-unified"
-                >
-                  {crumb.name}
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
+  breadcrumbs.forEach(crumb => {
+    if (crumb.id === "root") return;
+    items.push({
+      label: crumb.name,
+      onClick: () => onFolderSelect(crumb.id),
+    });
+  });
+
+  return <Breadcrumbs items={items} className={cn("mb-0", className)} />;
 }

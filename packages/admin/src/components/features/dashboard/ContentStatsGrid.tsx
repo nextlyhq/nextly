@@ -61,7 +61,7 @@ export const ContentStatsGrid: React.FC = () => {
       <StatsCard
         title="Total Entries"
         value={stats.content.totalEntries}
-        icon={<FileText className="h-4 w-4" />}
+        icon={<FileText className="h-5 w-5" />}
         sparklineData={[12, 14, 13, 15, 18, 17, 20]} // Mock trend for visual
         footer="+2 this week"
         trend="up"
@@ -70,7 +70,7 @@ export const ContentStatsGrid: React.FC = () => {
       <StatsCard
         title="Media Assets"
         value={stats.content.totalMedia}
-        icon={<Image className="h-4 w-4" />}
+        icon={<Image className="h-5 w-5" />}
         sparklineData={[45, 48, 47, 52, 50, 55, 58]} // Mock trend
         footer="+6 this week"
         trend="up"
@@ -79,7 +79,7 @@ export const ContentStatsGrid: React.FC = () => {
       <StatsCard
         title="Content Types"
         value={stats.content.contentTypes}
-        icon={<Layers className="h-4 w-4" />}
+        icon={<Layers className="h-5 w-5" />}
         sparklineData={[10, 10, 11, 11, 11, 12, 12]} // Mock trend
         footer="+1 this week"
         trend="up"
@@ -88,7 +88,7 @@ export const ContentStatsGrid: React.FC = () => {
       <StatsCard
         title="Changes (24h)"
         value={stats.content.recentChanges24h}
-        icon={<Clock className="h-4 w-4" />}
+        icon={<Clock className="h-5 w-5" />}
         sparklineData={[5, 4, 3, 2, 1, 0, 0]} // Mock trend showing decline/zero
         footer="No changes today"
         trend="down"

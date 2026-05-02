@@ -10,6 +10,8 @@ export { SearchBar } from "./search-bar";
 export type { SearchBarProps } from "./search-bar/types";
 export { Pagination } from "./pagination";
 export type { PaginationProps } from "./pagination/types";
+export { Breadcrumbs } from "./breadcrumbs";
+export type { BreadcrumbItem, BreadcrumbsProps } from "./breadcrumbs";
 
 // Bulk Operations
 export { BulkActionBar } from "./bulk-action-bar";

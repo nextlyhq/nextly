@@ -19,7 +19,6 @@ import {
   type CollectionSettingsData,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
-import * as Icons from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
@@ -141,14 +140,16 @@ export default function CollectionBuilderPage(): React.ReactElement {
         {
           href: ROUTES.DASHBOARD,
           label: "Dashboard",
-          icon: <Icons.Home className="w-4 h-4" />,
+          isDashboard: true,
         },
         { href: ROUTES.COLLECTIONS, label: "Collections" },
       ]}
       breadcrumbCurrentLabel="Create Collection"
       headerTitle="Create Collection"
       headerDescription="Design a new collection with custom fields and settings."
-      onSave={() => { void handleSave(); }}
+      onSave={() => {
+        void handleSave();
+      }}
       onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
       isSaving={isSaving}
       saveLabel="Create"

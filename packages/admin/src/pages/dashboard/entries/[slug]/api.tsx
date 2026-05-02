@@ -11,10 +11,11 @@
 import { Alert, AlertDescription, AlertTitle, Skeleton } from "@revnixhq/ui";
 
 import { APIPlayground } from "@admin/components/features/entries/APIPlayground";
-import { ChevronRight, Home, AlertCircle, Code } from "@admin/components/icons";
+import { AlertCircle } from "@admin/components/icons";
+import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollection } from "@admin/hooks/queries";
-import { navigateTo } from "@admin/lib/navigation";
 
 // ============================================================================
 // Types
@@ -110,44 +111,35 @@ export default function APIPlaygroundPage({ params }: APIPlaygroundPageProps) {
   const collectionLabel = collection?.label || slug;
 
   return (
-    <div className="p-6 space-y-6 h-full flex flex-col">
-      {/* Breadcrumb navigation */}
-      <nav className="flex items-center gap-2 text-sm text-muted-foreground">
-        <button
-          onClick={() => navigateTo(ROUTES.DASHBOARD)}
-          className="flex items-center gap-1 hover-unified"
-        >
-          <Home className="h-4 w-4" />
-        </button>
-        <ChevronRight className="h-4 w-4" />
-        <button
-          onClick={() =>
-            navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }))
-          }
-          className="hover-unified"
-        >
-          {collectionLabel}
-        </button>
-        <ChevronRight className="h-4 w-4" />
-        <span className="text-foreground font-medium">API Playground</span>
-      </nav>
+    <PageContainer>
+      <div className="flex flex-col gap-4 h-full">
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            {
+              label: collectionLabel,
+              href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),
+            },
+            { label: "API Playground" },
+          ]}
+        />
 
-      {/* Page header */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-3">
-          <Code className="h-6 w-6 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">API Playground</h1>
+        {/* Page header */}
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            API Playground
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Test API endpoints for the <strong>{collectionLabel}</strong>{" "}
+            collection. Build requests, execute them, and view responses.
+          </p>
         </div>
-        <p className="text-muted-foreground">
-          Test API endpoints for the <strong>{collectionLabel}</strong>{" "}
-          collection. Build requests, execute them, and view responses.
-        </p>
-      </div>
 
-      {/* API Playground component */}
-      <div className="flex-1 min-h-0">
-        <APIPlayground collectionSlug={slug} />
+        {/* API Playground component */}
+        <div className="flex-1 min-h-0">
+          <APIPlayground collectionSlug={slug} />
+        </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

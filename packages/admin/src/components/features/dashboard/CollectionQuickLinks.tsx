@@ -74,19 +74,28 @@ function CollectionCard({
   // 1. From collection metadata (admin.icon)
   // 2. From group default
   const Icon = useMemo(() => {
+    // 1. From collection metadata (admin.icon)
     if (collectionConfig?.admin?.icon) {
       const ConfiguredIcon = (Icons as Record<string, React.ElementType>)[
         collectionConfig.admin.icon
       ];
       if (ConfiguredIcon) return ConfiguredIcon;
     }
+
+    // 2. Specific item overrides for "Forms" group
+    if (item.group === "Forms") {
+      if (item.slug.toLowerCase().includes("submission")) return Icons.Inbox;
+      return Icons.Clipboard;
+    }
+
+    // 3. From group default
     return getGroupDefaultIcon(item.group);
-  }, [collectionConfig?.admin?.icon, item.group]);
+  }, [collectionConfig?.admin?.icon, item.group, item.slug]);
 
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-md overflow-hidden border border-border bg-card transition-colors duration-200 hover-unified-dashboard-card hover:border-primary/60"
+      className="block group h-full rounded-md overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/20"
     >
       <Card
         variant="interactive"
@@ -94,31 +103,18 @@ function CollectionCard({
           "h-full !border-0 !bg-transparent transition-colors duration-200 rounded-md overflow-hidden relative"
         )}
       >
-        <CardContent className="p-4 relative z-10">
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div
-                className={cn(
-                  "p-2 rounded-md transition-colors ring-1 ring-inset group-hover:bg-white/10 group-hover:text-white group-hover:ring-white/30",
-                  "bg-primary/5 text-primary ring-primary/20"
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-              </div>
-              <div className="flex flex-col items-end">
-                <span className="text-xl font-bold tabular-nums tracking-tight text-foreground/80 leading-none group-hover:text-white">
-                  {item.count}
-                </span>
-                <span className="text-[8px] font-bold uppercase tracking-wider text-muted-foreground/40 mt-1 group-hover:text-white">
-                  Items
-                </span>
-              </div>
-            </div>
-
+        <CardContent className="p-5 relative z-10">
+          <div className="flex items-start justify-between">
             <div className="space-y-1">
-              <h5 className="font-bold text-sm tracking-tight transition-colors leading-tight group-hover:text-white">
+              <span className="text-2xl font-bold tabular-nums tracking-tight text-primary/50 leading-none group-hover:text-primary transition-colors">
+                {item.count}
+              </span>
+              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-primary/50 group-hover:text-primary pt-1">
                 {item.label}
               </h5>
+            </div>
+            <div className="text-primary/50 group-hover:text-primary transition-colors pt-1">
+              <Icon className="h-6 w-6 shrink-0" />
             </div>
           </div>
         </CardContent>
@@ -129,7 +125,7 @@ function CollectionCard({
 
 function LoadingSkeleton() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
       {Array.from({ length: 4 }, (_, i) => (
         <Skeleton
           key={i}
@@ -211,7 +207,7 @@ export const CollectionQuickLinks: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {group.collections.map(item => (
                   <CollectionCard
                     key={item.slug}

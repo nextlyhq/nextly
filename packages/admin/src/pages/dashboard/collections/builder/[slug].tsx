@@ -400,7 +400,7 @@ export default function CollectionBuilderEditPage({
           {
             href: ROUTES.DASHBOARD,
             label: "Dashboard",
-            icon: <Icons.Home className="w-4 h-4" />,
+            isDashboard: true,
           },
           { href: ROUTES.COLLECTIONS, label: "Collections" },
         ]}

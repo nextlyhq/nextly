@@ -21,18 +21,12 @@ import {
 } from "@revnixhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
-import {
-  useState,
-  useCallback,
-  useMemo,
-  useRef,
-  useEffect,
-} from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 
 import {
   Upload,
   Grid3x3,
-  Home,
+  LayoutDashboard,
   ChevronRight,
   ChevronDown,
   Folder as FolderIcon,
@@ -51,6 +45,7 @@ import { cn } from "@admin/lib/utils";
 import type { Media, MediaFolder, MediaType } from "@admin/types/media";
 import type { MediaPickerDialogProps } from "@admin/types/ui/media-picker-dialog";
 
+import { FolderBreadcrumbs } from "../FolderBreadcrumbs";
 import { MediaGrid } from "../MediaGrid";
 import { MediaUploadDropzone } from "../MediaUploadDropzone";
 
@@ -555,44 +550,11 @@ export function MediaPickerDialog({
           {/* Media Library Tab */}
           <TabsContent value="library" className="mt-4 space-y-4">
             {/* Breadcrumb Navigation */}
-            <nav className="flex items-center gap-1 text-xs">
-              <button
-                type="button"
-                onClick={() => setActiveFolderId(null)}
-                className={cn(
-                  "flex items-center gap-1 rounded-sm px-1.5 py-0.5 transition-colors hover:bg-accent",
-                  !activeFolderId
-                    ? "font-medium text-foreground"
-                    : "text-muted-foreground"
-                )}
-              >
-                <Home className="h-3 w-3" />
-                All Media
-              </button>
-              {breadcrumbs
-                .filter(crumb => crumb.id !== "root")
-                .map((crumb, index, arr) => {
-                  const isLast = index === arr.length - 1;
-                  return (
-                    <span key={crumb.id} className="flex items-center gap-1">
-                      <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                      {isLast ? (
-                        <span className="rounded-sm px-1.5 py-0.5 font-medium text-foreground">
-                          {crumb.name}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setActiveFolderId(crumb.id)}
-                          className="rounded-sm px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                        >
-                          {crumb.name}
-                        </button>
-                      )}
-                    </span>
-                  );
-                })}
-            </nav>
+            <FolderBreadcrumbs
+              activeFolderId={activeFolderId}
+              onFolderSelect={setActiveFolderId}
+              className="text-xs"
+            />
 
             {/* Child Folder Chips */}
             {displayFolders && displayFolders.length > 0 && (
@@ -742,12 +704,12 @@ export function MediaPickerDialog({
                     onClick={() =>
                       setIsUploadFolderPickerOpen(!isUploadFolderPickerOpen)
                     }
-                    className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
+                    className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer"
                   >
                     {activeFolderId ? (
                       <FolderIcon className="h-3.5 w-3.5 text-muted-foreground" />
                     ) : (
-                      <Home className="h-3.5 w-3.5 text-muted-foreground" />
+                      <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
                     <span>
                       {activeFolderId
@@ -832,11 +794,11 @@ export function MediaPickerDialog({
                         setIsUploadFolderPickerOpen(false);
                       }}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors hover:bg-accent",
+                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer",
                         activeFolderId === null && "bg-accent font-medium"
                       )}
                     >
-                      <Home className="h-3.5 w-3.5" />
+                      <LayoutDashboard className="h-3.5 w-3.5" />
                       Root (All Media)
                     </button>
                     {rootFolders?.map(folder => (
@@ -855,7 +817,9 @@ export function MediaPickerDialog({
                 )}
               </div>
               <MediaUploadDropzone
-                onUploadComplete={(media) => { void handleUploadComplete(media); }}
+                onUploadComplete={media => {
+                  void handleUploadComplete(media);
+                }}
                 isCollapsed={false}
                 accept={accept}
                 maxFileSize={maxFileSize}

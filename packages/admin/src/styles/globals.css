@@ -2066,23 +2066,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
 }
 
 /* Dedicated hover for dashboard cards: full black surface + white content */
-.hover-unified-dashboard-card {
-  @apply hover:!bg-primary/5 hover:!text-primary transition-colors;
-}
-
-.hover-unified-dashboard-card:hover * {
-  color: inherit;
-}
-
-.hover-unified-dashboard-card:hover svg {
-  color: #ffffff !important;
-}
-
-@media (prefers-color-scheme: dark) {
-  .adminapp.dark .hover-unified-dashboard-card {
-    @apply hover:!bg-primary/5 hover:!text-primary transition-colors;
-  }
-}
 
 /*
  * TABLE ROW HOVER (DEDICATED)

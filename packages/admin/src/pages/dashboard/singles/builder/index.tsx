@@ -17,7 +17,6 @@ import {
   HooksEditor,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
-import * as Icons from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
@@ -118,14 +117,16 @@ export default function SingleBuilderPage(): React.ReactElement {
         {
           href: ROUTES.DASHBOARD,
           label: "Dashboard",
-          icon: <Icons.Home className="w-4 h-4" />,
+          isDashboard: true,
         },
         { href: ROUTES.SINGLES, label: "Singles" },
       ]}
       breadcrumbCurrentLabel="Create Single"
       headerTitle="Create Single"
       headerDescription="Design a new single global content type."
-      onSave={() => { void handleSave(); }}
+      onSave={() => {
+        void handleSave();
+      }}
       onCancel={() => navigateTo(ROUTES.SINGLES)}
       isSaving={isSaving}
       saveLabel="Create"

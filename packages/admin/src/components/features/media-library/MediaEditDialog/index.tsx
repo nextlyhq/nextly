@@ -567,7 +567,7 @@ export function MediaEditDialog({
           </div>
 
           {/* Footer - Full-Width Unified Background */}
-          <div className="mt-2 flex items-center justify-between gap-4 bg-primary/5 dark:bg-primary/10 border-t border-primary/10 px-6 py-4">
+          <div className="mt-2 flex items-center justify-between gap-4 bg-muted/50 border-t border-primary/10 px-6 py-4">
             {/* Action Buttons Group (Left) */}
             <div className="flex items-center gap-2">
               {onDelete && (
@@ -621,7 +621,7 @@ export function MediaEditDialog({
                 variant="outline"
                 onClick={() => onOpenChange(false)}
                 disabled={isPending}
-                className="h-9 px-4 text-xs font-semibold tracking-tight bg-white dark:bg-slate-900 border-border/50"
+                className="h-9 px-4 text-xs font-semibold tracking-tight bg-card border-border/50"
               >
                 Cancel
               </Button>
