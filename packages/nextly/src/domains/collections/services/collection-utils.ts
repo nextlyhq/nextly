@@ -60,8 +60,18 @@ export function withTimestampAliases<T extends Record<string, unknown>>(
 
 /**
  * Checks if a field requires JSON serialization/deserialization.
- * Also checks hasMany for select/text/number/upload fields which
- * are stored as jsonb when they hold arrays.
+ * Also checks hasMany for select/text/number/upload/relationship
+ * fields which are stored as jsonb when they hold arrays.
+ *
+ * Bug 7 (post-Phase-4 testing-pass): `relationship` fields with
+ * `hasMany: true` were missing from this check. The schema generator
+ * creates a JSON-style text column for them (single-column array of
+ * IDs, Payload pattern), but the mutation service's JSON-serialization
+ * step skipped them — leaving raw JS arrays to reach Drizzle's bind
+ * site, which crashed better-sqlite3 with "Too few parameter values
+ * were provided." Adding `relationship` to the hasMany conditional
+ * mirrors the schema generator's behavior: when hasMany, the column
+ * holds a JSON-stringified array of IDs.
  */
 export function isJsonFieldType(
   fieldType: string,
@@ -72,7 +82,8 @@ export function isJsonFieldType(
   if (
     (fieldType === "select" ||
       fieldType === "text" ||
-      fieldType === "number") &&
+      fieldType === "number" ||
+      fieldType === "relationship") &&
     field?.hasMany
   ) {
     return true;
