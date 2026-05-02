@@ -42,7 +42,7 @@ describe("UsersService", () => {
         await testDb.db.insert(testDb.schema.users).values(users);
 
         // Act
-        const result = await service.listUsers({ page: 1, pageSize: 10 });
+        const result = await service.listUsers({ page: 1, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -50,7 +50,7 @@ describe("UsersService", () => {
         expectPaginationMeta(result, {
           total: 25,
           page: 1,
-          pageSize: 10,
+          limit: 10,
           totalPages: 3,
         });
       });
@@ -61,14 +61,14 @@ describe("UsersService", () => {
         await testDb.db.insert(testDb.schema.users).values(users);
 
         // Act
-        const result = await service.listUsers({ page: 2, pageSize: 10 });
+        const result = await service.listUsers({ page: 2, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           page: 2,
-          pageSize: 10,
+          limit: 10,
           totalPages: 3,
         });
       });
@@ -79,7 +79,7 @@ describe("UsersService", () => {
         await testDb.db.insert(testDb.schema.users).values(users);
 
         // Act
-        const result = await service.listUsers({ page: 3, pageSize: 10 });
+        const result = await service.listUsers({ page: 3, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -96,7 +96,7 @@ describe("UsersService", () => {
         await testDb.db.insert(testDb.schema.users).values(users);
 
         // Act
-        const result = await service.listUsers({ page: 10, pageSize: 10 });
+        const result = await service.listUsers({ page: 10, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -114,14 +114,14 @@ describe("UsersService", () => {
         await testDb.db.insert(testDb.schema.users).values(users);
 
         // Act
-        const result = await service.listUsers({ page: 1, pageSize: 25 });
+        const result = await service.listUsers({ page: 1, limit: 25 });
 
         // Assert
         expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 25);
         expectPaginationMeta(result, {
           total: 50,
-          pageSize: 25,
+          limit: 25,
           totalPages: 2,
         });
       });
@@ -136,10 +136,10 @@ describe("UsersService", () => {
 
         // Assert
         expectSuccessResponse(result, 200);
-        expectArrayLength(result.data!, 10); // Default pageSize
+        expectArrayLength(result.data!, 10); // Default limit
         expectPaginationMeta(result, {
           page: 1, // Default page
-          pageSize: 10,
+          limit: 10,
         });
       });
     });

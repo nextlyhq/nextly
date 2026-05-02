@@ -162,7 +162,7 @@ export interface FolderContentsResponse {
  * ```tsx
  * const params: MediaParams = {
  *   page: 1,
- *   pageSize: 24,
+ *   limit: 24,
  *   search: "logo",
  *   type: "image",
  *   sortBy: "uploadedAt",
@@ -172,7 +172,7 @@ export interface FolderContentsResponse {
  */
 export interface MediaParams {
   page?: number;
-  pageSize?: number;
+  limit?: number;
   search?: string;
   type?: MediaType;
   sortBy?: "filename" | "uploadedAt" | "size";
@@ -194,7 +194,7 @@ export interface MediaListResponse {
   meta: {
     total: number;
     page: number;
-    pageSize: number;
+    limit: number;
     totalPages: number;
   };
 }

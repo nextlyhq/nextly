@@ -348,11 +348,11 @@ export class MediaService {
     this.logger.debug("Listing media files", { options });
 
     const page = options.page ?? 1;
-    const pageSize = options.pageSize ?? 24;
+    const limit = options.limit ?? 24;
 
-    const legacyParams: MediaParams = {
+    const queryParams: MediaParams = {
       page,
-      pageSize,
+      limit,
       search: options.search,
       type: options.type,
       folderId: options.folderId,
@@ -360,7 +360,7 @@ export class MediaService {
       sortOrder: options.sortOrder ?? "desc",
     };
 
-    const result = await this.legacyMediaService.listMedia(legacyParams);
+    const result = await this.legacyMediaService.listMedia(queryParams);
 
     if (!result.success) {
       throw this.mapLegacyErrorToNextlyError(result);
@@ -368,13 +368,13 @@ export class MediaService {
 
     const files = (result.data ?? []).map(m => this.mapToMediaFile(m));
     const total = result.meta?.total ?? files.length;
-    const offset = (page - 1) * pageSize;
+    const offset = (page - 1) * limit;
 
     return {
       data: files,
       pagination: {
         total,
-        limit: pageSize,
+        limit,
         offset,
         hasMore: offset + files.length < total,
       },

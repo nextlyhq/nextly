@@ -213,7 +213,7 @@ export async function fetchMedia(
   const queryParams = new URLSearchParams();
 
   if (params.page) queryParams.set("page", String(params.page));
-  if (params.pageSize) queryParams.set("pageSize", String(params.pageSize));
+  if (params.limit) queryParams.set("limit", String(params.limit));
   if (params.search) queryParams.set("search", params.search);
   if (params.type) queryParams.set("type", params.type);
   if (params.sortBy) queryParams.set("sortBy", params.sortBy);
@@ -231,7 +231,7 @@ export async function fetchMedia(
     meta: (result.meta as MediaListResponse["meta"]) || {
       total: 0,
       page: params.page || 1,
-      pageSize: params.pageSize || 24,
+      limit: params.limit || 24,
       totalPages: 0,
     },
     success: result.success,

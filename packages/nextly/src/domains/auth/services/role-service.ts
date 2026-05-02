@@ -25,7 +25,7 @@ import { RoleQueryService } from "./role/role-query-service";
  * @example
  * ```typescript
  * const roleService = new RoleService(adapter, logger);
- * const result = await roleService.listRoles({ page: 1, pageSize: 10 });
+ * const result = await roleService.listRoles({ page: 1, limit: 10 });
  * ```
  */
 export class RoleService extends BaseService {
@@ -79,7 +79,7 @@ export class RoleService extends BaseService {
    */
   listRoles(options?: {
     page?: number;
-    pageSize?: number;
+    limit?: number;
     search?: string;
     isSystem?: boolean;
     levelMin?: number;
@@ -98,7 +98,7 @@ export class RoleService extends BaseService {
     meta: {
       total: number;
       page: number;
-      pageSize: number;
+      limit: number;
       totalPages: number;
     };
   }> {

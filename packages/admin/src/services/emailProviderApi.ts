@@ -8,7 +8,7 @@
  * ```ts
  * import { emailProviderApi } from '@admin/services/emailProviderApi';
  *
- * const { data, meta } = await emailProviderApi.listProviders({ page: 0, pageSize: 10, search: '' });
+ * const { data, meta } = await emailProviderApi.listProviders({ page: 0, limit: 10, search: '' });
  * const provider = await emailProviderApi.getProvider('provider-id');
  * ```
  */
@@ -92,22 +92,16 @@ export interface TestProviderResult {
  */
 export async function listProviders(params: {
   page: number;
-  /** Deprecated: use `limit`. Kept for callers not yet updated (removed in Task 23). */
-  pageSize?: number;
-  /** New (Phase 4): canonical name. */
   limit?: number;
   search: string;
   type?: EmailProviderType | "all";
 }): Promise<EmailProviderListResponse> {
-  // Phase 4 (Task 19): the email-provider list endpoint is unpaginated on
-  // the server (the dispatcher returns the full array via respondData);
-  // page/pageSize remain in the query string for forward compatibility
-  // and as visual indicators in network logs. We keep emitting `pageSize`
-  // (rather than canonical `limit`) because the auth-style dispatchers
-  // still read `p.pageSize`; the server-side rename is queued for Task 23.
-  const effectiveLimit = params.limit ?? params.pageSize ?? 10;
+  // The email-provider dispatcher returns the full unpaginated array via
+  // respondData; we still emit `page` + `limit` so request logs are uniform
+  // with paginated endpoints.
+  const effectiveLimit = params.limit ?? 10;
   const queryParts: string[] = [
-    `pageSize=${effectiveLimit}`,
+    `limit=${effectiveLimit}`,
     `page=${params.page + 1}`, // Backend is 1-based when it does paginate
   ];
   if (params.search) {

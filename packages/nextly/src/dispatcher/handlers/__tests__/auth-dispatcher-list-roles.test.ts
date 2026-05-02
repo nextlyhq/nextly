@@ -24,7 +24,7 @@ describe("dispatchRbac('listRoles')", () => {
     ];
     const fakeServiceResult = {
       data: fakeRoles,
-      meta: { total: 1, page: 1, pageSize: 10, totalPages: 1 },
+      meta: { total: 1, page: 1, limit: 10, totalPages: 1 },
     };
 
     const listRolesMock = vi.fn().mockResolvedValue(fakeServiceResult);
@@ -38,7 +38,7 @@ describe("dispatchRbac('listRoles')", () => {
     const result = await dispatchRbac(
       container,
       "listRoles",
-      { page: "1", pageSize: "10" },
+      { page: "1", limit: "10" },
       undefined
     );
 
@@ -63,7 +63,7 @@ describe("dispatchRbac('listRoles')", () => {
     expect(listRolesMock).toHaveBeenCalledTimes(1);
     expect(listRolesMock.mock.calls[0]?.[0]).toMatchObject({
       page: 1,
-      pageSize: 10,
+      limit: 10,
     });
   });
 
@@ -71,7 +71,7 @@ describe("dispatchRbac('listRoles')", () => {
     const fakeRoles = [{ id: "r1", name: "Super Admin", level: 1000 }];
     const fakeServiceResult = {
       data: fakeRoles,
-      meta: { total: 1, page: 1, pageSize: 10, totalPages: 1 },
+      meta: { total: 1, page: 1, limit: 10, totalPages: 1 },
     };
 
     const container = {
@@ -85,7 +85,7 @@ describe("dispatchRbac('listRoles')", () => {
     const result = await dispatchRbac(
       container,
       "listRoles",
-      { page: "1", pageSize: "10" },
+      { page: "1", limit: "10" },
       undefined
     );
 

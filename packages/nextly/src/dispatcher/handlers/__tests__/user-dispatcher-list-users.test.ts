@@ -25,7 +25,7 @@ describe("dispatchUser('listUsers')", () => {
     // the handler translates it to the canonical { items, meta } body.
     const fakeServiceResult = {
       data: fakeUsers,
-      meta: { total: 2, page: 1, pageSize: 10, totalPages: 1 },
+      meta: { total: 2, page: 1, limit: 10, totalPages: 1 },
     };
 
     const listUsersMock = vi.fn().mockResolvedValue(fakeServiceResult);
@@ -37,7 +37,7 @@ describe("dispatchUser('listUsers')", () => {
     const result = await dispatchUser(
       container,
       "listUsers",
-      { page: "1", pageSize: "10" },
+      { page: "1", limit: "10" },
       undefined
     );
 
@@ -62,7 +62,7 @@ describe("dispatchUser('listUsers')", () => {
     expect(listUsersMock).toHaveBeenCalledTimes(1);
     expect(listUsersMock.mock.calls[0]?.[0]).toMatchObject({
       page: 1,
-      pageSize: 10,
+      limit: 10,
     });
   });
 
@@ -70,7 +70,7 @@ describe("dispatchUser('listUsers')", () => {
     const fakeUsers = [{ id: "u1", email: "a@example.com" }];
     const fakeServiceResult = {
       data: fakeUsers,
-      meta: { total: 1, page: 1, pageSize: 10, totalPages: 1 },
+      meta: { total: 1, page: 1, limit: 10, totalPages: 1 },
     };
 
     const container = {
@@ -82,7 +82,7 @@ describe("dispatchUser('listUsers')", () => {
     const result = await dispatchUser(
       container,
       "listUsers",
-      { page: "1", pageSize: "10" },
+      { page: "1", limit: "10" },
       undefined
     );
 

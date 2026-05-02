@@ -67,7 +67,7 @@ import { useBulkMutation } from "../useBulkMutation";
  */
 const defaultParams: MediaParams = {
   page: 1,
-  pageSize: 24, // Grid: 6 columns × 4 rows
+  limit: 24, // Grid: 6 columns × 4 rows
   sortBy: "uploadedAt",
   sortOrder: "desc",
 };
@@ -206,8 +206,8 @@ export function useInfiniteMedia(params?: Omit<MediaParams, "page">) {
     getNextPageParam: (lastPage, allPages) => {
       // Check if there are more pages
       const currentPage = allPages.length;
-      const pageSize = params?.pageSize || defaultParams.pageSize || 20;
-      const totalPages = Math.ceil(lastPage.meta.total / pageSize);
+      const limit = params?.limit || defaultParams.limit || 20;
+      const totalPages = Math.ceil(lastPage.meta.total / limit);
 
       if (currentPage < totalPages) {
         return currentPage + 1;

@@ -107,7 +107,7 @@ export class PermissionService extends BaseService {
   async listPermissions(options?: {
     // Pagination
     page?: number;
-    pageSize?: number;
+    limit?: number;
     // Search
     search?: string;
     // Filters
@@ -129,14 +129,14 @@ export class PermissionService extends BaseService {
     meta: {
       total: number;
       page: number;
-      pageSize: number;
+      limit: number;
       totalPages: number;
     };
   }> {
     try {
       const {
         page = 1,
-        pageSize = 10,
+        limit = 10,
         search,
         action,
         resource,
@@ -196,7 +196,7 @@ export class PermissionService extends BaseService {
           orderByClause = orderFn(permissions.resource);
       }
 
-      const offset = (page - 1) * pageSize;
+      const offset = (page - 1) * limit;
 
       const countResult = await this.db
         .select({ value: count() })
@@ -217,10 +217,10 @@ export class PermissionService extends BaseService {
         .from(permissions)
         .where(whereClause)
         .orderBy(orderByClause)
-        .limit(pageSize)
+        .limit(limit)
         .offset(offset);
 
-      const totalPages = Math.ceil(total / pageSize);
+      const totalPages = Math.ceil(total / limit);
 
       const resourcesInRows = [
         ...new Set(rows.map((row: PermissionSelectResult) => row.resource)),
@@ -286,7 +286,7 @@ export class PermissionService extends BaseService {
         meta: {
           total,
           page,
-          pageSize,
+          limit,
           totalPages,
         },
       };

@@ -85,7 +85,7 @@ function createAuthenticatedContext(userId: string): RequestContext {
  *
  * Query Parameters:
  * - page: Page number (default: 1)
- * - pageSize: Items per page (default: 24, becomes `perPage` in response meta)
+ * - limit: Items per page (default: 24, becomes `perPage` in response meta)
  * - search: Search query for filename, altText
  * - type: Filter by media type (image, video, audio, document, other)
  * - folderId: Filter by folder ("root" for root-level media)
@@ -103,8 +103,8 @@ export const GET = withErrorHandler(
     const folderIdParam = searchParams.get("folderId");
     const options: ListMediaOptions = {
       page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-      pageSize: searchParams.get("pageSize")
-        ? Number(searchParams.get("pageSize"))
+      limit: searchParams.get("limit")
+        ? Number(searchParams.get("limit"))
         : 24,
       search: searchParams.get("search") || undefined,
       type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
@@ -126,7 +126,7 @@ export const GET = withErrorHandler(
       createPaginatedResponse(result.data, {
         total: result.pagination.total,
         page: options.page ?? 1,
-        perPage: Math.max(1, options.pageSize ?? 24),
+        perPage: Math.max(1, options.limit ?? 24),
       })
     );
   }

@@ -249,7 +249,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           permissions: { loaded: false, loading: true },
         }));
 
-        const query = `?page=1&pageSize=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`;
+        const query = `?page=1&limit=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`;
 
         // Fetch permissions and single slugs in parallel so we can correctly
         // categorize each permission as collection-types, single-types, or settings.
@@ -278,9 +278,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             }>
           >(`/permissions${query}`),
           protectedApi
-            .get<ListEnvelope<{ slug: string }>>(
-              `/singles?page=1&pageSize=500`
-            )
+            .get<ListEnvelope<{ slug: string }>>(`/singles?page=1&limit=500`)
             .catch(() => ({ items: [] as Array<{ slug: string }> })),
         ]);
 

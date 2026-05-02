@@ -79,7 +79,7 @@ export const DeleteUserSchema = z.object({
 
 export const ListUsersSchema = z.object({
   page: z.number().int().positive().optional().default(1),
-  pageSize: z.number().int().positive().max(100).optional().default(10),
+  limit: z.number().int().positive().max(100).optional().default(10),
   search: z.string().optional(),
   emailVerified: z.boolean().optional(),
   hasPassword: z.boolean().optional(),

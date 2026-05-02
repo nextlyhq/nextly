@@ -10,8 +10,8 @@ import { BASE_URL } from "./fetcher";
 // emits `{ token: "..." }` directly via respondData. The two legacy
 // fallbacks (`data.data?.csrfToken` and `data.csrfToken`) are kept for
 // one release cycle so any in-flight clients running an older admin
-// build keep working; remove them in Phase 4.7+ once we drop the
-// transitional compat surface (parallels `pageSize` -> `limit`).
+// build keep working; remove them in Phase 4.6 with the auth/csrf
+// surface cleanup.
 export async function getCsrfToken(): Promise<string> {
   try {
     const res = await fetch(`${BASE_URL}/auth/csrf`, {

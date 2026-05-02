@@ -72,7 +72,15 @@ export function useEmailProviders(
 ) {
   return useQuery<EmailProviderListResponse, Error>({
     queryKey: emailProviderKeys.list(params),
-    queryFn: () => listProviders(params as Parameters<typeof listProviders>[0]),
+    // Admin-internal field name `pageSize` maps to canonical wire option
+    // `limit`; the TableParams rename itself is deferred to Phase 4.7.
+    queryFn: () =>
+      listProviders({
+        page: params.page,
+        limit: params.pageSize,
+        search: params.search,
+        type: params.type as Parameters<typeof listProviders>[0]["type"],
+      }),
     ...options,
   });
 }

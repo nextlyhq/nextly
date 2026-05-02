@@ -17,7 +17,7 @@
  * ```typescript
  * const queryService = new UserQueryService(adapter, logger);
  *
- * const users = await queryService.listUsers({ page: 1, pageSize: 10 });
+ * const users = await queryService.listUsers({ page: 1, limit: 10 });
  * const user = await queryService.getUserById('user-id');
  * ```
  */
@@ -83,7 +83,7 @@ const SEARCHABLE_FIELD_TYPES = new Set(["text", "textarea", "email"]);
 export interface ListUsersOptions {
   // Pagination
   page?: number;
-  pageSize?: number;
+  limit?: number;
   // Search
   search?: string;
   // Filters
@@ -107,7 +107,7 @@ export interface ListUsersResponse {
   meta: {
     total: number;
     page: number;
-    pageSize: number;
+    limit: number;
     totalPages: number;
   };
 }
@@ -360,7 +360,7 @@ export class UserQueryService extends BaseService {
   ): Promise<ListUsersResponse> {
     const {
       page = 1,
-      pageSize = 10,
+      limit = 10,
       search,
       emailVerified,
       hasPassword,
@@ -458,7 +458,7 @@ export class UserQueryService extends BaseService {
     );
 
     // Pagination
-    const offset = (page - 1) * pageSize;
+    const offset = (page - 1) * limit;
 
     // Total count — join user_ext only when sorting by a custom field
     // (not for filtering, since that is handled via inArray above)
@@ -506,12 +506,12 @@ export class UserQueryService extends BaseService {
       .leftJoin(roles, eq(userRoles.roleId, roles.id))
       .where(whereClause)
       .orderBy(orderByClause)
-      .limit(pageSize)
+      .limit(limit)
       .offset(offset);
 
     const userListWithRoles: Record<string, unknown>[] = await query;
 
-    const totalPages = Math.ceil(total / pageSize);
+    const totalPages = Math.ceil(total / limit);
 
     // Group results by user to handle multiple roles per user
     const usersMap = new Map<
@@ -604,7 +604,7 @@ export class UserQueryService extends BaseService {
       meta: {
         total,
         page,
-        pageSize,
+        limit,
         totalPages,
       },
     };

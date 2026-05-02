@@ -113,7 +113,7 @@ export interface UpdateCollectionInput {
  */
 export interface ListCollectionsOptions {
   page?: number;
-  pageSize?: number;
+  limit?: number;
   search?: string;
   sortBy?: "slug" | "createdAt" | "updatedAt";
   sortOrder?: "asc" | "desc";
@@ -247,9 +247,9 @@ export class CollectionService extends BaseService {
       throw this.mapLegacyErrorToNextlyError(result);
     }
 
-    const pageSize = options.pageSize ?? 10;
+    const limit = options.limit ?? 10;
     const page = options.page ?? 1;
-    const offset = (page - 1) * pageSize;
+    const offset = (page - 1) * limit;
     const total = (result.meta?.total as number) ?? 0;
     const items = (result.data ?? []) as unknown as Collection[];
 
@@ -257,7 +257,7 @@ export class CollectionService extends BaseService {
       data: items,
       pagination: {
         total,
-        limit: pageSize,
+        limit,
         offset,
         hasMore: offset + items.length < total,
       },
