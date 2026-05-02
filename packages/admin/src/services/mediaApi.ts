@@ -50,27 +50,18 @@ import type {
 // Internal fetch helper
 // ============================================================
 
-interface MediaApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  meta?: Record<string, unknown>;
-  message?: string;
-  statusCode?: number;
-}
-
 /**
  * Shared fetch wrapper for media API endpoints.
  *
- * The backend now returns canonical `{ data, meta? }` responses (per spec
- * §10.2). This helper synthesizes the legacy `MediaApiResponse<T>` shape
- * (`{ success, data, meta, message, statusCode }`) so the existing callers
- * keep working without touching every call site — `success: true` is implied
- * by a 2xx response and the legacy `message` field is empty.
+ * The backend now returns canonical respondX bodies (spec section 5.1).
+ * This helper handles the network/error concerns; each call site decodes
+ * the body into the right shape (bare doc, `{ items, meta }`, `{ message,
+ * item }`, or `{ message, ...result }`) using the typed helpers below.
  */
-async function mediaFetch<T>(
+async function mediaFetchJson<T>(
   url: string,
   options?: RequestInit
-): Promise<MediaApiResponse<T>> {
+): Promise<T> {
   const response = await authFetch(url, options);
 
   if (!response.ok) {
@@ -78,18 +69,19 @@ async function mediaFetch<T>(
     throw parseApiError(json, response.status);
   }
 
-  const json = (await response.json()) as {
-    data?: T;
-    meta?: Record<string, unknown>;
-  };
+  return (await response.json()) as T;
+}
 
-  return {
-    success: true,
-    data: json.data,
-    meta: json.meta,
-    statusCode: response.status,
-    message: "",
-  };
+async function mediaFetchVoid(
+  url: string,
+  options?: RequestInit
+): Promise<void> {
+  const response = await authFetch(url, options);
+
+  if (!response.ok) {
+    const json = await response.json().catch(() => null);
+    throw parseApiError(json, response.status);
+  }
 }
 
 // ============================================================
@@ -177,13 +169,16 @@ export async function uploadMedia(
   }
 
   if (result.status >= 200 && result.status < 300) {
-    // Canonical wire shape per spec §10.2: { data: Media }.
+    // Canonical respondMutation wire shape (spec section 5.1):
+    // { message, item: Media }.
     try {
-      const response = JSON.parse(result.responseText);
-      if (response.data) {
-        return response.data as Media;
+      const response = JSON.parse(result.responseText) as {
+        item?: Media;
+      };
+      if (response.item) {
+        return response.item;
       }
-      throw new Error("Upload succeeded but server returned no data.");
+      throw new Error("Upload succeeded but server returned no item.");
     } catch (err) {
       if (err instanceof Error) throw err;
       throw new Error("Failed to parse server response");
@@ -222,21 +217,31 @@ export async function fetchMedia(
     queryParams.set("folderId", params.folderId);
   }
 
-  const result = await mediaFetch<Media[]>(
-    `/api/media?${queryParams.toString()}`
-  );
+  // Canonical respondList wire shape (spec section 5.1):
+  // { items, meta: { total, page, limit, totalPages, hasNext, hasPrev } }.
+  const result = await mediaFetchJson<{
+    items?: Media[];
+    meta?: {
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+      hasNext: boolean;
+      hasPrev: boolean;
+    };
+  }>(`/api/media?${queryParams.toString()}`);
 
   return {
-    data: result.data || [],
+    data: result.items || [],
     meta: (result.meta as MediaListResponse["meta"]) || {
       total: 0,
       page: params.page || 1,
       limit: params.limit || 24,
       totalPages: 0,
     },
-    success: result.success,
-    statusCode: result.statusCode ?? 200,
-    message: result.message ?? "",
+    success: true,
+    statusCode: 200,
+    message: "",
   };
 }
 
@@ -244,11 +249,8 @@ export async function fetchMedia(
  * Fetch a single media item by ID
  */
 export async function getMediaById(mediaId: string): Promise<Media> {
-  const result = await mediaFetch<Media>(`/api/media/${mediaId}`);
-  if (!result.data) {
-    throw new Error(result.message || `Media not found: ${mediaId}`);
-  }
-  return result.data;
+  // respondDoc returns the bare row.
+  return mediaFetchJson<Media>(`/api/media/${mediaId}`);
 }
 
 /**
@@ -258,7 +260,8 @@ export async function updateMedia(
   mediaId: string,
   updates: MediaUpdateInput
 ): Promise<void> {
-  await mediaFetch(`/api/media/${mediaId}`, {
+  // respondMutation { message, item }; caller does not need the item back.
+  await mediaFetchVoid(`/api/media/${mediaId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
@@ -269,7 +272,8 @@ export async function updateMedia(
  * Delete a media item
  */
 export async function deleteMedia(mediaId: string): Promise<void> {
-  await mediaFetch(`/api/media/${mediaId}`, { method: "DELETE" });
+  // respondAction { message, id }; caller does not need the id back.
+  await mediaFetchVoid(`/api/media/${mediaId}`, { method: "DELETE" });
 }
 
 /**
@@ -321,15 +325,19 @@ export async function createFolder(
 ): Promise<MediaFolder> {
   const userId = await getCurrentUserId();
 
-  const result = await mediaFetch<MediaFolder>("/api/media/folders", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...input, createdBy: userId }),
-  });
-  if (!result.data) {
-    throw new Error(result.message || "Failed to create folder");
+  // respondMutation: { message, item: Folder }.
+  const result = await mediaFetchJson<{ item?: MediaFolder }>(
+    "/api/media/folders",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, createdBy: userId }),
+    }
+  );
+  if (!result.item) {
+    throw new Error("Failed to create folder");
   }
-  return result.data;
+  return result.item;
 }
 
 /**
@@ -338,33 +346,31 @@ export async function createFolder(
 export async function getFolderById(
   folderId: string
 ): Promise<FolderResponse["data"]> {
-  const result = await mediaFetch<FolderResponse["data"]>(
+  // respondDoc returns the bare folder row (with breadcrumbs).
+  return mediaFetchJson<FolderResponse["data"]>(
     `/api/media/folders/${folderId}`
   );
-  if (!result.data) {
-    throw new Error(result.message || `Folder not found: ${folderId}`);
-  }
-  return result.data;
 }
 
 /**
  * List root folders (folders with no parent)
  */
 export async function listRootFolders(): Promise<MediaFolder[]> {
-  const result = await mediaFetch<MediaFolder[]>(
+  // respondData { folders: MediaFolder[] } (non-paginated list, named field).
+  const result = await mediaFetchJson<{ folders?: MediaFolder[] }>(
     "/api/media/folders?root=true"
   );
-  return result.data || [];
+  return result.folders || [];
 }
 
 /**
  * List subfolders within a parent folder
  */
 export async function listSubfolders(parentId: string): Promise<MediaFolder[]> {
-  const result = await mediaFetch<MediaFolder[]>(
+  const result = await mediaFetchJson<{ folders?: MediaFolder[] }>(
     `/api/media/folders?parentId=${parentId}`
   );
-  return result.data || [];
+  return result.folders || [];
 }
 
 /**
@@ -377,11 +383,8 @@ export async function getFolderContents(
     ? `/api/media/folders/${folderId}/contents`
     : "/api/media/folders/root/contents";
 
-  const result = await mediaFetch<FolderContentsResponse["data"]>(url);
-  if (!result.data) {
-    throw new Error(result.message || "Failed to get folder contents");
-  }
-  return result.data;
+  // respondData ships the structured contents object bare.
+  return mediaFetchJson<FolderContentsResponse["data"]>(url);
 }
 
 /**
@@ -391,7 +394,7 @@ export async function updateFolder(
   folderId: string,
   updates: UpdateFolderInput
 ): Promise<MediaFolder> {
-  const result = await mediaFetch<MediaFolder>(
+  const result = await mediaFetchJson<{ item?: MediaFolder }>(
     `/api/media/folders/${folderId}`,
     {
       method: "PATCH",
@@ -399,10 +402,10 @@ export async function updateFolder(
       body: JSON.stringify(updates),
     }
   );
-  if (!result.data) {
-    throw new Error(result.message || "Failed to update folder");
+  if (!result.item) {
+    throw new Error("Failed to update folder");
   }
-  return result.data;
+  return result.item;
 }
 
 /**
@@ -412,7 +415,7 @@ export async function deleteFolder(
   folderId: string,
   deleteContents: boolean = false
 ): Promise<void> {
-  await mediaFetch(
+  await mediaFetchVoid(
     `/api/media/folders/${folderId}?deleteContents=${deleteContents}`,
     { method: "DELETE" }
   );
@@ -425,10 +428,14 @@ export async function moveMediaToFolder(
   mediaId: string,
   folderId: string | null
 ): Promise<Media | null> {
-  const result = await mediaFetch<Media>(`/api/media/${mediaId}/move`, {
+  // respondAction returns { message, id, folderId }; the caller's pre-Phase-4
+  // signature returned the moved record; the new endpoint omits it because
+  // the admin already has the row in cache. Keep the public signature for
+  // backwards compatibility with callers but always resolve to null.
+  await mediaFetchVoid(`/api/media/${mediaId}/move`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ folderId }),
   });
-  return result.data ?? null;
+  return null;
 }

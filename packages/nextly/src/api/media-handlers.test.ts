@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../init", () => ({
   getNextly: vi.fn(async () => ({})),
+  getCachedNextly: vi.fn(async () => ({})),
 }));
 
 vi.mock("../di", () => ({
@@ -63,11 +64,12 @@ describe("createMediaHandlers timezone formatting", () => {
 
     expect(response.status).toBe(200);
 
+    // Phase 4.6: list endpoint emits respondList `{ items, meta }`.
     const json = (await response.json()) as {
-      data: Array<{ uploadedAt: string; updatedAt: string }>;
+      items: Array<{ uploadedAt: string; updatedAt: string }>;
     };
 
-    expect(json.data[0].uploadedAt).toContain("+09:00");
-    expect(json.data[0].updatedAt).toContain("+09:00");
+    expect(json.items[0].uploadedAt).toContain("+09:00");
+    expect(json.items[0].updatedAt).toContain("+09:00");
   });
 });

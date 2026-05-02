@@ -31,9 +31,8 @@
  * established in Task 11.
  *
  * The regeneration helpers (`getRegenerationStatus`, `regenerateBatch`)
- * are out of scope for Task 12 (not listed in the plan as direct
- * branches). They keep `createSuccessResponse` until a later cleanup
- * pass.
+ * are non-CRUD: status is a pure read (`respondData`) and regenerate is a
+ * batch action (`respondAction`).
  *
  * Errors flow through `withErrorHandler` and serialize as
  * `application/problem+json`.
@@ -50,9 +49,9 @@ import { getCachedNextly } from "../init";
 import { ImageSizeService } from "../services/image-size";
 import { MediaRegenerationService } from "../services/media-regeneration";
 
-import { createSuccessResponse } from "./create-success-response";
 import {
   respondAction,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
@@ -287,7 +286,8 @@ export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
   const regenService = new MediaRegenerationService(adapter, console);
   const status = await regenService.getRegenerationStatus();
 
-  return createSuccessResponse(status);
+  // Non-CRUD read: surface the status object bare via respondData.
+  return respondData(status as unknown as Record<string, unknown>);
 });
 
 /**
@@ -329,5 +329,12 @@ export const regenerateBatch = withErrorHandler(async (req: Request) => {
   const regenService = new MediaRegenerationService(adapter, console);
   const result = await regenService.regenerateBatch({ batchSize, cursor });
 
-  return createSuccessResponse(result);
+  // Batch-action endpoint: surface the run summary alongside a toast string
+  // via respondAction.
+  return respondAction("Regeneration batch processed.", {
+    processed: result.processed,
+    remaining: result.remaining,
+    nextCursor: result.nextCursor,
+    failures: result.failures,
+  });
 });
