@@ -14,12 +14,7 @@ import { useState, useEffect } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
 
-import {
-  ArrowRight,
-  Eye,
-  EyeOff,
-  Loader2,
-} from "@admin/components/icons";
+import { ArrowRight, Eye, EyeOff, Loader2 } from "@admin/components/icons";
 import { PasswordStrengthIndicator } from "@admin/components/shared";
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { toast } from "@admin/components/ui";
@@ -34,6 +29,7 @@ import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { getCsrfToken } from "@admin/lib/api/csrf";
+import type { ActionResponse } from "@admin/lib/api/response-types";
 import { cn } from "@admin/lib/utils";
 import { passwordSchema } from "@admin/lib/validation";
 
@@ -90,15 +86,21 @@ export function Setup() {
     try {
       const csrfToken = await getCsrfToken();
 
-      // Create the admin account (auto-login: server sets access + refresh cookies)
-      await api.public.post("/auth/setup", {
+      // Create the admin account (auto-login: server sets access + refresh cookies).
+      // Phase 4 (Task 21): the setup handler emits
+      // `respondAction("Setup complete.", { user, ... })`; capture the
+      // result so the toast can surface the server-authored message.
+      const result = await api.public.post<ActionResponse>("/auth/setup", {
         name: values.fullName,
         email: values.email,
         password: values.password,
         csrfToken,
       });
 
-      toast.success("Welcome to " + appName + "!", {
+      // Phase 4 (Task 21): prefer the server message; fall back to the
+      // welcome string if the server omits it (defensive shim per
+      // spec §9.7).
+      toast.success(result?.message ?? "Welcome to " + appName + "!", {
         description: "Your admin account has been created.",
       });
 
@@ -154,7 +156,12 @@ export function Setup() {
 
         <CardContent className="pb-10">
           <FormProvider {...form}>
-            <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+            <form
+              onSubmit={e => {
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-6"
+            >
               <FormField
                 control={form.control}
                 name="fullName"

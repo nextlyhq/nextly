@@ -35,6 +35,7 @@ import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { getCsrfToken } from "@admin/lib/api/csrf";
+import type { ActionResponse } from "@admin/lib/api/response-types";
 import { cn } from "@admin/lib/utils";
 
 const formSchema = z.object({
@@ -79,14 +80,21 @@ export function Login() {
     try {
       const csrfToken = await getCsrfToken();
 
-      // POST to custom auth login endpoint (replaces Auth.js callback)
-      await api.public.post("/auth/login", {
+      // POST to custom auth login endpoint (replaces Auth.js callback).
+      // Phase 4 (Task 21): the login handler now emits a canonical
+      // `respondAction("Logged in.", { user, accessToken, ... })` body;
+      // capture the result so the toast can surface the server-authored
+      // message rather than hard-coding copy on the client.
+      const result = await api.public.post<ActionResponse>("/auth/login", {
         email: values.email,
         password: values.password,
         csrfToken,
       });
 
-      toast.success("Login successful!", {
+      // Phase 4 (Task 21): prefer `result.message` from the server; fall
+      // back to a friendly hard-coded string if the server omits it for
+      // any reason (defensive shim per spec §9.7).
+      toast.success(result?.message ?? "Login successful!", {
         description: `Welcome back to ${appName}`,
       });
 
@@ -144,8 +152,14 @@ export function Login() {
     setResendingVerification(true);
     try {
       const csrfToken = await getCsrfToken();
-      await api.public.post("/auth/verify-email/resend", { email, csrfToken });
-      toast.success("Verification email sent", {
+      // Phase 4 (Task 21): verify-email/resend handler emits
+      // `respondAction("Verification email sent.")`; surface that
+      // server-authored message instead of duplicating the copy here.
+      const result = await api.public.post<ActionResponse>(
+        "/auth/verify-email/resend",
+        { email, csrfToken }
+      );
+      toast.success(result?.message ?? "Verification email sent", {
         description: "Please check your inbox for the verification link.",
       });
     } catch {
@@ -185,7 +199,12 @@ export function Login() {
 
         <CardContent className="pb-10">
           <FormProvider {...form}>
-            <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+            <form
+              onSubmit={e => {
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-6"
+            >
               {emailNotVerified && (
                 <div className="flex items-start gap-3 rounded-none border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
                   <Mail className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
@@ -199,7 +218,9 @@ export function Login() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => { void handleResendVerification(); }}
+                      onClick={() => {
+                        void handleResendVerification();
+                      }}
                       disabled={resendingVerification}
                       className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-200 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100 disabled:opacity-50"
                     >
