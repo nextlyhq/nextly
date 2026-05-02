@@ -52,6 +52,7 @@ import type {
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
+import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { getProductionNotifier } from "../runtime/notifications/index";
 
@@ -103,6 +104,12 @@ interface CollectionRegistrySurface {
 }
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
+}
+interface SchemaRegistrySurface {
+  registerDynamicSchema(tableName: string, table: unknown): void;
+}
+interface CollectionsHandlerSurface {
+  refreshCollectionSchema(tableName: string, freshTable: unknown): void;
 }
 
 // Minimal field shape passed to buildDesiredTableFromFields. Mirrors the
@@ -485,6 +492,63 @@ export async function reloadNextlyConfig(opts?: {
       }
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
+    }
+
+    // Pre-compute fresh Drizzle table objects for all affected collections
+    // and singles. Synchronous (schema generation, no DB I/O). Shared
+    // between the two cache-refresh blocks below so we don't generate twice.
+    const collectionFreshTables = new Map<string, unknown>();
+    const singleFreshTables = new Map<string, unknown>();
+    try {
+      for (const c of Object.values(desiredCollections)) {
+        const { table } = generateRuntimeSchema(
+          c.tableName,
+          c.fields as Parameters<typeof generateRuntimeSchema>[1],
+          dialect
+        );
+        collectionFreshTables.set(c.tableName, table);
+      }
+      for (const s of Object.values(desiredSingles)) {
+        const { table } = generateRuntimeSchema(
+          s.tableName,
+          s.fields as Parameters<typeof generateRuntimeSchema>[1],
+          dialect
+        );
+        singleFreshTables.set(s.tableName, table);
+      }
+    } catch {
+      // Non-fatal: both refresh blocks below will no-op on empty maps.
+    }
+
+    // Refresh SchemaRegistry.dynamicSchemas — used by the adapter's CRUD
+    // path (INSERT / UPDATE / DELETE) for both dc_* and single_* tables.
+    try {
+      const schemaReg = (await resolve("schemaRegistry")) as SchemaRegistrySurface;
+      for (const [tableName, table] of collectionFreshTables) {
+        schemaReg.registerDynamicSchema(tableName, table);
+      }
+      for (const [tableName, table] of singleFreshTables) {
+        schemaReg.registerDynamicSchema(tableName, table);
+      }
+    } catch {
+      // Non-fatal: next request will still fail with stale schema, but
+      // a server restart will recover. Log is intentionally omitted here
+      // to avoid noise — the DDL itself succeeded.
+    }
+
+    // Refresh CollectionFileManager.schemaRegistry — used by the SELECT /
+    // GET query path for collections (loadDynamicSchema). Singles GET goes
+    // through the adapter (SchemaRegistry above), so only dc_* tables need
+    // this second refresh.
+    try {
+      const collHandler = (await resolve(
+        "collectionsHandler"
+      )) as CollectionsHandlerSurface;
+      for (const [tableName, table] of collectionFreshTables) {
+        collHandler.refreshCollectionSchema(tableName, table);
+      }
+    } catch {
+      // Non-fatal: same reasoning as SchemaRegistry block above.
     }
   }
 
