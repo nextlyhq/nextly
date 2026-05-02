@@ -25,8 +25,12 @@ import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondDoc,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 interface RouteContext {
@@ -62,7 +66,7 @@ export const GET = withErrorHandler(
     const service = await getUserFieldDefinitionService();
     const field = await service.getField(id);
 
-    return createSuccessResponse(field);
+    return respondDoc(field);
   }
 );
 
@@ -114,7 +118,7 @@ export const PATCH = withErrorHandler(
     const service = await getUserFieldDefinitionService();
     const field = await service.updateField(id, updateData);
 
-    return createSuccessResponse(field);
+    return respondMutation("User field updated.", field);
   }
 );
 
@@ -143,6 +147,9 @@ export const DELETE = withErrorHandler(
 
     await service.deleteField(id);
 
-    return createSuccessResponse({ success: true });
+    // Service returns void. Echo the deleted id (named `fieldId` to
+    // match the dispatcher route's wire shape) so the admin can prune
+    // its local list without a follow-up fetch.
+    return respondAction("User field deleted.", { fieldId: id });
   }
 );
