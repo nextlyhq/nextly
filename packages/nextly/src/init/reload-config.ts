@@ -80,7 +80,17 @@ type CollectionDef = {
   slug?: string;
   tableName?: string;
   fields?: unknown[];
+  labels?: { singular?: string; plural?: string };
+  description?: string;
+  timestamps?: boolean;
+  admin?: unknown;
+  dbName?: string;
 };
+
+// Minimal duck-typed surface of CollectionRegistryService used here.
+interface CollectionRegistrySurface {
+  syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
+}
 
 // Minimal field shape passed to buildDesiredTableFromFields. Mirrors the
 // MinimalFieldDef in build-from-fields.ts (kept duck-typed here to avoid
@@ -336,6 +346,36 @@ export async function reloadNextlyConfig(opts?: {
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",
   });
+
+  if (applyResult.success) {
+    // Sync dynamic_collections metadata so the fields JSON reflects the
+    // new config. The pipeline above only applies DDL to dc_<slug>; without
+    // this call, admin-UI queries still read the old field list until the
+    // server restarts and registerServices runs syncCodeFirstCollections.
+    try {
+      const registry = (await resolve(
+        "collectionRegistryService"
+      )) as CollectionRegistrySurface;
+      const codeFirstConfigs = (newConfig.collections ?? [])
+        .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
+        .map(c => ({
+          slug: c.slug,
+          labels: {
+            singular: c.labels?.singular ?? c.slug,
+            plural: c.labels?.plural ?? `${c.slug}s`,
+          },
+          fields: c.fields ?? [],
+          description: c.description,
+          tableName: c.dbName,
+          timestamps: c.timestamps,
+          admin: c.admin,
+        }));
+      await registry.syncCodeFirstCollections(codeFirstConfigs);
+    } catch {
+      // Non-fatal: DDL was applied; metadata sync failed. The next boot
+      // or HMR cycle will retry via registerServices.
+    }
+  }
 
   if (!applyResult.success) {
     const code = applyResult.error.code;
