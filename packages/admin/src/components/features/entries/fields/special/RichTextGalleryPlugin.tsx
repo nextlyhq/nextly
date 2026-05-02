@@ -275,7 +275,7 @@ export function RichTextGalleryPlugin({
               <div className="grid grid-cols-4 gap-2">
                 {selectedImages.map((image, index) => (
                   <div key={index} className="relative group">
-                    <div className="aspect-square rounded-md overflow-hidden bg-muted">
+                    <div className="aspect-square rounded-none overflow-hidden bg-primary/5">
                       <img
                         src={image.src}
                         alt={image.alt}
@@ -284,7 +284,7 @@ export function RichTextGalleryPlugin({
                     </div>
                     <button
                       type="button"
-                      className="absolute top-1 right-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-1 right-1 h-5 w-5 rounded-none bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                       onClick={() => removeImage(index)}
                     >
                       <X className="h-3 w-3" />

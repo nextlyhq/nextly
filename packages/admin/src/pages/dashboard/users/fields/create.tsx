@@ -47,15 +47,15 @@ export default function CreateUserFieldPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="space-y-8">
-          <UserBreadcrumbs currentPage="fields-create" />
+        <div>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="fields-create" />
+          </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">
-                Create Field
-              </h1>
-              <p className="mt-2 text-base text-muted-foreground">
+              <h1 className="text-xl font-semibold tracking-tight">Create Field</h1>
+              <p className="text-sm font-normal text-primary/50 mt-1">
                 Add a new custom attribute to user accounts
               </p>
             </div>

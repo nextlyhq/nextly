@@ -54,7 +54,7 @@ export class CollapsibleContainerNode extends ElementNode {
       "my-4",
       "border",
       "border-border",
-      "rounded-md",
+      "rounded-none",
       "overflow-hidden"
     );
     if (this.__open) {
@@ -148,7 +148,7 @@ export class CollapsibleTitleNode extends ElementNode {
       "font-medium",
       "cursor-pointer",
       "select-none",
-      "bg-muted/50",
+      "bg-primary/5",
       "hover-unified",
       "transition-colors",
       "list-none"

@@ -188,7 +188,7 @@ export function Login() {
             </div>
           </div>
           <div>
-            <CardTitle className="text-3xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Welcome Back
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">

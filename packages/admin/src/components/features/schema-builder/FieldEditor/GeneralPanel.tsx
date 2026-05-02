@@ -66,7 +66,7 @@ export function GeneralPanel({
     <>
       {/* System field notice */}
       {isSystemField && (
-        <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 border border-border">
+        <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5 border border-border">
           <Icons.Lock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground">
             This is a system field. Its name and type cannot be changed.
@@ -113,7 +113,7 @@ export function GeneralPanel({
       {/* Type (read-only) */}
       <div className="space-y-2">
         <Label className="text-xs font-medium">Type</Label>
-        <div className="flex items-center gap-2 h-8 px-3 rounded-md border border-border bg-muted/50">
+        <div className="flex items-center gap-2 h-8 px-3 rounded-none border border-border bg-primary/5">
           <IconComponent className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
             {formatFieldType(localField.type)}

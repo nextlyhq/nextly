@@ -160,7 +160,7 @@ export function PasswordInput<TFieldValues extends FieldValues = FieldValues>({
         autoComplete={field.admin?.autoComplete || "new-password"}
         aria-invalid={invalid || undefined}
         className={cn(
-          readOnly && "bg-muted cursor-not-allowed",
+          readOnly && "bg-primary/5 cursor-not-allowed",
           "pr-10",
           className
         )}

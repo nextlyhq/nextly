@@ -142,7 +142,7 @@ export function SelectFieldEditor({
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">
-          <TabsList className="w-full rounded-md">
+          <TabsList className="w-full rounded-none">
             <TabsTrigger value="basic" className="flex-1">
               Basic
             </TabsTrigger>
@@ -231,7 +231,7 @@ export function SelectFieldEditor({
 
               {/* Options Table */}
               {options.length > 0 ? (
-                <div className="border rounded-md">
+                <div className="border rounded-none">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -265,7 +265,7 @@ export function SelectFieldEditor({
                   </Table>
                 </div>
               ) : (
-                <div className="text-center p-4 border rounded-md bg-muted">
+                <div className="text-center p-4 border rounded-none bg-primary/5">
                   <p className="text-muted-foreground">No options defined</p>
                 </div>
               )}

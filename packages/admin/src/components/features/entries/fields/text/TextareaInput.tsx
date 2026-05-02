@@ -202,7 +202,7 @@ export function TextareaInput<TFieldValues extends FieldValues = FieldValues>({
       aria-invalid={invalid || undefined}
       className={cn(
         resizeStyle,
-        readOnly && "bg-muted cursor-not-allowed",
+        readOnly && "bg-primary/5 cursor-not-allowed",
         className
       )}
     />

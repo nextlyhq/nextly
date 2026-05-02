@@ -150,7 +150,7 @@ export function MediaListView({
           const isImage = type === "image";
           return (
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 overflow-hidden bg-card/50 flex items-center justify-center flex-shrink-0 border border-border/50 rounded">
+              <div className="w-10 h-10 overflow-hidden bg-card/50 flex items-center justify-center flex-shrink-0 border border-border/50 rounded-none">
                 {isImage && item.thumbnailUrl ? (
                   <img
                     src={item.thumbnailUrl}
@@ -195,7 +195,7 @@ export function MediaListView({
           return (
             <Badge
               variant="default"
-              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-primary/5 text-primary border border-primary/10 uppercase tracking-tight"
+              className="text-[10px] font-semibold px-2.5 py-0.5 rounded-none bg-primary/5 text-primary border border-primary/10 uppercase tracking-tight"
             >
               {type}
             </Badge>
@@ -259,15 +259,15 @@ export function MediaListView({
         {Array.from({ length: DEFAULT_MEDIA_SKELETON_COUNT }).map((_, i) => (
           <div
             key={i}
-            className="flex items-center gap-4 p-3 rounded-md border border-border animate-pulse"
+            className="flex items-center gap-4 p-3 rounded-none border border-border animate-pulse"
           >
-            <div className="w-10 h-10 rounded bg-muted" />
+            <div className="w-10 h-10 rounded-none bg-primary/5" />
             <div className="flex-1 space-y-1.5">
-              <div className="h-3.5 w-48 bg-muted rounded" />
-              <div className="h-3 w-24 bg-muted rounded" />
+              <div className="h-3.5 w-48 bg-primary/5 rounded-none" />
+              <div className="h-3 w-24 bg-primary/5 rounded-none" />
             </div>
-            <div className="h-3 w-16 bg-muted rounded" />
-            <div className="h-3 w-20 bg-muted rounded" />
+            <div className="h-3 w-16 bg-primary/5 rounded-none" />
+            <div className="h-3 w-20 bg-primary/5 rounded-none" />
           </div>
         ))}
       </div>

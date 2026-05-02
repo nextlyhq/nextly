@@ -200,7 +200,7 @@ function ResponsiveTableInner<T extends { id: string }>(
       <div
         ref={ref}
         className={cn(
-          "rounded-none border border-border p-8 text-center",
+          "p-8 text-center",
           className
         )}
       >

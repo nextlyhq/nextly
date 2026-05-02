@@ -257,7 +257,7 @@ export function RelationFieldEditor({
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">
-          <TabsList className="w-full rounded-md">
+          <TabsList className="w-full rounded-none">
             <TabsTrigger value="basic" className="flex-1">
               Basic Settings
             </TabsTrigger>
@@ -453,7 +453,7 @@ export function RelationFieldEditor({
                         as display field
                       </div>
 
-                      <div className="mt-2 p-3 border rounded-md flex items-center justify-between bg-muted/40">
+                      <div className="mt-2 p-3 border rounded-none flex items-center justify-between bg-primary/5">
                         <div className="flex items-center gap-2">
                           <Database className="h-4 w-4 text-muted-foreground" />
                           <span className="text-sm">
@@ -472,7 +472,7 @@ export function RelationFieldEditor({
                       </div>
 
                       {form.watch("searchable") && (
-                        <div className="flex items-center gap-2 border rounded-md px-3 py-2 mt-2">
+                        <div className="flex items-center gap-2 border rounded-none px-3 py-2 mt-2">
                           <Search className="h-4 w-4 text-muted-foreground" />
                           <Input
                             placeholder={`Search ${getSelectedContentTypeName()}...`}

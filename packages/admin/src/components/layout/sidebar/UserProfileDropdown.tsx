@@ -34,16 +34,16 @@ export function UserProfileDropdown({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary/20 focus:outline-none hover-subtle-row group"
+            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary/20 focus:outline-none hover-subtle-row group"
             aria-label="User profile menu"
           >
-            <Avatar className="h-8 w-8 rounded-md border border-sidebar-border group-hover:border-primary/20 transition-colors">
+            <Avatar className="h-8 w-8 rounded-none border border-sidebar-border group-hover:border-primary/20 transition-colors">
               <AvatarImage
                 src={user?.avatar}
                 alt={user?.name || "User"}
-                className="rounded-md"
+                className="rounded-none"
               />
-              <AvatarFallback className="bg-transparent text-sidebar-foreground/50 text-xs font-bold rounded-md">
+              <AvatarFallback className="bg-transparent text-sidebar-foreground/50 text-xs font-bold rounded-none">
                 {user?.name?.charAt(0)?.toUpperCase() || "U"}
               </AvatarFallback>
             </Avatar>

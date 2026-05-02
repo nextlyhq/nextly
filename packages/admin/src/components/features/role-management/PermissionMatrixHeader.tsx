@@ -46,9 +46,9 @@ export function PermissionMatrixHeader({
   );
 
   const headerClass =
-    "p-4 align-middle text-sm font-medium text-foreground border-b border-border bg-muted/80 backdrop-blur-sm sticky top-0 z-10";
+    "p-4 align-middle text-sm font-medium text-foreground border-b border-border bg-primary/5 backdrop-blur-sm sticky top-0 z-10";
   const actionClass =
-    "p-4 align-middle text-sm font-medium text-foreground border-b border-border bg-muted/80 backdrop-blur-sm w-[120px] sticky top-0 z-10";
+    "p-4 align-middle text-sm font-medium text-foreground border-b border-border bg-primary/5 backdrop-blur-sm w-[120px] sticky top-0 z-10";
 
   return (
     <thead>

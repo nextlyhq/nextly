@@ -17,7 +17,7 @@ import type { Media } from "../media";
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
  * - **Border**: Default `border border-border`, Selected `border-2 border-primary-500`
- * - **Border Radius**: 8px (`rounded-lg`)
+ * - **Border Radius**: 8px (`rounded-none`)
  * - **Hover State**: `border-primary-300`, `scale-105`, `shadow-md` (NOT applied when selected)
  * - **Selected State**: `border-2 border-primary-500`, `ring-2 ring-primary-500`, no scale
  * - **Focus State**: `ring-2 ring-primary-500 ring-offset-2` (keyboard navigation)

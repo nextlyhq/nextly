@@ -19,7 +19,7 @@
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
  * - **Border**: Default `border border-border`, Selected `border border-primary`
- * - **Border Radius**: 8px (`rounded-lg`)
+ * - **Border Radius**: 8px (`rounded-none`)
  * - **Hover State**: `border-primary-300 scale-105 shadow-md` (NOT when selected)
  * - **Selected State**: `border-2 border-primary-500 ring-2 ring-primary-500`, no scale
  * - **Focus State**: `ring-2 ring-primary-500 ring-offset-2` (keyboard navigation)
@@ -163,7 +163,7 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-xl overflow-hidden bg-card/50 transition-all duration-300 border border-border/50 flex flex-col",
+        "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300 border border-border/50 flex flex-col",
         isSelected
           ? "ring-2 ring-primary/30 ring-offset-2 border-primary/30 cursor-pointer"
           : "hover:border-primary/40 cursor-pointer",
@@ -215,7 +215,7 @@ export function MediaCard({
       )}
 
       {/* Information Bar - Integrated at bottom of aspect-square */}
-      <div className="bg-muted/50 border-t border-border/40 p-3 shrink-0">
+      <div className="bg-primary/5 border-t border-border/40 p-3 shrink-0">
         <div className="flex flex-col gap-1.5">
           <p className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}

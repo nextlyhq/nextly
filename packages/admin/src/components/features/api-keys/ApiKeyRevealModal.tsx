@@ -79,7 +79,7 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
           <DialogDescription id="reveal-key-description" asChild>
             <div>
               {/* Warning banner */}
-              <div className="mt-1 flex items-start gap-2.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+              <div className="mt-1 flex items-start gap-2.5 rounded-none border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                 <span>
                   This key will not be shown again. Copy and store it somewhere
@@ -95,7 +95,7 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
         <div className="space-y-2">
           <p className="text-sm font-medium">Your API key</p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-md border bg-muted px-3 py-2 font-mono text-sm break-all">
+            <code className="flex-1 overflow-x-auto rounded-none border bg-primary/5 px-3 py-2 font-mono text-sm break-all">
               {rawKey ?? ""}
             </code>
             <Button

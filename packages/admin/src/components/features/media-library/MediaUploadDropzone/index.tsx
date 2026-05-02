@@ -506,7 +506,7 @@ export function MediaUploadDropzone({
             e.stopPropagation();
             onToggleCollapse();
           }}
-          className="absolute right-2 top-2 z-10 rounded-full bg-background/50 hover:bg-background/80 backdrop-blur-sm transition-colors"
+          className="absolute right-2 top-2 z-10 rounded-none bg-background/50 hover:bg-background/80 backdrop-blur-sm transition-colors"
           aria-label="Close upload zone"
         >
           <X className="h-4 w-4" />
@@ -524,7 +524,7 @@ export function MediaUploadDropzone({
           }
         }}
         className={cn(
-          "relative flex flex-col items-center justify-center rounded-xl transition-all duration-200 group",
+          "relative flex flex-col items-center justify-center rounded-none transition-all duration-200 group",
           borderStyles[visualState],
           backgroundStyles[visualState],
           "min-h-48 md:min-h-56 py-16 px-8",
@@ -542,7 +542,7 @@ export function MediaUploadDropzone({
         {/* Icon circle — solid filled, primary light color background */}
         <div
           className={cn(
-            "flex items-center justify-center rounded-full mb-5 transition-all duration-200",
+            "flex items-center justify-center rounded-none mb-5 transition-all duration-200",
             "w-16 h-16",
             // Solid filled circle — no ring/outline, just a clean bg fill
             visualState === "default" &&
@@ -647,7 +647,7 @@ export function MediaUploadDropzone({
                   <X className="h-4 w-4 text-destructive" />
                 )}
                 {item.status === "pending" && (
-                  <div className="h-4 w-4 rounded-full border-2 border-muted-foreground" />
+                  <div className="h-4 w-4 rounded-none border-2 border-muted-foreground" />
                 )}
               </div>
 

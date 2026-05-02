@@ -297,7 +297,7 @@ export function QueryBuilder({
                 value={params[key] || ""}
                 onChange={e => updateParam(key, e.target.value)}
                 placeholder={placeholder}
-                className="h-10 text-xs font-mono rounded-none border-border/40 bg-muted/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all placeholder:text-muted-foreground/20"
+                className="h-10 text-xs font-mono rounded-none border-border/40 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all placeholder:text-muted-foreground/20"
               />
             </div>
           ))}
@@ -323,7 +323,7 @@ export function QueryBuilder({
           </div>
 
           {whereConditions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 border border-dashed border-border/20 rounded-none bg-muted/5">
+            <div className="flex flex-col items-center justify-center py-10 border border-dashed border-border/20 rounded-none bg-primary/5">
               <p className="text-[10px] text-muted-foreground/40 uppercase font-black tracking-widest">
                 No active filters
               </p>
@@ -333,7 +333,7 @@ export function QueryBuilder({
               {whereConditions.map(condition => (
                 <div
                   key={condition.id}
-                  className="flex items-center gap-3 p-4 bg-muted/5 border border-border/20 rounded-none group transition-all"
+                  className="flex items-center gap-3 p-4 bg-primary/5 border border-border/20 rounded-none group transition-all"
                 >
                   {/* Field name */}
                   <Input

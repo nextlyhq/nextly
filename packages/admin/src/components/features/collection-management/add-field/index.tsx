@@ -72,7 +72,7 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
             <div key={categoryIndex}>
               <div className="text-lg font-semibold flex items-center mb-4">
                 <div
-                  className={`w-2 h-2 ${categoryColors[category.title]} rounded-full mr-3`}
+                  className={`w-2 h-2 ${categoryColors[category.title]} rounded-none mr-3`}
                 ></div>
                 {category.title}
               </div>
@@ -83,7 +83,7 @@ export function AddField({ onClose, onFieldSelect }: AddFieldProps = {}) {
                   return (
                     <div
                       key={itemIndex}
-                      className="border border-border shadow rounded-md p-5 cursor-pointer hover:bg-zinc-100"
+                      className="border border-border shadow rounded-none p-5 cursor-pointer hover:bg-zinc-100"
                       onClick={() => {
                         const mappedType =
                           fieldTypeMapping[item.type] || item.type;

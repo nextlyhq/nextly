@@ -102,7 +102,7 @@ const editorTheme = {
     italic: "italic",
     underline: "underline",
     strikethrough: "line-through",
-    code: "bg-muted px-1.5 py-0.5 rounded font-mono text-sm",
+    code: "bg-primary/5 px-1.5 py-0.5 rounded-none font-mono text-sm",
     highlight: "bg-yellow-200 dark:bg-yellow-800",
     subscript: "align-sub text-xs",
     superscript: "align-super text-xs",
@@ -143,7 +143,7 @@ const editorTheme = {
   link: "text-primary underline hover-unified cursor-pointer",
 
   // Code blocks
-  code: "block bg-muted p-4 rounded-md font-mono text-sm mb-2 overflow-x-auto",
+  code: "block bg-primary/5 p-4 rounded-none font-mono text-sm mb-2 overflow-x-auto",
   codeHighlight: {
     atrule: "text-purple-500",
     attr: "text-primary",
@@ -181,9 +181,9 @@ const editorTheme = {
   table: "border-collapse w-full my-4",
   tableCell: "border border-border px-3 py-2 text-left align-top min-w-[75px]",
   tableCellHeader:
-    "border border-border px-3 py-2 text-left font-bold bg-muted align-top",
+    "border border-border px-3 py-2 text-left font-bold bg-primary/5 align-top",
   tableRow: "",
-  tableRowStriping: "even:bg-muted/30",
+  tableRowStriping: "even:bg-primary/5",
 };
 
 // ============================================================
@@ -261,8 +261,8 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-md border bg-background",
-        !isEditable && "bg-muted cursor-not-allowed",
+        "relative rounded-none border bg-background",
+        !isEditable && "bg-primary/5 cursor-not-allowed",
         className
       )}
       data-richtext-editor

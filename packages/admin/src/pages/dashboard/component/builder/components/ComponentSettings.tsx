@@ -240,7 +240,7 @@ function IconPicker({ value, onChange }: IconPickerProps) {
                     type="button"
                     onClick={() => handleSelect(icon.name)}
                     className={cn(
-                      "flex items-center justify-center p-2 rounded-md transition-colors",
+                      "flex items-center justify-center p-2 rounded-none transition-colors",
                       "hover:bg-accent hover:text-accent-foreground",
                       isSelected && "bg-primary text-primary-foreground"
                     )}
@@ -414,7 +414,7 @@ export function ComponentSettings({
 
   if (variant === "card") {
     return (
-      <div className="border border-border rounded-xl bg-card shadow-none p-6">
+      <div className="border border-border rounded-none bg-card shadow-none p-6">
         <div className="flex items-center gap-2 mb-6">
           <Icons.Settings className="h-5 w-5 text-primary" />
           <h3 className="text-lg font-semibold tracking-tight">
@@ -434,7 +434,7 @@ export function ComponentSettings({
     <Collapsible
       open={localExpanded}
       onOpenChange={handleExpandedChange}
-      className="border-b border-border bg-muted/30"
+      className="border-b border-border bg-primary/5"
     >
       <CollapsibleTrigger asChild>
         <button

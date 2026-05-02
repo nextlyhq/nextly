@@ -92,11 +92,11 @@ export function EntryFormHeader({
   const showActions = mode === "edit" && entry;
 
   return (
-    <div className="flex items-center justify-between mb-6 gap-4">
+    <div className="flex items-center justify-between mb-8 gap-4">
       <div>
-        <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
         {mode === "edit" && entry?.id && (
-          <p className="text-sm text-muted-foreground mt-1">ID: {entry.id}</p>
+          <p className="text-sm font-normal text-primary/50 mt-1">ID: {entry.id}</p>
         )}
       </div>
 

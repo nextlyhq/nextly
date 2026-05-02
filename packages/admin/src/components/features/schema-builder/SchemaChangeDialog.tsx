@@ -155,7 +155,7 @@ export function SchemaChangeDialog({
 
         {/* Changes list */}
         {hasChanges && (
-          <div className="max-h-64 overflow-y-auto rounded border border-border bg-muted/50 p-3">
+          <div className="max-h-64 overflow-y-auto rounded-none border border-border bg-primary/5 p-3">
             {changes.added.map(field => (
               <div
                 key={`add-${field.name}`}
@@ -225,7 +225,7 @@ export function SchemaChangeDialog({
             only the first rename runs; the second drop falls through as
             drop_and_add. F8 may revisit this once the Classifier ships. */}
         {candidatesByDrop.size > 0 && (
-          <div className="space-y-3 rounded border border-border bg-muted/50 p-3">
+          <div className="space-y-3 rounded-none border border-border bg-primary/5 p-3">
             <Label className="text-sm font-medium">
               Possible column renames
             </Label>
@@ -286,7 +286,7 @@ export function SchemaChangeDialog({
 
         {/* Interactive fields -- need user input */}
         {interactiveFields.length > 0 && (
-          <div className="space-y-3 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+          <div className="space-y-3 rounded-none border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
             {interactiveFields.map(field => (
               <div key={field.name} className="space-y-2">
                 <Label className="text-sm font-medium">

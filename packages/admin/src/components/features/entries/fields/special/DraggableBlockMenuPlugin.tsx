@@ -129,18 +129,18 @@ export function DraggableBlockMenuPlugin({
             transition:
               "transform 140ms ease-in-out, opacity 160ms ease-in-out",
           }}
-          className="flex items-center gap-0.5 rounded-[4px] p-[2px_1px] z-10"
+          className="flex items-center gap-0.5 rounded-none] p-[2px_1px] z-10"
         >
           <button
             type="button"
             onMouseDown={e => e.preventDefault()}
             onClick={handleAddBlock}
-            className="flex items-center justify-center h-4 w-4 rounded-sm opacity-30 hover:opacity-100 hover-unified transition-all cursor-pointer"
+            className="flex items-center justify-center h-4 w-4 rounded-none opacity-30 hover:opacity-100 hover-unified transition-all cursor-pointer"
             title="Click to add block below"
           >
             <Plus className="h-4 w-4" strokeWidth={2.5} />
           </button>
-          <div className="flex items-center justify-center h-4 w-4 rounded-sm opacity-30 hover:opacity-100 hover-unified transition-all cursor-grab active:cursor-grabbing">
+          <div className="flex items-center justify-center h-4 w-4 rounded-none opacity-30 hover:opacity-100 hover-unified transition-all cursor-grab active:cursor-grabbing">
             <GripVertical className="h-4 w-4" strokeWidth={2.5} />
           </div>
         </div>

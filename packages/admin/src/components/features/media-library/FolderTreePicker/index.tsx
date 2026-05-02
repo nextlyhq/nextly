@@ -240,7 +240,7 @@ function FolderTreePickerItem({
             onToggle(folder.id);
           }}
           className={cn(
-            "flex shrink-0 items-center justify-center rounded-sm transition-colors",
+            "flex shrink-0 items-center justify-center rounded-none transition-colors",
             isSelected
               ? "text-primary/70 hover:text-primary hover:bg-primary/10"
               : "text-muted-foreground group-hover:text-primary hover:bg-primary/10",

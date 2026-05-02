@@ -213,7 +213,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       key: "keyPrefix",
       label: "Key",
       render: (_value, key) => (
-        <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+        <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
           {key.keyPrefix}
           {"•".repeat(32)}
         </code>
@@ -398,7 +398,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
                 <Filter className="mr-2 h-4 w-4" />
                 Filter
                 {statusFilter !== "all" && (
-                  <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-full bg-primary" />
+                  <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
                 )}
               </Button>
             </DropdownMenuTrigger>
@@ -459,13 +459,13 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
       {/* Table card */}
       {isLoading && data.length === 0 ? (
-        <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
           <div className="p-4 space-y-3">
-            <Skeleton className="h-[200px] w-full rounded-md" />
+            <Skeleton className="h-[200px] w-full rounded-none" />
           </div>
         </div>
       ) : (
-        <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
           <div className="space-y-1">
             {isLoading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground pb-2 px-6 pt-4">

@@ -208,10 +208,10 @@ export function HookConfigForm({
                       <label
                         key={option}
                         className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs cursor-pointer border",
+                          "flex items-center gap-1.5 px-2 py-1 rounded-none text-xs cursor-pointer border",
                           isChecked
                             ? "bg-primary/10 border-primary text-primary"
-                            : "bg-muted/50 border-transparent text-muted-foreground hover:text-foreground"
+                            : "bg-primary/5 border-transparent text-muted-foreground hover:text-foreground"
                         )}
                       >
                         <input

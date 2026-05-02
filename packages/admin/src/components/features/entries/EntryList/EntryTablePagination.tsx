@@ -448,7 +448,7 @@ export function EntryTablePagination({
               onClick={handlePageInfoClick}
               disabled={isLoading || totalPages <= 1}
               className={cn(
-                "text-sm px-2 py-1 rounded transition-colors whitespace-nowrap",
+                "text-sm px-2 py-1 rounded-none transition-colors whitespace-nowrap",
                 totalPages > 1 &&
                   !isLoading &&
                   "hover-unified cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",

@@ -178,7 +178,7 @@ export function HooksEditor({
     <Collapsible
       open={localExpanded}
       onOpenChange={handleExpandedChange}
-      className="border-b border-border bg-muted/30 hidden"
+      className="border-b border-border bg-primary/5 hidden"
     >
       <CollapsibleTrigger asChild>
         <button
@@ -251,7 +251,7 @@ export function HooksEditor({
               </SortableContext>
             </DndContext>
           ) : (
-            <div className="flex flex-col items-center justify-center p-6 rounded-md border border-dashed border-border">
+            <div className="flex flex-col items-center justify-center p-6 rounded-none border border-dashed border-border">
               <Icons.Zap className="h-8 w-8 text-muted-foreground mb-2" />
               <p className="text-sm font-medium text-foreground mb-1">
                 No hooks configured
@@ -273,7 +273,7 @@ export function HooksEditor({
           )}
 
           {/* Info Note */}
-          <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
             <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <p className="text-xs text-muted-foreground">
               <strong>Note:</strong> For advanced hooks with custom logic, use

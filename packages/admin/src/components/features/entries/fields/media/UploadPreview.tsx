@@ -234,7 +234,7 @@ export function UploadPreview({
       {/* Preview area - clickable to open file */}
       <div
         className={cn(
-          "aspect-square bg-muted flex items-center justify-center",
+          "aspect-square bg-primary/5 flex items-center justify-center",
           file.url && "cursor-pointer"
         )}
         onClick={handlePreviewClick}

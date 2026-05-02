@@ -167,10 +167,10 @@ function SettingsRow({
   const { formItemId } = useFormField();
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 px-4 -mx-4 items-start transition-all duration-200 rounded-xl focus-within:bg-primary/5 focus-within:ring-1 focus-within:ring-inset focus-within:ring-primary">
+    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 px-4 -mx-4 items-start transition-all duration-200 rounded-none focus-within:bg-primary/5 focus-within:ring-1 focus-within:ring-inset focus-within:ring-primary">
       <div className="flex items-start gap-3">
         {icon && (
-          <div className="mt-0.5 shrink-0 flex items-center justify-center w-9 h-9 rounded-md bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
+          <div className="mt-0.5 shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
             {icon}
           </div>
         )}
@@ -204,10 +204,10 @@ function SettingsCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden">
+    <div className="rounded-none border border-border bg-card overflow-hidden">
       {/* Card header */}
-      <div className="flex items-center gap-4 px-6 py-5 border-b border-border/60 bg-muted/20">
-        <div className="shrink-0 flex items-center justify-center w-9 h-9 rounded-lg bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
+      <div className="flex items-center gap-4 px-6 py-5 border-b border-border/60 bg-primary/5">
+        <div className="shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
           {icon}
         </div>
         <div>
@@ -425,7 +425,7 @@ const SettingsGeneralPage: React.FC = () => {
                           <>
                             URL of the logo image shown in the admin sidebar and
                             authentication pages. Overrides the logo set in{" "}
-                            <code className="text-xs font-mono bg-muted px-1 py-0.5 rounded">
+                            <code className="text-xs font-mono bg-primary/5 px-1 py-0.5 rounded-none">
                               nextly.config.ts
                             </code>
                             .
@@ -577,7 +577,7 @@ const SettingsGeneralPage: React.FC = () => {
                 >
                   <div className="py-5">
                     <div className="flex items-start gap-3 mb-5">
-                      <div className="mt-0.5 shrink-0 flex items-center justify-center w-9 h-9 rounded-md bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
+                      <div className="mt-0.5 shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
                         <Monitor className="h-4 w-4" />
                       </div>
                       <div>
@@ -600,7 +600,7 @@ const SettingsGeneralPage: React.FC = () => {
                               type="button"
                               onClick={() => setTheme(value)}
                               className={[
-                                "group relative flex flex-col items-center gap-2.5 rounded-xl border p-4 text-center transition-all duration-200 cursor-pointer",
+                                "group relative flex flex-col items-center gap-2.5 rounded-none border p-4 text-center transition-all duration-200 cursor-pointer",
                                 isActive
                                   ? "border-primary bg-primary/5 text-primary dark:bg-primary/10"
                                   : "border-border bg-background hover:border-primary/40 hover-unified text-muted-foreground hover:text-foreground",
@@ -608,10 +608,10 @@ const SettingsGeneralPage: React.FC = () => {
                             >
                               <div
                                 className={[
-                                  "flex items-center justify-center w-10 h-10 rounded-lg transition-colors",
+                                  "flex items-center justify-center w-10 h-10 rounded-none transition-colors",
                                   isActive
                                     ? "bg-primary/10 text-primary dark:bg-primary/20"
-                                    : "bg-muted text-muted-foreground group-hover-unified",
+                                    : "bg-primary/5 text-muted-foreground group-hover-unified",
                                 ].join(" ")}
                               >
                                 <Icon className="h-5 w-5" />
@@ -633,7 +633,7 @@ const SettingsGeneralPage: React.FC = () => {
                               </div>
                               {isActive && (
                                 <span className="absolute top-2.5 right-2.5 flex h-2.5 w-2.5 items-center justify-center">
-                                  <span className="h-2 w-2 rounded-full bg-primary" />
+                                  <span className="h-2 w-2 rounded-none bg-primary" />
                                 </span>
                               )}
                             </button>

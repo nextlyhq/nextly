@@ -31,7 +31,7 @@ import { cn } from "../lib/utils";
  *
  * **Avatar Skeleton:**
  * ```tsx
- * <Skeleton className="h-12 w-12 rounded-full" />
+ * <Skeleton className="h-12 w-12 rounded-none" />
  * ```
  *
  * **Card Skeleton:**
@@ -51,7 +51,7 @@ import { cn } from "../lib/utils";
  *   {isLoading ? (
  *     <>
  *       <span className="sr-only">Loading user profile...</span>
- *       <Skeleton className="h-12 w-12 rounded-full" />
+ *       <Skeleton className="h-12 w-12 rounded-none" />
  *       <Skeleton className="h-4 w-[200px]" />
  *     </>
  *   ) : (
@@ -83,7 +83,7 @@ const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
         data-slot="skeleton"
         aria-hidden="true"
         className={cn(
-          "bg-muted animate-pulse rounded-none motion-reduce:animate-none",
+          "bg-primary/5 animate-pulse rounded-none motion-reduce:animate-none",
           className
         )}
         {...props}

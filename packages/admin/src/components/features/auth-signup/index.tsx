@@ -142,7 +142,7 @@ export function Signup() {
             </div>
           </div>
           <div>
-            <CardTitle className="text-3xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Create Account
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">

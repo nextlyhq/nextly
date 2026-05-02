@@ -49,7 +49,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
                     <GrayBar className="h-4 w-4" />
                   ) : colIdx === columns - 1 ? (
                     <div className="flex justify-center">
-                      <Skeleton className="h-4 w-4 rounded-full" />
+                      <Skeleton className="h-4 w-4 rounded-none" />
                     </div>
                   ) : colIdx === 1 ? (
                     <GrayBar className="h-4 w-[70%] max-w-[180px]" />
@@ -71,11 +71,11 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
                       <GrayBar className="h-4 w-4" />
                     ) : colIdx === columns - 1 ? (
                       <div className="flex justify-center">
-                        <Skeleton className="h-8 w-8 rounded-full" />
+                        <Skeleton className="h-8 w-8 rounded-none" />
                       </div>
                     ) : colIdx === 1 ? (
                       <div className="flex items-center gap-3">
-                        <Skeleton className="h-9 w-9 rounded-full shrink-0" />
+                        <Skeleton className="h-9 w-9 rounded-none shrink-0" />
                         <div className="space-y-1.5 flex-1">
                           <Skeleton className="h-4 w-[120px]" />
                           <Skeleton className="h-3 w-[80px]" />

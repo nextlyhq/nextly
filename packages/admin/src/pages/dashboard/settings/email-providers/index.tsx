@@ -498,7 +498,7 @@ function EmailProviderTable() {
       label: "Configuration",
       hideOnMobile: true,
       render: (_value, provider) => (
-        <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+        <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
           {maskConfiguration(provider.type, provider.configuration)}
         </code>
       ),
@@ -696,7 +696,7 @@ function EmailProviderTable() {
       </div>
 
       {/* Table */}
-      <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={data?.data || []}
           columns={columns}

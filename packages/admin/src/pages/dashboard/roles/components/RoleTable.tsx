@@ -480,7 +480,7 @@ export default function RoleTable() {
       </div>
 
       {/* Responsive table */}
-      <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={filteredData}
           columns={columns}

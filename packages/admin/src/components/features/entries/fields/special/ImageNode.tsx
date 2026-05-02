@@ -133,7 +133,7 @@ function ImageComponent({
             title={title}
             width={width}
             height={height}
-            className="w-full h-auto rounded-md"
+            className="w-full h-auto rounded-none"
             draggable={false}
           />
           <Button

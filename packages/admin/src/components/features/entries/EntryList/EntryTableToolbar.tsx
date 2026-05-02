@@ -157,7 +157,7 @@ export function EntryTableToolbar({
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
                   {hasActiveFilters && (
-                    <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-full bg-primary" />
+                    <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
                   )}
                 </Button>
               </DropdownMenuTrigger>

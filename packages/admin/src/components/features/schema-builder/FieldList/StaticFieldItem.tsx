@@ -51,8 +51,8 @@ export function StaticFieldItem({
     <div
       style={{ marginLeft: `${indentPx}px` }}
       className={`
-        group flex items-center gap-3 p-2 rounded-md border transition-all
-        ${isSystem ? "bg-muted/30 border-border/50 opacity-60 cursor-not-allowed" : isSelected ? "border-primary bg-primary/5" : "border-border bg-background hover-subtle-row"}
+        group flex items-center gap-3 p-2 rounded-none border transition-all
+        ${isSystem ? "bg-primary/5 border-border/50 opacity-60 cursor-not-allowed" : isSelected ? "border-primary bg-primary/5" : "border-border bg-background hover-subtle-row"}
         ${hasError ? "border-destructive bg-destructive/5" : ""}
         ${hasWarning ? "border-yellow-500 bg-yellow-500/5" : ""}
       `}
@@ -65,7 +65,7 @@ export function StaticFieldItem({
             e.stopPropagation();
             onToggleCollapse();
           }}
-          className="p-1 rounded hover-subtle-row shrink-0"
+          className="p-1 rounded-none hover-subtle-row shrink-0"
           aria-label={isCollapsed ? "Expand" : "Collapse"}
         >
           {isCollapsed ? (
@@ -84,7 +84,7 @@ export function StaticFieldItem({
       >
         {/* Field type icon */}
         <div
-          className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-[6px] border transition-colors ${isSystem ? "border-muted-foreground/20 bg-muted/50 text-muted-foreground/60" : "border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"}`}
+          className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-none] border transition-colors ${isSystem ? "border-muted-foreground/20 bg-primary/5 text-muted-foreground/60" : "border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"}`}
         >
           <IconComponent className="h-3.5 w-3.5" />
         </div>
@@ -130,7 +130,7 @@ export function StaticFieldItem({
       {isSystem && (
         <Badge
           variant="outline"
-          className="text-[10px] px-2 py-0.5 shrink-0 bg-muted/50 border-muted-foreground/20 text-muted-foreground/70 font-medium gap-1"
+          className="text-[10px] px-2 py-0.5 shrink-0 bg-primary/5 border-muted-foreground/20 text-muted-foreground/70 font-medium gap-1"
         >
           <Icons.Lock className="h-2.5 w-2.5" />
           System

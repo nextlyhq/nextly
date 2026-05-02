@@ -89,19 +89,18 @@ export interface SingleFormHeaderProps {
 export function SingleFormHeader({
   label,
   description,
-  updatedAt,
-  _isDirty,
+  updatedAt,  
   actions,
 }: SingleFormHeaderProps) {
   const lastUpdatedText = updatedAt ? formatTimeAgo(new Date(updatedAt)) : null;
 
   return (
-    <div className="mb-6">
+    <div className="mb-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">{label}</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">{label}</h1>
           {description && (
-            <p className="text-sm text-muted-foreground mt-1">{description}</p>
+            <p className="text-sm font-normal text-primary/50 mt-1">{description}</p>
           )}
         </div>
         {/* Right side: actions */}
@@ -112,7 +111,7 @@ export function SingleFormHeader({
 
       {/* Last updated info */}
       {lastUpdatedText && (
-        <p className="text-xs text-muted-foreground mt-2">
+        <p className="text-xs font-normal text-primary/50">
           Last updated {lastUpdatedText}
         </p>
       )}

@@ -128,7 +128,7 @@ export function EntryFormSidebar({
             {isDocInfoOpen && (
               <div className="space-y-4 px-6 pt-6 pb-6 border-b border-primary/20 z-0">
                 <div>
-                  <dt className="text-xs font-medium text-muted-foreground mb-1">
+                  <dt className="text-xs font-medium text-primary/50 mb-1">
                     Document ID
                   </dt>
                   <dd className="text-sm font-mono text-foreground break-all">
@@ -136,7 +136,7 @@ export function EntryFormSidebar({
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium text-muted-foreground mb-1">
+                  <dt className="text-xs font-medium text-primary/50 mb-1">
                     Created
                   </dt>
                   <dd className="text-sm text-foreground">
@@ -144,7 +144,7 @@ export function EntryFormSidebar({
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium text-muted-foreground mb-1">
+                  <dt className="text-xs font-medium text-primary/50 mb-1">
                     Last Updated
                   </dt>
                   <dd className="text-sm text-foreground">

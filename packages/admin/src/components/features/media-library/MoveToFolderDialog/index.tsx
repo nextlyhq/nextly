@@ -254,7 +254,7 @@ export function MoveToFolderDialog({
           {isCreatingFolder ? (
             <form
               onSubmit={handleSubmitCreate}
-              className="space-y-2 rounded-md border border-dashed border-primary/40 bg-primary/5 p-3"
+              className="space-y-2 rounded-none border border-dashed border-primary/40 bg-primary/5 p-3"
             >
               <Input
                 autoFocus
@@ -317,7 +317,7 @@ export function MoveToFolderDialog({
             <button
               type="button"
               onClick={handleStartCreate}
-              className="flex w-full items-center gap-2 rounded-md border border-dashed border-border px-4 py-2.5 text-left text-sm transition-colors hover:border-primary/50 hover:bg-accent"
+              className="flex w-full items-center gap-2 rounded-none border border-dashed border-border px-4 py-2.5 text-left text-sm transition-colors hover:border-primary/50 hover:bg-accent"
             >
               <FolderPlus className="h-4 w-4" />
               <span>New folder</span>

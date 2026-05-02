@@ -19,7 +19,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 export default function MediaLibraryPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer className="!p-0 overflow-hidden">
+      <PageContainer className="overflow-hidden">
         {/* MediaLibrary component handles its own header, sidebar, and content */}
         <MediaLibrary />
       </PageContainer>

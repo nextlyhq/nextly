@@ -310,7 +310,7 @@ export function TextInput<TFieldValues extends FieldValues = FieldValues>({
       maxLength={maxLength}
       autoComplete={autoComplete}
       aria-invalid={invalid || undefined}
-      className={cn(readOnly && "bg-muted cursor-not-allowed", className)}
+      className={cn(readOnly && "bg-primary/5 cursor-not-allowed", className)}
     />
   );
 }

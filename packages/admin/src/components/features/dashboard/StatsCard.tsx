@@ -91,7 +91,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
                     {change !== undefined && (
                       <div
                         className={cn(
-                          "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ring-1 transition-all duration-500",
+                          "flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold uppercase tracking-wider ring-1 transition-all duration-500",
                           trend === "up"
                             ? "bg-emerald-500/5 text-emerald-500 ring-emerald-500/20 group-hover:bg-emerald-500/10"
                             : "bg-rose-500/5 text-rose-500 ring-rose-500/20 group-hover:bg-rose-500/10"

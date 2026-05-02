@@ -82,16 +82,16 @@ export function GroupFieldContainer({
   const bgClass = groupBgClasses[Math.min(nestingDepth, 4)];
 
   return (
-    <div className={`p-4 rounded-lg ${bgClass}`}>
+    <div className={`p-4 rounded-none ${bgClass}`}>
       <div className="flex">
         {/* Left accent stripe -- amber for groups */}
-        <div className="w-[3px] shrink-0 rounded-full mr-3" />
+        <div className="w-[3px] shrink-0 rounded-none mr-3" />
 
         <div className="flex-1 min-w-0">
           {/* Nested field rows */}
           {fieldCount > 0 && (
             <div
-              className="border border-border/60 rounded-lg overflow-hidden bg-background mb-2"
+              className="border border-border/60 rounded-none overflow-hidden bg-background mb-2"
               style={{ borderRadius: "6px" }}
             >
               <SortableContext
@@ -111,7 +111,7 @@ export function GroupFieldContainer({
             ref={setNodeRef}
             className={`
               relative flex flex-col items-center justify-center gap-1.5
-              px-6 py-4 rounded-lg border-2 border-dashed
+              px-6 py-4 rounded-none border-2 border-dashed
               transition-all duration-200 select-none
               ${
                 isOver

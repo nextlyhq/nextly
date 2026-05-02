@@ -49,10 +49,10 @@ export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
   isSearching = false,
 }) => {
   return (
-    <div className="rounded-md bg-card border border-border p-12 text-center border-dashed">
+    <div className="rounded-none bg-card border border-border p-12 text-center border-dashed">
       {/* Icon */}
       <div className="flex justify-center mb-4">
-        <div className="rounded-full bg-accent p-3">
+        <div className="rounded-none bg-accent p-3">
           <Puzzle
             className="h-6 w-6 text-muted-foreground"
             aria-hidden="true"

@@ -30,7 +30,7 @@ export function BuilderPageHeader({
         : ROUTES.COLLECTIONS);
 
   return (
-    <div className="flex items-start justify-between mb-6">
+    <div className="flex items-start justify-between mb-8">
       <div className="flex items-start gap-4">
         <Link href={resolvedBackRoute}>
           <Button variant="ghost" size="icon" type="button" className="mt-1">
@@ -38,10 +38,10 @@ export function BuilderPageHeader({
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
             {title}
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">{description}</p>
+          <p className="text-sm font-normal text-primary/50 mt-1">{description}</p>
         </div>
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}

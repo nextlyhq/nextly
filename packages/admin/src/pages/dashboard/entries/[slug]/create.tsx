@@ -89,7 +89,7 @@ function CreateEntryPageSkeleton() {
         {/* Main Content */}
         <div className="flex-1 space-y-6 lg:p-8 pt-6">
           {/* Breadcrumbs skeleton */}
-          <div className="mb-2">
+          <div className="mb-6">
             <Skeleton className="h-5 w-64" />
           </div>
 
@@ -99,7 +99,7 @@ function CreateEntryPageSkeleton() {
             <Skeleton className="h-5 w-96" />
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-6">
+          <div className="bg-card border border-border rounded-none p-6">
             <div className="space-y-6">
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
@@ -272,10 +272,12 @@ export default function CreateEntryPage({
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <PageContainer>
-          <CreateEntryBreadcrumbs
-            collectionSlug={slug}
-            collectionLabel={collectionLabel}
-          />
+          <div className="mb-6">
+            <CreateEntryBreadcrumbs
+              collectionSlug={slug}
+              collectionLabel={collectionLabel}
+            />
+          </div>
           <CustomEditView {...customViewProps} />
         </PageContainer>
       </QueryErrorBoundary>

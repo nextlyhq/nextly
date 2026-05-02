@@ -25,10 +25,10 @@ function StatusItem({
   color: string;
 }) {
   return (
-    <div className="flex items-center justify-between p-3 rounded-2xl hover:bg-primary/[0.03] transition-all duration-500 group/item border border-transparent hover:border-primary/10">
+    <div className="flex items-center justify-between p-3 rounded-none hover:bg-primary/[0.03] transition-all duration-500 group/item border border-transparent hover:border-primary/10">
       <div className="flex items-center gap-3.5">
         <div
-          className="h-2 w-2 rounded-full ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
+          className="h-2 w-2 rounded-none ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
           style={
             {
               backgroundColor: color,
@@ -44,7 +44,7 @@ function StatusItem({
         <span className="text-[13px] font-black tabular-nums text-foreground/80">
           {count}
         </span>
-        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-full border border-primary/10 min-w-[36px] text-center">
+        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-none border border-primary/10 min-w-[36px] text-center">
           {percentage}%
         </span>
       </div>
@@ -55,10 +55,10 @@ function StatusItem({
 function LoadingSkeleton() {
   return (
     <div className="flex flex-col items-center gap-8 py-6" aria-busy="true">
-      <Skeleton className="h-[160px] w-[160px] rounded-full ring-8 ring-muted/5" />
+      <Skeleton className="h-[160px] w-[160px] rounded-none ring-8 ring-muted/5" />
       <div className="w-full space-y-3 px-2">
-        <Skeleton className="h-12 w-full rounded-2xl" />
-        <Skeleton className="h-12 w-full rounded-2xl" />
+        <Skeleton className="h-12 w-full rounded-none" />
+        <Skeleton className="h-12 w-full rounded-none" />
       </div>
     </div>
   );
@@ -80,7 +80,7 @@ export const ContentStatusWidget: React.FC = () => {
   ];
 
   return (
-    <Card className="border-border/60 bg-card/60 backdrop-blur-md rounded-[2.5rem] overflow-hidden transition-all duration-500 hover:border-primary/20">
+    <Card className="border-border/60 bg-card/60 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/20">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
@@ -89,20 +89,20 @@ export const ContentStatusWidget: React.FC = () => {
           <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
             Lifecycle Overview
           </CardTitle>
-          <div className="h-1 w-6 bg-primary/30 rounded-full" />
+          <div className="h-1 w-6 bg-primary/30 rounded-none" />
         </div>
       </CardHeader>
       <CardContent className="px-6 pb-8">
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-[2rem]">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none]">
             <AlertCircle className="h-4 w-4" />
             <span>Health synchronization failed</span>
           </div>
         ) : total === 0 ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-[2rem] bg-muted/20 border border-border/10">
+            <div className="p-6 rounded-none] bg-primary/5 border border-border/10">
               <FileText className="h-10 w-10 text-muted-foreground/10" />
             </div>
             <div className="space-y-2">
@@ -137,7 +137,7 @@ export const ContentStatusWidget: React.FC = () => {
               </div>
             </div>
 
-            <div className="w-full space-y-1.5 bg-muted/10 p-2 rounded-[2rem] border border-border/5">
+            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none] border border-border/5">
               <StatusItem
                 label="Published"
                 count={published}

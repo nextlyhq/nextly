@@ -116,7 +116,7 @@ export function DraftRecoveryDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <div className="flex items-start gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-none bg-amber-100 dark:bg-amber-900/30">
               <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-500" />
             </div>
             <div className="space-y-1">

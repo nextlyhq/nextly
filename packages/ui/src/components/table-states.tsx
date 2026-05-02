@@ -48,7 +48,7 @@ export interface TableEmptyProps {
 export function TableEmpty({ message = "No records found" }: TableEmptyProps) {
   return (
     <div className="flex flex-col items-center justify-center gap-4 p-16 text-center text-muted-foreground">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/50">
+      <div className="flex h-12 w-12 items-center justify-center rounded-none bg-primary/5">
         <FileQuestion className="h-6 w-6" />
       </div>
       <span className="text-sm font-medium">{message}</span>

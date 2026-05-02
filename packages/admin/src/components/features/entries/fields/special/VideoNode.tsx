@@ -166,7 +166,7 @@ function VideoComponent({
 
   if (!embedUrl) {
     return (
-      <div className="my-4 p-4 border rounded-md bg-muted/50 text-center text-sm text-muted-foreground">
+      <div className="my-4 p-4 border rounded-none bg-primary/5 text-center text-sm text-muted-foreground">
         Unsupported video URL
       </div>
     );
@@ -176,7 +176,7 @@ function VideoComponent({
     <>
       <figure className="my-4 relative group">
         <div
-          className="relative w-full overflow-hidden rounded-md"
+          className="relative w-full overflow-hidden rounded-none"
           style={{ paddingBottom: "56.25%" }}
         >
           <iframe

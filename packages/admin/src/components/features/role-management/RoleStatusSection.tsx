@@ -39,7 +39,7 @@ export function RoleStatusSection({
       case "deprecated":
         return "text-destructive bg-destructive/10 border-destructive/20";
       default:
-        return "text-muted-foreground bg-muted border-border";
+        return "text-muted-foreground bg-primary/5 border-border";
     }
   };
 
@@ -52,7 +52,7 @@ export function RoleStatusSection({
       case "deprecated":
         return "bg-destructive";
       default:
-        return "bg-muted-foreground";
+        return "bg-primary/5-foreground";
     }
   };
 
@@ -73,7 +73,7 @@ export function RoleStatusSection({
                   <label
                     key={option.id}
                     className={cn(
-                      "group relative flex cursor-pointer items-center rounded-md border p-4 transition-all outline-none",
+                      "group relative flex cursor-pointer items-center rounded-none border p-4 transition-all outline-none",
                       isChecked
                         ? "bg-primary/10 border-primary"
                         : "border-border bg-card hover-unified hover:border-primary/25",
@@ -95,12 +95,12 @@ export function RoleStatusSection({
                     {/* Custom Radio Circle */}
                     <div
                       className={cn(
-                        "mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                        "mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded-none border",
                         isChecked ? "border-primary" : "border-border"
                       )}
                     >
                       {isChecked && (
-                        <div className="h-2 w-2 rounded-full bg-primary" />
+                        <div className="h-2 w-2 rounded-none bg-primary" />
                       )}
                     </div>
 
@@ -118,13 +118,13 @@ export function RoleStatusSection({
                     {/* Status Badge */}
                     <div
                       className={cn(
-                        "flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border",
+                        "flex items-center gap-1.5 rounded-none px-2.5 py-0.5 text-xs font-medium border",
                         getStatusColor(option.id)
                       )}
                     >
                       <div
                         className={cn(
-                          "h-1.5 w-1.5 rounded-full",
+                          "h-1.5 w-1.5 rounded-none",
                           getDotColor(option.id)
                         )}
                       />

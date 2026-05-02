@@ -204,7 +204,7 @@ export function RelationshipSearch({
   }, []);
 
   return (
-    <div className={cn("rounded-lg border bg-card p-4   space-y-4", className)}>
+    <div className={cn("rounded-none border bg-card p-4   space-y-4", className)}>
       {/* Header with title and close button */}
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium">Search Related</h4>
@@ -269,7 +269,7 @@ export function RelationshipSearch({
                 type="button"
                 onClick={() => handleSelect(item)}
                 className={cn(
-                  "w-full text-left p-2 rounded-md transition-colors",
+                  "w-full text-left p-2 rounded-none transition-colors",
                   "hover:bg-accent hover:text-accent-foreground",
                   "focus:bg-accent focus:text-accent-foreground focus:outline-none"
                 )}

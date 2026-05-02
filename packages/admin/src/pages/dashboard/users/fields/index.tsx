@@ -218,7 +218,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
   const TypeIcon = typeConfig.icon;
 
   return (
-    <tr className="border-b border-border bg-muted/20">
+    <tr className="border-b border-border bg-primary/5">
       {/* Lock icon + Name */}
       <td className="px-4 py-3 whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
@@ -228,7 +228,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="text-sm px-1.5 py-0.5 rounded font-mono">
+          <code className="text-sm px-1.5 py-0.5 rounded-none font-mono">
             {field.name}
           </code>
         </div>
@@ -328,7 +328,7 @@ function SortableFieldRow({
             <GripVertical className="h-4 w-4" />
           </span>
           <code
-            className="text-sm bg-muted px-1.5 py-0.5 rounded font-mono cursor-pointer hover-unified transition-colors"
+            className="text-sm bg-primary/5 px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
             onClick={() => (isCode ? onView(field) : onEdit(field))}
             role="button"
             tabIndex={0}
@@ -654,7 +654,7 @@ function UserFieldsTable() {
           <AlertDescription className="flex items-center justify-between">
             <span>
               Restart the server (
-              <code className="text-xs bg-muted px-1 py-0.5 rounded">
+              <code className="text-xs bg-primary/5 px-1 py-0.5 rounded-none">
                 next dev
               </code>
               ) for new fields to take effect in the database.
@@ -690,8 +690,8 @@ function UserFieldsTable() {
 
       {/* Table with DnD */}
       {filteredStaticFields.length === 0 && paginatedFields.length === 0 ? (
-        <div className="border rounded-xl p-12 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-muted mx-auto mb-4">
+        <div className="border rounded-none p-12 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-none bg-primary/5 mx-auto mb-4">
             <Users className="h-7 w-7 text-muted-foreground" />
           </div>
           <h3 className="text-base font-medium mb-1">
@@ -702,7 +702,7 @@ function UserFieldsTable() {
           </p>
         </div>
       ) : (
-        <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -713,7 +713,7 @@ function UserFieldsTable() {
               strategy={verticalListSortingStrategy}
             >
               <table className="w-full">
-                <thead className="bg-muted border-b">
+                <thead className="bg-primary/5 border-b">
                   <tr>
                     <th
                       scope="col"
@@ -827,14 +827,16 @@ const UserFieldsPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="space-y-8">
-          <UserBreadcrumbs currentPage="fields" />
+        <div>
+          <div className="mb-6">
+            <UserBreadcrumbs currentPage="fields" />
+          </div>
 
           {/* Page Header */}
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">User Fields</h1>
-              <p className="mt-2 text-base text-muted-foreground">
+              <h1 className="text-xl font-semibold tracking-tight">User Fields</h1>
+              <p className="text-sm font-normal text-primary/50 mt-1">
                 Manage custom attributes for user accounts
               </p>
             </div>

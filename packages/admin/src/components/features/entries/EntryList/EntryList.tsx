@@ -475,10 +475,10 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <div className="space-y-2">
-            <div className="h-8 w-48 animate-pulse rounded bg-muted" />
-            <div className="h-4 w-64 animate-pulse rounded bg-muted" />
+            <div className="h-8 w-48 animate-pulse rounded-none bg-primary/5" />
+            <div className="h-4 w-64 animate-pulse rounded-none bg-primary/5" />
           </div>
-          <div className="h-10 w-32 animate-pulse rounded bg-muted" />
+          <div className="h-10 w-32 animate-pulse rounded-none bg-primary/5" />
         </div>
         <EntryTableSkeleton />
       </div>
@@ -506,20 +506,22 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="flex flex-col gap-4">
+    <div>
       {/* Breadcrumbs */}
-      <Breadcrumbs
-        items={[
-          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-          { label: labels.plural },
-        ]}
-      />
+      <div className="mb-6">
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: labels.plural },
+          ]}
+        />
+      </div>
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-2xl font-bold">{labels.plural}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{labels.plural}</h1>
           {collection?.description && (
-            <p className="text-muted-foreground text-sm">
+            <p className="text-sm font-normal text-primary/50 mt-1">
               {collection.description}
             </p>
           )}

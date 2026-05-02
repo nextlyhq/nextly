@@ -24,7 +24,7 @@ export function DropZone({
       type="button"
       onClick={() => onPlaceholderClick?.()}
       className={`
-        mt-4 w-full rounded-xl border-2 border-dashed transition-all duration-200
+        mt-4 w-full rounded-none border-2 border-dashed transition-all duration-200
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
         ${
           isOver

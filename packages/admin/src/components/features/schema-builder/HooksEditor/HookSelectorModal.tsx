@@ -153,9 +153,9 @@ export function HookSelectorModal({
                         onClick={() => !isAdded && handleSelect(hook.id)}
                         disabled={isAdded}
                         className={cn(
-                          "w-full text-left p-3 rounded-md border transition-colors",
+                          "w-full text-left p-3 rounded-none border transition-colors",
                           isAdded
-                            ? "bg-muted/30 border-border cursor-not-allowed opacity-60"
+                            ? "bg-primary/5 border-border cursor-not-allowed opacity-60"
                             : "bg-background border-border hover:border-primary hover:bg-accent"
                         )}
                       >

@@ -121,7 +121,7 @@ function ButtonGroupComponent({
             <span
               key={index}
               className={cn(
-                "inline-flex items-center justify-center rounded-md font-medium transition-colors cursor-pointer no-underline",
+                "inline-flex items-center justify-center rounded-none font-medium transition-colors cursor-pointer no-underline",
                 variantClass,
                 SIZE_CLASSES[button.size]
               )}
@@ -146,7 +146,7 @@ function ButtonGroupComponent({
           <button
             type="button"
             onClick={handleEdit}
-            className="absolute top-0 right-0 bg-primary text-primary-foreground rounded-full p-1 shadow-md hover:bg-primary/90 transition-colors z-10 translate-x-1/4 -translate-y-1/4"
+            className="absolute top-0 right-0 bg-primary text-primary-foreground rounded-none p-1 shadow-md hover:bg-primary/90 transition-colors z-10 translate-x-1/4 -translate-y-1/4"
             title="Edit button group"
           >
             <Pencil className="h-3 w-3" />

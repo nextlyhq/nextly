@@ -80,9 +80,10 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
   }, [pathname]);
 
   return (
-    <div className="space-y-8">
+    <div>
       {/* Breadcrumbs */}
-      <Breadcrumbs
+      <div className="mb-6">
+        <Breadcrumbs
         items={[
           { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
           { label: "Settings", href: ROUTES.SETTINGS },
@@ -91,14 +92,15 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
             : []),
         ]}
       />
+      </div>
 
       {/* Page Header */}
-      <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-[-0.04em] text-foreground leading-tight">
+          <h1 className="text-xl font-semibold tracking-tight">
             {pageInfo.title}
           </h1>
-          <p className="text-base text-muted-foreground">
+          <p className="text-sm font-normal text-primary/50 mt-1">
             {pageInfo.description}
           </p>
         </div>

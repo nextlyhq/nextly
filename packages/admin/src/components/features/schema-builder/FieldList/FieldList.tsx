@@ -133,7 +133,7 @@ export function FieldList({
             items={fields.map(f => f.id)}
             strategy={verticalListSortingStrategy}
           >
-            <div className="flex flex-col border border-border rounded-md overflow-hidden bg-background [&>*:last-child]:border-b-0">
+            <div className="flex flex-col border border-border rounded-none overflow-hidden bg-background [&>*:last-child]:border-b-0">
               {fields.map(field => (
                 <FieldRenderer
                   key={field.id}
@@ -163,7 +163,7 @@ export function FieldList({
             onClick={() => onPlaceholderClick?.()}
             className={`
               h-full w-full flex flex-col items-center justify-center text-center p-10
-              rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer
+              rounded-none border-2 border-dashed transition-all duration-200 cursor-pointer
               ${
                 isOver || isDropping
                   ? "border-primary bg-primary/15 dark:bg-primary/20"
@@ -173,7 +173,7 @@ export function FieldList({
           >
             {/* Icon */}
             <div
-              className={`w-12 h-12 rounded-full flex items-center justify-center mb-4 transition-all duration-200 ${
+              className={`w-12 h-12 rounded-none flex items-center justify-center mb-4 transition-all duration-200 ${
                 isOver || isDropping
                   ? "bg-primary/15 scale-110"
                   : "bg-primary/8"

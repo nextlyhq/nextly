@@ -100,7 +100,7 @@ export function SortableFieldItem({
       className={`
         group relative flex items-center gap-4 py-3 px-4 border-b outline-none select-none
         touch-none transition-colors duration-150 focus-visible:bg-primary/5 focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-primary
-        ${isSystem ? "bg-muted/30 opacity-60 cursor-not-allowed" : "cursor-grab active:cursor-grabbing hover-subtle-row"}
+        ${isSystem ? "bg-primary/5 opacity-60 cursor-not-allowed" : "cursor-grab active:cursor-grabbing hover-subtle-row"}
         ${isDragging ? "opacity-0" : ""}
         ${isSelected && !isSystem ? "bg-primary/5 border-transparent" : "border-border"}
         ${hasError && !isDragging ? "bg-destructive/5" : ""}
@@ -119,7 +119,7 @@ export function SortableFieldItem({
 
       {/* Field type icon */}
       <div
-        className={`shrink-0 flex items-center justify-center w-9 h-9 rounded-[6px] border transition-colors ${isSystem ? "border-muted-foreground/20 bg-muted/50 text-muted-foreground/60" : "border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"} mr-1`}
+        className={`shrink-0 flex items-center justify-center w-9 h-9 rounded-none] border transition-colors ${isSystem ? "border-muted-foreground/20 bg-primary/5 text-muted-foreground/60" : "border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"} mr-1`}
       >
         <IconComponent className="h-4 w-4" />
       </div>
@@ -132,7 +132,7 @@ export function SortableFieldItem({
             e.stopPropagation();
             onToggleCollapse?.();
           }}
-          className="p-1 rounded hover-unified shrink-0 transition-colors"
+          className="p-1 rounded-none hover-unified shrink-0 transition-colors"
           aria-label={isCollapsed ? "Expand" : "Collapse"}
         >
           {isCollapsed ? (
@@ -154,7 +154,7 @@ export function SortableFieldItem({
         <span className="text-muted-foreground/40 text-xs shrink-0">•</span>
 
         {/* Field type as a gray pill matching Required badge style */}
-        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-full border border-border/60 bg-muted text-muted-foreground">
+        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-none border border-border/60 bg-primary/5 text-muted-foreground">
           {formatFieldType(field.type)}
         </span>
 
@@ -162,7 +162,7 @@ export function SortableFieldItem({
         {field.validation?.required && (
           <Badge
             variant="outline"
-            className="text-[10px] px-2 py-0 bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400 font-normal rounded-full border-red-200 dark:border-red-900/50 shrink-0"
+            className="text-[10px] px-2 py-0 bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400 font-normal rounded-none border-red-200 dark:border-red-900/50 shrink-0"
           >
             Required
           </Badge>
@@ -172,7 +172,7 @@ export function SortableFieldItem({
         {hasNestedFields && nestedCount > 0 && (
           <Badge
             variant="default"
-            className="text-[10px] px-1.5 py-0 h-4 rounded-full shrink-0"
+            className="text-[10px] px-1.5 py-0 h-4 rounded-none shrink-0"
           >
             {nestedCount} {nestedCount === 1 ? "field" : "fields"}
           </Badge>
@@ -198,7 +198,7 @@ export function SortableFieldItem({
         {isSystem ? (
           <Badge
             variant="outline"
-            className="text-[10px] px-2 py-0.5 shrink-0 bg-muted/50 border-muted-foreground/20 text-muted-foreground/70 font-medium gap-1"
+            className="text-[10px] px-2 py-0.5 shrink-0 bg-primary/5 border-muted-foreground/20 text-muted-foreground/70 font-medium gap-1"
           >
             <Icons.Lock className="h-2.5 w-2.5" />
             System
@@ -210,7 +210,7 @@ export function SortableFieldItem({
               e.stopPropagation();
               onDelete();
             }}
-            className="opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-md hover-unified"
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-none hover-unified"
             aria-label="Delete field"
           >
             <Icons.Trash className="h-4 w-4 text-muted-foreground hover:text-destructive transition-colors delay-75" />

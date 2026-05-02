@@ -108,7 +108,7 @@ export type PasswordStrength = {
  * `passwordSchema` is the authoritative client-side check.
  */
 export function calculatePasswordStrength(password: string): PasswordStrength {
-  if (!password) return { score: 0, label: "", color: "bg-muted" };
+  if (!password) return { score: 0, label: "", color: "bg-primary/5" };
 
   let score = 0;
   if (password.length >= 8) score += 1;

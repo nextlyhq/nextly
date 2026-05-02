@@ -144,7 +144,7 @@ export function EmailInput<TFieldValues extends FieldValues = FieldValues>({
       placeholder={field.admin?.placeholder}
       autoComplete={field.admin?.autoComplete || "email"}
       aria-invalid={invalid || undefined}
-      className={cn(readOnly && "bg-muted cursor-not-allowed", className)}
+      className={cn(readOnly && "bg-primary/5 cursor-not-allowed", className)}
     />
   );
 }

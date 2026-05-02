@@ -26,7 +26,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
     <div>
       <div className="bg-card border-t border-border px-4 py-6 animate-in fade-in-0 slide-in-from-bottom-2">
         <div className="flex flex-col items-center mb-3">
-          <Avatar size="xl" className="bg-muted mb-3 text-primary">
+          <Avatar size="xl" className="bg-primary/5 mb-3 text-primary">
             <AvatarFallback>
               {user.name?.charAt(0).toUpperCase()}
             </AvatarFallback>
@@ -44,7 +44,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
         <div className="space-y-3">
           <Link
             href="/profile"
-            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-card-foreground hover:bg-accent cursor-pointer"
+            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-card-foreground hover:bg-accent cursor-pointer"
           >
             <UserIcon className="h-4 w-4 text-accent" />
             <div className="flex flex-col items-start">
@@ -59,7 +59,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             href="https://nextlyhq.com/docs"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-card-foreground hover:bg-accent cursor-pointer"
+            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-card-foreground hover:bg-accent cursor-pointer"
           >
             <HelpCircle className="h-4 w-4 text-primary" />
             <div className="flex flex-col items-start">
@@ -72,7 +72,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
 
           <button
             onClick={() => { void logout(); }}
-            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 mt-2 cursor-pointer"
+            className="flex w-full items-center space-x-2 rounded-none px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 mt-2 cursor-pointer"
           >
             <LogOut className="h-4 w-4" />
             <div className="flex flex-col items-start">
