@@ -40,34 +40,28 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
         ref={ref}
         variant={href ? "interactive" : "default"}
         className={cn(
-          "group relative overflow-hidden transition-all duration-500",
-          "border-border/60 bg-card/60 backdrop-blur-sm",
+          "group relative overflow-hidden transition-all duration-300",
+          "border-border/60 bg-card",
           href &&
-            "hover:border-primary/40 hover:shadow-soft-primary active:scale-[0.985] active:translate-y-0.5",
+            "hover-subtle-row hover:border-primary/20 active:scale-[0.985] active:translate-y-0.5",
           className
         )}
       >
-        {/* Subtle Accent Gradient on Hover */}
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.03] to-transparent opacity-0 transition-opacity duration-700 group-hover:opacity-100" />
-
-        {/* Top Sharp Border Accent */}
-        <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-primary/80 transform origin-left scale-x-0 transition-transform duration-500 ease-out group-hover:scale-x-100" />
-
         <CardContent className={isCompact ? "p-5" : "p-8"}>
           {isCompact ? (
             <div className="flex items-center justify-between gap-4 relative z-10">
               <div className="min-w-0">
                 <div className="flex items-center gap-2.5 mb-2">
                   {icon && (
-                    <div className="p-1.5 rounded-lg bg-primary/5 text-primary/70 shrink-0 group-hover-unified transition-colors">
+                    <div className="text-primary/50 shrink-0 group-hover:text-primary transition-colors">
                       {icon}
                     </div>
                   )}
-                  <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/60 truncate group-hover:text-muted-foreground/90 transition-colors">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-primary/50 truncate group-hover:text-primary transition-colors">
                     {title}
                   </span>
                 </div>
-                <p className="text-2xl font-bold tracking-[-0.03em] text-foreground leading-none">
+                <p className="text-2xl font-bold tracking-[-0.03em] text-primary/50 leading-none group-hover:text-primary transition-colors">
                   {typeof value === "number" ? value.toLocaleString() : value}
                 </p>
               </div>
@@ -77,14 +71,14 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
               <div className="flex items-start justify-between">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2.5 mb-1.5">
-                    <div className="p-2 rounded-xl bg-primary/5 text-primary/80 ring-1 ring-primary/10 group-hover:ring-primary/20 transition-all duration-500">
+                    <div className="text-primary/50 group-hover:text-primary transition-colors duration-500">
                       {icon}
                     </div>
-                    <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/50 group-hover:text-muted-foreground/80 transition-colors">
+                    <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-primary/50 group-hover:text-primary transition-colors">
                       {title}
                     </span>
                   </div>
-                  <p className="text-fluid-4xl font-bold tracking-[-0.05em] text-foreground leading-[0.9] transition-transform duration-500 group-hover:translate-x-0.5">
+                  <p className="text-fluid-4xl font-bold tracking-[-0.05em] text-primary/50 leading-[0.9] transition-all duration-500 group-hover:text-primary group-hover:translate-x-0.5">
                     {typeof value === "number" ? value.toLocaleString() : value}
                   </p>
                 </div>

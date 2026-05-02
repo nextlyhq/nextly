@@ -481,7 +481,7 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-card border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -512,7 +512,7 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-card border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -547,10 +547,8 @@ export function MediaLibrary({
             <Button
               onClick={() => setIsUploadCollapsed(!isUploadCollapsed)}
               className={cn(
-                "flex items-center gap-2 px-5 h-10 shrink-0 transition-all duration-200 font-medium tracking-tight rounded-xl",
-                !isUploadCollapsed
-                  ? "bg-primary/90 text-primary-foreground hover:bg-primary"
-                  : "bg-primary text-primary-foreground hover:opacity-90 shadow-sm"
+                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-xl shadow-sm",
+                !isUploadCollapsed ? "opacity-90" : ""
               )}
             >
               <Upload className="h-4 w-4" />
@@ -587,7 +585,7 @@ export function MediaLibrary({
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white dark:bg-slate-950">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-card">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>

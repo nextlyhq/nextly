@@ -45,7 +45,7 @@ export function WelcomeHeader() {
           Welcome,{" "}
           <span className="text-primary/90">{getFirstName(user?.name)}</span>
         </h1>
-        <p className="text-sm font-medium text-muted-foreground/60 tracking-tight">
+        <p className="text-sm font-medium text-muted-foreground/80 tracking-tight">
           {hasCollections
             ? "Your project is looking good. Here's what's happened since you left."
             : "Let's get started by building your first content structure."}

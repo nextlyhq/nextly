@@ -74,19 +74,28 @@ function CollectionCard({
   // 1. From collection metadata (admin.icon)
   // 2. From group default
   const Icon = useMemo(() => {
+    // 1. From collection metadata (admin.icon)
     if (collectionConfig?.admin?.icon) {
       const ConfiguredIcon = (Icons as Record<string, React.ElementType>)[
         collectionConfig.admin.icon
       ];
       if (ConfiguredIcon) return ConfiguredIcon;
     }
+
+    // 2. Specific item overrides for "Forms" group
+    if (item.group === "Forms") {
+      if (item.slug.toLowerCase().includes("submission")) return Icons.Inbox;
+      return Icons.Clipboard;
+    }
+
+    // 3. From group default
     return getGroupDefaultIcon(item.group);
-  }, [collectionConfig?.admin?.icon, item.group]);
+  }, [collectionConfig?.admin?.icon, item.group, item.slug]);
 
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-md overflow-hidden border border-border bg-card transition-colors duration-200 hover-unified-dashboard-card hover:border-primary/60"
+      className="block group h-full rounded-md overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/20"
     >
       <Card
         variant="interactive"
@@ -99,24 +108,24 @@ function CollectionCard({
             <div className="flex items-center justify-between">
               <div
                 className={cn(
-                  "p-2 rounded-md transition-colors ring-1 ring-inset group-hover:bg-white/10 group-hover:text-white group-hover:ring-white/30",
-                  "bg-primary/5 text-primary ring-primary/20"
+                  "transition-colors group-hover:text-primary",
+                  "text-primary/50"
                 )}
               >
                 <Icon className="h-4 w-4 shrink-0" />
               </div>
               <div className="flex flex-col items-end">
-                <span className="text-xl font-bold tabular-nums tracking-tight text-foreground/80 leading-none group-hover:text-white">
+                <span className="text-xl font-bold tabular-nums tracking-tight text-primary/50 leading-none group-hover:text-primary transition-colors">
                   {item.count}
                 </span>
-                <span className="text-[8px] font-bold uppercase tracking-wider text-muted-foreground/40 mt-1 group-hover:text-white">
+                <span className="text-[8px] font-bold uppercase tracking-wider text-primary/40 mt-1 group-hover:text-primary transition-colors">
                   Items
                 </span>
               </div>
             </div>
 
             <div className="space-y-1">
-              <h5 className="font-bold text-sm tracking-tight transition-colors leading-tight group-hover:text-white">
+              <h5 className="font-bold text-sm tracking-tight transition-colors leading-tight text-primary/50 group-hover:text-primary">
                 {item.label}
               </h5>
             </div>

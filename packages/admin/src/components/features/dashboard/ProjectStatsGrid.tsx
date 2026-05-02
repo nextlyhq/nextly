@@ -109,13 +109,13 @@ export const ProjectStatsGrid: React.FC = () => {
     }, [data]);
 
   return (
-    <Card className="border-border/60 bg-card/40 backdrop-blur-md rounded-[2.5rem] overflow-hidden transition-all duration-500 hover:border-primary/20">
+    <Card className="border-border/60 bg-card/80 backdrop-blur-md rounded-[2.5rem] overflow-hidden transition-all duration-500 hover:border-primary/20">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
+          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/80">
             Resource Inventory
           </CardTitle>
           <div className="h-1 w-6 bg-primary/30 rounded-full" />
