@@ -264,15 +264,22 @@ function lengthForKind(kind: ColumnKind): number | undefined {
 
 /**
  * Reserved system columns that BOTH consumers inject (id, created_at,
- * updated_at always; title/slug only when not user-defined). Owned
- * here so the two paths stay in lockstep when the system-column set
- * evolves.
+ * updated_at always; title/slug only when not user-defined; status only
+ * when enabled). Owned here so the two paths stay in lockstep when the
+ * system-column set evolves.
  */
 export interface SystemColumnSet {
   /** True if user provided a `title` field — skip the auto-injected one. */
   hasTitleField: boolean;
   /** True if user provided a `slug` field — skip the auto-injected one. */
   hasSlugField: boolean;
+  /**
+   * True if Draft/Published status is enabled on this collection/single.
+   * When set, a `status` column (varchar/text NOT NULL DEFAULT 'draft') is
+   * injected. Existing rows backfill to 'draft' so unpublished content
+   * never leaks during the migration that adds the column.
+   */
+  hasStatus?: boolean;
 }
 
 export interface SystemColumnDescriptor {
@@ -298,6 +305,9 @@ export function getSystemColumnDescriptors(
     }
     cols.push({ name: "created_at", dialectType: "timestamp", nullable: true, primaryKey: false });
     cols.push({ name: "updated_at", dialectType: "timestamp", nullable: true, primaryKey: false });
+    if (opts.hasStatus) {
+      cols.push({ name: "status", dialectType: "text", nullable: false, primaryKey: false });
+    }
   } else if (dialect === "mysql") {
     cols.push({
       name: "id",
@@ -336,6 +346,15 @@ export function getSystemColumnDescriptors(
       nullable: true,
       primaryKey: false,
     });
+    if (opts.hasStatus) {
+      cols.push({
+        name: "status",
+        dialectType: "varchar(20)",
+        length: 20,
+        nullable: false,
+        primaryKey: false,
+      });
+    }
   } else {
     // sqlite
     cols.push({ name: "id", dialectType: "text", nullable: false, primaryKey: true });
@@ -347,6 +366,9 @@ export function getSystemColumnDescriptors(
     }
     cols.push({ name: "created_at", dialectType: "integer", nullable: true, primaryKey: false });
     cols.push({ name: "updated_at", dialectType: "integer", nullable: true, primaryKey: false });
+    if (opts.hasStatus) {
+      cols.push({ name: "status", dialectType: "text", nullable: false, primaryKey: false });
+    }
   }
   return cols;
 }

@@ -46,28 +46,37 @@ interface MinimalFieldDef {
   relationTo?: unknown;
 }
 
+/** Optional toggles that affect which system columns are injected. */
+export interface BuildDesiredTableOptions {
+  /** When true, a `status` system column is injected (varchar/text NOT NULL DEFAULT 'draft'). */
+  hasStatus?: boolean;
+}
+
 /**
  * Build a TableSpec for the diff engine from a list of Nextly fields.
  * Field type tokens are translated to introspection-aligned strings via
  * the shared descriptor module so the diff can compare them directly
  * against live-DB output. Reserved system columns (id, title, slug,
- * created_at, updated_at) are injected to match runtime-schema-generator's
- * behavior — the descriptor module owns that list.
+ * created_at, updated_at, and conditionally status) are injected to match
+ * runtime-schema-generator's behavior — the descriptor module owns that list.
  */
 export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: BuildDesiredTableOptions = {}
 ): TableSpec {
   const columns: ColumnSpec[] = [];
 
   // Inject reserved system columns first - mirrors runtime-schema-generator's
-  // behavior. title/slug only when not user-defined (user wins).
+  // behavior. title/slug only when not user-defined (user wins). status only
+  // when the collection/single has Draft/Published enabled.
   const hasTitleField = fields.some(f => f.name === "title");
   const hasSlugField = fields.some(f => f.name === "slug");
   for (const reserved of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,
+    hasStatus: options.hasStatus,
   })) {
     columns.push({
       name: reserved.name,

@@ -133,6 +133,13 @@ export const dynamicCollectionsMysql = mysqlTable(
     timestamps: boolean("timestamps").default(true).notNull(),
 
     /**
+     * Whether the collection's records carry a Draft/Published status column.
+     * Default false; users opt in via the Schema Builder modal. See the
+     * postgres schema for full semantics.
+     */
+    status: boolean("status").default(false).notNull(),
+
+    /**
      * Admin UI configuration options.
      * Controls sidebar grouping, icon, columns, pagination, etc.
      */

@@ -24,6 +24,12 @@ export interface DesiredCollection {
   tableName: string;
   fields: FieldConfig[];
   indexes?: IndexConfig[];
+  /**
+   * Whether the collection has Draft/Published status enabled.
+   * When true, the diff input includes a `status` system column so the
+   * pipeline knows to add it on first enable and drop it on disable.
+   */
+  status?: boolean;
 }
 
 export interface DesiredSingle {
@@ -31,6 +37,8 @@ export interface DesiredSingle {
   tableName: string;
   fields: FieldConfig[];
   indexes?: IndexConfig[];
+  /** Same semantics as DesiredCollection.status. */
+  status?: boolean;
 }
 
 export interface DesiredComponent {

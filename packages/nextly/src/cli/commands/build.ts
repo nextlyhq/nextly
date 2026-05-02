@@ -751,6 +751,10 @@ function convertToRecords(
     tableName: collection.dbName ?? collection.slug.replace(/-/g, "_"),
     fields: collection.fields,
     timestamps: collection.timestamps ?? true,
+    // Why: status defaults to false for code-first collections unless the
+    // defineCollection() input explicitly opts in. The structurally-typed
+    // collection object may carry a status flag from the user's config.
+    status: (collection as { status?: boolean }).status === true,
     description: collection.admin?.description ?? collection.description,
     source: "code" as const,
     locked: true,
