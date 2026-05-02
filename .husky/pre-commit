@@ -1,1 +1,23 @@
+# Audit M13 / T-024: scan staged changes for committed secrets before
+# lint-staged formats them. `gitleaks protect --staged` only inspects
+# the index, so it's fast and accurate enough to catch common cases
+# (API keys, private keys, AWS/GCP creds, etc).
+#
+# If gitleaks isn't installed locally, skip with a one-line nudge
+# rather than block the commit — the GitHub Action enforces the same
+# scan on PRs, so coverage is preserved at the merge gate.
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --no-banner || {
+    echo ""
+    echo "✗ gitleaks found a potential secret in staged changes."
+    echo "  Review the diff above. If it's a false positive, add an"
+    echo "  exception to .gitleaks.toml (allowlist) and re-stage."
+    exit 1
+  }
+else
+  echo "ℹ gitleaks not installed locally — pre-commit secret scan skipped."
+  echo "  Install: https://github.com/gitleaks/gitleaks#installing"
+  echo "  CI will still run the scan on your PR."
+fi
+
 npx lint-staged

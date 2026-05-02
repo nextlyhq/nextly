@@ -35,22 +35,20 @@ import * as React from "react";
 
 import {
   List,
-  ChevronRight,
   Folder as FolderIconComponent,
   FolderPlus,
-  Home,
   LayoutGrid,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
   Trash2,
+  LayoutDashboard,
   Upload,
   Columns,
 } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
+import { Breadcrumbs, Pagination } from "@admin/components/shared";
 import { SearchBar } from "@admin/components/shared/search-bar";
-import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import {
@@ -459,20 +457,13 @@ export function MediaLibrary({
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 bg-background p-8 overflow-y-auto">
         {/* Page Breadcrumb (Move above the title) */}
-        <nav
-          className="flex items-center gap-2 text-sm text-muted-foreground mb-6"
-          aria-label="Breadcrumb"
-        >
-          <Link
-            href={ROUTES.DASHBOARD}
-            className="flex items-center gap-1.5 hover:text-foreground transition-colors duration-150"
-          >
-            <Home className="w-4 h-4" />
-            <span>Dashboard</span>
-          </Link>
-          <ChevronRight className="w-3.5 h-3.5" />
-          <span className="text-foreground font-medium">Media Library</span>
-        </nav>
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Media Library" },
+          ]}
+          className="mb-6"
+        />
         {/* Header Section */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
           <div>
@@ -486,7 +477,7 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-card border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -517,7 +508,7 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-white dark:bg-slate-950 border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-card border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -552,10 +543,8 @@ export function MediaLibrary({
             <Button
               onClick={() => setIsUploadCollapsed(!isUploadCollapsed)}
               className={cn(
-                "flex items-center gap-2 px-5 h-10 shrink-0 transition-all duration-200 font-medium tracking-tight rounded-xl",
-                !isUploadCollapsed
-                  ? "bg-primary/90 text-primary-foreground hover:bg-primary"
-                  : "bg-primary text-primary-foreground hover:opacity-90 shadow-sm"
+                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-xl shadow-sm",
+                !isUploadCollapsed ? "opacity-90" : ""
               )}
             >
               <Upload className="h-4 w-4" />
@@ -592,7 +581,7 @@ export function MediaLibrary({
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white dark:bg-slate-950">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-card">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -704,7 +693,7 @@ export function MediaLibrary({
                       : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
                   )}
                 >
-                  <Home
+                  <LayoutDashboard
                     className={cn(
                       "h-4 w-4 shrink-0 transition-colors",
                       !activeFolderId

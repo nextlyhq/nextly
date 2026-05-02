@@ -178,6 +178,29 @@ export const refreshTokens = mysqlTable(
   ]
 );
 
+// Audit log for security-sensitive events (Audit M10 / T-022). Append-
+// only by application convention — operators should revoke UPDATE /
+// DELETE GRANTs on this table in production for stricter integrity.
+export const auditLog = mysqlTable(
+  "audit_log",
+  {
+    id: varchar("id", { length: 191 }).primaryKey(),
+    kind: varchar("kind", { length: 64 }).notNull(),
+    actorUserId: varchar("actor_user_id", { length: 191 }),
+    targetUserId: varchar("target_user_id", { length: 191 }),
+    ipAddress: varchar("ip_address", { length: 45 }),
+    userAgent: text("user_agent"),
+    metadata: json("metadata"),
+    createdAt: datetime("created_at").notNull().default(new Date()),
+  },
+  t => [
+    index("audit_log_kind_idx").on(t.kind),
+    index("audit_log_actor_user_id_idx").on(t.actorUserId),
+    index("audit_log_target_user_id_idx").on(t.targetUserId),
+    index("audit_log_created_at_idx").on(t.createdAt),
+  ]
+);
+
 // -----------------------------
 // RBAC tables (roles/permissions)
 // -----------------------------

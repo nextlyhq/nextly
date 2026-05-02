@@ -8,11 +8,28 @@
  */
 import { describe, it, expect } from "vitest";
 
+import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
+
+// Audit M10 / T-022: spying writer used by the audit-on-CSRF-failure
+// test below. Counts events received and exposes them for assertions.
+function makeRecordingAuditWriter() {
+  const events: Array<Parameters<typeof NULL_AUDIT_LOG_WRITER.write>[0]> = [];
+  return {
+    events,
+    writer: {
+      async write(event: Parameters<typeof NULL_AUDIT_LOG_WRITER.write>[0]) {
+        events.push(event);
+      },
+    },
+  };
+}
 
 // Minimal deps stub. CSRF is checked before any of these fire for the
 // protected routes, so a throwing function proves the guard ran first.
-function makeStubDeps(): AuthRouterDeps {
+function makeStubDeps(
+  auditLog: AuthRouterDeps["auditLog"] = NULL_AUDIT_LOG_WRITER
+): AuthRouterDeps {
   const unreachable = () => {
     throw new Error("CSRF check should have rejected before this ran");
   };
@@ -25,7 +42,14 @@ function makeStubDeps(): AuthRouterDeps {
     lockoutDurationSeconds: 900,
     loginStallTimeMs: 0,
     requireEmailVerification: true,
+    revealRegistrationConflict: false,
     allowedOrigins: [],
+    trustProxy: false,
+    trustedProxyIps: [],
+    // T-016: 0 disables the per-IP envelope so CSRF (which is the
+    // contract under test) still runs first.
+    authRateLimit: { requestsPerHour: 0, windowMs: 3_600_000 },
+    auditLog,
     findUserByEmail: unreachable as never,
     findUserById: unreachable as never,
     incrementFailedAttempts: unreachable as never,
@@ -123,6 +147,27 @@ describe("CSRF coverage", () => {
       }
     }
   );
+
+  // Audit M10 / T-022: every CSRF rejection records a single
+  // `csrf-failed` event with the request path/method as metadata.
+  // change-password is excluded because its 401 short-circuit (no
+  // session) fires before CSRF, so there's nothing to audit on that
+  // row.
+  it("audits one csrf-failed event per CSRF-rejected request", async () => {
+    const recording = makeRecordingAuditWriter();
+    const deps = makeStubDeps(recording.writer);
+    const eligible = CSRF_PROTECTED_ROUTES.filter(
+      r => r.path !== "change-password"
+    );
+    for (const { method, path, body } of eligible) {
+      await routeAuthRequest(makeRequest(method, path, body), path, deps);
+    }
+    expect(recording.events).toHaveLength(eligible.length);
+    expect(recording.events.every(e => e.kind === "csrf-failed")).toBe(true);
+    expect(recording.events.map(e => e.metadata?.path).sort()).toEqual(
+      eligible.map(r => r.path).sort()
+    );
+  });
 
   // Intentionally unprotected routes. Each one has an explicit rationale
   // so a future dev who questions the exclusion finds the answer here

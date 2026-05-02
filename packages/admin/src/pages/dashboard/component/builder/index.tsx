@@ -14,7 +14,6 @@ import { useState, useCallback } from "react";
 import { z } from "zod";
 
 import { BuilderPageTemplate } from "@admin/components/features/schema-builder";
-import * as Icons from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateComponent } from "@admin/hooks/queries/useComponents";
@@ -107,14 +106,16 @@ export default function ComponentBuilderPage(): React.ReactElement {
         {
           href: ROUTES.DASHBOARD,
           label: "Dashboard",
-          icon: <Icons.Home className="w-4 h-4" />,
+          isDashboard: true,
         },
         { href: ROUTES.COMPONENTS, label: "Components" },
       ]}
       breadcrumbCurrentLabel="Create Component"
       headerTitle="Create Component"
       headerDescription="Design a reusable component with custom fields."
-      onSave={() => { void handleSave(); }}
+      onSave={() => {
+        void handleSave();
+      }}
       onCancel={() => navigateTo(ROUTES.COMPONENTS)}
       isSaving={isSaving}
       saveLabel="Save Component"

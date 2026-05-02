@@ -1,5 +1,5 @@
 import {
-  Home,
+  LayoutDashboard,
   Layers,
   Image as ImageIcon,
   Settings,
@@ -32,7 +32,7 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    icon: Home,
+    icon: LayoutDashboard,
     href: ROUTES.DASHBOARD,
   },
   { id: "collections", label: "Collections", icon: Layers, href: "#" },

@@ -48,6 +48,7 @@
 
 import { container } from "../di/container";
 import { isServicesRegistered, getService } from "../di/register";
+import { clampLimit } from "../domains/collections/query/query-parser";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -393,7 +394,9 @@ async function handleList(request: Request, _slug: string): Promise<Response> {
   const { searchParams } = new URL(request.url);
 
   const page = parseInt(searchParams.get("page") || "1", 10);
-  const perPage = parseInt(searchParams.get("limit") || "10", 10);
+  // Audit M21 / T-026: clamp `limit` to MAX_QUERY_LIMIT so a client
+  // can't yank an entire upload list in one round-trip.
+  const perPage = clampLimit(searchParams.get("limit"), { defaultLimit: 10 });
 
   return withTimezoneFormatting(
     createPaginatedResponse([], { total: 0, page, perPage })

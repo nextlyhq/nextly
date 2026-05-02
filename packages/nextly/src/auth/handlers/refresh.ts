@@ -8,6 +8,7 @@
 // `{ error: { code, message } }` shape. Refresh is a non-NextlyError
 // path and the spec §7.6 entry is `respondData (none, silent)`.
 import { respondData } from "../../api/response-shapes";
+import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import {
   setAccessTokenCookie,
@@ -27,6 +28,7 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
+import { evaluateRefreshBinding } from "../session/refresh-binding";
 
 import { buildCookieHeaders } from "./handler-utils";
 
@@ -35,9 +37,13 @@ export interface RefreshHandlerDeps {
   isProduction: boolean;
   accessTokenTTL: number;
   refreshTokenTTL: number;
-  findRefreshTokenByHash: (
-    tokenHash: string
-  ) => Promise<{ id: string; userId: string; expiresAt: Date } | null>;
+  findRefreshTokenByHash: (tokenHash: string) => Promise<{
+    id: string;
+    userId: string;
+    expiresAt: Date;
+    userAgent: string | null;
+    ipAddress: string | null;
+  } | null>;
   deleteRefreshToken: (id: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
   storeRefreshToken: (record: {
@@ -85,6 +91,43 @@ export async function handleRefresh(
   if (tokenRecord.expiresAt < new Date()) {
     await deps.deleteRefreshToken(tokenRecord.id);
     return clearAndDeny("Refresh token expired");
+  }
+
+  // Audit H3 / T-015: enforce refresh-token UA + trusted-IP binding before
+  // honoring rotation. A hard mismatch (IP family flip or /24 ÷ /48 prefix
+  // change) revokes every refresh token for the user, since one confirmed
+  // network mismatch suggests theft rather than benign rotation.
+  const currentUserAgent = request.headers.get("user-agent");
+  const currentIp = getTrustedClientIp(request, {
+    trustProxy: deps.trustProxy,
+    trustedProxyIps: deps.trustedProxyIps,
+  });
+  const binding = evaluateRefreshBinding({
+    storedUserAgent: tokenRecord.userAgent,
+    currentUserAgent,
+    storedIp: tokenRecord.ipAddress,
+    currentIp,
+  });
+
+  if (binding.kind === "hard") {
+    await deps.deleteRefreshToken(tokenRecord.id);
+    await deps.deleteAllRefreshTokensForUser(tokenRecord.userId);
+    getNextlyLogger().warn({
+      kind: "refresh-binding-hard-fail",
+      reason: binding.reason,
+      tokenId: tokenRecord.id,
+      userId: tokenRecord.userId,
+    });
+    return clearAndDeny("Session binding mismatch");
+  }
+
+  if (binding.kind === "soft") {
+    getNextlyLogger().warn({
+      kind: "refresh-binding-soft-warn",
+      reason: binding.reason,
+      tokenId: tokenRecord.id,
+      userId: tokenRecord.userId,
+    });
   }
 
   // Delete the consumed token (rotation)

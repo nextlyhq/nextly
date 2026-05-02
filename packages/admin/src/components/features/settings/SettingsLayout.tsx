@@ -3,8 +3,7 @@
 import type React from "react";
 import { useMemo } from "react";
 
-import { ChevronRight, Home } from "@admin/components/icons";
-import { Link } from "@admin/components/ui/link";
+import { Breadcrumbs } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 
 interface SettingsLayoutProps {
@@ -83,36 +82,15 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
   return (
     <div className="space-y-8">
       {/* Breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="mb-2">
-        <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-          <li className="flex items-center gap-2">
-            <Link
-              href={ROUTES.DASHBOARD}
-              className="flex items-center gap-1 hover:text-foreground transition-colors"
-            >
-              <Home className="h-4 w-4" />
-              <span>Dashboard</span>
-            </Link>
-            <ChevronRight className="h-4 w-4" />
-          </li>
-          <li>
-            <Link
-              href={ROUTES.SETTINGS}
-              className="hover:text-foreground transition-colors"
-            >
-              Settings
-            </Link>
-          </li>
-          {pageInfo.crumb && pageInfo.crumb !== "General" && (
-            <>
-              <li className="flex items-center gap-2">
-                <ChevronRight className="h-4 w-4" />
-              </li>
-              <li className="text-foreground font-medium">{pageInfo.crumb}</li>
-            </>
-          )}
-        </ol>
-      </nav>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: "Settings", href: ROUTES.SETTINGS },
+          ...(pageInfo.crumb && pageInfo.crumb !== "General"
+            ? [{ label: pageInfo.crumb }]
+            : []),
+        ]}
+      />
 
       {/* Page Header */}
       <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">

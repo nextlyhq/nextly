@@ -150,7 +150,7 @@ export function MediaListView({
           const isImage = type === "image";
           return (
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 overflow-hidden bg-white dark:bg-slate-900/50 flex items-center justify-center flex-shrink-0 border border-border/50 rounded">
+              <div className="w-10 h-10 overflow-hidden bg-card/50 flex items-center justify-center flex-shrink-0 border border-border/50 rounded">
                 {isImage && item.thumbnailUrl ? (
                   <img
                     src={item.thumbnailUrl}

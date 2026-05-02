@@ -13,7 +13,13 @@
 import { Button, toast } from "@revnixhq/ui";
 import { useState, useCallback, useMemo } from "react";
 
-import { Copy, Check, Loader2, FileJson } from "@admin/components/icons";
+import {
+  Copy,
+  Check,
+  Loader2,
+  FileJson,
+  AlertCircle,
+} from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
 
 import { JsonViewer } from "./JsonViewer";
@@ -93,10 +99,15 @@ export function ResponseViewer({
   // Loading state
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] bg-muted/5">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/30 mb-4" />
-        <p className="text-[10px] uppercase font-bold tracking-[0.2em] text-muted-foreground/50 animate-pulse">
-          Processing Response...
+      <div className="flex flex-col items-center justify-center h-full min-h-[400px] bg-muted/2">
+        <div className="relative mb-6">
+          <Loader2 className="h-10 w-10 animate-spin text-primary/20" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+          </div>
+        </div>
+        <p className="text-[10px] uppercase font-black tracking-[0.3em] text-primary/40 animate-pulse">
+          Processing...
         </p>
       </div>
     );
@@ -105,14 +116,14 @@ export function ResponseViewer({
   // Error state
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-8 text-center bg-destructive/5">
-        <div className="h-12 w-12 rounded-none border-2 border-destructive/20 flex items-center justify-center mb-6">
-          <span className="text-destructive font-bold text-xl">!</span>
+      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-12 text-center bg-rose-500/2">
+        <div className="h-14 w-14 rounded-none bg-rose-500/10 flex items-center justify-center mb-6">
+          <AlertCircle className="h-6 w-6 text-rose-500" />
         </div>
-        <h3 className="text-fluid-sm font-bold uppercase tracking-[0.15em] text-destructive mb-2">
+        <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-rose-500/80 mb-3">
           Request Failed
         </h3>
-        <p className="text-fluid-xs text-muted-foreground font-medium max-w-xs leading-relaxed">
+        <p className="text-xs text-muted-foreground/60 font-medium max-w-xs leading-relaxed">
           {error}
         </p>
       </div>
@@ -122,17 +133,17 @@ export function ResponseViewer({
   // Empty state
   if (!jsonString) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-8 text-center bg-muted/5 group">
-        <div className="h-16 w-16 mb-8 relative">
-          <div className="absolute inset-0 border border-muted-foreground/10 translate-x-1 translate-y-1 group-hover:translate-x-0 group-hover:translate-y-0 transition-transform" />
-          <div className="absolute inset-0 border border-muted-foreground/20 bg-background flex items-center justify-center">
-            <FileJson className="h-6 w-6 text-muted-foreground/40" />
+      <div className="flex flex-col items-center justify-center h-full min-h-[400px] p-12 text-center bg-muted/2 group">
+        <div className="h-20 w-20 mb-10 relative">
+          <div className="absolute inset-0 bg-primary/5 rounded-none scale-90 blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
+          <div className="absolute inset-0 bg-card border border-border/40 rounded-none flex items-center justify-center shadow-none group-hover:-translate-y-1 transition-transform duration-500">
+            <FileJson className="h-8 w-8 text-primary/30 group-hover:text-primary/60 transition-colors" />
           </div>
         </div>
-        <h3 className="text-fluid-sm font-bold uppercase tracking-[0.15em] text-muted-foreground/80 mb-3">
+        <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/80 mb-4">
           Response Pool
         </h3>
-        <p className="text-fluid-xs text-muted-foreground/60 font-medium max-w-[200px] leading-relaxed uppercase tracking-tight">
+        <p className="text-[10px] text-muted-foreground/40 font-black max-w-[240px] leading-loose uppercase tracking-[0.1em]">
           Select an action and execute the request to view structured response
           data
         </p>
@@ -142,11 +153,11 @@ export function ResponseViewer({
 
   // Response display
   return (
-    <div className="h-full min-h-[400px] flex flex-col bg-background">
+    <div className="h-full min-h-[400px] flex flex-col bg-card">
       {/* Action Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/20">
-        <span className="text-fluid-2xs font-bold uppercase tracking-widest text-muted-foreground/60">
-          Result Data
+      <div className="flex items-center justify-between px-8 py-3 border-b border-border/10 bg-muted/5">
+        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-primary/40">
+          Structured Result
         </span>
         <Button
           variant="ghost"
@@ -154,14 +165,14 @@ export function ResponseViewer({
           onClick={() => {
             void handleCopy();
           }}
-          className="h-7 gap-2 px-3 rounded-none text-[10px] font-bold uppercase tracking-tighter hover:bg-background/80"
+          className="h-8 gap-2 px-4 rounded-none text-[10px] font-bold uppercase tracking-widest text-primary/60 hover:text-primary transition-all"
         >
           {copied ? (
             <Check className="h-3 w-3 text-green-500" />
           ) : (
             <Copy className="h-3 w-3" />
           )}
-          {copied ? "Copied" : "Copy"}
+          {copied ? "Copied" : "Copy JSON"}
         </Button>
       </div>
 

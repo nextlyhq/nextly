@@ -13,6 +13,8 @@
  */
 // CSRF double-submit cookie + origin check. Prevents cross-site forced
 // account creation. See docs/auth/csrf.md.
+import { z } from "zod";
+
 import { readOrGenerateRequestId } from "../../api/request-id";
 // Phase 4 (Task 10): respondAction emits `{ message, ...result }` on the
 // success branches. The silent-success message is preserved verbatim on
@@ -21,10 +23,29 @@ import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
+import { EmailSchema, PasswordSchema } from "../../schemas/validation";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
 import { jsonResponse, stallResponse } from "./handler-utils";
+
+/**
+ * Audit M9 (T-021): structured payload validation at the route layer.
+ * Reuses the canonical EmailSchema (RFC 5321 + trim/lowercase) and
+ * PasswordSchema (length + class requirements) so register matches the
+ * checks the rest of the auth surface already enforces. Name is bounded
+ * to a sensible UI range — not load-bearing security, but rejects
+ * trivially silly inputs (empty string, multi-megabyte payloads).
+ */
+const RegisterPayloadSchema = z.object({
+  email: EmailSchema,
+  password: PasswordSchema,
+  name: z
+    .string()
+    .trim()
+    .min(1, "Name is required.")
+    .max(100, "Name must be 100 characters or less."),
+});
 
 export interface RegisterHandlerDeps {
   allowedOrigins: string[];
@@ -54,6 +75,27 @@ export interface RegisterHandlerDeps {
 
 const SILENT_SUCCESS_MESSAGE =
   "If this email is available, we've sent a confirmation link.";
+
+/**
+ * Map a zod issue to one of the codes the rest of the API uses for
+ * validation errors. Anything we don't have a stable equivalent for
+ * collapses to "INVALID" — the human-readable message still carries
+ * the specific reason.
+ */
+function zodIssueToCode(issue: z.core.$ZodIssue): string {
+  switch (issue.code) {
+    case "invalid_type":
+      return "REQUIRED";
+    case "too_small":
+      return issue.minimum === 1 ? "REQUIRED" : "TOO_SHORT";
+    case "too_big":
+      return "TOO_LONG";
+    case "invalid_format":
+      return "INVALID_FORMAT";
+    default:
+      return "INVALID";
+  }
+}
 
 function buildRegisterErrorResponse(
   err: NextlyError,
@@ -100,22 +142,19 @@ export async function handleRegister(
       );
     }
 
-    const { email, password, name } = body;
-    if (!email || !password || !name) {
+    const parsed = RegisterPayloadSchema.safeParse(body);
+    if (!parsed.success) {
       throw NextlyError.validation({
-        errors: [
-          ...(!email
-            ? [{ path: "email", code: "REQUIRED", message: "Required." }]
-            : []),
-          ...(!password
-            ? [{ path: "password", code: "REQUIRED", message: "Required." }]
-            : []),
-          ...(!name
-            ? [{ path: "name", code: "REQUIRED", message: "Required." }]
-            : []),
-        ],
+        errors: parsed.error.issues.map(issue => ({
+          path: issue.path.join(".") || "root",
+          code: zodIssueToCode(issue),
+          message: issue.message.endsWith(".")
+            ? issue.message
+            : `${issue.message}.`,
+        })),
       });
     }
+    const { email, password, name } = parsed.data;
 
     try {
       const user = await deps.registerUser({ email, password, name });

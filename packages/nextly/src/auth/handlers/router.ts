@@ -1,3 +1,7 @@
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+import { rateLimiter } from "../middleware/rate-limiter";
+
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
@@ -9,6 +13,20 @@ import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
 import { handleSetupStatus, handleSetup } from "./setup";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
+
+/**
+ * Audit H4 / T-016: POST paths under `/auth/*` that share one per-IP
+ * rate-limit bucket. Login is the obvious credential-stuffing target,
+ * but register/forgot-password/reset-password are also sensitive (user
+ * enumeration, mailbomb, token-grinding) and an attacker who maxes one
+ * shouldn't be able to refresh their budget by switching to another.
+ */
+const RATE_LIMITED_AUTH_PATHS = new Set([
+  "login",
+  "register",
+  "forgot-password",
+  "reset-password",
+]);
 
 /**
  * Combined dependency interface for all auth handlers.
@@ -41,6 +59,22 @@ export interface AuthRouterDeps {
   trustProxy: boolean;
   /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
+  /**
+   * Audit H4 / T-016: per-IP rate limit on auth write endpoints.
+   * `requestsPerHour: 0` disables the envelope. Single shared bucket
+   * across login/register/forgot-password/reset-password per IP.
+   */
+  authRateLimit: {
+    requestsPerHour: number;
+    windowMs: number;
+  };
+  /**
+   * Audit M10 / T-022: writer for security-sensitive auth events.
+   * Handlers call `auditLog.write(...)` on failed CSRF, failed login,
+   * password change, role mutation, and user delete. Writer is
+   * fail-safe — any DB error logs a warning and the request continues.
+   */
+  auditLog: AuditLogWriter;
 
   // User lookups (widest return type to satisfy all handlers)
   findUserByEmail: (email: string) => Promise<{
@@ -77,9 +111,13 @@ export interface AuthRouterDeps {
     ipAddress: string | null;
     expiresAt: Date;
   }) => Promise<void>;
-  findRefreshTokenByHash: (
-    tokenHash: string
-  ) => Promise<{ id: string; userId: string; expiresAt: Date } | null>;
+  findRefreshTokenByHash: (tokenHash: string) => Promise<{
+    id: string;
+    userId: string;
+    expiresAt: Date;
+    userAgent: string | null;
+    ipAddress: string | null;
+  } | null>;
   deleteRefreshToken: (id: string) => Promise<void>;
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
@@ -136,6 +174,15 @@ export async function routeAuthRequest(
   authPath: string,
   deps: AuthRouterDeps
 ): Promise<Response | null> {
+  const response = await dispatchAuthRequest(request, authPath, deps);
+  return applyNoStoreCache(response);
+}
+
+async function dispatchAuthRequest(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps
+): Promise<Response | null> {
   const method = request.method.toUpperCase();
 
   if (method === "GET") {
@@ -152,38 +199,163 @@ export async function routeAuthRequest(
   }
 
   if (method === "POST") {
-    switch (authPath) {
-      case "login":
-        return handleLogin(request, deps);
-      case "logout":
-        return handleLogout(request, deps);
-      case "refresh":
-        return handleRefresh(request, deps);
-      case "setup":
-        return handleSetup(request, deps);
-      case "register":
-        return handleRegister(request, deps);
-      case "forgot-password":
-        return handleForgotPassword(request, deps);
-      case "reset-password":
-        return handleResetPassword(request, deps);
-      case "verify-email":
-        return handleVerifyEmail(request, deps);
-      case "verify-email/resend":
-        return handleResendVerification(request, deps);
-      default:
-        return null;
+    if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
+      const limited = checkAuthIpRateLimit(request, deps);
+      if (limited) return limited;
     }
+    return auditCsrfFailure(request, authPath, deps, () => {
+      switch (authPath) {
+        case "login":
+          return handleLogin(request, deps);
+        case "logout":
+          return handleLogout(request, deps);
+        case "refresh":
+          return handleRefresh(request, deps);
+        case "setup":
+          return handleSetup(request, deps);
+        case "register":
+          return handleRegister(request, deps);
+        case "forgot-password":
+          return handleForgotPassword(request, deps);
+        case "reset-password":
+          return handleResetPassword(request, deps);
+        case "verify-email":
+          return handleVerifyEmail(request, deps);
+        case "verify-email/resend":
+          return handleResendVerification(request, deps);
+        default:
+          return Promise.resolve(null);
+      }
+    });
   }
 
   if (method === "PATCH") {
-    switch (authPath) {
-      case "change-password":
-        return handleChangePassword(request, deps);
-      default:
-        return null;
-    }
+    return auditCsrfFailure(request, authPath, deps, () => {
+      switch (authPath) {
+        case "change-password":
+          return handleChangePassword(request, deps);
+        default:
+          return Promise.resolve(null);
+      }
+    });
   }
 
   return null;
+}
+
+/**
+ * Audit M19 / T-025: stamp `Cache-Control: no-store` (and the legacy
+ * `Pragma: no-cache`) on every `/auth/*` response, regardless of the
+ * handler that produced it. Auth responses can carry tokens, session
+ * cookies, or account-state hints — none of those should ever live
+ * in a shared / browser / proxy cache.
+ *
+ * Centralising at the router means individual handlers don't have to
+ * remember to add the header (and don't have to thread headers
+ * through `new Response(...)` literals scattered across the dir).
+ *
+ * Returns the same `Response` object with mutated headers — `Headers`
+ * is mutable on `Response.headers`, so no clone is needed.
+ */
+function applyNoStoreCache(response: Response | null): Response | null {
+  if (!response) return response;
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Pragma", "no-cache");
+  return response;
+}
+
+/**
+ * Audit M10 / T-022: write a `csrf-failed` event whenever a dispatched
+ * handler returns a 403 carrying `error.code === "CSRF_FAILED"`.
+ * Centralising this in the router avoids touching every individual
+ * handler. Body parsing is gated on the cheap status check first, so
+ * happy-path requests pay nothing.
+ */
+async function auditCsrfFailure(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps,
+  dispatch: () => Promise<Response | null>
+): Promise<Response | null> {
+  const response = await dispatch();
+  if (!response || response.status !== 403) return response;
+
+  try {
+    const body = await response.clone().json();
+    if (body?.error?.code !== "CSRF_FAILED") return response;
+    await deps.auditLog.write({
+      kind: "csrf-failed",
+      ipAddress: getTrustedClientIp(request, {
+        trustProxy: deps.trustProxy,
+        trustedProxyIps: deps.trustedProxyIps,
+      }),
+      userAgent: request.headers.get("user-agent"),
+      metadata: { path: authPath, method: request.method.toUpperCase() },
+    });
+  } catch {
+    /* response had no JSON body or audit write failed silently */
+  }
+  return response;
+}
+
+/**
+ * Audit H4 / T-016: per-IP rate limit on auth write endpoints.
+ *
+ * Returns a 429 `Response` when the IP has exhausted its budget for the
+ * current window, or `null` when the request should proceed. Uses the
+ * shared in-memory sliding-window `rateLimiter` singleton — the same
+ * one the API-key middleware uses. T-104 will swap the backing store
+ * for Redis so multi-instance deployments share state; until then,
+ * single-instance is the documented beta scope.
+ *
+ * Falls back to a single shared `unknown` bucket when the trusted IP
+ * is null (matches the pattern in `middleware/rate-limit.ts`). That
+ * means a non-proxied deployment without `trustProxy` enabled will
+ * lump every auth request into one bucket — heavy-handed but
+ * intentional: the alternative (skip the limiter) leaves the
+ * deployment open to credential-stuffing.
+ */
+function checkAuthIpRateLimit(
+  request: Request,
+  deps: AuthRouterDeps
+): Response | null {
+  const limit = deps.authRateLimit.requestsPerHour;
+  if (limit <= 0) return null; // explicitly disabled
+
+  const ip =
+    getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }) ?? "unknown";
+
+  const result = rateLimiter.check(
+    `auth-ip:${ip}`,
+    limit,
+    deps.authRateLimit.windowMs
+  );
+  if (result.allowed) return null;
+
+  const retryAfter = Math.max(
+    1,
+    Math.ceil((result.resetAt.getTime() - Date.now()) / 1000)
+  );
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "RATE_LIMIT_EXCEEDED",
+        message: "Too many auth requests from this IP. Please try again later.",
+        retryAfter,
+      },
+    }),
+    {
+      status: 429,
+      headers: {
+        "content-type": "application/json",
+        "retry-after": String(retryAfter),
+        "x-ratelimit-limit": String(limit),
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(result.resetAt.getTime()),
+      },
+    }
+  );
 }

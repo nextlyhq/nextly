@@ -12,12 +12,11 @@
  */
 
 import { Button } from "@revnixhq/ui";
-import { ChevronRight, Home } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useState, useCallback, useMemo, useRef } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
-import { Link } from "@admin/components/ui/link";
+import { Breadcrumbs } from "@admin/components/shared";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useEntries, useBulkDeleteEntries } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
@@ -509,21 +508,12 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* Breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="-mb-2">
-        <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-          <li className="flex items-center gap-2">
-            <Link
-              href={ROUTES.DASHBOARD}
-              className="flex items-center gap-1 hover:text-foreground transition-colors"
-            >
-              <Home className="h-4 w-4" />
-              <span>Dashboard</span>
-            </Link>
-            <ChevronRight className="h-4 w-4" />
-          </li>
-          <li className="text-foreground font-medium">{labels.plural}</li>
-        </ol>
-      </nav>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: labels.plural },
+        ]}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div>

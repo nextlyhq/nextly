@@ -194,7 +194,7 @@ export default function SingleBuilderEditPage({
         {
           href: ROUTES.DASHBOARD,
           label: "Dashboard",
-          icon: <Icons.Home className="w-4 h-4" />,
+          isDashboard: true,
         },
         { href: ROUTES.SINGLES, label: "Singles" },
       ]}
@@ -202,7 +202,9 @@ export default function SingleBuilderEditPage({
       headerIcon={<Icons.FileText className="h-5 w-5" />}
       headerTitle={builder.form.watch("singularName") || "Edit Single"}
       headerDescription="Define the structure of this global content"
-      onSave={() => { void handleSave(); }}
+      onSave={() => {
+        void handleSave();
+      }}
       onCancel={() => navigateTo(ROUTES.SINGLES)}
       isSaving={isSaving}
       saveLabel="Update"
