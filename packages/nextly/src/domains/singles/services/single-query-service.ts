@@ -32,6 +32,7 @@ import {
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
+import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { RBACAccessControlService } from "../../../services/auth/rbac-access-control-service";
@@ -270,6 +271,28 @@ export class SingleQueryService extends BaseService {
       if (!doc) {
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocument(singleMeta);
+      }
+
+      // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
+      // identical to Collections: when status is enabled, public callers see
+      // only published; trusted callers see all. A draft Single returns 404
+      // so its existence is invisible to public callers — same response shape
+      // as a not-yet-created Single.
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus:
+          (singleMeta as { status?: boolean }).status === true,
+        overrideAccess: options.overrideAccess === true,
+        explicit: options.status,
+      });
+      if (
+        statusFilter &&
+        (doc as { status?: string }).status !== statusFilter.value
+      ) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: `Single "${slug}" not found`,
+        };
       }
 
       // 7. Deserialize JSON fields
