@@ -1,6 +1,12 @@
 // CSRF double-submit cookie + origin check. Setup is a one-time but
 // state-changing bootstrap — CSRF guards against a malicious page
 // racing the legitimate first-admin form. See docs/auth/csrf.md.
+// Phase 4 (Task 10): respondAction / respondData replace hand-rolled
+// `{ data: ... }` envelopes here. setup-status now also includes
+// `requiresInitialUser` per spec §7.7 so the field set is no longer
+// Boolean-only.
+import { respondAction, respondData } from "../../api/response-shapes";
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { validatePasswordStrength } from "../credentials/password-strength";
@@ -15,7 +21,6 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
-import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 
 import { jsonResponse, buildCookieHeaders } from "./handler-utils";
 
@@ -52,13 +57,14 @@ export async function handleSetupStatus(
   deps: Pick<SetupHandlerDeps, "getUserCount">
 ): Promise<Response> {
   const count = await deps.getUserCount();
-  // Canonical Task-21 envelope: { data: <payload> }. The admin fetcher peels
-  // one `data` layer, so consumers read `result.isSetupComplete` directly.
-  // (The previous double-wrap was a stale workaround that broke the
-  // login<->setup redirect guard once the fetcher was migrated.)
-  return jsonResponse(200, {
-    data: { isSetupComplete: count > 0 },
-  });
+  // Phase 4 / spec §7.7: emit `{ isSetup, requiresInitialUser }` directly
+  // (no `{ data: ... }` wrapper). Both fields are derived from the user
+  // count: `isSetup` is true once a user exists, `requiresInitialUser`
+  // is the inverse so the admin client can drive the bootstrap-form
+  // redirect guard without reinterpreting the same boolean. The pair
+  // also satisfies the §5.1 "no Boolean-only respondData payload" rule.
+  const isSetup = count > 0;
+  return respondData({ isSetup, requiresInitialUser: !isSetup });
 }
 
 export async function handleSetup(
@@ -151,12 +157,21 @@ export async function handleSetup(
     ),
   ];
 
-  return new Response(
-    JSON.stringify({
-      data: {
-        user: { id: user.id, email: user.email, name: user.name, roleIds },
-      },
-    }),
+  // Phase 4 / spec §7.6: action message is "Setup complete." plus the
+  // freshly-issued user + tokens. Tokens still travel as HttpOnly cookies;
+  // surfacing them in the body matches login-handler shape so SDK
+  // consumers can pick them up uniformly.
+  return respondAction(
+    "Setup complete.",
+    {
+      user: { id: user.id, email: user.email, name: user.name, roleIds },
+      accessToken,
+      refreshToken: rawRefreshToken,
+      // Authoritative server-side exp = accessToken JWT exp claim, not cookie max-age.
+      expiresAt: new Date(
+        Date.now() + deps.accessTokenTTL * 1000
+      ).toISOString(),
+    },
     { status: 201, headers: buildCookieHeaders(cookies) }
   );
 }

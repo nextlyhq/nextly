@@ -10,15 +10,17 @@
  * export { POST } from '@revnixhq/nextly/api/email-send-template';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
- * Auth uses the existing `requireAuthentication` middleware bridged to
- * `NextlyError` via `toNextlyAuthError`. Validation flows through
- * `nextlyValidationFromZod` (F11). The attachment resolver throws
- * `NextlyError` directly (validation for caller-fixable failures,
- * internal for storage I/O) — `withErrorHandler` produces the canonical
- * envelope. The machine-readable `EMAIL_ATTACHMENT_*` code lives at
- * `error.data.errors[0].code`.
+ * Wire shape: Phase 4 Task 11 migrates this handler off the legacy
+ * `{ data: <result> }` envelope onto `respondAction` (spec §5.1). The
+ * service returns `{ success, messageId? }`; the body surfaces both
+ * fields plus the resolved template id alongside a server-authored
+ * toast. Auth uses the existing `requireAuthentication` middleware
+ * bridged to `NextlyError` via `toNextlyAuthError`. Validation flows
+ * through `nextlyValidationFromZod` (F11). The attachment resolver
+ * throws `NextlyError` directly (validation for caller-fixable
+ * failures, internal for storage I/O); `withErrorHandler` produces the
+ * canonical problem+json envelope. The machine-readable
+ * `EMAIL_ATTACHMENT_*` code lives at `error.data.errors[0].code`.
  *
  * @module api/email-send-template
  */
@@ -32,7 +34,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondAction } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -68,10 +70,10 @@ const sendTemplateSchema = z.object({
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
  *
  * Response codes:
- * - 200 OK: `{ data: { success, messageId? } }`
- * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found
- * - 401 Unauthorized
- * - 500 Internal Server Error: storage read failed or provider error
+ * - 200 OK: `{ message, success, messageId?, templateId }` via `respondAction`.
+ * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found.
+ * - 401 Unauthorized.
+ * - 500 Internal Server Error: storage read failed or provider error.
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -118,6 +120,12 @@ export const POST = withErrorHandler(
         attachments: args.attachments,
       }
     );
-    return createSuccessResponse(result);
+    // Phase 4: respondAction. Spread the service result and surface the
+    // resolved template slug so callers can correlate the queued message
+    // back to the request without storing the original payload.
+    return respondAction("Email queued.", {
+      ...result,
+      templateId: args.template,
+    });
   }
 );

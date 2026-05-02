@@ -6,6 +6,9 @@
 // CSRF double-submit cookie + origin check. This endpoint is the highest-
 // value target for account takeover, so CSRF is non-negotiable here.
 // See docs/auth/csrf.md.
+// Phase 4 (Task 10): respondAction replaces the hand-rolled `{ data: ... }`
+// success envelope. Cleared cookies travel via the headers param.
+import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
@@ -103,8 +106,11 @@ export async function handleChangePassword(
 
   const clearCookies = [clearAccessTokenCookie(), clearRefreshTokenCookie()];
 
-  return new Response(JSON.stringify({ data: { success: true } }), {
-    status: 200,
-    headers: buildCookieHeaders(clearCookies),
-  });
+  // Phase 4 / spec §7.6: success body is `{ message: "Password changed." }`.
+  // Cleared cookies (forcing re-login on every device) ride the headers.
+  return respondAction(
+    "Password changed.",
+    {},
+    { status: 200, headers: buildCookieHeaders(clearCookies) }
+  );
 }

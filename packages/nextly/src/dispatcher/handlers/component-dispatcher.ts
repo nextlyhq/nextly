@@ -5,14 +5,26 @@
  * list / create / get / update / delete. The create/update flows run
  * `comp_*` table migrations directly against the DI-registered adapter
  * so UI-edited components have a usable backing table immediately.
+ *
+ * Phase 4 Task 9: every handler returns a Response built via the
+ * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
+ * passes the Response through unchanged. See spec §5.1 for the
+ * canonical shape contract.
  */
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
+import {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { NextlyError } from "../../errors";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import { ComponentSchemaService } from "../../services/components/component-schema-service";
 import { getAdapterFromDI, getComponentRegistryFromDI } from "../helpers/di";
@@ -21,6 +33,36 @@ import type { MethodHandler, Params } from "../types";
 
 interface ComponentsServices {
   registry: ComponentRegistryService;
+}
+
+// ============================================================
+// Pagination helper
+// ============================================================
+
+/**
+ * Translate the registry's `limit/offset/total` triple into the canonical
+ * `PaginationMeta` shape that `respondList` expects. Mirrors the helper
+ * in `single-dispatcher.ts` because the Components registry uses the
+ * same offset-based shape.
+ */
+function offsetPaginationToMeta(args: {
+  total: number;
+  limit?: number;
+  offset?: number;
+}) {
+  const total = args.total;
+  const limit = args.limit && args.limit > 0 ? args.limit : total || 1;
+  const offset = args.offset ?? 0;
+  const page = Math.floor(offset / limit) + 1;
+  const totalPages = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
+  return {
+    total,
+    page,
+    limit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
+  };
 }
 
 // ============================================================
@@ -81,23 +123,23 @@ function registerComponentRuntimeSchema(
 
 const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   listComponents: {
+    // Phase 4: respondList. Registry returns BaseListResult `{data,total}`
+    // with limit/offset semantics; offsetPaginationToMeta synthesises the
+    // canonical PaginationMeta so the wire shape matches every other
+    // dispatcher.
     execute: async (svc, p) => {
+      const limit = toNumber(p.limit);
+      const offset = toNumber(p.offset);
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
         search: p.search,
-        limit: toNumber(p.limit),
-        offset: toNumber(p.offset),
+        limit,
+        offset,
       });
-      return {
-        success: true,
-        statusCode: 200,
-        data: result.data,
-        meta: {
-          total: result.total,
-          limit: toNumber(p.limit),
-          offset: toNumber(p.offset),
-        },
-      };
+      return respondList(
+        result.data,
+        offsetPaginationToMeta({ total: result.total, limit, offset })
+      );
     },
   },
 
@@ -186,28 +228,23 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         migrationStatus,
       });
 
-      return {
-        success: true,
-        statusCode: 201,
-        data: created,
-        message:
-          migrationStatus === "applied"
-            ? `Component "${b.slug}" created and table applied!`
-            : `Component "${b.slug}" created. Run migrations to apply the table.`,
-      };
+      // Phase 4: respondMutation 201. Migration status drives the toast
+      // copy so admins immediately know whether the table was applied.
+      const message =
+        migrationStatus === "applied"
+          ? `Component "${b.slug}" created and table applied!`
+          : `Component "${b.slug}" created. Run migrations to apply the table.`;
+      return respondMutation(message, created, { status: 201 });
     },
   },
 
   getComponent: {
+    // Phase 4: respondDoc. registry.getComponent throws NextlyError on
+    // not-found, so we never see a null doc here.
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Component slug");
       const component = await svc.registry.getComponent(slug);
-
-      return {
-        success: true,
-        statusCode: 200,
-        data: component,
-      };
+      return respondDoc(component);
     },
   },
 
@@ -225,11 +262,16 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        return {
-          success: false,
-          statusCode: 403,
-          message: `Component "${slug}" is locked (code-first). Modify the source file instead.`,
-        };
+        // Phase 4: throw a NextlyError so the dispatcher's error path
+        // emits the canonical singular `{ error: ... }` shape with a
+        // 403 status. Slug stays in logContext per §13.8 (never on
+        // the wire).
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "component-locked",
+            slug,
+          },
+        });
       }
 
       const existing = await svc.registry.getComponent(slug);
@@ -327,40 +369,46 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         updateData as Parameters<typeof svc.registry.updateComponent>[1]
       );
 
-      return {
-        success: true,
-        statusCode: 200,
-        data: updated,
-        message:
-          migrationStatus === "applied"
-            ? `Component "${slug}" updated and migration applied successfully.`
-            : b?.fields
-              ? `Component "${slug}" updated. Run migrations to apply schema changes.`
-              : `Component "${slug}" updated.`,
-      };
+      // Phase 4: respondMutation 200. The toast copy varies by what
+      // changed (fields-with-applied vs fields-pending vs metadata-only)
+      // so the admin can react accordingly without parsing the body.
+      const message =
+        migrationStatus === "applied"
+          ? `Component "${slug}" updated and migration applied successfully.`
+          : b?.fields
+            ? `Component "${slug}" updated. Run migrations to apply schema changes.`
+            : `Component "${slug}" updated.`;
+      return respondMutation(message, updated);
     },
   },
 
   deleteComponent: {
+    // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete to
+    // respondMutation, but registry.deleteComponent returns void (no
+    // deleted record to surface). We use respondAction here so the wire
+    // shape is `{ message, slug }` rather than the awkward
+    // `{ message, item: undefined }` that respondMutation would emit.
+    // If registry.deleteComponent is later refactored to return the
+    // deleted record, switch this back to respondMutation.
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Component slug");
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        return {
-          success: false,
-          statusCode: 403,
-          message: `Component "${slug}" is locked (code-first). Remove it from your config file instead.`,
-        };
+        // Same NextlyError pattern as updateComponent's locked branch.
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "component-locked",
+            slug,
+          },
+        });
       }
 
       await svc.registry.deleteComponent(slug);
 
-      return {
-        success: true,
-        statusCode: 200,
-        message: `Component "${slug}" deleted successfully.`,
-      };
+      return respondAction(`Component "${slug}" deleted successfully.`, {
+        slug,
+      });
     },
   },
 };

@@ -146,6 +146,14 @@ export type {
   CountResult,
   DeleteResult,
   BulkOperationResult as DirectAPIBulkOperationResult,
+  // Phase 4 (Task 13): canonical envelope shapes shared with the wire API.
+  // Templates and downstream consumers import these to type Direct API
+  // results without reaching into internal modules. The deprecated
+  // `PaginatedDocs<T>` alias was removed in Task 23 once Tasks 13-21
+  // migrated every in-tree consumer to `ListResult<T>`.
+  ListResult,
+  MutationResult,
+  PaginationMeta,
   // Auth types
   LoginArgs,
   RegisterArgs,

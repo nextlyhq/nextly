@@ -239,13 +239,15 @@ export class CollectionEntryService extends BaseService {
     return this.bulkService.duplicateEntry(params);
   }
 
+  // Phase 4.5: bulk methods carry full records on update (caller needs
+  // the post-mutation values) and minimal {id} records on delete.
   async bulkDeleteEntries(params: {
     collectionName: string;
     ids: string[];
     user?: UserContext;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
-  }): Promise<BulkOperationResult> {
+  }): Promise<BulkOperationResult<{ id: string }>> {
     return this.bulkService.bulkDeleteEntries(params);
   }
 
@@ -256,7 +258,7 @@ export class CollectionEntryService extends BaseService {
     user?: UserContext;
     overrideAccess?: boolean;
     context?: Record<string, unknown>;
-  }): Promise<BulkOperationResult> {
+  }): Promise<BulkOperationResult<Record<string, unknown>>> {
     return this.bulkService.bulkUpdateEntries(params);
   }
 
@@ -270,7 +272,7 @@ export class CollectionEntryService extends BaseService {
       context?: Record<string, unknown>;
     },
     options?: BulkOperationOptions & { limit?: number }
-  ): Promise<BulkOperationResult> {
+  ): Promise<BulkOperationResult<Record<string, unknown>>> {
     return this.bulkService.bulkUpdateByQuery(params, options);
   }
 
@@ -283,7 +285,7 @@ export class CollectionEntryService extends BaseService {
       context?: Record<string, unknown>;
     },
     options?: { limit?: number }
-  ): Promise<BulkOperationResult> {
+  ): Promise<BulkOperationResult<{ id: string }>> {
     return this.bulkService.bulkDeleteByQuery(params, options);
   }
 

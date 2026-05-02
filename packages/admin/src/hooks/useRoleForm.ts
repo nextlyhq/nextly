@@ -252,10 +252,24 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const query = `?page=1&pageSize=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`;
 
         // Fetch permissions and single slugs in parallel so we can correctly
-        // categorize each permission as collection-types, single-types, or settings
+        // categorize each permission as collection-types, single-types, or settings.
+        //
+        // Phase 4 (post-merge follow-up): both endpoints now return the
+        // canonical paginated wire shape `{ items, meta }` via respondList
+        // (spec section 5.1). Pre-Phase-4 the fetcher peeled `data` so
+        // these calls received bare arrays; the typed generic and the
+        // map/Set construction below assumed that shape. After the
+        // fetcher rewrite (Task 18), the canonical body flows through
+        // unchanged, so we type the response as `{ items, meta }` and
+        // read `.items` for the array. Without this fix the runtime
+        // crashed inside `(response || []).map(...)` (object has no .map),
+        // the catch reset loadingState back to {loaded:false,loading:false},
+        // and the dependency-driven useEffect re-fired in an infinite loop
+        // hammering the rate limiter.
+        type ListEnvelope<T> = { items: T[]; meta?: unknown };
         const [response, singlesResponse] = await Promise.all([
           protectedApi.get<
-            Array<{
+            ListEnvelope<{
               id: string | number;
               name: string | null;
               action: string;
@@ -264,15 +278,17 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             }>
           >(`/permissions${query}`),
           protectedApi
-            .get<Array<{ slug: string }>>(`/singles?page=1&pageSize=500`)
-            .catch(() => [] as Array<{ slug: string }>),
+            .get<ListEnvelope<{ slug: string }>>(
+              `/singles?page=1&pageSize=500`
+            )
+            .catch(() => ({ items: [] as Array<{ slug: string }> })),
         ]);
 
         const singleSlugs = new Set(
-          (singlesResponse || []).map(s => String(s.slug))
+          (singlesResponse?.items ?? []).map(s => String(s.slug))
         );
 
-        const mapped: Permission[] = (response || []).map(p => {
+        const mapped: Permission[] = (response?.items ?? []).map(p => {
           const resource = String(p.resource);
           const action = String(p.action);
           const slug = `${resource}.${action}`;

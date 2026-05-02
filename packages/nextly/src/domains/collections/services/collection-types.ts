@@ -42,22 +42,40 @@ export interface UserContext {
 /**
  * Result of a bulk operation (create, update, or delete).
  *
- * Tracks successful and failed operations with detailed error information
- * for each failed entry. Uses partial success pattern where some operations
- * may succeed while others fail.
+ * Tracks successful and failed operations with structured per-item error
+ * information for each failed entry. Uses partial success pattern where
+ * some operations may succeed while others fail.
+ *
+ * Phase 4.5: redesigned to carry full success records (not just ids) and
+ * structured per-item failures (canonical NextlyErrorCode + public-safe
+ * message). The dispatcher decomposes this directly into the wire shape
+ * via respondBulk; admin gets one round-trip with no re-fetch needed.
+ *
+ * Generic over T:
+ *   - For delete: T is `{ id: string }`. Records are gone; no point
+ *     materializing more than the id.
+ *   - For update/create: T is the full record. The records changed and
+ *     the client needs the new values.
  *
  * @public
  */
-export interface BulkOperationResult {
-  /** IDs of entries successfully processed */
-  success: string[];
-  /** Detailed information for each failed entry */
-  failed: Array<{ id: string; error: string }>;
-  /** Total number of entries attempted */
+export interface BulkOperationResult<T = { id: string }> {
+  /** Records successfully processed. Full record for update; just `{id}` for delete. */
+  successes: T[];
+  /** Structured per-item failures. */
+  failures: Array<{
+    /** Identifier of the entry that failed (matches the request's input id). */
+    id: string;
+    /** Canonical NextlyErrorCode value (e.g. "NOT_FOUND", "FORBIDDEN", ...). */
+    code: string;
+    /** Public-safe message (NextlyError.publicMessage; no identifier or value echo). */
+    message: string;
+  }>;
+  /** Total number of entries attempted. */
   total: number;
-  /** Count of successful operations */
+  /** Count of successful operations. */
   successCount: number;
-  /** Count of failed operations */
+  /** Count of failed operations. */
   failedCount: number;
 }
 

@@ -1,38 +1,33 @@
 /**
- * useBulkEntries Hooks
+ * useBulkEntries hooks (Phase 4.5 server-bulk pattern).
  *
- * TanStack Query mutation hooks for bulk entry operations.
- * Uses the useBulkMutation hook for parallel execution with
- * partial failure handling.
+ * TanStack Query mutation hooks for bulk entry operations. Each hook
+ * dispatches a single round-trip to the server's bulk endpoint
+ * (`POST /api/collections/{slug}/entries/bulk-delete` or
+ * `POST /api/collections/{slug}/entries/bulk-update`). The server runs
+ * per-row deletes/updates concurrently via Promise.allSettled, with
+ * full hooks + access-control pipeline preserved per row.
  *
- * ## Available Hooks
- * - `useBulkDeleteEntries` - Delete multiple entries by IDs
- * - `useBulkUpdateEntries` - Update multiple entries with same data
+ * Pre-Phase-4.5: these hooks did client-side parallel fan-out via the
+ * generic `useBulkMutation` helper, issuing N parallel single-item
+ * requests. That pattern was replaced because:
+ *   1. Cost: N round-trips, N auth/middleware passes, N log entries.
+ *   2. Surface: per-item failure surface was inconsistent across hooks.
+ *   3. Spec: Phase 4.5 designed canonical `BulkResponse<T>` envelopes.
  *
- * ## Features
- * - Parallel execution with Promise.allSettled()
- * - Partial failure handling (some succeed, some fail)
- * - Detailed results with success/failure counts
- * - Automatic cache invalidation
- * - Toast notifications with result summary
+ * Result shape (`BulkResponse<T>`):
+ *   - `message`: server-authored toast string (e.g. "Deleted 4 of 5 entries.")
+ *   - `items`:   successful records (full record for update; `{id}` for delete)
+ *   - `errors`:  per-item failures with canonical NextlyErrorCode + message
  *
- * @example
- * ```tsx
- * const { mutate: bulkDelete, isPending } = useBulkDeleteEntries({
- *   collectionSlug: 'posts',
- * });
- *
- * bulkDelete(['id1', 'id2', 'id3'], undefined);
- * ```
- *
- * @see hooks/useBulkMutation.ts - Generic bulk mutation hook
- * @see hooks/queries/useCollections.ts - Reference pattern for bulk hooks
+ * @see services/entryApi.ts for the underlying calls
+ * @see lib/api/response-types.ts for `BulkResponse<T>` definition
  */
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
-import { useBulkMutation } from "@admin/hooks/useBulkMutation";
+import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
   entryApi,
   entryKeys,
@@ -41,114 +36,82 @@ import {
 import type { Entry } from "@admin/types/collection";
 
 /**
- * Options for useBulkDeleteEntries hook
+ * Callback payload for bulk operation lifecycle hooks. Carries the
+ * canonical `BulkResponse` shape so the consumer can render rich
+ * partial-failure UX (per-item code + message) without losing the
+ * scalar counts that older callers rely on.
+ */
+export interface BulkCallbackPayload<T> {
+  /** Number of items that succeeded (mirrors `items.length`). */
+  succeeded: number;
+  /** Number of items that failed (mirrors `errors.length`). */
+  failed: number;
+  /** Total items attempted (`succeeded + failed`). */
+  total: number;
+  /** Server-authored summary message (e.g. "Deleted 4 of 5 entries."). */
+  message: string;
+  /** Successful records returned by the server. */
+  items: T[];
+  /** Per-item failures with canonical NextlyErrorCode + public message. */
+  errors: PerItemError[];
+}
+
+/** Build the callback payload from a server `BulkResponse<T>`. */
+function toCallbackPayload<T>(
+  response: BulkResponse<T>
+): BulkCallbackPayload<T> {
+  return {
+    succeeded: response.items.length,
+    failed: response.errors.length,
+    total: response.items.length + response.errors.length,
+    message: response.message,
+    items: response.items,
+    errors: response.errors,
+  };
+}
+
+// ============================================================================
+// useBulkDeleteEntries
+// ============================================================================
+
+/**
+ * Options for useBulkDeleteEntries hook.
  */
 export interface UseBulkDeleteEntriesOptions {
-  /** The collection slug/name containing the entries */
+  /** The collection slug/name containing the entries. */
   collectionSlug: string;
-  /** Callback fired when operation completes (success or partial failure) */
-  onComplete?: (result: { succeeded: number; failed: number }) => void;
-  /** Callback fired when at least one entry was deleted */
-  onSuccess?: (result: { succeeded: number; failed: number }) => void;
-  /** Callback fired when at least one deletion failed */
-  onError?: (result: { succeeded: number; failed: number }) => void;
-  /** Whether to show toast notifications (default: true) */
+  /** Fired after the bulk request completes (success OR partial failure). */
+  onComplete?: (result: BulkCallbackPayload<{ id: string }>) => void;
+  /** Fired when the request resolved (regardless of partial failures). */
+  onSuccess?: (result: BulkCallbackPayload<{ id: string }>) => void;
+  /**
+   * Fired when the request itself rejected (network error, 4xx, 5xx).
+   * Per-item failures inside a 200 response do NOT trigger this callback;
+   * use `onComplete` to inspect `result.errors` for partial failures.
+   */
+  onError?: (error: Error) => void;
+  /** Whether to show a toast notification with `result.message` (default: true). */
   showToast?: boolean;
 }
 
 /**
- * useBulkDeleteEntries - Bulk mutation hook for deleting multiple entries
+ * Bulk-delete multiple entries in a single round-trip.
  *
- * Executes parallel delete operations for multiple entries using Promise.allSettled().
- * Allows partial failures where some deletions succeed while others fail.
- * Automatically invalidates the entry cache after all operations complete.
+ * Hits `POST /api/collections/{slug}/entries/bulk-delete`. Server runs
+ * per-row delete concurrently with full hook + access-control pipeline.
  *
- * ## Features
- * - Parallel execution with Promise.allSettled()
- * - Partial failure handling (some succeed, some fail)
- * - Detailed results with success/failure counts
- * - Automatic cache invalidation after completion
- * - Toast notifications with result summary
- * - TypeScript type safety
- *
- * ## Result Structure
- * ```ts
- * {
- *   succeeded: 8,        // Number of successful deletions
- *   failed: 2,           // Number of failed deletions
- *   total: 10,           // Total entries attempted
- *   succeededIds: [...], // IDs of successfully deleted entries
- *   failedIds: [...],    // IDs of entries that failed to delete
- *   results: [...]       // Individual results with error details
- * }
- * ```
- *
- * ## Cache Invalidation
- * Automatically invalidates:
- * - `["entries", "list", collectionSlug]` - Entry list queries
- * - `["entries", "count", collectionSlug]` - Entry count queries
- *
- * @param options - Hook options including collectionSlug and callbacks
- * @returns Bulk mutation interface with mutate function, isPending state, and result
- *
- * @example Basic usage - Delete selected entries
+ * @example Bulk delete with confirmation dialog
  * ```tsx
- * function EntryListActions({ selectedIds }: { selectedIds: string[] }) {
- *   const { mutate: bulkDelete, isPending } = useBulkDeleteEntries({
- *     collectionSlug: 'posts',
- *   });
- *
- *   const handleBulkDelete = async () => {
- *     if (confirm(`Delete ${selectedIds.length} entries?`)) {
- *       await bulkDelete(selectedIds, undefined);
- *     }
- *   };
- *
- *   return (
- *     <Button
- *       variant="destructive"
- *       onClick={handleBulkDelete}
- *       disabled={isPending || selectedIds.length === 0}
- *     >
- *       {isPending ? 'Deleting...' : `Delete ${selectedIds.length} Entries`}
- *     </Button>
- *   );
- * }
- * ```
- *
- * @example With callbacks
- * ```tsx
- * const { mutate: bulkDelete } = useBulkDeleteEntries({
+ * const bulkDelete = useBulkDeleteEntries({
  *   collectionSlug: 'posts',
- *   onSuccess: (result) => {
- *     console.log(`${result.succeeded} entries deleted`);
- *   },
- *   onError: (result) => {
- *     console.error(`${result.failed} entries failed to delete`);
- *   },
- *   onComplete: (result) => {
- *     setSelectedIds([]);
- *   },
- * });
- * ```
- *
- * @example With custom toast
- * ```tsx
- * const { mutate: bulkDelete } = useBulkDeleteEntries({
- *   collectionSlug: 'posts',
- *   showToast: false,
- *   onComplete: (result) => {
+ *   onComplete: result => {
  *     if (result.failed > 0) {
- *       toast.custom(<PartialFailureToast result={result} />);
- *     } else {
- *       toast.custom(<SuccessToast count={result.succeeded} />);
+ *       openPartialFailureModal(result.errors);
  *     }
  *   },
  * });
+ * bulkDelete.mutate(selectedIds);
  * ```
- *
- * @see useBulkMutation - Generic bulk mutation hook
- * @see useBulkDeleteCollections - Similar pattern for collections
  */
 export function useBulkDeleteEntries({
   collectionSlug,
@@ -159,132 +122,85 @@ export function useBulkDeleteEntries({
 }: UseBulkDeleteEntriesOptions) {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, Entry, Error, void>({
-    mutationFn: async (entryId: string) => {
-      return await entryApi.delete(collectionSlug, entryId);
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      return entryApi.deleteByIDs(collectionSlug, ids);
     },
-    defaultOptions: {
-      onComplete: result => {
-        // Invalidate entry queries
-        void queryClient.invalidateQueries({
-          queryKey: entryKeys.listsByCollection(collectionSlug),
+    onSuccess: response => {
+      // Invalidate list + count queries; remove deleted detail entries
+      // from cache so any open detail page sees the canonical 404 from
+      // the server next time it refetches rather than a stale read.
+      void queryClient.invalidateQueries({
+        queryKey: entryKeys.listsByCollection(collectionSlug),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: entryKeys.counts(),
+      });
+      response.items.forEach(({ id }) => {
+        queryClient.removeQueries({
+          queryKey: entryKeys.detail(collectionSlug, id),
         });
-        void queryClient.invalidateQueries({
-          queryKey: entryKeys.counts(),
-        });
+      });
 
-        // Remove deleted entries from cache
-        result.succeededIds.forEach(id => {
-          queryClient.removeQueries({
-            queryKey: entryKeys.detail(collectionSlug, id),
-          });
-        });
+      const payload = toCallbackPayload(response);
 
-        if (showToast) {
-          if (result.failed > 0) {
-            toast.warning(
-              `Deleted ${result.succeeded} entries, ${result.failed} failed`
-            );
-          } else {
-            toast.success(`Deleted ${result.succeeded} entries`);
-          }
+      if (showToast) {
+        if (payload.failed > 0) {
+          toast.warning(payload.message);
+        } else {
+          toast.success(payload.message);
         }
+      }
 
-        onComplete?.({ succeeded: result.succeeded, failed: result.failed });
-      },
-      onSuccess: result => {
-        onSuccess?.({ succeeded: result.succeeded, failed: result.failed });
-      },
-      onError: result => {
-        onError?.({ succeeded: result.succeeded, failed: result.failed });
-      },
+      onComplete?.(payload);
+      onSuccess?.(payload);
+    },
+    onError: error => {
+      // Network / non-2xx error: the server-bulk request itself failed.
+      // Partial-success failures (200 with errors[]) come through onSuccess.
+      if (showToast) {
+        toast.error(
+          error instanceof Error ? error.message : "Bulk delete failed."
+        );
+      }
+      onError?.(error instanceof Error ? error : new Error(String(error)));
     },
   });
 }
 
+// ============================================================================
+// useBulkUpdateEntries
+// ============================================================================
+
 /**
- * Options for useBulkUpdateEntries hook
+ * Options for useBulkUpdateEntries hook.
  */
 export interface UseBulkUpdateEntriesOptions {
-  /** The collection slug/name containing the entries */
+  /** The collection slug/name containing the entries. */
   collectionSlug: string;
-  /** Callback fired when operation completes (success or partial failure) */
-  onComplete?: (result: { succeeded: number; failed: number }) => void;
-  /** Callback fired when at least one entry was updated */
-  onSuccess?: (result: { succeeded: number; failed: number }) => void;
-  /** Callback fired when at least one update failed */
-  onError?: (result: { succeeded: number; failed: number }) => void;
-  /** Whether to show toast notifications (default: true) */
+  /** Fired after the bulk request completes (success OR partial failure). */
+  onComplete?: (result: BulkCallbackPayload<Entry>) => void;
+  /** Fired when the request resolved (regardless of partial failures). */
+  onSuccess?: (result: BulkCallbackPayload<Entry>) => void;
+  /** Fired when the request itself rejected (network error, 4xx, 5xx). */
+  onError?: (error: Error) => void;
+  /** Whether to show a toast notification with `result.message` (default: true). */
   showToast?: boolean;
 }
 
 /**
- * useBulkUpdateEntries - Bulk mutation hook for updating multiple entries
+ * Bulk-update multiple entries in a single round-trip.
  *
- * Executes parallel update operations for multiple entries using Promise.allSettled().
- * All entries are updated with the same data (passed as context).
- * Allows partial failures where some updates succeed while others fail.
+ * Hits `POST /api/collections/{slug}/entries/bulk-update`. Server runs
+ * per-row update concurrently with full hook + validation + access-control
+ * pipeline. Successes carry the full mutated record so the admin can
+ * refresh local state without a re-fetch.
  *
- * ## Features
- * - Parallel execution with Promise.allSettled()
- * - Partial failure handling
- * - Apply same update to multiple entries
- * - Automatic cache invalidation
- * - Toast notifications with result summary
- *
- * ## Result Structure
- * Same as useBulkDeleteEntries
- *
- * ## Cache Invalidation
- * Automatically invalidates:
- * - `["entries", "list", collectionSlug]` - Entry list queries
- *
- * @param options - Hook options including collectionSlug and callbacks
- * @returns Bulk mutation interface with mutate function, isPending state, and result
- *
- * @example Bulk update status
+ * @example Bulk publish selected drafts
  * ```tsx
- * function BulkStatusUpdate({ selectedIds }: { selectedIds: string[] }) {
- *   const { mutate: bulkUpdate, isPending } = useBulkUpdateEntries({
- *     collectionSlug: 'posts',
- *   });
- *
- *   const publishAll = () => {
- *     bulkUpdate(selectedIds, { status: 'published' });
- *   };
- *
- *   const archiveAll = () => {
- *     bulkUpdate(selectedIds, { status: 'archived' });
- *   };
- *
- *   return (
- *     <div>
- *       <Button onClick={publishAll} disabled={isPending}>
- *         Publish Selected
- *       </Button>
- *       <Button onClick={archiveAll} disabled={isPending}>
- *         Archive Selected
- *       </Button>
- *     </div>
- *   );
- * }
+ * const bulkUpdate = useBulkUpdateEntries({ collectionSlug: 'posts' });
+ * bulkUpdate.mutate({ ids: selectedIds, data: { status: 'published' } });
  * ```
- *
- * @example With callbacks
- * ```tsx
- * const { mutate: bulkUpdate } = useBulkUpdateEntries({
- *   collectionSlug: 'posts',
- *   onSuccess: (result) => {
- *     console.log(`${result.succeeded} entries updated`);
- *   },
- * });
- *
- * // Update all selected entries to published
- * bulkUpdate(selectedIds, { status: 'published' });
- * ```
- *
- * @see useBulkMutation - Generic bulk mutation hook
- * @see useBulkUpdateCollections - Similar pattern for collections
  */
 export function useBulkUpdateEntries({
   collectionSlug,
@@ -295,42 +211,48 @@ export function useBulkUpdateEntries({
 }: UseBulkUpdateEntriesOptions) {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, Entry, Error, UpdateEntryPayload>({
-    mutationFn: async (entryId: string, updates: UpdateEntryPayload) => {
-      return await entryApi.update(collectionSlug, entryId, updates);
+  return useMutation({
+    mutationFn: async (variables: {
+      ids: string[];
+      data: UpdateEntryPayload;
+    }) => {
+      return entryApi.updateByIDs(collectionSlug, variables);
     },
-    defaultOptions: {
-      onComplete: result => {
-        // Invalidate entry list queries
-        void queryClient.invalidateQueries({
-          queryKey: entryKeys.listsByCollection(collectionSlug),
-        });
-
-        // Invalidate updated entries
-        result.succeededIds.forEach(id => {
+    onSuccess: response => {
+      void queryClient.invalidateQueries({
+        queryKey: entryKeys.listsByCollection(collectionSlug),
+      });
+      // Invalidate per-detail queries for updated entries so any open
+      // detail view sees the new values on next refetch.
+      response.items.forEach(item => {
+        const id = (item as { id?: string }).id;
+        if (id) {
           void queryClient.invalidateQueries({
             queryKey: entryKeys.detail(collectionSlug, id),
           });
-        });
-
-        if (showToast) {
-          if (result.failed > 0) {
-            toast.warning(
-              `Updated ${result.succeeded} entries, ${result.failed} failed`
-            );
-          } else {
-            toast.success(`Updated ${result.succeeded} entries`);
-          }
         }
+      });
 
-        onComplete?.({ succeeded: result.succeeded, failed: result.failed });
-      },
-      onSuccess: result => {
-        onSuccess?.({ succeeded: result.succeeded, failed: result.failed });
-      },
-      onError: result => {
-        onError?.({ succeeded: result.succeeded, failed: result.failed });
-      },
+      const payload = toCallbackPayload(response);
+
+      if (showToast) {
+        if (payload.failed > 0) {
+          toast.warning(payload.message);
+        } else {
+          toast.success(payload.message);
+        }
+      }
+
+      onComplete?.(payload);
+      onSuccess?.(payload);
+    },
+    onError: error => {
+      if (showToast) {
+        toast.error(
+          error instanceof Error ? error.message : "Bulk update failed."
+        );
+      }
+      onError?.(error instanceof Error ? error : new Error(String(error)));
     },
   });
 }

@@ -178,7 +178,7 @@ describe("MediaService — Edge Cases", () => {
   // ── Bulk Delete Edge Cases ────────────────────────────────────────
 
   describe("bulkDelete — mixed results", () => {
-    it("should report partial success when some deletes fail", async () => {
+    it("should report partial success when some deletes fail (Phase 4.5)", async () => {
       // First delete succeeds, second fails
       mockLegacyMedia.deleteMedia
         .mockResolvedValueOnce(successResult(null))
@@ -189,24 +189,32 @@ describe("MediaService — Edge Cases", () => {
         context
       );
 
-      expect(result.totalItems).toBe(2);
+      // Phase 4.5: shape is `{ successes: [{id}], failures: [{id, code, message}],
+      // total, successCount, failedCount }`. NextlyError thrown by `delete()`
+      // for a 404 underneath becomes a NOT_FOUND failure entry.
+      expect(result.total).toBe(2);
       expect(result.successCount).toBe(1);
-      expect(result.failureCount).toBe(1);
-      expect(result.results[0].success).toBe(true);
-      expect(result.results[1].success).toBe(false);
-      expect(result.results[1].error).toBeDefined();
+      expect(result.failedCount).toBe(1);
+      expect(result.successes).toEqual([{ id: "media-001" }]);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toMatchObject({
+        id: "media-nonexistent",
+        code: expect.any(String),
+        message: expect.any(String),
+      });
     });
 
-    it("should handle empty ID array", async () => {
+    it("should handle empty ID array (Phase 4.5)", async () => {
       const result = await service.bulkDelete([], context);
 
-      expect(result.totalItems).toBe(0);
+      expect(result.total).toBe(0);
       expect(result.successCount).toBe(0);
-      expect(result.failureCount).toBe(0);
-      expect(result.results).toEqual([]);
+      expect(result.failedCount).toBe(0);
+      expect(result.successes).toEqual([]);
+      expect(result.failures).toEqual([]);
     });
 
-    it("should handle all deletes failing", async () => {
+    it("should handle all deletes failing (Phase 4.5)", async () => {
       mockLegacyMedia.deleteMedia.mockResolvedValue(
         errorResult(404, "Not found")
       );
@@ -216,9 +224,10 @@ describe("MediaService — Edge Cases", () => {
         context
       );
 
-      expect(result.totalItems).toBe(3);
+      expect(result.total).toBe(3);
       expect(result.successCount).toBe(0);
-      expect(result.failureCount).toBe(3);
+      expect(result.failedCount).toBe(3);
+      expect(result.failures).toHaveLength(3);
     });
   });
 
@@ -258,9 +267,19 @@ describe("MediaService — Edge Cases", () => {
 
       const result = await service.bulkUpload(inputs, context);
 
-      expect(result.totalItems).toBe(2);
+      // Phase 4.5: BulkUploadOperationResult shape is keyed by `index` +
+      // `filename` for failures (no id since the upload never created
+      // the record).
+      expect(result.total).toBe(2);
       expect(result.successCount).toBe(1);
-      expect(result.failureCount).toBe(1);
+      expect(result.failedCount).toBe(1);
+      expect(result.failures[0]).toMatchObject({
+        index: 0,
+        filename: "fail.jpg",
+        code: expect.any(String),
+        message: expect.any(String),
+      });
+      expect(result.successes).toHaveLength(1);
     });
   });
 

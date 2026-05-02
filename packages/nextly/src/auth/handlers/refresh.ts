@@ -3,6 +3,11 @@
  * Rotates the refresh token and issues a new access token.
  * Re-fetches roles from DB (guarantees fresh roles within 15 min).
  */
+// Phase 4 (Task 10): respondData replaces hand-rolled `{ data: ... }` on
+// the silent rotation success path. The error legs stay on the discrete
+// `{ error: { code, message } }` shape. Refresh is a non-NextlyError
+// path and the spec §7.6 entry is `respondData (none, silent)`.
+import { respondData } from "../../api/response-shapes";
 import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import {
@@ -22,6 +27,7 @@ import {
   generateRefreshToken,
   generateRefreshTokenId,
 } from "../session/refresh";
+
 import { evaluateRefreshBinding } from "../session/refresh-binding";
 
 import { buildCookieHeaders } from "./handler-utils";
@@ -171,18 +177,25 @@ export async function handleRefresh(
     setRefreshTokenCookie(newRawToken, deps.refreshTokenTTL, deps.isProduction),
   ];
 
-  return new Response(
-    JSON.stringify({
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          image: user.image,
-          roleIds,
-        },
+  // Phase 4 / spec §7.6: silent rotation, no `message`. Body surfaces the
+  // freshly-rotated tokens so non-cookie clients (mobile / SDK) can replace
+  // their stored values; browser clients keep using the HttpOnly cookies.
+  return respondData(
+    {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        image: user.image,
+        roleIds,
       },
-    }),
+      accessToken,
+      refreshToken: newRawToken,
+      // Authoritative server-side exp lives on the JWT itself (accessTokenTTL).
+      expiresAt: new Date(
+        Date.now() + deps.accessTokenTTL * 1000
+      ).toISOString(),
+    },
     { status: 200, headers: buildCookieHeaders(cookies) }
   );
 }

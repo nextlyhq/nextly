@@ -27,7 +27,8 @@ export async function GET(
     link: absoluteUrl(`/tags/${slug}`),
     description:
       tag.description ?? `Posts tagged ${tag.name} on ${settings.siteName}.`,
-    items: postsToFeedItems(posts.docs),
+    // Phase 4 (Task 14): getPostsByTag returns canonical ListResult.
+    items: postsToFeedItems(posts.items),
   });
 
   return new Response(xml, {

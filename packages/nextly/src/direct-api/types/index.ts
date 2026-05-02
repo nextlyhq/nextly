@@ -9,6 +9,14 @@
  */
 
 export type {
+  // Phase 4 (Task 13): canonical list / mutation shapes shared with the wire API.
+  // Note: the deprecated `PaginatedDocs<T>` alias was removed in Task 23
+  // after Tasks 13-21 migrated every in-tree consumer to `ListResult<T>`.
+  ListResult,
+  MutationResult,
+  PaginationMeta,
+  // Legacy Payload-style paginated shape, kept exported for callers that
+  // have not migrated yet but no longer used by the Direct API itself.
   PaginatedResponse,
   WhereFilter,
   QueryOperator,

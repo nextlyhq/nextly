@@ -2,6 +2,8 @@
 // Used by the visual schema builder save flow.
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
+import type { ActionResponse } from "../lib/api/response-types";
+
 // Field change types returned by the preview endpoint
 export interface SchemaPreviewChange {
   added: Array<{
@@ -102,7 +104,12 @@ export interface FieldResolution {
 }
 
 export const schemaApi = {
-  // Preview schema changes (dry-run, returns diff without applying)
+  // Preview schema changes (dry-run, returns diff without applying).
+  //
+  // Phase 4 (Task 19): the previewSchemaChanges dispatcher emits
+  // `respondData({ ...legacyShape, renamed, schemaVersion })` so the wire
+  // body IS the SchemaPreviewResponse shape; type the fetcher generic
+  // directly.
   preview: async (
     slug: string,
     fields: unknown[]
@@ -117,6 +124,14 @@ export const schemaApi = {
   // renameResolutions are F4 Option E PR 5: one entry per rename
   // candidate the user picked in SchemaChangeDialog ("rename" preserves
   // data; "drop_and_add" lets the column drop and a new one create).
+  //
+  // Phase 4 (Task 19): the applySchemaChanges dispatcher emits
+  // `respondAction(message, { newSchemaVersion, toastSummary? })`, so the
+  // wire body is `{ message, newSchemaVersion, toastSummary? }`. The
+  // canonical action shape has no boolean `success` field (a 2xx
+  // response IS the success signal), so we synthesize `success: true`
+  // here to keep the legacy SchemaApplyResponse contract intact for
+  // existing callers (the schema builder reads `result.success`).
   apply: async (
     slug: string,
     fields: unknown[],
@@ -124,15 +139,20 @@ export const schemaApi = {
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[]
   ): Promise<SchemaApplyResponse> => {
-    return protectedApi.post<SchemaApplyResponse>(
-      `/collections/schema/${slug}/apply`,
-      {
-        fields,
-        confirmed: true,
-        schemaVersion,
-        resolutions,
-        renameResolutions,
-      }
-    );
+    const result = await protectedApi.post<
+      ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
+    >(`/collections/schema/${slug}/apply`, {
+      fields,
+      confirmed: true,
+      schemaVersion,
+      resolutions,
+      renameResolutions,
+    });
+    return {
+      success: true,
+      message: result.message,
+      newSchemaVersion: result.newSchemaVersion,
+      toastSummary: result.toastSummary,
+    };
   },
 };

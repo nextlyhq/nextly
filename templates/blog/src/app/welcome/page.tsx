@@ -19,24 +19,38 @@ type SeedStatus = "idle" | "running" | "success" | "error";
 export default function WelcomePage() {
   const [status, setStatus] = useState<SeedStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Phase 4 (Task 21): the seed route returns a canonical
+  // `respondAction`-shaped body (`{ message: "Demo content seeded." }`).
+  // Holding it in state lets the success UI surface the server-authored
+  // copy instead of a hard-coded string.
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   async function runSeed() {
     setStatus("running");
     setErrorMessage(null);
+    setSuccessMessage(null);
     try {
       const res = await fetch("/admin/api/seed", {
         method: "POST",
         credentials: "include",
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as
-          | { errors?: Array<{ message?: string }> }
-          | null;
-        const message = body?.errors?.[0]?.message ?? `Request failed (${res.status})`;
+        const body = (await res.json().catch(() => null)) as {
+          errors?: Array<{ message?: string }>;
+        } | null;
+        const message =
+          body?.errors?.[0]?.message ?? `Request failed (${res.status})`;
         setErrorMessage(message);
         setStatus("error");
         return;
       }
+      // Phase 4 (Task 21): read `message` from the canonical envelope so
+      // the success copy is server-authored. Fall back to the previous
+      // hard-coded string if the field is somehow missing.
+      const body = (await res.json().catch(() => null)) as {
+        message?: string;
+      } | null;
+      setSuccessMessage(body?.message ?? "Demo content seeded.");
       setStatus("success");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
@@ -48,16 +62,16 @@ export default function WelcomePage() {
     <main className="mx-auto max-w-xl px-6 py-16">
       <h1 className="text-3xl font-semibold">Welcome</h1>
       <p className="mt-2 text-muted-foreground">
-        Your Nextly project is ready. You can start with an empty database
-        or load some demo blog posts to explore how everything fits together.
+        Your Nextly project is ready. You can start with an empty database or
+        load some demo blog posts to explore how everything fits together.
       </p>
 
       <div className="mt-8 rounded-lg border p-6">
         <h2 className="text-lg font-medium">Seed demo content</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Adds example posts, categories, tags, an author, navigation links,
-          a homepage hero, site-settings, and a newsletter form. Idempotent —
-          safe to re-run.
+          Adds example posts, categories, tags, an author, navigation links, a
+          homepage hero, site-settings, and a newsletter form. Idempotent — safe
+          to re-run.
         </p>
 
         <div className="mt-4 flex items-center gap-3">
@@ -79,9 +93,18 @@ export default function WelcomePage() {
 
         {status === "success" && (
           <p className="mt-4 text-sm text-emerald-600">
-            Demo content seeded. Visit{" "}
-            <Link href="/" className="underline">your site</Link> or{" "}
-            <Link href="/admin" className="underline">the admin</Link>.
+            {/* Phase 4 (Task 21): surface the server-authored message
+                from `respondAction` instead of a hard-coded string so
+                copy lives next to the handler that owns the action. */}
+            {successMessage ?? "Demo content seeded."} Visit{" "}
+            <Link href="/" className="underline">
+              your site
+            </Link>{" "}
+            or{" "}
+            <Link href="/admin" className="underline">
+              the admin
+            </Link>
+            .
           </p>
         )}
         {status === "error" && (

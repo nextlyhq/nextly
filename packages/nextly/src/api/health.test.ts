@@ -13,7 +13,7 @@ describe("Health Check Route Handlers", () => {
   });
 
   describe("GET handler", () => {
-    it("should return 200 with canonical success body when database is healthy", async () => {
+    it("should return 200 with bare respondData body when database is healthy", async () => {
       // Arrange
       const { healthCheck } = await import("../database/health");
       (healthCheck as any).mockResolvedValueOnce({
@@ -37,11 +37,17 @@ describe("Health Check Route Handlers", () => {
         "public, max-age=60, stale-while-revalidate=30"
       );
 
-      // Canonical success shape per spec §10.2: payload is wrapped in `data`.
+      // Phase 4 (Task 11): respondData emits a bare body. Health-check fields
+      // are spread alongside `version` and `uptime` so the payload is never
+      // Boolean-only (spec §5.1 rule 3 / §7.7).
       const json = await response.json();
-      expect(json.data.ok).toBe(true);
-      expect(json.data.database.connected).toBe(true);
-      expect(json.data.database.latencyMs).toBe(5);
+      expect(json).not.toHaveProperty("data");
+      expect(json.ok).toBe(true);
+      expect(json.database.connected).toBe(true);
+      expect(json.database.latencyMs).toBe(5);
+      expect(typeof json.version).toBe("string");
+      expect(typeof json.uptime).toBe("number");
+      expect(json.uptime).toBeGreaterThanOrEqual(0);
     });
 
     it("should return 503 with problem+json body when database is unhealthy", async () => {
@@ -118,9 +124,17 @@ describe("Health Check Route Handlers", () => {
       const request = new Request("http://localhost:3000/api/health");
       const response = await GET(request);
 
-      // Assert — full body is the canonical `{ data: ... }` envelope.
+      // Assert: bare body has the original probe fields plus version + uptime.
+      // We only assert the structural keys here because `version` reads from
+      // `process.env.npm_package_version` (varies per launch mode) and
+      // `uptime` is wall-clock dependent.
       const json = await response.json();
-      expect(json).toEqual({ data: mockHealth });
+      expect(json).not.toHaveProperty("data");
+      expect(json.ok).toBe(mockHealth.ok);
+      expect(json.timestamp).toBe(mockHealth.timestamp);
+      expect(json.database).toEqual(mockHealth.database);
+      expect(json).toHaveProperty("version");
+      expect(json).toHaveProperty("uptime");
     });
   });
 

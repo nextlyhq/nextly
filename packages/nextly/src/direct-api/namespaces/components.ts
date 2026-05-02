@@ -11,12 +11,12 @@
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   ComponentDefinition,
-  ComponentListResult,
   CreateComponentArgs,
   DeleteComponentArgs,
-  DeleteResult,
   FindComponentBySlugArgs,
   FindComponentsArgs,
+  ListResult,
+  MutationResult,
   UpdateComponentArgs,
 } from "../types/index";
 
@@ -25,15 +25,18 @@ import { isNotFoundError, mapComponentRecord, mergeConfig } from "./helpers";
 
 /**
  * Components namespace API, bound to a Nextly context.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use canonical envelopes
+ * (`ListResult<T>`, `MutationResult<T>`).
  */
 export interface ComponentsNamespace {
-  find(args?: FindComponentsArgs): Promise<ComponentListResult>;
+  find(args?: FindComponentsArgs): Promise<ListResult<ComponentDefinition>>;
   findBySlug(
     args: FindComponentBySlugArgs
   ): Promise<ComponentDefinition | null>;
-  create(args: CreateComponentArgs): Promise<ComponentDefinition>;
-  update(args: UpdateComponentArgs): Promise<ComponentDefinition>;
-  delete(args: DeleteComponentArgs): Promise<DeleteResult>;
+  create(args: CreateComponentArgs): Promise<MutationResult<ComponentDefinition>>;
+  update(args: UpdateComponentArgs): Promise<MutationResult<ComponentDefinition>>;
+  delete(args: DeleteComponentArgs): Promise<MutationResult<{ slug: string }>>;
 }
 
 /**
@@ -43,7 +46,9 @@ export function createComponentsNamespace(
   ctx: NextlyContext
 ): ComponentsNamespace {
   return {
-    async find(args: FindComponentsArgs = {}): Promise<ComponentListResult> {
+    async find(
+      args: FindComponentsArgs = {}
+    ): Promise<ListResult<ComponentDefinition>> {
       const result = await ctx.componentRegistryService.listComponents({
         source: args.source,
         migrationStatus: args.migrationStatus,
@@ -53,11 +58,26 @@ export function createComponentsNamespace(
         offset: args.offset,
       });
 
+      // Phase 4 (Task 13): the components namespace uses offset-based
+      // service pagination; map it onto canonical page-based meta. We
+      // synthesize `page` from `(offset / limit) + 1` so callers see the
+      // same `{ items, meta }` envelope as page-paginated namespaces.
+      const limit = args.limit ?? result.data.length;
+      const offset = args.offset ?? 0;
+      const total = result.total;
+      const effectiveLimit = limit > 0 ? limit : Math.max(total, 1);
+      const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
+      const page = Math.floor(offset / effectiveLimit) + 1;
       return {
-        docs: result.data.map(mapComponentRecord),
-        totalDocs: result.total,
-        limit: args.limit ?? result.data.length,
-        offset: args.offset ?? 0,
+        items: result.data.map(mapComponentRecord),
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNext: page < totalPages,
+          hasPrev: page > 1,
+        },
       };
     },
 
@@ -100,7 +120,9 @@ export function createComponentsNamespace(
       }
     },
 
-    async create(args: CreateComponentArgs): Promise<ComponentDefinition> {
+    async create(
+      args: CreateComponentArgs
+    ): Promise<MutationResult<ComponentDefinition>> {
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -146,10 +168,16 @@ export function createComponentsNamespace(
         migrationStatus: "pending",
       });
 
-      return mapComponentRecord(component);
+      // Phase 4 (Task 13): canonical mutation envelope.
+      return {
+        message: "Component created.",
+        item: mapComponentRecord(component),
+      };
     },
 
-    async update(args: UpdateComponentArgs): Promise<ComponentDefinition> {
+    async update(
+      args: UpdateComponentArgs
+    ): Promise<MutationResult<ComponentDefinition>> {
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -196,10 +224,16 @@ export function createComponentsNamespace(
         { source: "ui" }
       );
 
-      return mapComponentRecord(component);
+      // Phase 4 (Task 13): canonical mutation envelope.
+      return {
+        message: "Component updated.",
+        item: mapComponentRecord(component),
+      };
     },
 
-    async delete(args: DeleteComponentArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteComponentArgs
+    ): Promise<MutationResult<{ slug: string }>> {
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -209,9 +243,12 @@ export function createComponentsNamespace(
       }
 
       await ctx.componentRegistryService.deleteComponent(args.slug);
+      // Phase 4 (Task 13): canonical mutation envelope. The `item` carries
+      // the deleted slug rather than `id` because components are addressed
+      // by slug throughout this namespace.
       return {
-        deleted: true,
-        ids: [args.slug],
+        message: "Component deleted.",
+        item: { slug: args.slug },
       };
     },
   };

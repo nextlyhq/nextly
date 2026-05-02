@@ -49,9 +49,12 @@ async function fetchProviders(): Promise<ProviderOption[]> {
       credentials: "include",
     });
     if (!res.ok) return [];
-    const json = await res.json();
-    // Canonical wire shape per spec §10.2: { data: ProviderOption[] }.
-    return (json.data as ProviderOption[]) ?? [];
+    // Phase 4 (Task 15): /admin/api/email-providers now uses
+    // `respondData({ providers })` (see email-dispatcher.ts:53), so the
+    // wire body is `{ providers: ProviderOption[] }`. Read the named
+    // field rather than the legacy `json.data` envelope.
+    const json = (await res.json()) as { providers?: ProviderOption[] };
+    return json.providers ?? [];
   } catch {
     return [];
   }
@@ -63,9 +66,12 @@ async function fetchTemplates(): Promise<TemplateOption[]> {
       credentials: "include",
     });
     if (!res.ok) return [];
-    const json = await res.json();
-    // Canonical wire shape per spec §10.2: { data: TemplateOption[] }.
-    return (json.data as TemplateOption[]) ?? [];
+    // Phase 4 (Task 15): /admin/api/email-templates now uses
+    // `respondData({ templates })` (see email-dispatcher.ts:138), so the
+    // wire body is `{ templates: TemplateOption[] }`. Mirror the
+    // providers helper above.
+    const json = (await res.json()) as { templates?: TemplateOption[] };
+    return json.templates ?? [];
   } catch {
     return [];
   }

@@ -43,11 +43,27 @@ interface StdoutCaptureLogger {
  *
  * Returns whatever `work` returns. If `work` throws, restores the
  * stream methods before re-throwing.
+ *
+ * Phase 4 follow-up (2026-05-02): when `process.stdin` is a TTY (i.e.
+ * the operator is running `pnpm dev` interactively), bypass the
+ * capture entirely. drizzle-kit's `pushSchema` writes its
+ * rename-detection prompt to stderr while reading the user's response
+ * from stdin; capturing that stderr leaves drizzle-kit blocked on
+ * stdin while its prompt is invisible, producing the "dev seems stuck
+ * after `pnpm dev`" report. The capture is only worth its cost in
+ * non-TTY contexts (CI, piped shells), which never see a prompt
+ * anyway because drizzle-kit fast-fails when stdin isn't a TTY.
  */
 export async function withCapturedStdout<T>(
   work: () => Promise<T>,
   logger: StdoutCaptureLogger | undefined
 ): Promise<T> {
+  // Bypass capture in interactive shells so drizzle-kit's rename
+  // prompts surface to the user. See doc block above.
+  if (process.stdin.isTTY) {
+    return work();
+  }
+
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
   const originalStderrWrite = process.stderr.write.bind(process.stderr);
 

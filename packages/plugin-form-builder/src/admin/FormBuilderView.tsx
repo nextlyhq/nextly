@@ -242,13 +242,27 @@ function FormBuilderViewInner({
         body: JSON.stringify(saveData),
       });
       if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
+        // Phase 4 (Task 15): error wire shape is now
+        // `{ error: { code, message, requestId, ... } }` (per
+        // routeHandler.ts:843 and NextlyError.toResponseJSON), not a bare
+        // string. Pull the public message off `error.message`.
+        const err = (await response.json().catch(() => ({}))) as {
+          error?: { message?: string };
+        };
         throw new Error(
-          err.error || `Failed to save form: ${response.statusText}`
+          err.error?.message ?? `Failed to save form: ${response.statusText}`
         );
       }
-      const result = await response.json();
-      const savedEntry = result.data || result;
+      // Phase 4 (Task 15): collection-entries create/update endpoints now
+      // return the canonical MutationResponse `{ message, item }` (per
+      // collection-dispatcher.ts:875,931). Read the saved entry off
+      // `result.item`; fall back to the bare body only for resilience
+      // against transitional callers.
+      const result = (await response.json()) as {
+        message?: string;
+        item?: Record<string, unknown>;
+      } & Record<string, unknown>;
+      const savedEntry: Record<string, unknown> = result.item ?? result;
       void queryClient.invalidateQueries({
         queryKey: ["entries", "list", collectionSlug],
       });

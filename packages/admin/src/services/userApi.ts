@@ -1,8 +1,9 @@
 import type { TableParams, TableResponse } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 import { isUser } from "../types/guards";
 import type {
   User,
@@ -25,7 +26,11 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
- * Fetch users with pagination, search, and sorting
+ * Fetch users with pagination, search, and sorting.
+ *
+ * Phase 4 (Task 19): server now returns the canonical
+ * `ListResponse<UserApiResponse>` shape (`{ items, meta }`); we map
+ * `items` into the table component's `{ data, meta }` shape locally.
  */
 export const fetchUsers = async (
   params: TableParams
@@ -33,26 +38,30 @@ export const fetchUsers = async (
   const query = buildQuery(params);
   const url = `/users${query ? `?${query}` : ""}`;
 
-  const result = await enhancedFetcher<
-    UserApiResponse[],
-    Record<string, unknown>
-  >(url, {}, true);
+  const result = await fetcher<ListResponse<UserApiResponse>>(url, {}, true);
 
-  const users = result.data;
+  const users = result.items;
   const { pageSize = 10 } = params.pagination;
+  // normalizePagination accepts the canonical { total, page, limit,
+  // totalPages, ... } shape via its Record<string, unknown> input. Its
+  // internal page-based detector keys on `pageSize`, so we widen the
+  // canonical meta to a record before passing it through.
   const meta = normalizePagination(result.meta, pageSize, users.length);
 
   return { data: users, meta };
 };
 
 /**
- * Update a user
+ * Update a user.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<User>`; we discard
+ * the message + item here because the caller expects void.
  */
 export const updateUser = async (
   userId: string,
   updates: Partial<User> | UpdateUserPayload
 ): Promise<void> => {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<User>>(
     `/users/${userId}`,
     {
       method: "PATCH",
@@ -62,10 +71,17 @@ export const updateUser = async (
   );
 };
 
+/**
+ * Create a user.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<User>` (`{ message,
+ * item }`); we surface the legacy `{ id }` projection so existing callers
+ * keep working.
+ */
 export const createUser = async (
   updates: CreateUserPayload
 ): Promise<{ id: string }> => {
-  const result = await enhancedFetcher<{ id: string }>(
+  const result = await fetcher<MutationResponse<{ id: string }>>(
     `/users`,
     {
       method: "POST",
@@ -73,11 +89,16 @@ export const createUser = async (
     },
     true
   );
-  return { id: result.data.id };
+  return { id: result.item.id };
 };
 
+/**
+ * Delete a user.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<User>`; we discard.
+ */
 export const deleteUser = async (userId: string): Promise<void> => {
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<User>>(
     `/users/${userId}`,
     {
       method: "DELETE",
@@ -85,19 +106,22 @@ export const deleteUser = async (userId: string): Promise<void> => {
     true
   );
 };
-/**
- * Get user by ID
- */
 
+/**
+ * Get user by ID.
+ *
+ * Phase 4 (Task 19): findByID endpoints return the bare doc directly via
+ * `respondDoc`, so we type the fetcher generic with the bare `User` shape.
+ */
 export const getUserById = async (userId: string): Promise<User> => {
-  const result = await enhancedFetcher<User>(`/users/${userId}`, {}, true);
+  const result = await fetcher<User>(`/users/${userId}`, {}, true);
 
   // Validate the response data before returning
-  if (!isUser(result.data)) {
+  if (!isUser(result)) {
     throw new Error("Invalid user data received from API");
   }
 
-  return result.data;
+  return result;
 };
 
 export const userApi = {

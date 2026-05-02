@@ -165,11 +165,18 @@ function ReadOnlyPreview({ permissions }: { permissions: string[] }) {
 }
 
 function RolePermissionsPreview({ roleId }: { roleId: string }) {
+  // Phase 4 (post-merge follow-up): the listRolePermissions dispatcher
+  // method emits `respondData({ permissions: [...] })` (spec section 5.1
+  // non-paginated list). Pre-Phase-4 the fetcher peeled `data` so this
+  // component read `data.data` for the array; after the fetcher rewrite
+  // (Task 18) the wire body comes through unchanged, so we type the
+  // response with the canonical `{ permissions }` shape and read
+  // `data.permissions`.
   const { data, isLoading, isError } = useQuery({
     queryKey: ["rolePermissions", roleId],
     queryFn: () =>
       protectedApi.get<{
-        data: Array<{ id: string; action: string; resource: string }>;
+        permissions: Array<{ id: string; action: string; resource: string }>;
       }>(`/roles/${roleId}/permissions`),
     enabled: !!roleId,
     staleTime: 60_000,
@@ -184,7 +191,7 @@ function RolePermissionsPreview({ roleId }: { roleId: string }) {
     );
   }
 
-  if (isError || !data?.data) {
+  if (isError || !data?.permissions) {
     return (
       <p className="text-sm text-muted-foreground">
         Unable to load role permissions.
@@ -192,7 +199,7 @@ function RolePermissionsPreview({ roleId }: { roleId: string }) {
     );
   }
 
-  const permissions = data.data;
+  const permissions = data.permissions;
 
   if (permissions.length === 0) {
     return (

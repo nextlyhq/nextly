@@ -130,6 +130,14 @@ export function RelationFieldEditor({
     });
 
     try {
+      // Phase 4 (post-merge follow-up): both /admin/api/collections and
+      // /admin/api/singles emit `respondList({ items, meta })` (spec
+      // section 5.1). Pre-Phase-4 the legacy wire was `{ data: [...] }`;
+      // after the rename we read `.items` for the array. Same regression
+      // class as the role-create infinite-loop bug fixed in the
+      // companion useRoleForm.ts edit; centralizing the comment here
+      // would dilute it, so each call site documents its own migration.
+
       // 2. Fetch Collections
       try {
         const collectionsRes = await authFetch(
@@ -138,8 +146,8 @@ export function RelationFieldEditor({
         );
         if (collectionsRes.ok) {
           const collectionsData = await collectionsRes.json();
-          if (collectionsData.data) {
-            const mappedCollections = collectionsData.data.map(
+          if (Array.isArray(collectionsData?.items)) {
+            const mappedCollections = collectionsData.items.map(
               (c: { name: string; label?: string; description?: string }) => ({
                 id: c.name,
                 name: c.label || c.name,
@@ -167,8 +175,8 @@ export function RelationFieldEditor({
         });
         if (singlesRes.ok) {
           const singlesData = await singlesRes.json();
-          if (singlesData.data) {
-            const mappedSingles = singlesData.data.map(
+          if (Array.isArray(singlesData?.items)) {
+            const mappedSingles = singlesData.items.map(
               (s: { slug: string; label?: string; description?: string }) => ({
                 id: s.slug,
                 name: s.label || s.slug,

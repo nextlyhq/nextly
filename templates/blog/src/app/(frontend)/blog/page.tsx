@@ -35,6 +35,9 @@ export default async function BlogPage({
   const currentPage = Math.max(1, Number(pageParam) || 1);
 
   const result = await getPosts({ page: currentPage, limit: 9 });
+  // Phase 4 (Task 14): getPosts now returns canonical envelope
+  // (`{ items, meta }`). Destructure for cleaner JSX below.
+  const { items, meta } = result;
 
   return (
     <>
@@ -43,18 +46,18 @@ export default async function BlogPage({
         description="Every published post, newest first."
         stats={[
           {
-            text: `${result.totalDocs} ${result.totalDocs === 1 ? "post" : "posts"}`,
+            text: `${meta.total} ${meta.total === 1 ? "post" : "posts"}`,
           },
           { text: "RSS", href: "/feed.xml" },
         ]}
       />
 
-      <PostGrid posts={result.docs} />
+      <PostGrid posts={items} />
 
       <div className="mt-12">
         <Pagination
           currentPage={currentPage}
-          totalPages={result.totalPages}
+          totalPages={meta.totalPages}
           basePath="/blog"
         />
       </div>

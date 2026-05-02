@@ -21,7 +21,7 @@ import type {
  * ```typescript
  * // With generated types - slug and return type are inferred:
  * const posts = await nextly.find({ collection: 'posts' });
- * // posts.docs is typed as Post[]
+ * // posts.items is typed as Post[]
  *
  * // Without generated types - accepts any string:
  * const posts = await nextly.find({
@@ -307,7 +307,8 @@ export interface DeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
  *
  * @example
  * ```typescript
- * const { totalDocs } = await nextly.count({
+ * // Phase 4 (Task 13): count() now returns `{ total }` (was `{ totalDocs }`).
+ * const { total } = await nextly.count({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  * });
@@ -372,14 +373,22 @@ export interface DuplicateArgs<TSlug extends CollectionSlug = CollectionSlug>
 
 /**
  * Result of a count operation.
+ *
+ * Phase 4 (Task 13): renamed `totalDocs` to `total` so the Direct API and
+ * the wire API's `respondCount` envelope both speak the same key.
  */
 export interface CountResult {
   /** Total number of documents matching the query */
-  totalDocs: number;
+  total: number;
 }
 
 /**
- * Result of a delete operation.
+ * Result of a delete-by-id or delete-by-where operation.
+ *
+ * Phase 4 (Task 13): the top-level `nextly.delete(...)` and per-namespace
+ * `delete()` calls return `{ message, item }` (`MutationResult`) so they
+ * match the wire API's `respondMutation` envelope. `DeleteResult` is still
+ * used for the bulk-by-where path where multiple IDs may be returned.
  */
 export interface DeleteResult {
   /** Whether the delete was successful */
@@ -391,23 +400,37 @@ export interface DeleteResult {
 
 /**
  * Result of a bulk operation with partial success support.
+ *
+ * Phase 4.5: redesigned to carry full success records (not just ids) and
+ * structured per-item failures keyed by canonical NextlyErrorCode. The
+ * direct-API surface mirrors the wire shape emitted by respondBulk so
+ * direct-API callers and HTTP callers see the same data on the success
+ * path.
+ *
+ * Generic over T:
+ *   - For delete: T is `{ id: string }`.
+ *   - For update/create: T is the full record.
  */
-export interface BulkOperationResult {
-  /** IDs of successfully processed documents */
-  success: string[];
+export interface BulkOperationResult<T = { id: string }> {
+  /** Records successfully processed. */
+  successes: T[];
 
-  /** Details of failed operations */
-  failed: Array<{
+  /** Structured per-item failures. */
+  failures: Array<{
+    /** Identifier of the entry that failed. */
     id: string;
-    error: string;
+    /** Canonical NextlyErrorCode value. */
+    code: string;
+    /** Public-safe message (no identifier or value echo). */
+    message: string;
   }>;
 
-  /** Total number of documents processed */
+  /** Total number of documents processed. */
   total: number;
 
-  /** Number of successful operations */
+  /** Number of successful operations. */
   successCount: number;
 
-  /** Number of failed operations */
+  /** Number of failed operations. */
   failedCount: number;
 }

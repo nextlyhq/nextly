@@ -26,8 +26,9 @@
  *     imageProcessor: myImageProcessor,
  *   });
  *
- *   const posts = await nextly.collections.find('posts', {}, context);
- *   return Response.json({ posts });
+ *   // Returns ListResult<T> = { items, meta } (Phase 4 canonical shape).
+ *   const posts = await nextly.find({ collection: 'posts' });
+ *   return Response.json(posts);
  * }
  * ```
  */
@@ -114,12 +115,13 @@ const globalForInit = globalThis as unknown as {
  *
  * @example
  * ```typescript
- * // Recommended — using the @nextly-config path alias
+ * // Recommended: use the @nextly-config path alias.
  * import { getNextly } from '@revnixhq/nextly';
  * import config from '@nextly-config';
  *
  * export async function GET() {
  *   const nextly = await getNextly({ config });
+ *   // Returns ListResult<T> = { items, meta } (Phase 4 canonical shape).
  *   const posts = await nextly.find({ collection: 'posts' });
  *   return Response.json(posts);
  * }

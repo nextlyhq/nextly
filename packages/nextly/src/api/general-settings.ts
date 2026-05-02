@@ -7,12 +7,12 @@
  *
  * Requires `manage-settings` permission for both operations.
  *
- * Wire shape — Task 21 migration: handlers now wrap `withErrorHandler` and
- * return the canonical `{ data: <settings> }` envelope per spec §10.2. The
- * legacy implementation accidentally double-wrapped as
- * `{ data: { data: <settings> } }`; clients that depended on the inner field
- * are updated in Task 10 (admin frontend simplification). Errors flow through
- * `withErrorHandler` and serialize as `application/problem+json`.
+ * Wire shape: Phase 4 Task 11 migrates these handlers off the legacy
+ * `{ data: <settings> }` envelope onto the canonical respondX helpers
+ * (spec §5.1). GET uses `respondData` (bare object read). PATCH uses
+ * `respondMutation` so the admin gets a server-authored toast string
+ * alongside the updated row. Errors flow through `withErrorHandler`
+ * and serialize as `application/problem+json`.
  *
  * @module api/general-settings
  * @since 1.0.0
@@ -28,7 +28,7 @@ import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondData, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -78,9 +78,12 @@ export const getGeneralSettings = withErrorHandler(async (req: Request) => {
   const service = await getGeneralSettingsService();
   const settings = await service.getSettings();
 
-  // Canonical `{ data: <settings> }` envelope; the timezone wrapper rewrites
-  // timestamp fields in-place without changing the envelope shape.
-  return withTimezoneFormatting(createSuccessResponse(settings));
+  // Phase 4: respondData (bare object). The timezone wrapper rewrites
+  // timestamp fields in-place without changing the body shape, so the
+  // bare-data wire format flows through unchanged. Spread into a fresh
+  // literal so the named settings interface satisfies the respondData
+  // `Record<string, unknown>` bound.
+  return withTimezoneFormatting(respondData({ ...settings }));
 });
 
 /**
@@ -124,5 +127,11 @@ export const updateGeneralSettings = withErrorHandler(async (req: Request) => {
   const service = await getGeneralSettingsService();
   const updated = await service.updateSettings(parsed.data);
 
-  return withTimezoneFormatting(createSuccessResponse(updated));
+  // Phase 4: respondMutation. The settings row is the mutated `item` and
+  // the message powers the admin toast. The timezone wrapper rewrites the
+  // nested settings fields in-place; the `{ message, item }` envelope is
+  // preserved untouched because timestamp normalization only walks values.
+  return withTimezoneFormatting(
+    respondMutation("General settings updated.", updated)
+  );
 });

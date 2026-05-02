@@ -30,6 +30,7 @@ import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { getCsrfToken } from "@admin/lib/api/csrf";
+import type { ActionResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 import { passwordSchema } from "@admin/lib/validation";
@@ -86,14 +87,21 @@ export function Signup() {
 
     try {
       const csrfToken = await getCsrfToken();
-      await api.public.post("/auth/register", {
+      // Phase 4 (Task 21): the register handler emits
+      // `respondAction("Account created.", { user })` (or the silent
+      // success message when conflict-reveal is off). Capture the
+      // result so the toast can use the server-authored copy.
+      const result = await api.public.post<ActionResponse>("/auth/register", {
         name: values.fullName,
         email: values.email,
         password: values.password,
         csrfToken,
       });
 
-      toast.success("Account created successfully!", {
+      // Phase 4 (Task 21): prefer the server message; fall back to the
+      // existing friendly string so the toast still works if the server
+      // omits the field.
+      toast.success(result?.message ?? "Account created successfully!", {
         description: "You can now sign in with your credentials.",
       });
       navigateTo(ROUTES.LOGIN);

@@ -8,14 +8,15 @@
  *   GET /api/dashboard/activity       → recent activity log entries
  *
  * All endpoints require authentication (any logged-in user can view the
- * dashboard). No specific permission is needed — the dashboard is the
+ * dashboard). No specific permission is needed. The dashboard is the
  * landing page for all authenticated admin users.
  *
- * Wire shape — Task 21 migration: all three handlers replace the legacy
- * nested envelope `{ data: { status, success, data: <result>, meta? } }`
- * with the canonical `{ data: <result> }` per spec §10.2. The error path
- * uses `application/problem+json` from `withErrorHandler`. Admin
- * consumers update in Task 10 (frontend simplification).
+ * Wire shape: Phase 4 Task 11 migrates each handler off the legacy
+ * `{ data: <result> }` envelope onto the canonical respondX helpers
+ * (spec §5.1). All three endpoints expose object-shaped reads with
+ * named fields, so they use `respondData` (bare body, no envelope).
+ * Errors continue to flow through `withErrorHandler` and serialize as
+ * `application/problem+json`.
  *
  * @module api/dashboard
  * @since 1.0.0
@@ -32,7 +33,7 @@ import {
   listEffectivePermissions,
 } from "../services/lib/permissions";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 const PRIVATE_NO_STORE_HEADERS = {
@@ -86,7 +87,11 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   const readableResources = await resolveReadableResources(auth.userId);
   const stats = await service.getStats({ readableResources });
 
-  return createSuccessResponse(stats, { headers: PRIVATE_NO_STORE_HEADERS });
+  // Bare-object read: stats is the dashboard summary itself; no envelope.
+  // Spread into a fresh literal so respondData's `Record<string, unknown>`
+  // bound is satisfied without leaning on a typecast (named interfaces lack
+  // an implicit index signature).
+  return respondData({ ...stats }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 /**
@@ -112,9 +117,17 @@ export const getDashboardRecentEntries = withErrorHandler(
     const readableResources = await resolveReadableResources(auth.userId);
     const entries = await service.getRecentEntries(limit, readableResources);
 
-    return createSuccessResponse(entries, {
-      headers: PRIVATE_NO_STORE_HEADERS,
-    });
+    // Service returns `{ entries: [...] }` (a named-field object). This is a
+    // capped non-paginated read (no total / page / limit semantics), so the
+    // bare-object `respondData` shape applies rather than `respondList`.
+    // Spread into a fresh literal so the response-shape generic accepts the
+    // named `RecentEntriesResponse` interface (no implicit index signature).
+    return respondData(
+      { ...entries },
+      {
+        headers: PRIVATE_NO_STORE_HEADERS,
+      }
+    );
   }
 );
 
@@ -126,8 +139,10 @@ export const getDashboardRecentEntries = withErrorHandler(
  * Query params:
  *   - limit: number (default: 5, max: 50)
  *
- * Body shape: `{ data: { activities, total, hasMore } }` — see the
- * file-level docstring for the migration note.
+ * Body shape: `{ activities, total, hasMore }`. The activity feed is
+ * cursor-style (`hasMore` flag, no page/limit/totalPages metadata
+ * surfaced to clients), so this uses `respondData` rather than
+ * `respondList`. See the file-level docstring for the migration note.
  */
 export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -142,5 +157,8 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const service = await getActivityLogService();
   const result = await service.getRecentActivity({ limit });
 
-  return createSuccessResponse(result, { headers: PRIVATE_NO_STORE_HEADERS });
+  // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
+  // Spread into a fresh literal so the response-shape generic accepts the
+  // named `ActivityLogResult` interface (no implicit index signature).
+  return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

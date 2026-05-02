@@ -36,7 +36,8 @@ export async function GET(
     link: absoluteUrl(`/authors/${slug}`),
     description:
       author.bio ?? `Posts by ${author.name} on ${settings.siteName}.`,
-    items: postsToFeedItems(posts.docs),
+    // Phase 4 (Task 14): getPostsByAuthor returns canonical ListResult.
+    items: postsToFeedItems(posts.items),
   });
 
   return new Response(xml, {

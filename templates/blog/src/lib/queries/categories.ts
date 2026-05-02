@@ -19,7 +19,8 @@ export async function getCategoryBySlug(
     limit: 1,
     depth: 0,
   });
-  return result.docs[0] ? (result.docs[0] as Category) : null;
+  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
+  return result.items[0] ? (result.items[0] as Category) : null;
 }
 
 /**
@@ -34,7 +35,8 @@ export async function getAllCategories(): Promise<Category[]> {
     limit: 1000,
     depth: 0,
   });
-  return result.docs.map(d => d as unknown as Category);
+  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
+  return result.items.map(d => d as unknown as Category);
 }
 
 export async function getAllCategorySlugs(): Promise<string[]> {
@@ -44,7 +46,8 @@ export async function getAllCategorySlugs(): Promise<string[]> {
     limit: 1000,
     depth: 0,
   });
-  return result.docs.map(d => d.slug as string);
+  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
+  return result.items.map(d => d.slug as string);
 }
 
 /**
@@ -65,8 +68,10 @@ export async function getAllCategoriesWithCounts(): Promise<
     limit: 1000,
     depth: 0,
   });
+  // Phase 4 (Task 14): canonical envelope; iterate `items` (was `docs`)
+  // and read total count from `meta.total` (was `totalDocs`).
   return Promise.all(
-    cats.docs.map(async cat => {
+    cats.items.map(async cat => {
       const posts = await nextly.find({
         collection: "posts",
         where: {
@@ -80,7 +85,7 @@ export async function getAllCategoriesWithCounts(): Promise<
       });
       return {
         item: cat as Category,
-        postCount: posts.totalDocs,
+        postCount: posts.meta.total,
       };
     })
   );

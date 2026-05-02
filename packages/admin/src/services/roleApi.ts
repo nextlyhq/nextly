@@ -3,21 +3,26 @@ import type { TableParams, TableResponse } from "@revnixhq/ui";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
+import type {
+  ActionResponse,
+  ListResponse,
+  MutationResponse,
+} from "../lib/api/response-types";
 import type {
   ApiRole,
   Role,
   ApiRoleCreatePayload,
   ApiRoleUpdatePayload,
 } from "../types/entities";
-import type {
-  ApiRoleWithRelations} from "../types/role";
-import {
-} from "../types/role";
+import type { ApiRoleWithRelations } from "../types/role";
 
+// Phase 4 (Task 19): the role-permissions sub-resource is a non-CRUD read
+// returning a bare list of permission objects via respondDoc. We type the
+// fetcher with the bare array shape.
 const fetchRolePermissionIds = async (roleId: string): Promise<string[]> => {
-  const result = await enhancedFetcher<
+  const result = await fetcher<
     Array<{
       id: string;
       action: string;
@@ -25,7 +30,7 @@ const fetchRolePermissionIds = async (roleId: string): Promise<string[]> => {
     }>
   >(`/roles/${roleId}/permissions`, {}, true);
 
-  return normalizePermissions(result.data.map(permission => permission.id));
+  return normalizePermissions(result.map(permission => permission.id));
 };
 
 // Transform API role to our Role interface
@@ -61,25 +66,33 @@ const buildQuery = (params: TableParams): string => {
   });
 };
 
+/**
+ * Fetch paginated list of roles.
+ *
+ * Phase 4 (Task 19): server returns `ListResponse<ApiRole>` (`{ items, meta }`);
+ * we map `items` and the canonical meta into the table-component shape.
+ */
 export const fetchRoles = async (
   params: TableParams
 ): Promise<TableResponse<Role>> => {
   const query = buildQuery(params);
   const url = `/roles${query ? `?${query}&includePermissions=true` : ""}`;
 
-  const result = await enhancedFetcher<ApiRole[], Record<string, unknown>>(
-    url,
-    {},
-    true
-  );
+  const result = await fetcher<ListResponse<ApiRole>>(url, {}, true);
 
-  const roles = result.data.map(transformRole);
+  const roles = result.items.map(transformRole);
   const { pageSize = 10 } = params.pagination;
   const meta = normalizePagination(result.meta, pageSize, roles.length);
 
   return { data: roles, meta };
 };
 
+/**
+ * Update a role's metadata.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiRole>`; we discard
+ * the message + item because the caller expects void.
+ */
 export const updateRole = async (
   roleId: string,
   updates: Partial<Role> & { childRoleIds?: string[] }
@@ -96,7 +109,7 @@ export const updateRole = async (
     apiUpdates.childRoleIds = updates.childRoleIds;
   }
 
-  await enhancedFetcher<null>(
+  await fetcher<MutationResponse<ApiRole>>(
     `/roles/${roleId}`,
     {
       method: "PATCH",
@@ -106,8 +119,14 @@ export const updateRole = async (
   );
 };
 
+/**
+ * Delete a role.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiRole>` for delete;
+ * we discard the body.
+ */
 export const deleteRole = async (roleId: string): Promise<void> => {
-  await enhancedFetcher<{ id: string }>(
+  await fetcher<MutationResponse<ApiRole>>(
     `/roles/${roleId}`,
     {
       method: "DELETE",
@@ -116,19 +135,33 @@ export const deleteRole = async (roleId: string): Promise<void> => {
   );
 };
 
+/**
+ * Get a role by ID.
+ *
+ * Phase 4 (Task 19): findByID returns the bare doc via respondDoc, and the
+ * sub-resource `/roles/:id/permissions` returns a bare list. Both are typed
+ * directly without an envelope wrapper.
+ */
 export const getRoleById = async (roleId: string): Promise<Role> => {
-  const [result, permissionIds] = await Promise.all([
-    enhancedFetcher<ApiRoleWithRelations>(`/roles/${roleId}`, {}, true),
+  const [apiRole, permissionIds] = await Promise.all([
+    fetcher<ApiRoleWithRelations>(`/roles/${roleId}`, {}, true),
     fetchRolePermissionIds(roleId),
   ]);
 
   return transformRole({
-    ...(result.data as ApiRole),
+    ...(apiRole as ApiRole),
     permissionIds,
   });
 };
 
-// Fetch role once and also provide extracted childRoleIds to avoid extra requests
+/**
+ * Fetch role once and also provide extracted childRoleIds to avoid extra
+ * requests.
+ *
+ * Phase 4 (Task 19): the sub-resources `/roles/:id/parents` and
+ * `/roles/:id` both return bare bodies (respondDoc); we type the generic
+ * with the inner shape directly.
+ */
 export const getRoleDetails = async (
   roleId: string
 ): Promise<{
@@ -136,15 +169,14 @@ export const getRoleDetails = async (
   childRoleIds: string[];
   childRolePermissionsMap?: Record<string, string[]>;
 }> => {
-  const [result, permissionIds, parentRoleIds] = await Promise.all([
-    enhancedFetcher<ApiRoleWithRelations>(`/roles/${roleId}`, {}, true),
+  const [apiRole, permissionIds, parentRoleIds] = await Promise.all([
+    fetcher<ApiRoleWithRelations>(`/roles/${roleId}`, {}, true),
     fetchRolePermissionIds(roleId),
-    enhancedFetcher<string[]>(`/roles/${roleId}/parents`, {}, true).then(
-      response => response.data || []
+    // The parents endpoint returns a bare string[] via respondDoc.
+    fetcher<string[]>(`/roles/${roleId}/parents`, {}, true).then(
+      ids => ids || []
     ),
   ]);
-
-  const apiRole = result.data;
 
   let childRolePermissionsMap: Record<string, string[]> | undefined;
   if (parentRoleIds.length > 0) {
@@ -171,7 +203,13 @@ export const getRoleDetails = async (
   };
 };
 
-// Update role permissions by diffing current vs next permission ID arrays
+/**
+ * Update role permissions by diffing current vs next permission ID arrays.
+ *
+ * Phase 4 (Task 19): the role-permissions sub-resource is a non-CRUD
+ * mutation returning `ActionResponse` (`{ message, ... }`); we discard
+ * the body since the caller expects void.
+ */
 export const updateRolePermissions = async (
   roleId: string,
   currentPermissionIds: string[],
@@ -179,7 +217,7 @@ export const updateRolePermissions = async (
 ): Promise<void> => {
   void currentPermissionIds;
 
-  await enhancedFetcher(
+  await fetcher<ActionResponse>(
     `/roles/${roleId}/permissions`,
     {
       method: "PATCH",
@@ -191,6 +229,12 @@ export const updateRolePermissions = async (
   );
 };
 
+/**
+ * Create a new role.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiRole>`; we read
+ * `item.id` to keep the legacy `{ id }` projection callers expect.
+ */
 export const createRole = async (
   roleData: Partial<Role> & { childRoleIds?: string[] }
 ): Promise<{ id: string }> => {
@@ -208,7 +252,7 @@ export const createRole = async (
       : [],
   };
 
-  const result = await enhancedFetcher<{ id: string }>(
+  const result = await fetcher<MutationResponse<{ id: string }>>(
     `/roles`,
     {
       method: "POST",
@@ -217,14 +261,20 @@ export const createRole = async (
     true
   );
 
-  return { id: result.data.id };
+  return { id: result.item.id };
 };
 
+/**
+ * Stats projection over the roles list.
+ *
+ * Phase 4 (Task 19): typed against the canonical `ListResponse<ApiRole>`;
+ * we read `result.items` for the role array.
+ */
 export const getStats = async () => {
   try {
-    const result = await enhancedFetcher<ApiRole[]>(`/roles`, {}, true);
+    const result = await fetcher<ListResponse<ApiRole>>(`/roles`, {}, true);
 
-    const roles = result.data;
+    const roles = result.items;
     return {
       totalRoles: roles.length,
       systemRoles: roles.filter((r: ApiRole) => r.isSystem).length,

@@ -11,9 +11,16 @@
  * Auth: super-admin only. Schema applies are admin-level operations;
  * their audit log is gated the same way.
  *
- * Wire shape: canonical `{ data: { rows, hasMore } }` per spec §13.2.
- * Errors flow through `withErrorHandler` and produce
- * `application/problem+json`.
+ * Wire shape: Phase 4 Task 11 migrates this handler to `respondData`
+ * with body `{ rows, hasMore }`. Pagination here is cursor-style
+ * (caller passes `before=<ISO>` to "load more"); there is no total
+ * count, no page index, and no totalPages, so the canonical
+ * `respondList` meta shape would either need sentinel values
+ * (`total: -1`, `totalPages: -1`) or be filled in with synthetic data
+ * the underlying query never produced. We pick `respondData` because
+ * cursor semantics dominate here and the caller already keys off the
+ * `hasMore` flag rather than meta. Errors flow through
+ * `withErrorHandler` and produce `application/problem+json`.
  *
  * Caching: `private, no-store` so the response never leaks across user
  * sessions in shared caches. `Vary: Cookie` reinforces this for any
@@ -31,7 +38,7 @@ import { readJournal } from "../domains/schema/journal/read-journal";
 import { NextlyError } from "../errors/nextly-error";
 import { isSuperAdmin } from "../services/lib/permissions";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 const PRIVATE_NO_STORE_HEADERS = {
@@ -61,7 +68,8 @@ async function getAdapter(): Promise<AdapterLike> {
  *   - before: ISO 8601 timestamp — returns rows whose `startedAt` is
  *     strictly older than this value. Used for "load more".
  *
- * Response: `{ data: { rows: JournalRow[], hasMore: boolean } }`.
+ * Response: `{ rows: JournalRow[], hasMore: boolean }` (bare body via
+ * `respondData`; cursor semantics, no pagination meta).
  *
  * Errors:
  *   - 400 NEXTLY_VALIDATION when `limit` or `before` is malformed.
@@ -128,5 +136,7 @@ export const getSchemaJournal = withErrorHandler(async (req: Request) => {
     before,
   });
 
-  return createSuccessResponse(result, { headers: PRIVATE_NO_STORE_HEADERS });
+  // Phase 4: bare cursor read, no envelope. Spread into a fresh literal so
+  // the named result type satisfies the respondData generic constraint.
+  return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

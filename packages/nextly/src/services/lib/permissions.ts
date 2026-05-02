@@ -12,8 +12,13 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
-import { getDialectTables } from "@nextly/database/index";
-import { getAuthLogger } from "@nextly/lib/logger";
+// Phase 4 note: use relative paths instead of TS path aliases.
+// Vitest's vite-tsconfig-paths plugin sometimes fails to resolve
+// these aliases when this module loads in certain test orders
+// (e.g. first dispatcher-touched module in the run). Relative paths
+// are deterministic.
+import { getDialectTables } from "../../database/index";
+import { getAuthLogger } from "../../lib/logger";
 
 import { container } from "../../di/container";
 import { PermissionCacheService } from "../auth/permission-cache-service";

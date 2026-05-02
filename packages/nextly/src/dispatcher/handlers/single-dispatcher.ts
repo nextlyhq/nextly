@@ -11,10 +11,21 @@
  * The create/update schema flows run SQL migrations directly against
  * the DI-registered adapter so that UI-edited Singles immediately have
  * a usable backing table (sandbox dev-db semantics).
+ *
+ * Phase 4 Task 9: every handler returns a Response built via the
+ * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
+ * passes the Response through unchanged. See spec §5.1 for the
+ * canonical shape contract.
  */
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
+import {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
@@ -33,6 +44,15 @@ import {
   getSingleEntryServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+// Phase 4.9: shared dispatcher helpers. Previously this file kept local
+// copies of offsetPaginationToMeta + unwrapSingleResult; the latter was
+// a near-duplicate of unwrapServiceResult elsewhere. Consolidating onto
+// `unwrapServiceResult` also brings the Bug 6 fix (status 400 to
+// NextlyError.validation) to single-dispatcher's error mapping for free.
+import {
+  offsetPaginationToMeta,
+  unwrapServiceResult,
+} from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
   requireParam,
@@ -145,12 +165,19 @@ interface SinglesServices {
 
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   listSingles: {
+    // Phase 4: respondList. The registry returns the limit/offset
+    // BaseListResult shape; offsetPaginationToMeta synthesises the
+    // canonical PaginationMeta. Permission filtering runs after the
+    // raw fetch so the meta we ship reflects the FILTERED counts (admin
+    // pagination footer matches what the user actually sees).
     execute: async (svc, p) => {
+      const limit = toNumber(p.limit);
+      const offset = toNumber(p.offset);
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
         search: p.search,
-        limit: toNumber(p.limit),
-        offset: toNumber(p.offset),
+        limit,
+        offset,
       });
       const userId = p._authenticatedUserId
         ? String(p._authenticatedUserId)
@@ -173,18 +200,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      return {
-        success: true,
-        statusCode: 200,
-        data: filteredSingles.map(s =>
-          injectSingleDefaultFields(s as unknown as SingleWithFields)
-        ),
-        meta: {
+      const items = filteredSingles.map(s =>
+        injectSingleDefaultFields(s as unknown as SingleWithFields)
+      );
+      return respondList(
+        items,
+        offsetPaginationToMeta({
           total: filteredSingles.length,
-          limit: toNumber(p.limit),
-          offset: toNumber(p.offset),
-        },
-      };
+          limit,
+          offset,
+        })
+      );
     },
   },
 
@@ -322,19 +348,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      return {
-        success: true,
-        statusCode: 201,
-        data: single,
-        message:
-          migrationStatus === "applied"
-            ? `Single "${b.slug}" created and table applied!`
-            : `Single "${b.slug}" created. Run migrations to apply the table.`,
-      };
+      // Phase 4: respondMutation 201. Migration status drives the toast
+      // copy so admins see "table applied" vs "run migrations" without
+      // an extra round-trip.
+      const message =
+        migrationStatus === "applied"
+          ? `Single "${b.slug}" created and table applied!`
+          : `Single "${b.slug}" created. Run migrations to apply the table.`;
+      return respondMutation(message, single, { status: 201 });
     },
   },
 
   getSingleDocument: {
+    // Phase 4: respondDoc. Bare doc body. The legacy SingleResult
+    // envelope is unwrapped here so a service-side failure throws a
+    // NextlyError which the dispatcher's error path canonicalises.
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
@@ -344,6 +372,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       });
 
       // Transform rich text fields to requested format when not JSON.
+      // Mutates result.data in place to keep behaviour identical to the
+      // pre-Phase-4 path; unwrap below sees the transformed payload.
       if (
         result.success &&
         result.data &&
@@ -360,11 +390,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      return result;
+      const doc = unwrapServiceResult(result, { slug });
+      return respondDoc(doc);
     },
   },
 
   updateSingleDocument: {
+    // Phase 4: respondMutation 200. Service returns the legacy
+    // SingleResult envelope; unwrap propagates failure as a NextlyError.
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
       if (!body) throw new Error("Update data is required");
@@ -379,11 +412,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               : undefined,
           }
         : undefined;
-      return svc.entry.update(slug, body as Record<string, unknown>, {
-        locale: p.locale,
-        user,
-        overrideAccess: !!user,
-      });
+      const result = await svc.entry.update(
+        slug,
+        body as Record<string, unknown>,
+        {
+          locale: p.locale,
+          user,
+          overrideAccess: !!user,
+        }
+      );
+      const doc = unwrapServiceResult(result, { slug });
+      return respondMutation(
+        result.message ?? `Single "${slug}" updated.`,
+        doc
+      );
     },
   },
 
@@ -447,11 +489,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      return {
-        success: true,
-        statusCode: 200,
-        message: `Single "${slug}" deleted successfully`,
-      };
+      // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete
+      // to respondMutation, but registry.deleteSingle returns void (no
+      // deleted record to surface). We use respondAction here so the
+      // wire shape is `{ message, slug }` rather than the awkward
+      // `{ message, item: undefined }` that respondMutation would emit.
+      // If registry.deleteSingle is later refactored to return the
+      // deleted record, switch this back to respondMutation.
+      return respondAction(`Single "${slug}" deleted successfully`, { slug });
     },
   },
 
@@ -488,13 +533,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      return {
-        success: true,
-        statusCode: 200,
-        data: injectSingleDefaultFields(
-          enrichedData as unknown as SingleWithFields
-        ),
-      };
+      // Phase 4: respondDoc. The schema record IS the doc here, so the
+      // admin Schema Builder reads slug/fields/admin off the response
+      // body directly without an envelope wrapper.
+      return respondDoc(
+        injectSingleDefaultFields(enrichedData as unknown as SingleWithFields)
+      );
     },
   },
 
@@ -662,15 +706,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         source: "ui",
       });
 
-      return {
-        success: true,
-        statusCode: 200,
-        data: updated,
-        message:
-          migrationStatus === "applied"
-            ? `Single "${slug}" schema updated and migration applied successfully`
-            : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`,
-      };
+      // Phase 4: respondMutation 200. Migration status drives the toast
+      // copy so admins see "applied" vs "pending" immediately.
+      const message =
+        migrationStatus === "applied"
+          ? `Single "${slug}" schema updated and migration applied successfully`
+          : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
+      return respondMutation(message, updated);
     },
   },
 };

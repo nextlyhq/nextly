@@ -30,7 +30,10 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
+import { toast } from "@admin/components/ui";
+import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
+  bulkDeleteMedia,
   deleteMedia,
   fetchMedia,
   getMediaById,
@@ -580,18 +583,84 @@ export function useDeleteMedia() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useDeleteMedia} - Single media deletion hook
  */
-export function useBulkDeleteMedia() {
+/**
+ * Options for useBulkDeleteMedia hook (Phase 4.5).
+ *
+ * Surface mirrors `UseBulkDeleteEntriesOptions` so consumers see a
+ * consistent shape across entity-specific bulk hooks.
+ */
+export interface UseBulkDeleteMediaOptions {
+  /** Fired after the bulk request completes (success OR partial failure). */
+  onComplete?: (result: {
+    succeeded: number;
+    failed: number;
+    total: number;
+    message: string;
+    items: Array<{ id: string }>;
+    errors: PerItemError[];
+  }) => void;
+  /**
+   * Fired when the request itself rejected (network error, 4xx, 5xx).
+   * Per-item failures inside a 200 response do NOT trigger this; use
+   * `onComplete` to inspect `result.errors` for partial failures.
+   */
+  onError?: (error: Error) => void;
+  /** Whether to show a toast notification with `result.message` (default: true). */
+  showToast?: boolean;
+}
+
+/**
+ * Bulk-delete multiple media files in a single round-trip (Phase 4.5).
+ *
+ * Hits `DELETE /api/media/bulk` (server `media-bulk.ts`). Server runs
+ * per-id deletes concurrently via Promise.allSettled with full
+ * access-control + storage-cleanup pipeline. Partial failures land in
+ * `result.errors` with structured `{ id, code, message }`.
+ *
+ * Pre-Phase-4.5: this hook used `useBulkMutation` to fan out N parallel
+ * single-item DELETE calls. The new pattern is a single round-trip to
+ * the server's bulk endpoint; see useBulkEntries.ts for the same pattern
+ * applied to collection entries.
+ */
+export function useBulkDeleteMedia(options: UseBulkDeleteMediaOptions = {}) {
+  const { onComplete, onError, showToast = true } = options;
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, void>({
-    mutationFn: async mediaId => {
-      await deleteMedia(mediaId);
+  return useMutation({
+    mutationFn: async (mediaIds: string[]) => {
+      return bulkDeleteMedia(mediaIds);
     },
-    defaultOptions: {
-      onComplete: () => {
-        // Invalidate media cache after all mutations complete
-        void queryClient.invalidateQueries({ queryKey: ["media"] });
-      },
+    onSuccess: (response: BulkResponse<{ id: string }>) => {
+      // Invalidate media cache so list views reflect the deletions.
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+
+      const succeeded = response.items.length;
+      const failed = response.errors.length;
+
+      if (showToast) {
+        if (failed > 0) {
+          toast.warning(response.message);
+        } else {
+          toast.success(response.message);
+        }
+      }
+
+      onComplete?.({
+        succeeded,
+        failed,
+        total: succeeded + failed,
+        message: response.message,
+        items: response.items,
+        errors: response.errors,
+      });
+    },
+    onError: error => {
+      if (showToast) {
+        toast.error(
+          error instanceof Error ? error.message : "Bulk delete failed."
+        );
+      }
+      onError?.(error instanceof Error ? error : new Error(String(error)));
     },
   });
 }

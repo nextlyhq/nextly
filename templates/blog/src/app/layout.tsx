@@ -59,8 +59,17 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
+      {/*
+        suppressHydrationWarning on <body> because some browser extensions
+        (ColorZilla, Honey, Grammarly, etc.) inject attributes like
+        `cz-shortcut-listen="true"` after page load, causing harmless
+        hydration warnings. We keep the warning suppressed only on this
+        element; React still flags hydration mismatches in the rest of
+        the tree.
+      */}
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
       >
         {children}
       </body>

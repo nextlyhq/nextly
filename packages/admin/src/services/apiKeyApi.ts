@@ -4,11 +4,11 @@
  * API client for managing API keys. Supports listing, creating, updating,
  * and revoking keys.
  *
- * The internal `apiKeyFetch` helper returns the parsed JSON unchanged so each
- * endpoint can pick the exact field shape it emits (`{ data, meta? }` for
- * paginated lists, `{ doc, key }` for create, etc.). This will be folded into
- * the shared fetcher once the full Payload-style envelope migration lands
- * (see task 24 phase 4).
+ * Phase 4 (Task 19, plan T4.15): the bespoke `apiKeyFetch` helper is gone.
+ * Every endpoint now uses the shared `fetcher` typed against the canonical
+ * envelope helpers (`ListResponse`, `MutationResponse`, `ActionResponse`)
+ * from `lib/api/response-types.ts`. This brings api-keys onto the same
+ * wire contract as the rest of the admin services.
  *
  * @example
  * ```ts
@@ -19,9 +19,12 @@
  * ```
  */
 
-import { BASE_URL } from "../lib/api/fetcher";
-import { parseApiError } from "../lib/api/parseApiError";
-import { authFetch } from "../lib/api/refreshInterceptor";
+import { fetcher } from "../lib/api/fetcher";
+import type {
+  ActionResponse,
+  ListResponse,
+  MutationResponse,
+} from "../lib/api/response-types";
 
 // ============================================================
 // Types
@@ -81,41 +84,6 @@ export interface CreateApiKeyResult {
 }
 
 // ============================================================
-// Internal fetch helper
-// ============================================================
-
-/**
- * Thin authenticated fetch wrapper for the API key endpoints.
- *
- * Returns the full parsed JSON (canonical wire shape `{ data, meta? }` per
- * spec §10.2) so each caller can pick the field shape its endpoint emits —
- * `data` for single docs, `data` + `meta` for paginated lists.
- *
- * Uses the shared `parseApiError` for consistent error handling.
- */
-async function apiKeyFetch<T = unknown>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const res = await authFetch(`${BASE_URL}${path}`, {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers ?? {}),
-    },
-    credentials: "include",
-    ...options,
-  });
-
-  if (!res.ok) {
-    const json = await res.json().catch(() => null);
-    throw parseApiError(json, res.status);
-  }
-
-  return res.json() as Promise<T>;
-}
-
-// ============================================================
 // API Functions
 // ============================================================
 
@@ -123,12 +91,17 @@ async function apiKeyFetch<T = unknown>(
  * List all API keys visible to the authenticated user.
  *
  * Super-admins see keys across all users. Regular users see only their own.
+ *
+ * Phase 4 (Task 19): server returns canonical `ListResponse<ApiKeyMeta>`
+ * (`{ items, meta }`). We project to the legacy `{ data, meta: { total } }`
+ * shape callers expect.
  */
 export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
-  const json = await apiKeyFetch<{ data: ApiKeyMeta[]; meta: ApiKeyListMeta }>(
-    "/api-keys"
-  );
-  return { data: json.data, meta: json.meta };
+  const result = await fetcher<ListResponse<ApiKeyMeta>>("/api-keys", {}, true);
+  return {
+    data: result.items,
+    meta: { total: result.meta.total },
+  };
 }
 
 /**
@@ -137,19 +110,23 @@ export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
  * Session-only — cannot be called via an existing API key.
  * The raw `key` in the result is shown exactly once; it is never stored
  * and cannot be retrieved again.
+ *
+ * Phase 4 (Task 19): server returns
+ * `MutationResponse<{ doc, key }>` (`{ message, item: { doc, key } }`); we
+ * project `item` to keep the legacy `{ doc, key }` callers expect.
  */
 export async function createApiKey(
   input: CreateApiKeyPayload
 ): Promise<CreateApiKeyResult> {
-  // Canonical wire shape per spec §10.2: route returns { data: { doc, key } }.
-  // Reading the top-level json.doc / json.key (the legacy shape) leaves the
-  // reveal modal blank — the raw key is shown exactly once and cannot be
-  // recovered, so this fix is critical (handoff F12 HIGH IMPACT).
-  const json = await apiKeyFetch<{ data: CreateApiKeyResult }>("/api-keys", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return { doc: json.data.doc, key: json.data.key };
+  const result = await fetcher<MutationResponse<CreateApiKeyResult>>(
+    "/api-keys",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    true
+  );
+  return { doc: result.item.doc, key: result.item.key };
 }
 
 /**
@@ -157,16 +134,23 @@ export async function createApiKey(
  *
  * Token type, role, and duration are immutable — revoke and recreate to
  * change them. Session-only.
+ *
+ * Phase 4 (Task 19): server returns `MutationResponse<ApiKeyMeta>`;
+ * project `item` for the bare-record public signature.
  */
 export async function updateApiKey(
   id: string,
   input: UpdateApiKeyPayload
 ): Promise<ApiKeyMeta> {
-  const json = await apiKeyFetch<{ data: ApiKeyMeta }>(`/api-keys/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-  return json.data;
+  const result = await fetcher<MutationResponse<ApiKeyMeta>>(
+    `/api-keys/${id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+    true
+  );
+  return result.item;
 }
 
 /**
@@ -174,11 +158,18 @@ export async function updateApiKey(
  *
  * Sets `isActive = false`. The row is preserved for audit purposes.
  * Session-only.
+ *
+ * Phase 4 (Task 19): server returns `respondAction("API key revoked.", { id })`;
+ * we discard the body since the caller expects void.
  */
 export async function revokeApiKey(id: string): Promise<void> {
-  await apiKeyFetch<{ success: true }>(`/api-keys/${id}`, {
-    method: "DELETE",
-  });
+  await fetcher<ActionResponse<{ id: string }>>(
+    `/api-keys/${id}`,
+    {
+      method: "DELETE",
+    },
+    true
+  );
 }
 
 export const apiKeyApi = {

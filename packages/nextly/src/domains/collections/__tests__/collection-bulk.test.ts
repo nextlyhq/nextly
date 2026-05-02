@@ -149,19 +149,22 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
   // ── bulkDeleteEntries ─────────────────────────────────────────────────
 
   describe("bulkDeleteEntries", () => {
-    it("should return BulkOperationResult shape", async () => {
+    it("should return BulkOperationResult shape (Phase 4.5)", async () => {
       const result = await service.bulkDeleteEntries({
         collectionName: "posts",
         ids: [],
       });
 
-      expect(result).toHaveProperty("success");
-      expect(result).toHaveProperty("failed");
+      // Phase 4.5: shape is `{ successes, failures, total, successCount, failedCount }`.
+      // `successes` is `Array<{ id }>` for delete; `failures` is the structured
+      // per-item error array `{ id, code, message }` (canonical NextlyErrorCode).
+      expect(result).toHaveProperty("successes");
+      expect(result).toHaveProperty("failures");
       expect(result).toHaveProperty("total");
       expect(result).toHaveProperty("successCount");
       expect(result).toHaveProperty("failedCount");
-      expect(Array.isArray(result.success)).toBe(true);
-      expect(Array.isArray(result.failed)).toBe(true);
+      expect(Array.isArray(result.successes)).toBe(true);
+      expect(Array.isArray(result.failures)).toBe(true);
     });
 
     it("should handle empty ids array", async () => {
@@ -199,10 +202,13 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       });
 
       expect(result.failedCount).toBe(2);
-      expect(result.failed.length).toBe(2);
-      result.failed.forEach(f => {
+      expect(result.failures.length).toBe(2);
+      // Phase 4.5: per-item failure carries `{ id, code, message }` where code
+      // is a canonical NextlyErrorCode value and message is public-safe.
+      result.failures.forEach(f => {
         expect(f).toHaveProperty("id");
-        expect(f).toHaveProperty("error");
+        expect(f).toHaveProperty("code");
+        expect(f).toHaveProperty("message");
       });
     });
 
@@ -225,15 +231,18 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
   // ── bulkUpdateEntries ─────────────────────────────────────────────────
 
   describe("bulkUpdateEntries", () => {
-    it("should return BulkOperationResult shape", async () => {
+    it("should return BulkOperationResult shape (Phase 4.5)", async () => {
       const result = await service.bulkUpdateEntries({
         collectionName: "posts",
         ids: [],
         data: { status: "archived" },
       });
 
-      expect(result).toHaveProperty("success");
-      expect(result).toHaveProperty("failed");
+      // Phase 4.5: shape is `{ successes, failures, total, successCount, failedCount }`.
+      // For update, `successes` carries the full updated record (not just id) so
+      // the dispatcher can hand it directly to respondBulk without re-fetching.
+      expect(result).toHaveProperty("successes");
+      expect(result).toHaveProperty("failures");
       expect(result).toHaveProperty("total");
       expect(result).toHaveProperty("successCount");
       expect(result).toHaveProperty("failedCount");
@@ -274,15 +283,16 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       });
 
       expect(result.failedCount).toBe(1);
-      expect(result.failed[0]).toHaveProperty("id", "missing-1");
-      expect(result.failed[0]).toHaveProperty("error");
+      expect(result.failures[0]).toHaveProperty("id", "missing-1");
+      expect(result.failures[0]).toHaveProperty("code");
+      expect(result.failures[0]).toHaveProperty("message");
     });
   });
 
   // ── bulkUpdateByQuery ─────────────────────────────────────────────────
 
   describe("bulkUpdateByQuery", () => {
-    it("should return BulkOperationResult shape", async () => {
+    it("should return BulkOperationResult shape (Phase 4.5)", async () => {
       selectData.rows = [];
 
       const result = await service.bulkUpdateByQuery({
@@ -291,8 +301,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         data: { status: "published" },
       });
 
-      expect(result).toHaveProperty("success");
-      expect(result).toHaveProperty("failed");
+      expect(result).toHaveProperty("successes");
+      expect(result).toHaveProperty("failures");
       expect(result).toHaveProperty("total");
     });
 
@@ -310,15 +320,18 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       expect(result.failedCount).toBe(0);
     });
 
-    it("should check collection-level access first", async () => {
-      // Mock access denied at collection level
+    it("should throw NextlyError.forbidden when collection-level access is denied (Phase 4.5)", async () => {
+      // Phase 4.5: a collection-wide access denial is a request-level
+      // authorization failure, not a per-item partial failure. The service
+      // throws NextlyError.forbidden so the dispatcher emits a canonical
+      // 403 error envelope instead of fabricating a synthetic row in
+      // `failures[]` with no real id to attach it to.
       const mockACS = createMockAccessControlService();
       mockACS.evaluateAccess.mockResolvedValueOnce({
         allowed: false,
         reason: "No update access",
       });
 
-      // Recreate service with restricted access
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
         mockAdapter as never,
@@ -332,21 +345,21 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         undefined
       );
 
-      const result = await restrictedService.bulkUpdateByQuery({
-        collectionName: "posts",
-        where: { status: { equals: "draft" } },
-        data: { status: "published" },
-        user: { id: "user-1" },
-      });
-
-      expect(result.failedCount).toBeGreaterThanOrEqual(1);
+      await expect(
+        restrictedService.bulkUpdateByQuery({
+          collectionName: "posts",
+          where: { status: { equals: "draft" } },
+          data: { status: "published" },
+          user: { id: "user-1" },
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 
   // ── bulkDeleteByQuery ─────────────────────────────────────────────────
 
   describe("bulkDeleteByQuery", () => {
-    it("should return BulkOperationResult shape", async () => {
+    it("should return BulkOperationResult shape (Phase 4.5)", async () => {
       selectData.rows = [];
 
       const result = await service.bulkDeleteByQuery({
@@ -354,8 +367,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         where: { status: { equals: "draft" } },
       });
 
-      expect(result).toHaveProperty("success");
-      expect(result).toHaveProperty("failed");
+      expect(result).toHaveProperty("successes");
+      expect(result).toHaveProperty("failures");
       expect(result).toHaveProperty("total");
     });
 
@@ -371,7 +384,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       expect(result.failedCount).toBe(0);
     });
 
-    it("should check collection-level access first", async () => {
+    it("should throw NextlyError.forbidden when collection-level access is denied (Phase 4.5)", async () => {
+      // See bulkUpdateByQuery analogue above: a collection-wide access denial
+      // is a request-level authorization failure (403), not a partial-success
+      // entry in `failures[]`.
       const mockACS = createMockAccessControlService();
       mockACS.evaluateAccess.mockResolvedValueOnce({
         allowed: false,
@@ -391,13 +407,13 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         undefined
       );
 
-      const result = await restrictedService.bulkDeleteByQuery({
-        collectionName: "posts",
-        where: { status: { equals: "draft" } },
-        user: { id: "user-1" },
-      });
-
-      expect(result.failedCount).toBeGreaterThanOrEqual(1);
+      await expect(
+        restrictedService.bulkDeleteByQuery({
+          collectionName: "posts",
+          where: { status: { equals: "draft" } },
+          user: { id: "user-1" },
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 

@@ -13,16 +13,16 @@ import type {
   MediaFile,
   MediaFolder,
 } from "../../services/media/media-service";
-import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteMediaArgs,
   BulkOperationResult,
   CreateFolderArgs,
   DeleteMediaArgs,
-  DeleteResult,
   FindMediaArgs,
   FindMediaByIDArgs,
   ListFoldersArgs,
+  ListResult,
+  MutationResult,
   UpdateMediaArgs,
   UploadMediaArgs,
 } from "../types/index";
@@ -32,7 +32,7 @@ import {
   createRequestContext,
   isNotFoundError,
   mergeConfig,
-  toPaginatedResponse,
+  toListResult,
 } from "./helpers";
 
 /**
@@ -50,13 +50,18 @@ export interface MediaFoldersNamespace {
 
 /**
  * Media namespace API, bound to a Nextly context.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use the canonical envelopes.
+ * Uploads keep returning the bare `MediaFile` because they're a non-CRUD
+ * action and the wire API does not wrap successful uploads in
+ * `respondMutation` either.
  */
 export interface MediaNamespace {
   upload(args: UploadMediaArgs): Promise<MediaFile>;
-  find(args?: FindMediaArgs): Promise<PaginatedResponse<MediaFile>>;
+  find(args?: FindMediaArgs): Promise<ListResult<MediaFile>>;
   findByID(args: FindMediaByIDArgs): Promise<MediaFile | null>;
-  update(args: UpdateMediaArgs): Promise<MediaFile>;
-  delete(args: DeleteMediaArgs): Promise<DeleteResult>;
+  update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>>;
+  delete(args: DeleteMediaArgs): Promise<MutationResult<{ id: string }>>;
   bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult>;
   folders: MediaFoldersNamespace;
 }
@@ -113,9 +118,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       );
     },
 
-    async find(
-      args: FindMediaArgs = {}
-    ): Promise<PaginatedResponse<MediaFile>> {
+    async find(args: FindMediaArgs = {}): Promise<ListResult<MediaFile>> {
       const limit = args.limit ?? 24;
       const page = args.page ?? 1;
 
@@ -132,7 +135,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         createRequestContext(args)
       );
 
-      return toPaginatedResponse(result, limit, page);
+      return toListResult(result, limit, page);
     },
 
     async findByID(args: FindMediaByIDArgs): Promise<MediaFile | null> {
@@ -151,7 +154,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       }
     },
 
-    async update(args: UpdateMediaArgs): Promise<MediaFile> {
+    async update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>> {
       if (!args.id) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -160,7 +163,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         });
       }
 
-      return await ctx.mediaService.update(
+      const item = await ctx.mediaService.update(
         args.id,
         {
           filename: args.data.filename,
@@ -171,9 +174,16 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         },
         createRequestContext(args)
       );
+      // Phase 4 (Task 13): mutations return `{ message, item }`.
+      return {
+        message: "Media updated.",
+        item,
+      };
     },
 
-    async delete(args: DeleteMediaArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteMediaArgs
+    ): Promise<MutationResult<{ id: string }>> {
       if (!args.id) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -184,36 +194,26 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
       await ctx.mediaService.delete(args.id, createRequestContext(args));
       return {
-        deleted: true,
-        ids: [args.id],
+        message: "Media deleted.",
+        item: { id: args.id },
       };
     },
 
     async bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult> {
       if (!args.ids || args.ids.length === 0) {
         return {
-          success: [],
-          failed: [],
+          successes: [],
+          failures: [],
           total: 0,
           successCount: 0,
           failedCount: 0,
         };
       }
 
-      const result = await ctx.mediaService.bulkDelete(
-        args.ids,
-        createRequestContext(args)
-      );
-
-      return {
-        success: result.results.filter(r => r.success).map(r => r.id),
-        failed: result.results
-          .filter(r => !r.success)
-          .map(r => ({ id: r.id, error: r.error ?? "Unknown error" })),
-        total: result.totalItems,
-        successCount: result.successCount,
-        failedCount: result.failureCount,
-      };
+      // Phase 4.5: mediaService.bulkDelete now returns the canonical
+      // BulkOperationResult shape (successes + failures) directly. No
+      // translation needed at the direct-api boundary anymore.
+      return ctx.mediaService.bulkDelete(args.ids, createRequestContext(args));
     },
 
     folders,

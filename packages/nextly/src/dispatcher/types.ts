@@ -45,10 +45,19 @@ export interface DispatchRequest {
   request?: Request;
 }
 
+import type { NextlyError } from "../errors/nextly-error";
+
 export interface DispatchResult {
   success: boolean;
   data?: unknown;
-  error?: string;
+  /**
+   * Phase 4: error carries the original NextlyError (not a stringified
+   * message) so the route wrapper can rebuild the response with correct
+   * statusCode, code, publicData, and headers (Retry-After for rate
+   * limits, etc.). Pre-Phase-4 this was `string`, which lost all the
+   * structured metadata. See spec §6.4.
+   */
+  error?: NextlyError;
   status: number;
   message?: string;
   meta?: unknown;

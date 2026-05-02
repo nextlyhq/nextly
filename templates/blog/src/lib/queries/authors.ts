@@ -41,7 +41,9 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
   // (typically <50) so the full page fetch is cheap.
   const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.users.find({ limit: 1000 });
-  const match = (result.docs as unknown as Record<string, unknown>[]).find(
+  // Phase 4 (Task 14): users.find now returns canonical ListResult shape
+  // (`{ items, meta }`); read the page slice from `items` (was `docs`).
+  const match = (result.items as unknown as Record<string, unknown>[]).find(
     d => (d.slug as string | undefined) === slug
   );
   return match ? toAuthor(match) : null;
@@ -50,7 +52,8 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
 export async function getAllAuthorSlugs(): Promise<string[]> {
   const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.users.find({ limit: 1000 });
-  return (result.docs as unknown as Record<string, unknown>[])
+  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
+  return (result.items as unknown as Record<string, unknown>[])
     .map(d => d.slug as string | undefined)
     .filter((s): s is string => typeof s === "string" && s.length > 0);
 }

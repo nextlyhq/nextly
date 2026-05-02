@@ -54,8 +54,14 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
+import { readOrGenerateRequestId } from "./api/request-id";
+// Phase 4 Task 12: direct branches (admin-meta, sidebar-groups) emit
+// canonical respondX wire shapes (spec section 5.1) instead of the
+// hand-rolled `{ data: <payload> }` envelope.
+import { respondData, respondMutation } from "./api/response-shapes";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { NextlyError } from "./errors/nextly-error";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -793,32 +799,104 @@ async function handleServiceRequest(
     headers["X-Nextly-Schema-Version"] = String(schemaVersion);
   }
 
-  // Task 24 phase 4: collapse the dispatcher's triple-wrap to the
-  // canonical envelope. Pre-task-24 the wire was
-  //   { data: { success, status, data: <T>, message?, meta? } }
-  // which forced consumers to read `result.data.<field>` after the
-  // fetcher's single-`data` peel — and most of them got it wrong.
-  // Now success responses follow the Task-21 spec (§10.2) shape:
-  //   { data: <T>, meta?: <M> }                 // success
-  //   { errors: [{ code, message }] }           // failure
-  // Status code carries success/failure on the wire. Consumers read
-  // `result.<field>` directly (or `.docs` / `.meta` for paginated
-  // lists once those endpoints get migrated to PaginatedDocs<T>).
+  // Phase 4: align dispatcher error path with withErrorHandler. Both API
+  // surfaces emit the canonical Task 21 §10.1 singular shape:
+  //
+  //   { error: { code, message, messageKey?, data?, requestId } }
+  //
+  // Pre-Phase-4 the dispatcher emitted plural { errors: [...] } and
+  // parseApiError on the admin client only read singular `error`,
+  // silently degrading to "Unexpected response from server." See spec §6.4.
+  //
+  // The original NextlyError flows through DispatchResult.error
+  // (Task 5 — propagated, not stringified), so we can rebuild the response
+  // with the correct status, code, publicData, and headers (Retry-After
+  // for rate limits, X-Request-Id always).
   if (!result.success) {
-    const errorBody = {
-      errors: [
-        {
-          code: "INTERNAL_ERROR",
-          message: result.error ?? "An unexpected error occurred.",
-        },
-      ],
+    const requestId = readOrGenerateRequestId(req);
+    // The dispatcher (post-Phase-4) always sets `error` to a NextlyError
+    // when `success` is false. The fallback covers a paranoid corner.
+    const nextlyErr = NextlyError.is(result.error)
+      ? result.error
+      : NextlyError.internal();
+
+    // Phase 4 follow-up (post-merge): emit an operator-facing log line
+    // mirroring withErrorHandler's pattern (api/with-error-handler.ts).
+    // Without this, dispatcher errors leave nothing in the terminal
+    // beyond `PATCH ... 500`, making 5xx triage essentially impossible.
+    // Skip logging for benign expected errors (NOT_FOUND, RATE_LIMITED,
+    // AUTH_REQUIRED) so the log doesn't get flooded by unauth probes.
+    const benignCodes = new Set([
+      "NOT_FOUND",
+      "RATE_LIMITED",
+      "AUTH_REQUIRED",
+    ]);
+    if (!benignCodes.has(String(nextlyErr.code))) {
+      try {
+        // Lazy-import the logger to avoid pulling it onto the cold path
+        // for paths that never error.
+        const { getNextlyLogger } = await import("./observability/logger");
+        getNextlyLogger().error({
+          kind: "dispatcher-error",
+          ...nextlyErr.toLogJSON(requestId),
+          route: new URL(req.url).pathname,
+          method: req.method,
+          service: dispatchRequest.service,
+          operation: dispatchRequest.operation,
+          dispatchMethod: dispatchRequest.method,
+        });
+      } catch {
+        // If the logger itself throws, swallow; we still want to emit
+        // the user-facing error response below.
+      }
+    }
+
+    const errorHeaders: Record<string, string> = {
+      "content-type": "application/problem+json",
+      "x-request-id": requestId,
     };
-    return new Response(JSON.stringify(errorBody), {
-      status: result.status,
-      headers,
-    });
+    if (schemaVersion !== undefined) {
+      errorHeaders["X-Nextly-Schema-Version"] = String(schemaVersion);
+    }
+    if (nextlyErr.code === "RATE_LIMITED") {
+      const data = nextlyErr.publicData;
+      if (
+        data &&
+        typeof data === "object" &&
+        "retryAfterSeconds" in data &&
+        typeof (data as { retryAfterSeconds?: unknown }).retryAfterSeconds ===
+          "number"
+      ) {
+        errorHeaders["retry-after"] = String(
+          (data as { retryAfterSeconds: number }).retryAfterSeconds
+        );
+      }
+    }
+    return new Response(
+      JSON.stringify({ error: nextlyErr.toResponseJSON(requestId) }),
+      {
+        status: nextlyErr.statusCode,
+        headers: errorHeaders,
+      }
+    );
   }
 
+  // Phase 4: dispatcher handlers migrated via respondX helpers return
+  // a Response directly (body + status + content-type already set).
+  // Just attach the schema-version header (and any other route-level
+  // metadata) and return it.
+  if (result.data instanceof Response) {
+    const response = result.data;
+    if (schemaVersion !== undefined) {
+      response.headers.set("X-Nextly-Schema-Version", String(schemaVersion));
+    }
+    return response;
+  }
+
+  // Legacy path for unmigrated handlers (Tasks 6-12 in progress):
+  // wrap whatever data they returned in { data, meta }. This is
+  // gone after the migration is complete and `respondX` is the only
+  // way to build a body in the dispatcher path.
   const successBody: Record<string, unknown> = { data: result.data };
   if (result.meta !== undefined) {
     successBody.meta = result.meta;
@@ -950,13 +1028,12 @@ async function handleAdminMetaRequest(): Promise<Response> {
     console.error("[ADMIN-META] Error fetching settings from DB:", err);
   }
 
-  // Canonical Task-21 envelope: { data: <payload> }. The dispatcher used to
-  // wrap an extra { status, success, data } envelope which the migrated
-  // fetcher no longer peels — see task 24 phase 1.
-  return new Response(JSON.stringify({ data: payload }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  // Phase 4 Task 12: respondData (bare object). The admin-meta payload is
+  // a non-CRUD read; the admin client already consumes a bare body via the
+  // migrated fetcher. `respondData` requires a Record-shaped argument and
+  // `payload` is built as `Record<string, unknown>` above so the bound is
+  // satisfied without a cast.
+  return respondData(payload);
 }
 
 /**
@@ -999,11 +1076,9 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
     const svc = container.get<GeneralSettingsService>("generalSettingsService");
     const updated = await svc.updateCustomSidebarGroups(validated);
 
-    // Canonical envelope: { data: <updated> } — see task 24 phase 1.
-    return new Response(JSON.stringify({ data: updated }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    // Phase 4 Task 12: respondMutation. The updated groups array is the
+    // mutation `item` and the toast message is server-authored.
+    return respondMutation("Sidebar groups updated.", updated);
   } catch (error) {
     const message =
       error instanceof Error
@@ -1333,3 +1408,18 @@ export function getCollectionsHandler(): CollectionsHandler | undefined {
   // The caller should check for this and handle accordingly
   return undefined;
 }
+
+/**
+ * Test-only re-exports for the routeHandler direct branches.
+ *
+ * Phase 4 Task 12 introduced regression tests that pin the canonical
+ * respondX wire shapes for the admin-meta and sidebar-groups branches.
+ * Those branches are private (defined inside this module to keep the
+ * route-dispatch surface narrow), so we expose them under a clearly
+ * test-flagged name. Production code must keep importing through
+ * `createDynamicHandlers`. The underscore prefix and `_ForTest` suffix
+ * make accidental production imports obvious in code review.
+ */
+export const _handleAdminMetaRequestForTest = handleAdminMetaRequest;
+export const _handleAdminMetaSidebarGroupsForTest =
+  handleAdminMetaSidebarGroups;

@@ -32,32 +32,44 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("find()", () => {
-    it("should return paginated response on success", async () => {
-      const mockResult = {
+    // Phase 4 (Task 13): find() returns the canonical `ListResult<T>`
+    // envelope (`{ items, meta }`). The collections handler still emits
+    // the legacy Payload-style shape internally; the namespace adapter
+    // translates at the Direct API boundary.
+    it("should return list result on success", async () => {
+      const mockData = {
+        docs: [
+          { id: "1", title: "Post 1" },
+          { id: "2", title: "Post 2" },
+        ],
+        totalDocs: 2,
+        limit: 10,
+        page: 1,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPrevPage: false,
+        nextPage: null,
+        prevPage: null,
+        pagingCounter: 1,
+      };
+      mocks.collectionsHandler.listEntries.mockResolvedValue({
         success: true,
         statusCode: 200,
         message: "OK",
-        data: {
-          docs: [
-            { id: "1", title: "Post 1" },
-            { id: "2", title: "Post 2" },
-          ],
-          totalDocs: 2,
-          limit: 10,
-          page: 1,
-          totalPages: 1,
-          hasNextPage: false,
-          hasPrevPage: false,
-          nextPage: null,
-          prevPage: null,
-          pagingCounter: 1,
-        },
-      };
-      mocks.collectionsHandler.listEntries.mockResolvedValue(mockResult);
+        data: mockData,
+      });
 
       const result = await nextly.find({ collection: "posts" });
 
-      expect(result).toEqual(mockResult.data);
+      expect(result.items).toEqual(mockData.docs);
+      expect(result.meta).toEqual({
+        total: 2,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+      });
       expect(mocks.collectionsHandler.listEntries).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "posts",
@@ -202,7 +214,11 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("create()", () => {
-    it("should return created document", async () => {
+    // Phase 4 (Task 13): create() returns `{ message, item }`. Message
+    // uses the collection slug capitalized (e.g. "Posts created.") so
+    // callers can surface a generic toast without hand-writing copy per
+    // collection.
+    it("should return mutation result with the created document", async () => {
       const mockDoc = { id: "new-1", title: "New Post" };
       mocks.collectionsHandler.createEntry.mockResolvedValue({
         success: true,
@@ -216,7 +232,8 @@ describe("Direct API - Collection Operations", () => {
         data: { title: "New Post" },
       });
 
-      expect(result).toEqual(mockDoc);
+      expect(result.item).toEqual(mockDoc);
+      expect(result.message).toBe("Posts created.");
       expect(mocks.collectionsHandler.createEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "posts",
@@ -265,7 +282,8 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("update()", () => {
-    it("should update by ID and return updated document", async () => {
+    // Phase 4 (Task 13): update() returns `{ message, item }`.
+    it("should update by ID and return mutation result", async () => {
       const mockDoc = { id: "post-1", title: "Updated" };
       mocks.collectionsHandler.updateEntry.mockResolvedValue({
         success: true,
@@ -280,7 +298,8 @@ describe("Direct API - Collection Operations", () => {
         data: { title: "Updated" },
       });
 
-      expect(result).toEqual(mockDoc);
+      expect(result.item).toEqual(mockDoc);
+      expect(result.message).toBe("Posts updated.");
       expect(mocks.collectionsHandler.updateEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           collectionName: "posts",
@@ -310,7 +329,10 @@ describe("Direct API - Collection Operations", () => {
         data: { status: "published" },
       });
 
-      expect(result).toEqual({ id: "post-1", status: "published" });
+      // Phase 4 (Task 13): the where-clause path also returns the
+      // canonical `{ message, item }` envelope.
+      expect(result.item).toEqual({ id: "post-1", status: "published" });
+      expect(result.message).toBe("Posts updated.");
     });
 
     it("should throw when neither id nor where provided", async () => {
@@ -341,7 +363,10 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("delete()", () => {
-    it("should delete by ID and return result", async () => {
+    // Phase 4 (Task 13): the by-id path returns `{ message, item: { id } }`.
+    // The by-where path keeps the legacy `DeleteResult` shape because a
+    // multi-row delete can't collapse into a single mutation envelope.
+    it("should delete by ID and return mutation result", async () => {
       mocks.collectionsHandler.deleteEntry.mockResolvedValue({
         success: true,
         statusCode: 200,
@@ -354,10 +379,13 @@ describe("Direct API - Collection Operations", () => {
         id: "post-1",
       });
 
-      expect(result).toEqual({ deleted: true, ids: ["post-1"] });
+      expect(result).toEqual({
+        message: "Posts deleted.",
+        item: { id: "post-1" },
+      });
     });
 
-    it("should delete by where clause", async () => {
+    it("should delete by where clause and return DeleteResult", async () => {
       mocks.collectionsHandler.bulkDeleteByQuery.mockResolvedValue({
         success: ["post-1", "post-2"],
         failed: [],
@@ -394,18 +422,20 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("count()", () => {
-    it("should return count result", async () => {
-      const mockCount = { totalDocs: 42 };
+    // Phase 4 (Task 13): count() returns `{ total }` (was `{ totalDocs }`).
+    // The service still emits the legacy `{ totalDocs }` shape; the
+    // namespace adapter renames the key at the Direct API boundary.
+    it("should return count result with `total` key", async () => {
       mocks.collectionsHandler.countEntries.mockResolvedValue({
         success: true,
         statusCode: 200,
         message: "OK",
-        data: mockCount,
+        data: { totalDocs: 42 },
       });
 
       const result = await nextly.count({ collection: "posts" });
 
-      expect(result).toEqual(mockCount);
+      expect(result).toEqual({ total: 42 });
     });
 
     it("should pass where clause", async () => {
@@ -506,7 +536,8 @@ describe("Direct API - Collection Operations", () => {
   });
 
   describe("duplicate()", () => {
-    it("should return duplicated document", async () => {
+    // Phase 4 (Task 13): duplicate() returns `{ message, item }`.
+    it("should return mutation result with the duplicated document", async () => {
       const mockDoc = { id: "post-copy", title: "Hello" };
       mocks.collectionsHandler.duplicateEntry.mockResolvedValue({
         success: true,
@@ -520,7 +551,8 @@ describe("Direct API - Collection Operations", () => {
         id: "post-1",
       });
 
-      expect(result).toEqual(mockDoc);
+      expect(result.item).toEqual(mockDoc);
+      expect(result.message).toBe("Posts duplicated.");
     });
 
     it("should pass overrides", async () => {

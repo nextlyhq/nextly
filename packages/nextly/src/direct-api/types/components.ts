@@ -261,7 +261,9 @@ export interface UpdateComponentArgs extends DirectAPIConfig {
  * @example
  * ```typescript
  * const result = await nextly.components.delete({ slug: 'testimonial' });
- * console.log('Deleted:', result.deleted);
+ * // Phase 4 (Task 13): delete returns MutationResult<{ slug }>.
+ * console.log(result.message);    // e.g. "Component deleted successfully"
+ * console.log(result.item.slug);  // "testimonial"
  * ```
  */
 export interface DeleteComponentArgs extends DirectAPIConfig {
@@ -271,6 +273,11 @@ export interface DeleteComponentArgs extends DirectAPIConfig {
 
 /**
  * Result of listing component definitions.
+ *
+ * @deprecated Phase 4 (Task 13): `nextly.components.find()` now returns
+ * `ListResult<ComponentDefinition>` (`{ items, meta }`). This legacy
+ * shape is retained only for transitional consumer code and is removed
+ * in Task 23 cleanup.
  */
 export interface ComponentListResult {
   /** Component definitions */

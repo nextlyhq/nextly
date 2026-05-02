@@ -160,8 +160,8 @@ export interface SubmitFormResult {
  *   page: 1,
  * });
  *
- * console.log(result.docs);      // Submission records
- * console.log(result.totalDocs); // Total count
+ * console.log(result.items);      // Submission records
+ * console.log(result.meta.total); // Total count
  * ```
  */
 export interface FormSubmissionsArgs extends DirectAPIConfig {

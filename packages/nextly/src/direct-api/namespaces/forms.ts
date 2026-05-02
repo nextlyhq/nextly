@@ -15,6 +15,7 @@ import type {
   FindFormBySlugArgs,
   FindFormsArgs,
   FormSubmissionsArgs,
+  ListResult,
   SubmitFormArgs,
   SubmitFormResult,
 } from "../types/index";
@@ -29,16 +30,19 @@ import {
 
 /**
  * Forms namespace API, bound to a Nextly context.
+ *
+ * Phase 4 (Task 13): list surfaces use the canonical `ListResult<T>`
+ * envelope. `submit()` retains its own `SubmitFormResult` shape because
+ * it carries `success`/`redirect` semantics that don't map cleanly onto
+ * `MutationResult`.
  */
 export interface FormsNamespace {
-  find(
-    args?: FindFormsArgs
-  ): Promise<PaginatedResponse<Record<string, unknown>>>;
+  find(args?: FindFormsArgs): Promise<ListResult<Record<string, unknown>>>;
   findBySlug(args: FindFormBySlugArgs): Promise<Record<string, unknown> | null>;
   submit(args: SubmitFormArgs): Promise<SubmitFormResult>;
   submissions(
     args: FormSubmissionsArgs
-  ): Promise<PaginatedResponse<Record<string, unknown>>>;
+  ): Promise<ListResult<Record<string, unknown>>>;
 }
 
 /**
@@ -48,7 +52,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
   const namespace: FormsNamespace = {
     async find(
       args: FindFormsArgs = {}
-    ): Promise<PaginatedResponse<Record<string, unknown>>> {
+    ): Promise<ListResult<Record<string, unknown>>> {
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -68,7 +72,25 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         throw createErrorFromResult(result);
       }
 
-      return result.data as PaginatedResponse<Record<string, unknown>>;
+      // Phase 4 (Task 13): the underlying collectionsHandler still emits
+      // the legacy Payload-style envelope (`{ docs, totalDocs, ... }`);
+      // adapt to the canonical `ListResult<T>` here. Defaults guard
+      // against test fixtures that omit pagination metadata.
+      const legacy = result.data as PaginatedResponse<Record<string, unknown>>;
+      const total = legacy.totalDocs ?? legacy.docs.length;
+      const totalPages =
+        legacy.totalPages ?? Math.max(1, Math.ceil(total / Math.max(limit, 1)));
+      return {
+        items: legacy.docs,
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNext: legacy.hasNextPage ?? page < totalPages,
+          hasPrev: legacy.hasPrevPage ?? page > 1,
+        },
+      };
     },
 
     async findBySlug(
@@ -198,7 +220,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
 
     async submissions(
       args: FormSubmissionsArgs
-    ): Promise<PaginatedResponse<Record<string, unknown>>> {
+    ): Promise<ListResult<Record<string, unknown>>> {
       if (!args.form) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -240,7 +262,23 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         throw createErrorFromResult(result);
       }
 
-      return result.data as PaginatedResponse<Record<string, unknown>>;
+      // Phase 4 (Task 13): adapt the legacy Payload-style envelope from
+      // collectionsHandler.listEntries to the canonical `ListResult<T>`.
+      const legacy = result.data as PaginatedResponse<Record<string, unknown>>;
+      const total = legacy.totalDocs ?? legacy.docs.length;
+      const totalPages =
+        legacy.totalPages ?? Math.max(1, Math.ceil(total / Math.max(limit, 1)));
+      return {
+        items: legacy.docs,
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNext: legacy.hasNextPage ?? page < totalPages,
+          hasPrev: legacy.hasPrevPage ?? page > 1,
+        },
+      };
     },
   };
 

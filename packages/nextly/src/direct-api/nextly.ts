@@ -19,25 +19,29 @@
  *
  * const nextly = getNextly();
  *
- * // Find documents
- * const posts = await nextly.find({
+ * // Find documents -> ListResult<T> = { items, meta }
+ * const result = await nextly.find({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  *   limit: 10,
  *   sort: '-createdAt',
  * });
+ * result.items;       // Post[]
+ * result.meta.total;  // number
  *
- * // Get single document
+ * // Get single document -> bare doc or null
  * const post = await nextly.findByID({
  *   collection: 'posts',
  *   id: 'post-123',
  * });
  *
- * // Create document
- * const newPost = await nextly.create({
+ * // Create document -> MutationResult<T> = { message, item }
+ * const created = await nextly.create({
  *   collection: 'posts',
  *   data: { title: 'Hello', content: 'World' },
  * });
+ * created.item;     // Post
+ * created.message;  // string
  * ```
  *
  * @packageDocumentation
@@ -66,7 +70,6 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
-import type { PaginatedResponse } from "../types/pagination";
 
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
@@ -118,8 +121,10 @@ import type {
   FindGlobalArgs,
   FindGlobalsArgs,
   ForgotPasswordArgs,
+  ListResult,
   LoginArgs,
   LoginResult,
+  MutationResult,
   RegisterArgs,
   ResetPasswordArgs,
   SingleListResult,
@@ -211,7 +216,10 @@ import type {
  * const nextly = getNextly();
  *
  * // Default: bypass access control (trusted server context)
+ * // Returns ListResult<T> = { items, meta }.
  * const posts = await nextly.find({ collection: 'posts' });
+ * posts.items;       // Post[]
+ * posts.meta.total;  // number
  *
  * // Enforce access control for user-facing operations
  * const userPosts = await nextly.find({
@@ -436,11 +444,16 @@ export class Nextly implements NextlyContext {
 
   /**
    * Find multiple documents in a collection.
+   *
+   * Phase 4 (Task 13): returns the canonical `ListResult<T>` shape
+   * (`{ items, meta }`). Callers migrating from `{ docs, totalDocs, ... }`:
+   * `result.docs` -> `result.items`, `result.totalDocs` -> `result.meta.total`.
+   *
    * @throws {NextlyError} If the operation fails
    */
   find<TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ): Promise<PaginatedResponse<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<ListResult<DataFromCollectionSlug<TSlug>>> {
     return collectionsNs.find(this, args);
   }
 
@@ -454,26 +467,49 @@ export class Nextly implements NextlyContext {
     return collectionsNs.findByID(this, args);
   }
 
-  /** Create a new document in a collection. */
+  /**
+   * Create a new document in a collection.
+   *
+   * Phase 4 (Task 13): returns `{ message, item }`. Callers reading the
+   * created doc must read `result.item` (was a bare `T`).
+   */
   create<TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
-  ): Promise<DataFromCollectionSlug<TSlug>> {
+  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
     return collectionsNs.create(this, args);
   }
 
-  /** Update a document by ID or by `where` clause (returns the first match). */
+  /**
+   * Update a document by ID or by `where` clause (returns the first match).
+   *
+   * Phase 4 (Task 13): returns `{ message, item }`. Callers reading the
+   * updated doc must read `result.item` (was a bare `T`).
+   */
   update<TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
-  ): Promise<DataFromCollectionSlug<TSlug>> {
+  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
     return collectionsNs.update(this, args);
   }
 
-  /** Delete a document by ID or by `where` clause. */
-  delete(args: DeleteArgs): Promise<DeleteResult> {
+  /**
+   * Delete a document by ID or by `where` clause.
+   *
+   * Phase 4 (Task 13): when called with `id`, returns `{ message, item }`
+   * where `item` carries the deleted `id`. The bulk-by-where path still
+   * returns the legacy `DeleteResult` shape (`{ deleted, ids }`) because
+   * a multi-row delete cannot collapse to a single mutation envelope.
+   */
+  delete<TSlug extends CollectionSlug = CollectionSlug>(
+    args: DeleteArgs<TSlug>
+  ): Promise<MutationResult<{ id: string }> | DeleteResult> {
     return collectionsNs.deleteEntry(this, args);
   }
 
-  /** Count documents matching a query. */
+  /**
+   * Count documents matching a query.
+   *
+   * Phase 4 (Task 13): returns `{ total }` (was `{ totalDocs }`).
+   */
   count(args: CountArgs): Promise<CountResult> {
     return collectionsNs.count(this, args);
   }
@@ -483,10 +519,15 @@ export class Nextly implements NextlyContext {
     return collectionsNs.bulkDelete(this, args);
   }
 
-  /** Duplicate a document (optionally applying field overrides). */
+  /**
+   * Duplicate a document (optionally applying field overrides).
+   *
+   * Phase 4 (Task 13): returns `{ message, item }`. Callers reading the
+   * duplicated doc must read `result.item` (was a bare `T`).
+   */
   duplicate<TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
-  ): Promise<DataFromCollectionSlug<TSlug>> {
+  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
     return collectionsNs.duplicate(this, args);
   }
 
@@ -592,11 +633,13 @@ const globalForDirectApi = globalThis as unknown as {
  *
  * const nextly = getNextly();
  *
- * // Find posts
- * const posts = await nextly.find({
+ * // Find posts. Returns ListResult<T> = { items, meta }.
+ * const result = await nextly.find({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  * });
+ * result.items;       // Post[]
+ * result.meta.total;  // number
  * ```
  */
 export function getNextly(config?: DirectAPIConfig): Nextly {
@@ -649,12 +692,15 @@ export function resetNextlyInstance(): void {
  * ```typescript
  * import { nextly } from '@revnixhq/nextly';
  *
- * const posts = await nextly.find({
+ * // Returns ListResult<T> = { items, meta }.
+ * const result = await nextly.find({
  *   collection: 'posts',
  *   where: { status: { equals: 'published' } },
  *   limit: 10,
  *   sort: '-createdAt',
  * });
+ * result.items;       // Post[]
+ * result.meta.total;  // number
  * ```
  */
 export const nextly = {

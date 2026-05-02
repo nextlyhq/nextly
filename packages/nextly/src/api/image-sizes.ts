@@ -14,9 +14,28 @@
  *
  * Requires `read-settings` (read paths) or `manage-settings` (write paths).
  *
- * Wire shape — Task 21 migration: every handler is wrapped in
- * `withErrorHandler` and returns the canonical `{ data: <result> }` envelope
- * per spec §10.2. Errors flow through the wrapper and serialize as
+ * Wire shape: Phase 4 Task 12 migrates these handlers off the legacy
+ * `{ data: <result> }` envelope onto the canonical respondX helpers
+ * (spec section 5.1):
+ *
+ *   list   -> respondList(items, syntheticMeta)
+ *   get    -> respondDoc(item)
+ *   create -> respondMutation("Image size created.", item, 201)
+ *   update -> respondMutation("Image size updated.", item)
+ *   delete -> respondAction("Image size deleted.", { id })
+ *
+ * The list endpoint is not server-paginated (callers receive every
+ * configured image size in one page). To stay on the canonical
+ * `respondList` envelope, we ship a single-page synthetic meta whose
+ * `total` matches the array length. Mirrors the api-keys pattern
+ * established in Task 11.
+ *
+ * The regeneration helpers (`getRegenerationStatus`, `regenerateBatch`)
+ * are out of scope for Task 12 (not listed in the plan as direct
+ * branches). They keep `createSuccessResponse` until a later cleanup
+ * pass.
+ *
+ * Errors flow through `withErrorHandler` and serialize as
  * `application/problem+json`.
  */
 
@@ -32,6 +51,12 @@ import { ImageSizeService } from "../services/image-size";
 import { MediaRegenerationService } from "../services/media-regeneration";
 
 import { createSuccessResponse } from "./create-success-response";
+import {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -73,7 +98,12 @@ const updateImageSizeSchema = z.object({
 });
 
 /**
- * GET /api/image-sizes - List all image sizes
+ * GET /api/image-sizes - List all image sizes.
+ *
+ * Response: `{ items: ImageSize[], meta: PaginationMeta }`. The list is
+ * not server-paginated (callers see every configured image size); meta is
+ * a single-page synthetic envelope so the wire format matches
+ * `respondList` for every list endpoint.
  */
 export const listImageSizes = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
@@ -85,7 +115,16 @@ export const listImageSizes = withErrorHandler(async (req: Request) => {
   const service = await getImageSizeService();
   const sizes = await service.list();
 
-  return createSuccessResponse(sizes);
+  // Phase 4: respondList. Synthetic single-page meta keeps the canonical
+  // list shape even though the underlying service does not paginate.
+  return respondList(sizes, {
+    total: sizes.length,
+    page: 1,
+    limit: sizes.length,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+  });
 });
 
 /**
@@ -108,7 +147,8 @@ export const getImageSizeById = withErrorHandler(
       throw NextlyError.notFound({ logContext: { resource: "imageSize", id } });
     }
 
-    return createSuccessResponse(size);
+    // Phase 4: respondDoc. Single document fetch returns the row bare.
+    return respondDoc(size);
   }
 );
 
@@ -169,7 +209,9 @@ export const createImageSize = withErrorHandler(async (req: Request) => {
     isDefault: false, // UI-created sizes are not "default" (code-defined)
   });
 
-  return createSuccessResponse(created, { status: 201 });
+  // Phase 4: respondMutation 201. The created row is the mutation `item`
+  // and the toast message is server-authored.
+  return respondMutation("Image size created.", created, { status: 201 });
 });
 
 /**
@@ -206,7 +248,8 @@ export const updateImageSize = withErrorHandler(
     const service = await getImageSizeService();
     const updated = await service.update(id, parsed.data);
 
-    return createSuccessResponse(updated);
+    // Phase 4: respondMutation. The updated row is the mutation `item`.
+    return respondMutation("Image size updated.", updated);
   }
 );
 
@@ -223,7 +266,10 @@ export const deleteImageSize = withErrorHandler(
     const service = await getImageSizeService();
     await service.delete(id);
 
-    return createSuccessResponse({ deleted: true });
+    // Phase 4: respondAction. The service returns void, so we surface the
+    // deleted id alongside the toast message (mirrors the deleteSingle
+    // precedent set in Task 9).
+    return respondAction("Image size deleted.", { id });
   }
 );
 

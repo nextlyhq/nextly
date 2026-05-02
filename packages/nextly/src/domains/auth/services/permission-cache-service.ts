@@ -1,7 +1,9 @@
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 import { and, eq, gt, lt, sql } from "drizzle-orm";
 
-import { getAuthLogger } from "@nextly/lib/logger";
+// Phase 4 note: relative path; vitest path-alias resolution is order-
+// dependent for this file (see services/lib/permissions.ts header).
+import { getAuthLogger } from "../../../lib/logger";
 
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";

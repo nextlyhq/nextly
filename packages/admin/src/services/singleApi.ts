@@ -15,9 +15,10 @@ import type { TableParams, TableResponse } from "@revnixhq/ui";
 import type { ApiSingle } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
-import { enhancedFetcher } from "../lib/api/enhancedFetcher";
+import { fetcher } from "../lib/api/fetcher";
 import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 
 /**
  * Build query string for pagination and search using shared utility
@@ -35,10 +36,10 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
- * Fetch Singles with pagination and filters
+ * Fetch Singles with pagination and filters.
  *
- * @param params - Table parameters for pagination, search, and sorting
- * @returns Promise with Singles data and pagination meta
+ * Phase 4 (Task 19): server returns `ListResponse<ApiSingle>`
+ * (`{ items, meta }`); we map to the table-component shape locally.
  */
 export const fetchSingles = async (
   params: TableParams
@@ -46,13 +47,9 @@ export const fetchSingles = async (
   const query = buildQuery(params);
   const url = `/singles${query ? `?${query}` : ""}`;
 
-  const result = await enhancedFetcher<ApiSingle[], Record<string, unknown>>(
-    url,
-    {},
-    true
-  );
+  const result = await fetcher<ListResponse<ApiSingle>>(url, {}, true);
 
-  const singles = result.data;
+  const singles = result.items;
   const { pageSize = 10 } = params.pagination;
   const meta = normalizePagination(result.meta, pageSize, singles.length);
 
@@ -60,12 +57,17 @@ export const fetchSingles = async (
 };
 
 /**
- * Delete a Single by slug
+ * Delete a Single by slug.
  *
- * @param slug - The slug of the Single to delete
+ * Phase 4 (Task 19): server returns `ActionResponse` (delete is a non-CRUD
+ * action in single-dispatcher because the registry returns void); we discard
+ * the body since the caller expects void.
  */
 export const deleteSingle = async (slug: string): Promise<void> => {
-  await enhancedFetcher<null>(
+  // Use MutationResponse<unknown> as a generic shape. The dispatcher emits
+  // either respondMutation (item) or respondAction ({ slug }), and we drop
+  // the body in either case.
+  await fetcher<MutationResponse<unknown>>(
     `/singles/${slug}`,
     {
       method: "DELETE",
@@ -75,77 +77,83 @@ export const deleteSingle = async (slug: string): Promise<void> => {
 };
 
 /**
- * Single API client object with all operations
+ * Single API client object with all operations.
+ *
+ * Phase 4 (Task 19): the `protectedApi.*` calls below receive the raw
+ * canonical body. List endpoints emit `ListResponse<T>`; bare reads (get,
+ * getSchema, getDocument) return the doc directly; mutations return
+ * `MutationResponse<T>`. We project the legacy shapes the existing callers
+ * expect (bare arrays for `list`, `{ message, data }` for `create`, etc.).
  */
 export const singleApi = {
   fetchSingles,
   deleteSingle,
 
   /**
-   * List all Singles
+   * List all Singles.
    */
   list: async (): Promise<ApiSingle[]> => {
-    return protectedApi.get<ApiSingle[]>("/singles");
+    const result = await protectedApi.get<ListResponse<ApiSingle>>("/singles");
+    return result.items;
   },
 
   /**
-   * Get a Single by slug
-   *
-   * @param slug - The unique slug of the Single
+   * Get a Single by slug.
    */
   get: async (slug: string): Promise<ApiSingle> => {
     return protectedApi.get<ApiSingle>(`/singles/${slug}`);
   },
 
   /**
-   * Get the schema for a Single
-   *
-   * @param slug - The unique slug of the Single
+   * Get the schema for a Single.
    */
   getSchema: async (slug: string): Promise<ApiSingle> => {
     return protectedApi.get<ApiSingle>(`/singles/${slug}/schema`);
   },
 
   /**
-   * Create a new Single
-   *
-   * @param payload - Single creation payload
+   * Create a new Single.
    */
   create: async (
     payload: Partial<ApiSingle>
   ): Promise<{ message: string; data: ApiSingle }> => {
-    return protectedApi.post<{ message: string; data: ApiSingle }>(
+    const result = await protectedApi.post<MutationResponse<ApiSingle>>(
       "/singles",
       payload
     );
+    // Preserve the legacy `{ message, data }` projection for callers; map
+    // the canonical `item` field into `data`.
+    return { message: result.message, data: result.item };
   },
 
   /**
-   * Update an existing Single's schema/metadata
+   * Update an existing Single's schema/metadata.
    *
    * This updates the Single's schema definition (fields, label, description, admin options).
    * For updating the Single's document data (actual content values), use `updateDocument()`.
-   *
-   * @param slug - The slug of the Single to update
-   * @param payload - Update payload (label, description, fields, admin)
    */
   update: async (
     slug: string,
     payload: Partial<ApiSingle>
   ): Promise<{ message: string }> => {
-    return protectedApi.patch<{ message: string }>(
+    const result = await protectedApi.patch<MutationResponse<ApiSingle>>(
       `/singles/${slug}/schema`,
       payload
     );
+    return { message: result.message };
   },
 
   /**
-   * Remove a Single
-   *
-   * @param slug - The slug of the Single to remove
+   * Remove a Single.
    */
   remove: async (slug: string): Promise<{ message: string }> => {
-    return protectedApi.delete<{ message: string }>(`/singles/${slug}`);
+    // Single delete is a respondAction (`{ message, slug }`) in the
+    // dispatcher; the message field is shared between mutation and action
+    // shapes, so we type the broader MutationResponse and read `message`.
+    const result = await protectedApi.delete<MutationResponse<unknown>>(
+      `/singles/${slug}`
+    );
+    return { message: result.message };
   },
 
   // ============================================================
@@ -156,21 +164,8 @@ export const singleApi = {
   /**
    * Get a Single's document data.
    *
-   * This fetches the actual content/values of the Single, not the schema.
-   * If the document doesn't exist, it will be auto-created with default values.
-   *
-   * Note: The API endpoint `/api/singles/[slug]` returns document data by default.
-   * For schema/metadata, use `getSchema()` which calls `/api/singles/[slug]/schema`.
-   *
-   * @param slug - The unique slug of the Single
-   * @param options - Optional parameters (depth for relationship expansion)
-   * @returns The Single document data
-   *
-   * @example
-   * ```ts
-   * const doc = await singleApi.getDocument('site-settings');
-   * console.log(doc.siteName); // "My Site"
-   * ```
+   * Phase 4 (Task 19): the document endpoint returns the bare document
+   * via respondDoc (not a list/mutation envelope).
    */
   getDocument: async (
     slug: string,
@@ -189,27 +184,19 @@ export const singleApi = {
   /**
    * Update a Single's document data.
    *
-   * This updates the actual content/values of the Single.
-   * If the document doesn't exist, it will be auto-created first.
-   *
-   * @param slug - The unique slug of the Single
-   * @param data - The document data to update
-   * @returns The updated Single document
-   *
-   * @example
-   * ```ts
-   * const updated = await singleApi.updateDocument('site-settings', {
-   *   siteName: 'My New Site Name',
-   *   tagline: 'Building the future',
-   * });
-   * ```
+   * Phase 4 (Task 19): server returns `MutationResponse<SingleDocument>`;
+   * we project `result.item` so callers continue to receive the document
+   * directly.
    */
   updateDocument: async (
     slug: string,
     data: Record<string, unknown>
   ): Promise<SingleDocument> => {
-    // The /singles/[slug] endpoint with PATCH updates document data
-    return protectedApi.patch<SingleDocument>(`/singles/${slug}`, data);
+    const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
+      `/singles/${slug}`,
+      data
+    );
+    return result.item;
   },
 } as const;
 

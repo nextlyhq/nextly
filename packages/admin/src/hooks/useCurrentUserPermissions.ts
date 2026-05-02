@@ -42,14 +42,17 @@ function buildCapabilities(
       canViewRoles: true,
       canViewMedia: true,
       canViewSettings: true,
-      collections: new Proxy({}, {
-        get: () => ({
-          canRead: true,
-          canCreate: true,
-          canUpdate: true,
-          canDelete: true,
-        }),
-      }),
+      collections: new Proxy(
+        {},
+        {
+          get: () => ({
+            canRead: true,
+            canCreate: true,
+            canUpdate: true,
+            canDelete: true,
+          }),
+        }
+      ),
       canManageUsers: true,
       canManageRoles: true,
       canManageMedia: true,
@@ -159,13 +162,12 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
  * ```
  */
 export function useCurrentUserPermissions() {
-  // Wire shape (post task-24 phase 4): `{ data: <UserPermissionsResponse> }`.
-  // The fetcher peels the single `data` layer, so `data` here IS the
-  // permissions payload directly.
+  // Phase 4 (Task 18): the fetcher no longer peels a `data` envelope; the
+  // `/me/permissions` endpoint returns the canonical UserPermissionsResponse
+  // shape directly, so `data` here IS the permissions payload.
   const { data, isLoading, error } = useQuery<UserPermissionsResponse>({
     queryKey: ["currentUserPermissions"],
-    queryFn: () =>
-      protectedApi.get<UserPermissionsResponse>("/me/permissions"),
+    queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,

@@ -18,14 +18,12 @@ import type { EmailProviderRecord } from "../../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import type { UpdateEmailTemplateInput } from "../../services/email/email-template-service";
-import type { PaginatedResponse } from "../../types/pagination";
 import type {
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
   CreateUserFieldArgs,
   DeleteEmailProviderArgs,
   DeleteEmailTemplateArgs,
-  DeleteResult,
   DeleteUserFieldArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
@@ -35,6 +33,8 @@ import type {
   FindUserFieldByIDArgs,
   FindUserFieldsArgs,
   GetEmailLayoutArgs,
+  ListResult,
+  MutationResult,
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
   SendEmailArgs,
@@ -52,7 +52,7 @@ import type { NextlyContext } from "./context";
 import {
   isNotFoundError,
   mergeConfig,
-  slicePaginatedResponse,
+  sliceListResult,
 } from "./helpers";
 
 /**
@@ -113,17 +113,27 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
 
 /**
  * `nextly.emailProviders.*` namespace — CRUD on provider configurations.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
+ * `setDefault` keeps returning the bare provider record because it's a
+ * non-CRUD action whose primary value is the resulting record itself.
  */
 export interface EmailProvidersNamespace {
   find(
     args?: FindEmailProvidersArgs
-  ): Promise<PaginatedResponse<EmailProviderRecord>>;
+  ): Promise<ListResult<EmailProviderRecord>>;
   findByID(
     args: FindEmailProviderByIDArgs
   ): Promise<EmailProviderRecord | null>;
-  create(args: CreateEmailProviderArgs): Promise<EmailProviderRecord>;
-  update(args: UpdateEmailProviderArgs): Promise<EmailProviderRecord>;
-  delete(args: DeleteEmailProviderArgs): Promise<DeleteResult>;
+  create(
+    args: CreateEmailProviderArgs
+  ): Promise<MutationResult<EmailProviderRecord>>;
+  update(
+    args: UpdateEmailProviderArgs
+  ): Promise<MutationResult<EmailProviderRecord>>;
+  delete(
+    args: DeleteEmailProviderArgs
+  ): Promise<MutationResult<{ id: string }>>;
   setDefault(args: SetDefaultProviderArgs): Promise<EmailProviderRecord>;
   test(
     args: TestEmailProviderArgs
@@ -139,9 +149,9 @@ export function createEmailProvidersNamespace(
   return {
     async find(
       args: FindEmailProvidersArgs = {}
-    ): Promise<PaginatedResponse<EmailProviderRecord>> {
+    ): Promise<ListResult<EmailProviderRecord>> {
       const providers = await ctx.emailProviderService.listProviders();
-      return slicePaginatedResponse(providers, args.limit, args.page);
+      return sliceListResult(providers, args.limit, args.page);
     },
 
     async findByID(
@@ -158,8 +168,10 @@ export function createEmailProvidersNamespace(
       }
     },
 
-    async create(args: CreateEmailProviderArgs): Promise<EmailProviderRecord> {
-      return await ctx.emailProviderService.createProvider({
+    async create(
+      args: CreateEmailProviderArgs
+    ): Promise<MutationResult<EmailProviderRecord>> {
+      const item = await ctx.emailProviderService.createProvider({
         name: args.data.name,
         type: args.data.type,
         fromEmail: args.data.fromEmail,
@@ -167,15 +179,28 @@ export function createEmailProvidersNamespace(
         configuration: args.data.configuration,
         isDefault: args.data.isDefault,
       });
+      // Phase 4 (Task 13): canonical mutation envelope.
+      return { message: "Email provider created.", item };
     },
 
-    async update(args: UpdateEmailProviderArgs): Promise<EmailProviderRecord> {
-      return await ctx.emailProviderService.updateProvider(args.id, args.data);
+    async update(
+      args: UpdateEmailProviderArgs
+    ): Promise<MutationResult<EmailProviderRecord>> {
+      const item = await ctx.emailProviderService.updateProvider(
+        args.id,
+        args.data
+      );
+      return { message: "Email provider updated.", item };
     },
 
-    async delete(args: DeleteEmailProviderArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteEmailProviderArgs
+    ): Promise<MutationResult<{ id: string }>> {
       await ctx.emailProviderService.deleteProvider(args.id);
-      return { deleted: true, ids: [args.id] };
+      return {
+        message: "Email provider deleted.",
+        item: { id: args.id },
+      };
     },
 
     async setDefault(
@@ -194,20 +219,30 @@ export function createEmailProvidersNamespace(
 
 /**
  * `nextly.emailTemplates.*` namespace — CRUD + preview + shared layout.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
+ * `preview`, `getLayout`, `updateLayout` keep their bespoke shapes
+ * because they're non-CRUD actions with domain-specific return types.
  */
 export interface EmailTemplatesNamespace {
   find(
     args?: FindEmailTemplatesArgs
-  ): Promise<PaginatedResponse<EmailTemplateRecord>>;
+  ): Promise<ListResult<EmailTemplateRecord>>;
   findByID(
     args: FindEmailTemplateByIDArgs
   ): Promise<EmailTemplateRecord | null>;
   findBySlug(
     args: FindEmailTemplateBySlugArgs
   ): Promise<EmailTemplateRecord | null>;
-  create(args: CreateEmailTemplateArgs): Promise<EmailTemplateRecord>;
-  update(args: UpdateEmailTemplateArgs): Promise<EmailTemplateRecord>;
-  delete(args: DeleteEmailTemplateArgs): Promise<DeleteResult>;
+  create(
+    args: CreateEmailTemplateArgs
+  ): Promise<MutationResult<EmailTemplateRecord>>;
+  update(
+    args: UpdateEmailTemplateArgs
+  ): Promise<MutationResult<EmailTemplateRecord>>;
+  delete(
+    args: DeleteEmailTemplateArgs
+  ): Promise<MutationResult<{ id: string }>>;
   preview(
     args: PreviewEmailTemplateArgs
   ): Promise<{ subject: string; html: string }>;
@@ -226,9 +261,9 @@ export function createEmailTemplatesNamespace(
   return {
     async find(
       args: FindEmailTemplatesArgs = {}
-    ): Promise<PaginatedResponse<EmailTemplateRecord>> {
+    ): Promise<ListResult<EmailTemplateRecord>> {
       const templates = await ctx.emailTemplateService.listTemplates();
-      return slicePaginatedResponse(templates, args.limit, args.page);
+      return sliceListResult(templates, args.limit, args.page);
     },
 
     async findByID(
@@ -273,8 +308,10 @@ export function createEmailTemplatesNamespace(
       }
     },
 
-    async create(args: CreateEmailTemplateArgs): Promise<EmailTemplateRecord> {
-      return await ctx.emailTemplateService.createTemplate({
+    async create(
+      args: CreateEmailTemplateArgs
+    ): Promise<MutationResult<EmailTemplateRecord>> {
+      const item = await ctx.emailTemplateService.createTemplate({
         name: args.data.name,
         slug: args.data.slug,
         subject: args.data.subject,
@@ -283,9 +320,13 @@ export function createEmailTemplatesNamespace(
         variables: args.data.variables,
         attachments: args.data.attachments,
       });
+      // Phase 4 (Task 13): canonical mutation envelope.
+      return { message: "Email template created.", item };
     },
 
-    async update(args: UpdateEmailTemplateArgs): Promise<EmailTemplateRecord> {
+    async update(
+      args: UpdateEmailTemplateArgs
+    ): Promise<MutationResult<EmailTemplateRecord>> {
       const { textContent, variables, attachments, ...rest } = args.data;
       const updateData: UpdateEmailTemplateInput = {
         ...rest,
@@ -299,12 +340,21 @@ export function createEmailTemplatesNamespace(
       if (attachments !== undefined) {
         updateData.attachments = attachments;
       }
-      return await ctx.emailTemplateService.updateTemplate(args.id, updateData);
+      const item = await ctx.emailTemplateService.updateTemplate(
+        args.id,
+        updateData
+      );
+      return { message: "Email template updated.", item };
     },
 
-    async delete(args: DeleteEmailTemplateArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteEmailTemplateArgs
+    ): Promise<MutationResult<{ id: string }>> {
       await ctx.emailTemplateService.deleteTemplate(args.id);
-      return { deleted: true, ids: [args.id] };
+      return {
+        message: "Email template deleted.",
+        item: { id: args.id },
+      };
     },
 
     async preview(
@@ -330,17 +380,25 @@ export function createEmailTemplatesNamespace(
 
 /**
  * `nextly.userFields.*` namespace — CRUD on user field definitions.
+ *
+ * Phase 4 (Task 13): list/mutation surfaces use canonical envelopes.
+ * `reorder` keeps its array return type because the wire-side equivalent
+ * also returns the reordered list as a non-CRUD action.
  */
 export interface UserFieldsNamespace {
   find(
     args?: FindUserFieldsArgs
-  ): Promise<PaginatedResponse<UserFieldDefinitionRecord>>;
+  ): Promise<ListResult<UserFieldDefinitionRecord>>;
   findByID(
     args: FindUserFieldByIDArgs
   ): Promise<UserFieldDefinitionRecord | null>;
-  create(args: CreateUserFieldArgs): Promise<UserFieldDefinitionRecord>;
-  update(args: UpdateUserFieldArgs): Promise<UserFieldDefinitionRecord>;
-  delete(args: DeleteUserFieldArgs): Promise<DeleteResult>;
+  create(
+    args: CreateUserFieldArgs
+  ): Promise<MutationResult<UserFieldDefinitionRecord>>;
+  update(
+    args: UpdateUserFieldArgs
+  ): Promise<MutationResult<UserFieldDefinitionRecord>>;
+  delete(args: DeleteUserFieldArgs): Promise<MutationResult<{ id: string }>>;
   reorder(args: ReorderUserFieldsArgs): Promise<UserFieldDefinitionRecord[]>;
 }
 
@@ -353,11 +411,11 @@ export function createUserFieldsNamespace(
   return {
     async find(
       args: FindUserFieldsArgs = {}
-    ): Promise<PaginatedResponse<UserFieldDefinitionRecord>> {
+    ): Promise<ListResult<UserFieldDefinitionRecord>> {
       const allFields = args.includeInactive
         ? await ctx.userFieldDefinitionService.listFields()
         : await ctx.userFieldDefinitionService.getMergedFields();
-      return slicePaginatedResponse(allFields, args.limit, args.page);
+      return sliceListResult(allFields, args.limit, args.page);
     },
 
     async findByID(
@@ -376,8 +434,8 @@ export function createUserFieldsNamespace(
 
     async create(
       args: CreateUserFieldArgs
-    ): Promise<UserFieldDefinitionRecord> {
-      return await ctx.userFieldDefinitionService.createField({
+    ): Promise<MutationResult<UserFieldDefinitionRecord>> {
+      const item = await ctx.userFieldDefinitionService.createField({
         name: args.data.name,
         label: args.data.label,
         type: args.data.type,
@@ -389,20 +447,28 @@ export function createUserFieldsNamespace(
         sortOrder: args.data.sortOrder,
         source: "ui",
       });
+      // Phase 4 (Task 13): canonical mutation envelope.
+      return { message: "User field created.", item };
     },
 
     async update(
       args: UpdateUserFieldArgs
-    ): Promise<UserFieldDefinitionRecord> {
-      return await ctx.userFieldDefinitionService.updateField(
+    ): Promise<MutationResult<UserFieldDefinitionRecord>> {
+      const item = await ctx.userFieldDefinitionService.updateField(
         args.id,
         args.data
       );
+      return { message: "User field updated.", item };
     },
 
-    async delete(args: DeleteUserFieldArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteUserFieldArgs
+    ): Promise<MutationResult<{ id: string }>> {
       await ctx.userFieldDefinitionService.deleteField(args.id);
-      return { deleted: true, ids: [args.id] };
+      return {
+        message: "User field deleted.",
+        item: { id: args.id },
+      };
     },
 
     async reorder(

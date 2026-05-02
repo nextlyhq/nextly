@@ -10,14 +10,14 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import type { User } from "../../services/users/user-service";
-import type { PaginatedResponse } from "../../types/pagination";
 import type {
   CreateUserArgs,
-  DeleteResult,
   DeleteUserArgs,
   FindOneUserArgs,
   FindUserByIDArgs,
   FindUsersArgs,
+  ListResult,
+  MutationResult,
   UpdateUserArgs,
 } from "../types/index";
 
@@ -26,19 +26,23 @@ import {
   createRequestContext,
   isNotFoundError,
   mergeConfig,
-  toPaginatedResponse,
+  toListResult,
 } from "./helpers";
 
 /**
  * Users namespace API, bound to a Nextly context.
+ *
+ * Phase 4 (Task 13): every list/mutation surface uses the canonical
+ * `ListResult<T>` / `MutationResult<T>` envelopes so the Direct API and
+ * the wire API speak the same shape.
  */
 export interface UsersNamespace {
-  find(args?: FindUsersArgs): Promise<PaginatedResponse<User>>;
+  find(args?: FindUsersArgs): Promise<ListResult<User>>;
   findOne(args?: FindOneUserArgs): Promise<User | null>;
   findByID(args: FindUserByIDArgs): Promise<User | null>;
-  create(args: CreateUserArgs): Promise<User>;
-  update(args: UpdateUserArgs): Promise<User>;
-  delete(args: DeleteUserArgs): Promise<DeleteResult>;
+  create(args: CreateUserArgs): Promise<MutationResult<User>>;
+  update(args: UpdateUserArgs): Promise<MutationResult<User>>;
+  delete(args: DeleteUserArgs): Promise<MutationResult<{ id: string }>>;
 }
 
 /**
@@ -46,7 +50,7 @@ export interface UsersNamespace {
  */
 export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
   return {
-    async find(args: FindUsersArgs = {}): Promise<PaginatedResponse<User>> {
+    async find(args: FindUsersArgs = {}): Promise<ListResult<User>> {
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -62,7 +66,7 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         createRequestContext(args)
       );
 
-      return toPaginatedResponse(result, limit, page);
+      return toListResult(result, limit, page);
     },
 
     async findOne(args: FindOneUserArgs = {}): Promise<User | null> {
@@ -96,7 +100,7 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       }
     },
 
-    async create(args: CreateUserArgs): Promise<User> {
+    async create(args: CreateUserArgs): Promise<MutationResult<User>> {
       const data = args.data ?? {};
       const { name, image, roles, isActive, ...customFields } = data;
       const user = await ctx.userService.create(
@@ -111,10 +115,16 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         },
         createRequestContext(args)
       );
-      return user;
+      // Phase 4 (Task 13): namespace mutations return `{ message, item }`
+      // matching the wire API. Hardcoded noun ("User") since this is the
+      // users-specific namespace.
+      return {
+        message: "User created.",
+        item: user,
+      };
     },
 
-    async update(args: UpdateUserArgs): Promise<User> {
+    async update(args: UpdateUserArgs): Promise<MutationResult<User>> {
       if (!args.id) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -138,10 +148,15 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         },
         createRequestContext(args)
       );
-      return user;
+      return {
+        message: "User updated.",
+        item: user,
+      };
     },
 
-    async delete(args: DeleteUserArgs): Promise<DeleteResult> {
+    async delete(
+      args: DeleteUserArgs
+    ): Promise<MutationResult<{ id: string }>> {
       if (!args.id) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -151,9 +166,12 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       }
 
       await ctx.userService.delete(args.id, createRequestContext(args));
+      // For deletes the `item` is just the deleted id so callers can still
+      // chain on something concrete (matches the wire API's `{ id }` shape
+      // returned by delete handlers under `respondMutation`).
       return {
-        deleted: true,
-        ids: [args.id],
+        message: "User deleted.",
+        item: { id: args.id },
       };
     },
   };
