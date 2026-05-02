@@ -45,7 +45,7 @@ function LoadingSkeleton() {
     <div className="grid grid-cols-2 gap-4" aria-busy="true">
       <span className="sr-only">Loading metrics...</span>
       {Array.from({ length: 8 }, (_, i) => (
-        <Skeleton key={i} className="h-20 rounded-2xl" />
+        <Skeleton key={i} className="h-20 rounded-none" />
       ))}
     </div>
   );
@@ -109,7 +109,7 @@ export const ProjectStatsGrid: React.FC = () => {
     }, [data]);
 
   return (
-    <Card className="border-border/60 bg-card/80 backdrop-blur-md rounded-[2.5rem] overflow-hidden transition-all duration-500 hover:border-primary/20">
+    <Card className="border-border/60 bg-card/80 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/20">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
@@ -118,11 +118,11 @@ export const ProjectStatsGrid: React.FC = () => {
           <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground/80">
             Resource Inventory
           </CardTitle>
-          <div className="h-1 w-6 bg-primary/30 rounded-full" />
+          <div className="h-1 w-6 bg-primary/30 rounded-none" />
         </div>
         <Link
           href={ROUTES.SETTINGS}
-          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-full bg-primary/5 hover-unified"
+          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-none bg-primary/5 hover-unified"
         >
           Infrastructure <ChevronRight className="h-3 w-3" />
         </Link>
@@ -131,7 +131,7 @@ export const ProjectStatsGrid: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-[2rem]">
+          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none]">
             <AlertCircle className="h-4 w-4" />
             <span>Resource index synchronization failed</span>
           </div>
@@ -145,7 +145,7 @@ export const ProjectStatsGrid: React.FC = () => {
                 value={stat.value}
                 icon={stat.icon}
                 href={stat.href}
-                className="rounded-2xl bg-muted/10 border-border/10"
+                className="rounded-none bg-primary/5 border-border/10"
               />
             ))}
           </div>

@@ -161,10 +161,10 @@ export function UserRoleSelector({
                     key={role.id}
                     role="listitem"
                     className={cn(
-                      "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
+                      "inline-flex items-center gap-1 rounded-none px-2.5 py-1 text-xs font-medium",
                       isSystem
                         ? "bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100"
-                        : "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200"
+                        : "bg-primary/5 text-slate-800 dark:bg-slate-800 dark:text-slate-200"
                     )}
                   >
                     {isSystem && (
@@ -176,7 +176,7 @@ export function UserRoleSelector({
                       onClick={e => removeRole(role.id, e)}
                       disabled={disabled}
                       aria-label={`Remove ${role.name} role`}
-                      className="ml-0.5 rounded-full p-0.5 hover-unified transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      className="ml-0.5 rounded-none p-0.5 hover-unified transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <X className="h-3 w-3" aria-hidden="true" />
                     </button>
@@ -252,7 +252,7 @@ export function UserRoleSelector({
                             {/* Checkbox indicator */}
                             <div
                               className={cn(
-                                "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors mt-0.5",
+                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-none border transition-colors mt-0.5",
                                 isSelected
                                   ? "border-primary bg-primary text-primary-foreground"
                                   : "border-input bg-background"

@@ -684,7 +684,7 @@ export default function CollectionTable() {
                       Filter
                       {(sourceFilter !== "all" ||
                         migrationFilter !== "all") && (
-                        <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-full bg-primary" />
+                        <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
                       )}
                     </Button>
                   </DropdownMenuTrigger>
@@ -807,7 +807,7 @@ export default function CollectionTable() {
       ) : isEmpty ? (
         <CollectionsEmptyState isSearching={isSearching || isFiltering} />
       ) : (
-        <div className="table-wrapper md:rounded-md md:border md:border-border md:bg-card overflow-hidden">
+        <div className="table-wrapper md:rounded-none md:border md:border-border md:bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}

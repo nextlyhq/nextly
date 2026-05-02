@@ -93,7 +93,7 @@ export function FieldTypePicker({
             disabled={disabled}
             onClick={() => onChange(opt.value)}
             className={`
-              relative flex flex-row items-center gap-4 rounded-md border p-4 text-left transition-all duration-200
+              relative flex flex-row items-center gap-4 rounded-none border p-4 text-left transition-all duration-200
               ${
                 isSelected
                   ? "border-primary bg-primary/5"
@@ -106,14 +106,14 @@ export function FieldTypePicker({
             }}
           >
             {isSelected && (
-              <div className="absolute top-2 right-2 flex items-center justify-center w-5 h-5 rounded-full bg-primary text-white">
+              <div className="absolute top-2 right-2 flex items-center justify-center w-5 h-5 rounded-none bg-primary text-white">
                 <Check className="h-3 w-3 text-primary-foreground" />
               </div>
             )}
             <div
               className={`
                 shrink-0 flex items-center justify-center w-9 h-9 transition-all duration-200
-                bg-primary/5 text-primary border border-primary/20 rounded-[6px]
+                bg-primary/5 text-primary border border-primary/20 rounded-none]
                 ${isSelected ? "border border-primary/25" : ""}
               `}
             >

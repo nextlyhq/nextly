@@ -266,7 +266,7 @@ export function ValidationOptionsPanel({
         !supportsRows &&
         !supportsChips &&
         !localField.hasMany && (
-          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50">
+          <div className="flex items-center gap-2 p-3 rounded-none bg-primary/5">
             <Icons.Info className="h-4 w-4 text-muted-foreground" />
             <p className="text-xs text-muted-foreground">
               This field type has no additional validation options

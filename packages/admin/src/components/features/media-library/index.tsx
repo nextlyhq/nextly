@@ -447,10 +447,10 @@ export function MediaLibrary({
 
   return (
     <div
-      className={cn("flex min-h-[calc(100vh-4rem)] bg-background", className)}
+      className={cn("flex min-h-[calc(100vh-4rem)]", className)}
     >
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background p-8 overflow-y-auto">
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         {/* Page Breadcrumb (Move above the title) */}
         <Breadcrumbs
           items={[
@@ -462,22 +462,22 @@ export function MediaLibrary({
         {/* Header Section */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-foreground">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">
               Media Library
             </h1>
-            <p className="text-sm font-medium text-muted-foreground mt-1">
+            <p className="text-sm font-normal text-primary/50 mt-1">
               {total} {total === 1 ? "file" : "files"}
               {activeFolderId && " in this folder"}
             </p>
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-card border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-card border border-border rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
+                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   folderViewMode === "sidebar"
                     ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -491,7 +491,7 @@ export function MediaLibrary({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
+                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   folderViewMode === "grid"
                     ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -503,12 +503,12 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-card border border-border rounded-lg p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-card border border-border rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
+                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   viewMode === "grid"
                     ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -522,7 +522,7 @@ export function MediaLibrary({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "h-8 w-8 rounded-md transition-all duration-200 !cursor-pointer",
+                  "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   viewMode === "list"
                     ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
@@ -538,7 +538,7 @@ export function MediaLibrary({
             <Button
               onClick={() => setIsUploadCollapsed(!isUploadCollapsed)}
               className={cn(
-                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-xl shadow-sm",
+                "flex items-center gap-2 px-5 h-10 shrink-0 font-medium tracking-tight rounded-none shadow-sm",
                 !isUploadCollapsed ? "opacity-90" : ""
               )}
             >
@@ -682,10 +682,10 @@ export function MediaLibrary({
                   type="button"
                   onClick={() => setActiveFolderId(null)}
                   className={cn(
-                    "group flex items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                    "group flex items-center gap-3 rounded-none border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                     !activeFolderId
                       ? "border-primary/20 bg-primary/5"
-                      : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
+                      : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
                   )}
                 >
                   <LayoutDashboard
@@ -717,10 +717,10 @@ export function MediaLibrary({
                         type="button"
                         onClick={() => setActiveFolderId(folder.id)}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                          "flex w-full items-center gap-3 rounded-none border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                           isActive
                             ? "border-primary/20 bg-primary/5 ring-1 ring-primary/20"
-                            : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
+                            : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
                         )}
                       >
                         <FolderIconComponent
@@ -762,7 +762,7 @@ export function MediaLibrary({
                           <DropdownMenuTrigger asChild>
                             <button
                               type="button"
-                              className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-primary/10 transition-colors !cursor-pointer"
+                              className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/10 transition-colors !cursor-pointer"
                               onClick={e => e.stopPropagation()}
                             >
                               <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
@@ -830,10 +830,10 @@ export function MediaLibrary({
                           type="button"
                           onClick={() => setActiveFolderId(folder.id)}
                           className={cn(
-                            "flex w-full items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                            "flex w-full items-center gap-3 rounded-none border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                             isActive
                               ? "border-primary/20 bg-primary/5 ring-1 ring-primary/20"
-                              : "border-border bg-card hover:bg-muted/50 hover:border-border-strong"
+                              : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
                           )}
                         >
                           <FolderIconComponent
@@ -875,7 +875,7 @@ export function MediaLibrary({
                             <DropdownMenuTrigger asChild>
                               <button
                                 type="button"
-                                className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-primary/10 transition-colors !cursor-pointer"
+                                className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/10 transition-colors !cursor-pointer"
                                 onClick={e => e.stopPropagation()}
                               >
                                 <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
@@ -932,7 +932,7 @@ export function MediaLibrary({
         )}
 
         {/* Media Content - Grid or List view */}
-        <div className="rounded-md border border-border bg-card overflow-hidden">
+        <div className="rounded-none border border-border bg-card overflow-hidden">
           {viewMode === "grid" ? (
             <div className="p-6">
               <MediaGrid

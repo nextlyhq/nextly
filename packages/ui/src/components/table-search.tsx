@@ -67,7 +67,7 @@ export function TableSearch({
             <button
               type="button"
               onClick={onClear}
-              className="text-muted-foreground/60 hover:text-foreground transition-colors p-0.5 rounded-none hover:bg-muted"
+              className="text-muted-foreground/60 hover:text-foreground transition-colors p-0.5 rounded-none hover:bg-primary/5"
               aria-label="Clear search"
             >
               <X className="w-3.5 h-3.5" />

@@ -191,7 +191,7 @@ export function ComponentFieldEditor({
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
           <Label className="text-xs font-medium">Component Configuration</Label>
         </div>
-        <div className="flex flex-col items-center gap-3 p-6 rounded-md border border-amber-500/20 bg-amber-500/10">
+        <div className="flex flex-col items-center gap-3 p-6 rounded-none border border-amber-500/20 bg-amber-500/10">
           <Icons.AlertTriangle className="h-8 w-8 text-amber-500" />
           <div className="text-center">
             <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
@@ -203,7 +203,7 @@ export function ComponentFieldEditor({
           </div>
           <Link
             href={ROUTES.COMPONENTS_BUILDER}
-            className="inline-flex items-center justify-center gap-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+            className="inline-flex items-center justify-center gap-1 rounded-none border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
           >
             <Icons.Plus className="h-4 w-4" />
             Create Component
@@ -231,7 +231,7 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("single")}
             className={`
-              flex items-center gap-3 p-4 rounded-md border transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-none border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "single"
                   ? "border-primary text-primary bg-primary/5"
@@ -255,7 +255,7 @@ export function ComponentFieldEditor({
             type="button"
             onClick={() => handleModeChange("multi")}
             className={`
-              flex items-center gap-3 p-4 rounded-md border transition-all duration-200 cursor-pointer
+              flex items-center gap-3 p-4 rounded-none border transition-all duration-200 cursor-pointer
               ${
                 currentMode === "multi"
                   ? "border-primary text-primary bg-primary/5"
@@ -321,14 +321,14 @@ export function ComponentFieldEditor({
           </Select>
         ) : (
           // Multi-component selector (checkboxes)
-          <div className="space-y-2 max-h-48 overflow-y-auto rounded-md border border-border p-2">
+          <div className="space-y-2 max-h-48 overflow-y-auto rounded-none border border-border p-2">
             {availableComponents.map(comp => {
               const isSelected = components?.includes(comp.slug) || false;
               return (
                 <label
                   key={comp.slug}
                   className={`
-                    flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors
+                    flex items-center gap-2 p-2 rounded-none cursor-pointer transition-colors
                     ${isSelected ? "bg-primary/5" : "hover:bg-accent"}
                   `}
                 >
@@ -459,7 +459,7 @@ export function ComponentFieldEditor({
       </div>
 
       {/* Info Box */}
-      <div className="flex items-start gap-2 p-3 rounded-md bg-muted/30">
+      <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
         <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
         <p className="text-xs text-muted-foreground">
           <strong>Tip:</strong> Components are reusable field groups. Each

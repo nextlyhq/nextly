@@ -210,7 +210,7 @@ export function RelationshipEditor({
                     <button
                       type="button"
                       onClick={() => handleRemoveCollection(slug)}
-                      className="ml-0.5 rounded-full p-0.5 hover-subtle-row"
+                      className="ml-0.5 rounded-none p-0.5 hover-subtle-row"
                     >
                       <Icons.X className="h-3 w-3" />
                     </button>
@@ -278,7 +278,7 @@ export function RelationshipEditor({
                             handleCollectionToggle(collection.slug);
                           }
                         }}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left hover-subtle-row transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-none text-left hover-subtle-row transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <Checkbox
                           checked={isSelected}
@@ -425,7 +425,7 @@ export function RelationshipEditor({
         </div>
 
         {filterOptions ? (
-          <div className="space-y-2 p-3 rounded-md border border-border bg-background">
+          <div className="space-y-2 p-3 rounded-none border border-border bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Only show documents where:
             </p>
@@ -463,7 +463,7 @@ export function RelationshipEditor({
 
       {/* Info Box */}
       {selectedCollections.length === 0 && (
-        <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 border border-amber-500/20">
+        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
           <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-amber-600 dark:text-amber-400">
             <p className="font-medium">No target collection selected</p>

@@ -564,7 +564,7 @@ export function MediaPickerDialog({
                     key={folder.id}
                     type="button"
                     onClick={() => setActiveFolderId(folder.id)}
-                    className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
+                    className="flex items-center gap-1.5 rounded-none border border-border px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
                   >
                     <span className="text-muted-foreground">
                       <FolderIcon className="h-3.5 w-3.5" />
@@ -669,7 +669,7 @@ export function MediaPickerDialog({
               {/* Loading indicator for infinite scroll */}
               {isFetchingNextPage && !isLoading && (
                 <div className="text-center py-6">
-                  <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+                  <div className="inline-block animate-spin rounded-none h-6 w-6 border-b-2 border-primary"></div>
                   <p className="text-xs text-muted-foreground mt-2">
                     Loading more...
                   </p>
@@ -704,7 +704,7 @@ export function MediaPickerDialog({
                     onClick={() =>
                       setIsUploadFolderPickerOpen(!isUploadFolderPickerOpen)
                     }
-                    className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-none border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer"
                   >
                     {activeFolderId ? (
                       <FolderIcon className="h-3.5 w-3.5 text-muted-foreground" />
@@ -728,11 +728,11 @@ export function MediaPickerDialog({
                 </div>
 
                 {isUploadFolderPickerOpen && (
-                  <div className="max-h-[200px] space-y-0.5 overflow-y-auto rounded-md border border-border p-1.5">
+                  <div className="max-h-[200px] space-y-0.5 overflow-y-auto rounded-none border border-border p-1.5">
                     {isCreatingFolder ? (
                       <form
                         onSubmit={handleSubmitCreateFolder}
-                        className="space-y-1.5 rounded-sm border border-dashed border-primary/40 bg-primary/5 p-2"
+                        className="space-y-1.5 rounded-none border border-dashed border-primary/40 bg-primary/5 p-2"
                       >
                         <Input
                           autoFocus
@@ -776,7 +776,7 @@ export function MediaPickerDialog({
                       <button
                         type="button"
                         onClick={handleStartCreateFolder}
-                        className="flex w-full items-center gap-2 rounded-sm border border-dashed border-border px-2 py-1.5 text-xs transition-colors hover:border-primary/50 hover:bg-accent"
+                        className="flex w-full items-center gap-2 rounded-none border border-dashed border-border px-2 py-1.5 text-xs transition-colors hover:border-primary/50 hover:bg-accent"
                       >
                         <FolderPlus className="h-3.5 w-3.5" />
                         <span>New folder</span>
@@ -794,7 +794,7 @@ export function MediaPickerDialog({
                         setIsUploadFolderPickerOpen(false);
                       }}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer",
+                        "flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer",
                         activeFolderId === null && "bg-accent font-medium"
                       )}
                     >
@@ -890,7 +890,7 @@ function PickerFolderItem({
     <div>
       <div
         className={cn(
-          "flex w-full items-center rounded-sm transition-colors hover:bg-accent",
+          "flex w-full items-center rounded-none transition-colors hover:bg-accent",
           isActive && "bg-accent font-medium"
         )}
         style={{ paddingLeft: `${8 + level * 16}px` }}
@@ -901,7 +901,7 @@ function PickerFolderItem({
             e.stopPropagation();
             setIsExpanded(!isExpanded);
           }}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm hover-unified"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-none hover-unified"
         >
           {isExpanded ? (
             <ChevronDown className="h-3 w-3" />

@@ -112,7 +112,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
       <div className="w-full max-w-[480px] mx-auto">
         <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
-            <CardTitle className="text-3xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Invalid Link
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">
@@ -143,7 +143,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
       <div className="w-full max-w-[480px] mx-auto">
         <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
-            <CardTitle className="text-3xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Password Reset
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">
@@ -187,7 +187,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
             </div>
           </div>
           <div>
-            <CardTitle className="text-3xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Reset Password
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">
@@ -198,7 +198,12 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
 
         <CardContent className="pb-10">
           <FormProvider {...form}>
-            <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+            <form
+              onSubmit={e => {
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-6"
+            >
               <FormField
                 control={form.control}
                 name="newPassword"

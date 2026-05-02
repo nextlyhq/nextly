@@ -113,24 +113,26 @@ export default function CompareEntryPage({ params }: ComparePageProps) {
 
   return (
     <div className="p-6 space-y-6 h-full flex flex-col">
-      <Breadcrumbs
-        items={[
-          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-          {
-            label: collectionLabel,
-            href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),
-          },
-          { label: "Compare Entries" },
-        ]}
-      />
+      <div className="mb-6">
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            {
+              label: collectionLabel,
+              href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),
+            },
+            { label: "Compare Entries" },
+          ]}
+        />
+      </div>
 
       {/* Page header */}
-      <div className="space-y-1">
+      <div className="mb-8">
         <div className="flex items-center gap-3">
-          <ArrowLeftRight className="h-6 w-6 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">Compare Entries</h1>
+          <ArrowLeftRight className="h-6 w-6 text-muted-foreground/70" />
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">Compare Entries</h1>
         </div>
-        <p className="text-muted-foreground">
+        <p className="text-sm font-normal text-primary/50 mt-1">
           Compare two entries from the <strong>{collectionLabel}</strong>{" "}
           collection side-by-side to see their differences.
         </p>

@@ -124,7 +124,7 @@ export function SectionErrorFallback({
             <summary className="cursor-pointer font-medium">
               Error details
             </summary>
-            <pre className="mt-2 overflow-auto rounded bg-destructive/10 p-2">
+            <pre className="mt-2 overflow-auto rounded-none bg-destructive/10 p-2">
               {error.message}
             </pre>
           </details>

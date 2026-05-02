@@ -466,7 +466,7 @@ export function APIPlayground({
             <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1 group-hover:text-primary transition-colors">
               Base Endpoint
             </Label>
-            <div className="flex items-center gap-2 p-4 bg-muted/10 border border-border/20 rounded-none font-mono text-xs transition-colors">
+            <div className="flex items-center gap-2 p-4 bg-primary/5 border border-border/20 rounded-none font-mono text-xs transition-colors">
               <span className="text-muted-foreground">
                 {isSingle ? "/admin/api/singles/" : "/admin/api/collections/"}
               </span>
@@ -489,7 +489,7 @@ export function APIPlayground({
               onValueChange={v => setAction(v as EndpointAction)}
               disabled={isSingle}
             >
-              <SelectTrigger className="rounded-none border-border/40 h-12 bg-muted/5 focus:ring-2 focus:ring-primary/10 transition-all">
+              <SelectTrigger className="rounded-none border-border/40 h-12 bg-primary/5 focus:ring-2 focus:ring-primary/10 transition-all">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-none border-border/60 shadow-xl">
@@ -503,7 +503,7 @@ export function APIPlayground({
                   >
                     <div className="flex items-center gap-2">
                       <span
-                        className={`text-[10px] font-bold font-mono px-1.5 py-0.5 bg-muted border border-border/50 ${METHOD_COLORS[a.method]}`}
+                        className={`text-[10px] font-bold font-mono px-1.5 py-0.5 bg-primary/5 border border-border/50 ${METHOD_COLORS[a.method]}`}
                       >
                         {a.method}
                       </span>
@@ -528,7 +528,7 @@ export function APIPlayground({
                 value={entryId}
                 onChange={e => setEntryId(e.target.value)}
                 placeholder="Enter entry ID (e.g., abc123)"
-                className="font-mono text-xs rounded-none border-border/40 h-12 bg-muted/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all"
+                className="font-mono text-xs rounded-none border-border/40 h-12 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all"
               />
               {entryIdMissing && (
                 <p className="text-[10px] text-destructive font-medium ml-1">
@@ -543,7 +543,7 @@ export function APIPlayground({
             defaultValue="params"
             className="flex-1 flex flex-col min-h-0 pt-2"
           >
-            <TabsList className="bg-muted/10 border-none p-1 w-full justify-start rounded-none h-11">
+            <TabsList className="bg-primary/5 border-none p-1 w-full justify-start rounded-none h-11">
               <TabsTrigger
                 value="params"
                 className="flex-1 rounded-none font-bold text-[10px] uppercase tracking-widest data-[state=active]:bg-card data-[state=active]:text-primary data-[state=active]:shadow-sm transition-all"
@@ -575,7 +575,7 @@ export function APIPlayground({
                 <textarea
                   value={requestBody}
                   onChange={e => setRequestBody(e.target.value)}
-                  className="w-full flex-1 font-mono text-xs p-4 border border-border/40 rounded-none bg-muted/5 resize-none focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/5 transition-all"
+                  className="w-full flex-1 font-mono text-xs p-4 border border-border/40 rounded-none bg-primary/5 resize-none focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/5 transition-all"
                   placeholder={getBodyPlaceholder()}
                   disabled={!actionRequiresBody}
                 />
@@ -589,7 +589,7 @@ export function APIPlayground({
               Full Request URL
             </Label>
             <div className="flex items-center gap-2 mt-4 group">
-              <code className="flex-1 text-[10px] bg-muted/10 p-4 border border-border/10 rounded-none break-all font-mono transition-colors">
+              <code className="flex-1 text-[10px] bg-primary/5 p-4 border border-border/10 rounded-none break-all font-mono transition-colors">
                 <span className={METHOD_COLORS[method]}>{method}</span>{" "}
                 {fullUrl}
               </code>
@@ -656,7 +656,7 @@ export function APIPlayground({
                   <div className="flex items-center gap-2">
                     <div
                       className={cn(
-                        "h-1.5 w-1.5 rounded-full",
+                        "h-1.5 w-1.5 rounded-none",
                         response.status < 300 ? "bg-emerald-500" : "bg-rose-500"
                       )}
                     />

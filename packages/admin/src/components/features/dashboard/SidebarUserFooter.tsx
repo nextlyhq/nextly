@@ -61,7 +61,7 @@ export function SidebarUserFooter({
             <button className="cursor-pointer focus:outline-none">
               <Avatar
                 size="md"
-                className="bg-muted text-primary hover-unified transition-all"
+                className="bg-primary/5 text-primary hover-unified transition-all"
               >
                 <AvatarFallback>
                   {user?.name?.charAt(0)?.toUpperCase() || "?"}
@@ -85,7 +85,7 @@ export function SidebarUserFooter({
             <DropdownMenuSeparator className="bg-sidebar-border/30" />
             <DropdownMenuItem
               asChild
-              className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
+              className="cursor-pointer rounded-none hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <a href="/profile" className="flex items-center gap-2">
                 <User className="h-4 w-4" />
@@ -94,7 +94,7 @@ export function SidebarUserFooter({
             </DropdownMenuItem>
             <DropdownMenuItem
               asChild
-              className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
+              className="cursor-pointer rounded-none hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <a href="/help" className="flex items-center gap-2">
                 <HelpCircle className="h-4 w-4" />
@@ -106,7 +106,7 @@ export function SidebarUserFooter({
               onClick={() => {
                 void logout();
               }}
-              className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/5 focus:text-primary"
+              className="cursor-pointer rounded-none text-black hover-unified focus:bg-primary/5 focus:text-primary"
             >
               <LogOut className="mr-2 h-4 w-4" />
               <span>Log out</span>
@@ -120,9 +120,9 @@ export function SidebarUserFooter({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="w-full flex items-center gap-3 px-2 py-2 rounded-md hover-unified transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <button className="w-full flex items-center gap-3 px-2 py-2 rounded-none hover-unified transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/50">
           {/* Avatar */}
-          <Avatar size="md" className="bg-muted text-primary">
+          <Avatar size="md" className="bg-primary/5 text-primary">
             <AvatarFallback>
               {user?.name?.charAt(0)?.toUpperCase() || "?"}
             </AvatarFallback>
@@ -140,8 +140,8 @@ export function SidebarUserFooter({
             </div>
           ) : (
             <div className="flex flex-col flex-1 min-w-0 space-y-1">
-              <Skeleton className="h-4 w-24 bg-muted" />
-              <Skeleton className="h-3 w-32 bg-muted" />
+              <Skeleton className="h-4 w-24 bg-primary/5" />
+              <Skeleton className="h-3 w-32 bg-primary/5" />
             </div>
           )}
 
@@ -165,7 +165,7 @@ export function SidebarUserFooter({
         <DropdownMenuSeparator className="bg-sidebar-border/30" />
         <DropdownMenuItem
           asChild
-          className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
+          className="cursor-pointer rounded-none hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <a href="/profile" className="flex items-center gap-2">
             <User className="h-4 w-4" />
@@ -174,7 +174,7 @@ export function SidebarUserFooter({
         </DropdownMenuItem>
         <DropdownMenuItem
           asChild
-          className="cursor-pointer rounded-md hover-unified focus:bg-primary/5 focus:text-primary"
+          className="cursor-pointer rounded-none hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <a href="/help" className="flex items-center gap-2">
             <HelpCircle className="h-4 w-4" />
@@ -186,7 +186,7 @@ export function SidebarUserFooter({
           onClick={() => {
             void logout();
           }}
-          className="cursor-pointer rounded-md text-black hover-unified focus:bg-primary/5 focus:text-primary"
+          className="cursor-pointer rounded-none text-black hover-unified focus:bg-primary/5 focus:text-primary"
         >
           <LogOut className="mr-2 h-4 w-4" />
           <span>Log out</span>

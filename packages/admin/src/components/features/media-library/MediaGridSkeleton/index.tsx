@@ -89,7 +89,7 @@ export function MediaLibrarySkeleton({
       {Array.from({ length: count }).map((_, index) => (
         <div key={index} className="space-y-3">
           {/* Card image skeleton */}
-          <Skeleton className="aspect-square w-full rounded-lg" />
+          <Skeleton className="aspect-square w-full rounded-none" />
 
           {/* Card filename skeleton */}
           <Skeleton className="h-4 w-3/4" />

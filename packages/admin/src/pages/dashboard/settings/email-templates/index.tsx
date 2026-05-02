@@ -154,8 +154,8 @@ function EmailLayoutSection() {
           <CardContent className="pt-0 pb-6 px-5 border-t border-border">
             {isLoading && !loaded ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-                <Skeleton className="h-[200px] w-full rounded-md" />
-                <Skeleton className="h-[200px] w-full rounded-md" />
+                <Skeleton className="h-[200px] w-full rounded-none" />
+                <Skeleton className="h-[200px] w-full rounded-none" />
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-5">
@@ -177,7 +177,7 @@ function EmailLayoutSection() {
                     value={header}
                     onChange={e => setHeader(e.target.value)}
                     rows={8}
-                    className="flex min-h-[200px] w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex min-h-[200px] w-full rounded-none border border-input bg-background/50 px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     placeholder="<div style='padding: 24px; text-align: center;'><!-- Header HTML --></div>"
                   />
                 </div>
@@ -200,14 +200,14 @@ function EmailLayoutSection() {
                     value={footer}
                     onChange={e => setFooter(e.target.value)}
                     rows={8}
-                    className="flex min-h-[200px] w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex min-h-[200px] w-full rounded-none border border-input bg-background/50 px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     placeholder="<div style='padding: 24px; text-align: center; color: #6t6666;'><!-- Footer HTML --></div>"
                   />
                 </div>
               </div>
             )}
           </CardContent>
-          <CardFooter className="px-5 py-4 border-t border-border bg-muted/20 flex justify-end rounded-b-xl">
+          <CardFooter className="px-5 py-4 border-t border-border bg-primary/5 flex justify-end rounded-none">
             <Button
               onClick={handleSave}
               disabled={isSaving || (isLoading && !loaded)}
@@ -348,7 +348,7 @@ function TemplatePreviewDialog({
             <DialogDescription>Subject: {previewSubject}</DialogDescription>
           )}
         </DialogHeader>
-        <div className="flex-1 overflow-auto border rounded-md">
+        <div className="flex-1 overflow-auto border rounded-none">
           {isLoading ? (
             <div className="flex items-center justify-center h-48">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -527,7 +527,7 @@ function EmailTemplateTable() {
       label: "Slug",
       hideOnMobile: true,
       render: slug => (
-        <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+        <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
           {slug as string}
         </code>
       ),
@@ -680,7 +680,7 @@ function EmailTemplateTable() {
       />
 
       {/* Table */}
-      <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
         <ResponsiveTable
           data={paginatedTemplates}
           columns={columns}

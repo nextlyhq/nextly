@@ -209,7 +209,7 @@ export function NumberInput<TFieldValues extends FieldValues = FieldValues>({
       className={cn(
         // Remove spinner buttons on some browsers for cleaner look
         "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
-        readOnly && "bg-muted cursor-not-allowed",
+        readOnly && "bg-primary/5 cursor-not-allowed",
         className
       )}
     />

@@ -75,7 +75,7 @@ export function MediaBulkActionBar({
       aria-label="Bulk actions for selected media"
       aria-live="polite"
       className={cn(
-        "flex items-center justify-between gap-4 w-full p-3 rounded-xl border border-primary/20 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
+        "flex items-center justify-between gap-4 w-full p-3 rounded-none border border-primary/20 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
         className
       )}
     >
@@ -123,12 +123,12 @@ export function MediaBulkActionBar({
           size="sm"
           onClick={onDelete}
           disabled={isDeleting}
-          className="h-8 text-xs font-normal px-4 rounded-xl"
+          className="h-8 text-xs font-normal px-4 rounded-none"
           aria-label={`Delete ${selectedCount} selected ${itemLabel}`}
         >
           {isDeleting ? (
             <>
-              <span className="mr-1.5 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span className="mr-1.5 h-3 w-3 animate-spin rounded-none border-2 border-current border-t-transparent" />
               Deleting...
             </>
           ) : (

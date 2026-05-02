@@ -174,7 +174,7 @@ export function Login() {
             </div>
           </div>
           <div>
-            <CardTitle className="text-3xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
+            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Welcome Back
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">
@@ -185,7 +185,12 @@ export function Login() {
 
         <CardContent className="pb-10">
           <FormProvider {...form}>
-            <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
+            <form
+              onSubmit={e => {
+                void form.handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-6"
+            >
               {emailNotVerified && (
                 <div className="flex items-start gap-3 rounded-none border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
                   <Mail className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
@@ -199,7 +204,9 @@ export function Login() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => { void handleResendVerification(); }}
+                      onClick={() => {
+                        void handleResendVerification();
+                      }}
                       disabled={resendingVerification}
                       className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-200 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100 disabled:opacity-50"
                     >

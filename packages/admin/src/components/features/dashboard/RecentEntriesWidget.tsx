@@ -54,11 +54,11 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
 
   return (
     <Link href={editHref} className="block group">
-      <div className="flex items-center gap-5 px-4 py-4.5 rounded-[1.25rem] transition-all duration-500 group-hover:bg-primary/[0.04] group-active:scale-[0.985] group-active:translate-y-0.5 relative overflow-hidden">
+      <div className="flex items-center gap-5 px-4 py-4.5 rounded-none] transition-all duration-500 group-hover:bg-primary/[0.04] group-active:scale-[0.985] group-active:translate-y-0.5 relative overflow-hidden">
         {/* Hover Highlight Overlay */}
         <div className="absolute inset-0 bg-gradient-to-r from-primary/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
 
-        <div className="h-12 w-12 shrink-0 rounded-2xl bg-muted/30 flex items-center justify-center border border-border/40 group-hover:border-primary/20 group-hover-unified group-hover:rotate-3 transition-all duration-500 relative z-10">
+        <div className="h-12 w-12 shrink-0 rounded-none bg-primary/5 flex items-center justify-center border border-border/40 group-hover:border-primary/20 group-hover-unified group-hover:rotate-3 transition-all duration-500 relative z-10">
           <span className="text-sm font-black text-muted-foreground/60 group-hover-unified transition-colors">
             {firstLetter}
           </span>
@@ -72,7 +72,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
             <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-[0.15em]">
               {entry.collectionLabel}
             </span>
-            <span className="h-0.5 w-0.5 rounded-full bg-border" />
+            <span className="h-0.5 w-0.5 rounded-none bg-border" />
             <span className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-[0.15em]">
               {formatRelativeTime(entry.updatedAt)}
             </span>
@@ -83,7 +83,7 @@ function EntryRow({ entry }: { entry: RecentEntry }) {
           {getStatusBadge(entry.status)}
         </div>
 
-        <div className="p-2 rounded-xl border border-transparent group-hover:border-primary/10 group-hover:bg-white group-hover:shadow-sm transition-all duration-500 relative z-10">
+        <div className="p-2 rounded-none border border-transparent group-hover:border-primary/10 group-hover:bg-white group-hover:shadow-sm transition-all duration-500 relative z-10">
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover-unified group-hover:translate-x-0.5 transition-all" />
         </div>
       </div>
@@ -97,15 +97,15 @@ function LoadingSkeleton() {
       <span className="sr-only">Loading recent entries...</span>
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex items-center gap-5 px-4 py-4.5">
-          <Skeleton className="h-12 w-12 rounded-2xl shrink-0" />
+          <Skeleton className="h-12 w-12 rounded-none shrink-0" />
           <div className="flex-1 space-y-2">
-            <Skeleton className="h-4 w-1/3 rounded-lg" />
-            <Skeleton className="h-3 w-1/4 rounded-lg" />
+            <Skeleton className="h-4 w-1/3 rounded-none" />
+            <Skeleton className="h-3 w-1/4 rounded-none" />
           </div>
           <div className="hidden md:flex items-center gap-4">
-            <Skeleton className="h-6 w-20 rounded-full" />
+            <Skeleton className="h-6 w-20 rounded-none" />
           </div>
-          <Skeleton className="h-8 w-8 rounded-xl" />
+          <Skeleton className="h-8 w-8 rounded-none" />
         </div>
       ))}
     </div>
@@ -116,7 +116,7 @@ export const RecentEntriesWidget: React.FC = () => {
   const { data, isLoading, error } = useRecentEntries(7);
 
   return (
-    <Card className="border-border/60 bg-card/60 backdrop-blur-md overflow-hidden rounded-[2rem] transition-all duration-500 hover:border-primary/20">
+    <Card className="border-border/60 bg-card/60 backdrop-blur-md overflow-hidden rounded-none] transition-all duration-500 hover:border-primary/20">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 py-7 border-b border-border/5"
@@ -125,11 +125,11 @@ export const RecentEntriesWidget: React.FC = () => {
           <CardTitle className="text-[11px] font-black uppercase tracking-[0.25em] text-muted-foreground/40">
             Recent Editorial Activity
           </CardTitle>
-          <div className="h-1 w-8 bg-primary/20 rounded-full" />
+          <div className="h-1 w-8 bg-primary/20 rounded-none" />
         </div>
         <Link
           href={ROUTES.COLLECTIONS}
-          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-full bg-primary/5 hover-unified"
+          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-none bg-primary/5 hover-unified"
         >
           Explore All <ChevronRight className="h-3 w-3" />
         </Link>
@@ -138,7 +138,7 @@ export const RecentEntriesWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-2 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-3xl mx-3 mb-3">
+          <div className="flex items-center gap-2 py-12 justify-center text-sm text-destructive bg-destructive/5 rounded-none mx-3 mb-3">
             <AlertCircle className="h-4 w-4" />
             <span className="font-bold uppercase tracking-wider text-[11px]">
               Failed to load recent activity stream
@@ -146,7 +146,7 @@ export const RecentEntriesWidget: React.FC = () => {
           </div>
         ) : !data?.entries.length ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-[2rem] bg-muted/20 border border-border/40">
+            <div className="p-6 rounded-none] bg-primary/5 border border-border/40">
               <FileText className="h-10 w-10 text-muted-foreground/20" />
             </div>
             <div className="space-y-1">

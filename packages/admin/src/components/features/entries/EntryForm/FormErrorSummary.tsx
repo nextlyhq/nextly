@@ -136,7 +136,7 @@ export function FormErrorSummary({
               <li key={path} className="text-sm">
                 <button
                   type="button"
-                  className="font-medium underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-red-500 rounded-sm inline-block"
+                  className="font-medium underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-red-500 rounded-none inline-block"
                   onClick={() => scrollToField(path)}
                 >
                   {formatFieldPath(path)}

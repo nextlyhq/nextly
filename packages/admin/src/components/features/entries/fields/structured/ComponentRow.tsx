@@ -253,7 +253,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
               <button
                 type="button"
                 className={cn(
-                  "cursor-grab active:cursor-grabbing p-1 rounded",
+                  "cursor-grab active:cursor-grabbing p-1 rounded-none",
                   "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1",
                   "touch-none" // Prevent touch scrolling interference
                 )}
@@ -274,7 +274,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
                 type="button"
                 className={cn(
                   "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
-                  "rounded px-1 py-0.5",
+                  "rounded-none px-1 py-0.5",
                   "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
                 )}
                 aria-expanded={isOpen}

@@ -72,14 +72,16 @@ export function RoleForm({ roleId }: RoleFormProps) {
         <FormProvider {...form}>
           <form
             ref={formRef}
-            onSubmit={(e) => { void onSubmit(e); }}
+            onSubmit={e => {
+              void onSubmit(e);
+            }}
             className="space-y-8"
             aria-labelledby="role-form-title"
             noValidate
           >
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-2">
               <div>
-                <h1 className="text-3xl font-semibold text-foreground">
+                <h1 className="text-xl font-semibold text-foreground">
                   {isEditMode ? "Edit Role" : "Create New Role"}
                 </h1>
                 <p className="text-muted-foreground mt-1">
@@ -125,7 +127,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
 
             <div className="flex flex-col gap-6 xl:flex-row items-start">
               {/* Left Sidebar Card - Role details */}
-              <div className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-card xl:w-[380px] xl:shrink-0 sticky top-6">
+              <div className="flex w-full flex-col overflow-hidden rounded-none border border-border bg-card xl:w-[380px] xl:shrink-0 sticky top-6">
                 <div className="border-b border-border p-6">
                   <h2 className="text-lg font-semibold text-foreground">
                     Role details
@@ -172,7 +174,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
 
               {/* Main Content Card - Permissions Card */}
               <div className="flex-1 w-full min-w-0">
-                <div className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-card">
+                <div className="flex w-full flex-col overflow-hidden rounded-none border border-border bg-card">
                   <div className="p-6">
                     <h2 className="text-lg font-semibold text-foreground mb-1">
                       Permissions

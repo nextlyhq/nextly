@@ -34,7 +34,7 @@ import type {
  * - 2xl: 80px (h-20 w-20) - For profile headers, large avatars
  *
  * **Design Specs**:
- * - Border radius: rounded-full (circular)
+ * - Border radius: rounded-none (circular)
  * - Background: bg-accent (slate-100 light, slate-800 dark)
  * - Text color: text-accent-foreground (slate-900 light, slate-100 dark)
  * - Fallback text scales with avatar size (text-xs to text-2xl)
@@ -76,7 +76,7 @@ import type {
  * @see {@link https://github.com/nextlyhq/nextly/blob/main/ui-revamp/04-design-system-specification.md Design System Specification}
  */
 export const avatarVariants = cva(
-  "relative inline-flex shrink-0 overflow-hidden rounded-none items-center justify-center bg-muted text-muted-foreground",
+  "relative inline-flex shrink-0 overflow-hidden rounded-none items-center justify-center bg-primary/5 text-muted-foreground",
   {
     variants: {
       size: {
@@ -203,7 +203,7 @@ const AvatarFallback = forwardRef<HTMLSpanElement, AvatarFallbackProps>(
         ref={ref}
         data-slot="avatar-fallback"
         className={cn(
-          "bg-muted text-muted-foreground flex size-full items-center justify-center rounded-none font-medium",
+          "bg-primary/5 text-muted-foreground flex size-full items-center justify-center rounded-none font-medium",
           textSize,
           className
         )}

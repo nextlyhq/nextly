@@ -41,11 +41,11 @@ export function WelcomeHeader() {
   return (
     <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between pb-4">
       <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-[-0.04em] text-foreground leading-tight">
+        <h1 className="text-xl font-semibold tracking-[-0.04em] text-foreground leading-tight">
           Welcome,{" "}
           <span className="text-primary/90">{getFirstName(user?.name)}</span>
         </h1>
-        <p className="text-sm font-medium text-muted-foreground/80 tracking-tight">
+        <p className="text-sm font-normal text-primary/50 tracking-tight">
           {hasCollections
             ? "Your project is looking good. Here's what's happened since you left."
             : "Let's get started by building your first content structure."}
@@ -58,7 +58,7 @@ export function WelcomeHeader() {
             <Button
               variant="primary"
               size="sm"
-              className="h-10 px-6 rounded-md font-bold uppercase tracking-[0.1em] text-[11px] shadow-elevation-primary"
+              className="h-10 px-6 rounded-none font-bold uppercase tracking-[0.1em] text-[11px] shadow-elevation-primary"
             >
               <Plus className="mr-2 h-3.5 w-3.5" />
               Create Collection

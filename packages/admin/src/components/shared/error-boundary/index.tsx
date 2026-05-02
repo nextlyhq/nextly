@@ -84,7 +84,7 @@ export class ErrorBoundary extends Component<
 
       return (
         <div className="flex items-center justify-center p-4">
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
+          <div className="rounded-none border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
             <h2 className="mb-2 text-lg font-semibold text-red-900 dark:text-red-100">
               Something went wrong
             </h2>
@@ -97,7 +97,7 @@ export class ErrorBoundary extends Component<
                 <summary className="cursor-pointer text-sm font-medium text-red-800 dark:text-red-200">
                   Error details
                 </summary>
-                <pre className="mt-2 overflow-auto rounded bg-red-100 p-2 text-xs text-red-900 dark:bg-red-900 dark:text-red-100">
+                <pre className="mt-2 overflow-auto rounded-none bg-red-100 p-2 text-xs text-red-900 dark:bg-red-900 dark:text-red-100">
                   {this.state.error.toString()}
                 </pre>
               </details>

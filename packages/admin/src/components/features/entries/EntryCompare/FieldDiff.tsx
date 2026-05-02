@@ -191,7 +191,7 @@ export function FieldDiff({
         </CardHeader>
         <CardContent className="py-2 px-3">
           {usePreFormat ? (
-            <pre className="text-sm whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded max-h-48 overflow-auto">
+            <pre className="text-sm whitespace-pre-wrap break-words font-mono bg-primary/5 p-2 rounded-none max-h-48 overflow-auto">
               {leftFormatted}
             </pre>
           ) : (
@@ -220,7 +220,7 @@ export function FieldDiff({
         </CardHeader>
         <CardContent className="py-2 px-3">
           {usePreFormat ? (
-            <pre className="text-sm whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded max-h-48 overflow-auto">
+            <pre className="text-sm whitespace-pre-wrap break-words font-mono bg-primary/5 p-2 rounded-none max-h-48 overflow-auto">
               {rightFormatted}
             </pre>
           ) : (

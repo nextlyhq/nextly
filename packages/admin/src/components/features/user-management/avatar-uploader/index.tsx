@@ -48,7 +48,7 @@ export function AvatarUploader({
         <AvatarFallback
           className={
             fallbackClassName ??
-            cn("text-2xl font-medium", getAvatarColor(displayName))
+            cn("text-2xl font-medium bg-primary/5 text-primary")
           }
         >
           {initial}
@@ -61,7 +61,7 @@ export function AvatarUploader({
         disabled={disabled}
         aria-label="Change avatar"
         className={cn(
-          "absolute -bottom-1 -right-1 inline-flex h-7 w-7 items-center justify-center rounded-full",
+          "absolute -bottom-1 -right-1 inline-flex h-7 w-7 items-center justify-center rounded-none",
           "bg-primary text-primary-foreground shadow-sm border border-background",
           "hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
           "disabled:opacity-50 disabled:cursor-not-allowed"
@@ -77,7 +77,7 @@ export function AvatarUploader({
           disabled={disabled}
           aria-label="Remove avatar"
           className={cn(
-            "absolute -top-1 -right-1 inline-flex h-6 w-6 items-center justify-center rounded-full",
+            "absolute -top-1 -right-1 inline-flex h-6 w-6 items-center justify-center rounded-none",
             "bg-destructive text-destructive-foreground shadow-sm border border-background",
             "hover:bg-destructive/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
             "disabled:opacity-50 disabled:cursor-not-allowed"

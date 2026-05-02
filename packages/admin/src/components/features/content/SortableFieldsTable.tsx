@@ -145,7 +145,7 @@ export function SortableFieldsTable({
   };
 
   return (
-    <div className="border rounded-md">
+    <div className="border rounded-none">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -156,7 +156,7 @@ export function SortableFieldsTable({
           strategy={verticalListSortingStrategy}
         >
           <table className="w-full divide-y divide-border">
-            <thead className="bg-muted">
+            <thead className="bg-primary/5">
               <tr>
                 <th
                   scope="col"

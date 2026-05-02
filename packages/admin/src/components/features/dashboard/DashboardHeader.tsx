@@ -11,7 +11,7 @@ export function DashboardHeader() {
       <div className="flex items-center gap-2 hidden">
         <button
           onClick={toggleSidebar}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border/40 bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-none border border-border/40 bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
           aria-label="Toggle Sidebar"
         >
           <AlignLeft className="h-4 w-4" />

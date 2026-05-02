@@ -235,7 +235,7 @@ function IconPicker({ value, onChange }: IconPickerProps) {
                     type="button"
                     onClick={() => handleSelect(icon.name)}
                     className={cn(
-                      "flex items-center justify-center p-2 rounded-md transition-colors",
+                      "flex items-center justify-center p-2 rounded-none transition-colors",
                       "hover:bg-accent hover:text-accent-foreground",
                       isSelected && "bg-primary text-primary-foreground"
                     )}
@@ -487,7 +487,7 @@ export function CollectionSettings({
                 id="sidebar-group"
                 value={settings.admin?.sidebarGroup || ""}
                 onChange={e => handleSidebarGroupChange(e.target.value)}
-                className="flex w-full rounded-md border border-input bg-background h-10 px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex w-full rounded-none border border-input bg-background h-10 px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="">Collections (default)</option>
                 {customGroups?.map(group => (
@@ -622,7 +622,7 @@ export function CollectionSettings({
 
   if (variant === "card") {
     return (
-      <div className="border border-border rounded-xl bg-card shadow-none p-6">
+      <div className="border border-border rounded-none bg-card shadow-none p-6">
         <div className="flex items-center gap-2 mb-6">
           <Icons.Settings className="h-5 w-5 text-primary" />
           <h3 className="text-lg font-semibold tracking-tight">
@@ -642,7 +642,7 @@ export function CollectionSettings({
     <Collapsible
       open={localExpanded}
       onOpenChange={handleExpandedChange}
-      className="border-b border-border bg-muted/30"
+      className="border-b border-border bg-primary/5"
     >
       <CollapsibleTrigger asChild>
         <button
@@ -750,7 +750,7 @@ export function CollectionSettings({
                     id="sidebar-group-collapsible"
                     value={settings.admin?.sidebarGroup || ""}
                     onChange={e => handleSidebarGroupChange(e.target.value)}
-                    className="flex w-full rounded-md border border-input bg-background h-10 px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="flex w-full rounded-none border border-input bg-background h-10 px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
                     <option value="">Collections (default)</option>
                     {customGroups?.map(group => (

@@ -74,7 +74,7 @@ export function ArrayFieldContainer({
   // Progressively darker shade per nesting depth
   const arrayBgClasses: Record<number, string> = {
     0: "light:bg-slate-50 dark:transparent",
-    1: "light:bg-slate-100 dark:transparent",
+    1: "light:bg-primary/5 dark:transparent",
     2: "light:bg-slate-200 dark:transparent",
     3: "light:bg-slate-300 dark:transparent",
     4: "light:bg-slate-400 dark:transparent",
@@ -82,16 +82,16 @@ export function ArrayFieldContainer({
   const bgClass = arrayBgClasses[Math.min(nestingDepth, 4)];
 
   return (
-    <div className={`p-4 rounded-lg ${bgClass}`}>
+    <div className={`p-4 rounded-none ${bgClass}`}>
       <div className="flex">
         {/* Left accent stripe -- teal for arrays/repeaters */}
-        <div className="w-[3px] shrink-0 rounded-full pb-3 mr-3" />
+        <div className="w-[3px] shrink-0 rounded-none pb-3 mr-3" />
 
         <div className="flex-1 min-w-0">
           {/* Nested field rows */}
           {fieldCount > 0 && (
             <div
-              className="border-border/60 rounded-lg overflow-hidden bg-background mb-2"
+              className="border-border/60 rounded-none overflow-hidden bg-background mb-2"
               style={{ borderRadius: "6px" }}
             >
               <SortableContext
@@ -111,7 +111,7 @@ export function ArrayFieldContainer({
             ref={setNodeRef}
             className={`
               relative flex flex-col items-center justify-center gap-1.5
-              px-6 py-4 rounded-lg border-2 border-dashed
+              px-6 py-4 rounded-none border-2 border-dashed
               transition-all duration-200 select-none
               ${
                 isOver

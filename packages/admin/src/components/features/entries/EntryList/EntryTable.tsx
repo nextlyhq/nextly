@@ -541,7 +541,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
         {isLoading ? (
           <EntryTableSkeleton />
         ) : (
-          <div className="table-wrapper rounded-md border border-border bg-card overflow-hidden">
+          <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
             <div className="border-0 rounded-none shadow-none">
               <Table>
                 <TableHeader>

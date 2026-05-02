@@ -125,7 +125,7 @@ export function RichTextEditor({
 
   return (
     <LexicalComposer initialConfig={initialConfig}>
-      <div className="relative border border-gray-300 dark:border-gray-600 rounded-md overflow-hidden bg-white dark:bg-gray-900">
+      <div className="relative border border-gray-300 dark:border-gray-600 rounded-none overflow-hidden bg-white dark:bg-gray-900">
         {/* Toolbar */}
         {!disabled && <EditorToolbar toolbarOptions={toolbarOptions} />}
 

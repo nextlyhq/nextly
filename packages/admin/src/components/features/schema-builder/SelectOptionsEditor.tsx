@@ -167,7 +167,7 @@ function SortableOption({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 p-2 rounded-md border border-border bg-background group"
+      className="flex items-center gap-2 p-2 rounded-none border border-border bg-background group"
     >
       {/* Drag Handle */}
       <button
@@ -381,7 +381,7 @@ export function SelectOptionsEditor({
           </SortableContext>
         </DndContext>
       ) : (
-        <div className="flex flex-col items-center justify-center p-4 rounded-md border border-dashed border-border">
+        <div className="flex flex-col items-center justify-center p-4 rounded-none border border-dashed border-border">
           <Icons.List className="h-6 w-6 text-muted-foreground mb-2" />
           <p className="text-xs text-muted-foreground text-center">
             No options defined
@@ -459,7 +459,7 @@ export function SelectOptionsEditor({
             </div>
 
             {/* Format Help */}
-            <div className="text-xs text-muted-foreground p-2 rounded-md bg-muted/50">
+            <div className="text-xs text-muted-foreground p-2 rounded-none bg-primary/5">
               {importFormat === "csv" ? (
                 <>
                   <p className="font-medium mb-1">CSV Format:</p>

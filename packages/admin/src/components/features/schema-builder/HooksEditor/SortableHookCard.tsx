@@ -72,7 +72,7 @@ export function SortableHookCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "rounded-md border bg-background",
+        "rounded-none border bg-background",
         hook.enabled ? "border-border" : "border-border/50 opacity-60"
       )}
     >
@@ -89,7 +89,7 @@ export function SortableHookCard({
         </button>
 
         {/* Hook Icon */}
-        <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center">
+        <div className="w-6 h-6 rounded-none bg-primary/5 flex items-center justify-center">
           <CategoryIcon className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
 
@@ -109,7 +109,7 @@ export function SortableHookCard({
         <Switch
           checked={hook.enabled}
           onCheckedChange={checked => onUpdate(hook.id, { enabled: checked })}
-          className="data-[state=unchecked]:bg-muted"
+          className="data-[state=unchecked]:bg-primary/5"
         />
 
         {/* Expand/Collapse Button */}

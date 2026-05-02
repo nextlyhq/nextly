@@ -43,7 +43,7 @@ export const lexicalTheme: EditorThemeClasses = {
   },
 
   // Images (custom ImageNode styling)
-  image: "max-w-full h-auto rounded-md my-4",
+  image: "max-w-full h-auto rounded-none my-4",
 
   // Links
   link: "text-primary underline hover-unified cursor-pointer",
@@ -51,7 +51,7 @@ export const lexicalTheme: EditorThemeClasses = {
   // Text formatting
   text: {
     bold: "font-bold",
-    code: "bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-sm font-mono text-red-600 dark:text-red-400",
+    code: "bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-none text-sm font-mono text-red-600 dark:text-red-400",
     italic: "italic",
     strikethrough: "line-through",
     subscript: "text-xs align-sub",
@@ -61,7 +61,7 @@ export const lexicalTheme: EditorThemeClasses = {
   },
 
   // Code blocks
-  code: "bg-gray-900 dark:bg-gray-950 text-gray-100 p-4 rounded-md font-mono text-sm overflow-x-auto my-4 block",
+  code: "bg-gray-900 dark:bg-gray-950 text-gray-100 p-4 rounded-none font-mono text-sm overflow-x-auto my-4 block",
   codeHighlight: {
     atrule: "text-purple-400",
     attr: "text-primary",

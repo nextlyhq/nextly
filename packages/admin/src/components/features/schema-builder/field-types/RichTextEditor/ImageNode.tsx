@@ -298,7 +298,7 @@ function ImageComponent({
   if (imageError) {
     return (
       <div
-        className="my-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md"
+        className="my-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-none"
         style={{
           maxWidth: maxWidth ? `${maxWidth}px` : undefined,
         }}
@@ -323,7 +323,7 @@ function ImageComponent({
         alt={altText}
         width={width}
         height={height}
-        className="rounded-md w-full h-auto"
+        className="rounded-none w-full h-auto"
         loading="lazy"
         draggable="false"
         onError={() => setImageError(true)}

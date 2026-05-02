@@ -139,7 +139,7 @@ export function MobileSidebarDrawer({
           </Link>
 
           {/* Close button placed inside header so it aligns with logo */}
-          <SheetClose className="rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+          <SheetClose className="rounded-none opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
             <X className="h-4 w-4 text-sidebar-foreground" />
             <span className="sr-only">Close</span>
           </SheetClose>
@@ -150,8 +150,8 @@ export function MobileSidebarDrawer({
           className="flex-1 overflow-y-auto py-4 px-3
             [&::-webkit-scrollbar]:w-2
             [&::-webkit-scrollbar-track]:bg-transparent
-            [&::-webkit-scrollbar-thumb]:rounded-full
-            [&::-webkit-scrollbar-thumb]:bg-muted
+            [&::-webkit-scrollbar-thumb]:rounded-none
+            [&::-webkit-scrollbar-thumb]:bg-primary/5
             hover:[&::-webkit-scrollbar-thumb]:bg-accent"
         >
           <SidebarGroup>

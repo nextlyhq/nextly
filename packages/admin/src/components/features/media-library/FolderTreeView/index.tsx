@@ -104,7 +104,7 @@ export function FolderTreeView({
           onClick={() => onFolderSelect(null)}
           onKeyDown={e => handleKeyDown(e, null)}
           className={cn(
-            "group flex w-full items-center px-2 py-2 text-sm transition-all duration-200 cursor-pointer rounded-md",
+            "group flex w-full items-center px-2 py-2 text-sm transition-all duration-200 cursor-pointer rounded-none",
             activeFolderId === null
               ? "bg-primary/5 text-primary font-bold"
               : "text-muted-foreground hover:bg-primary/5 font-medium"
@@ -203,7 +203,7 @@ function FolderTreeItem({
     <div>
       <div
         className={cn(
-          "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-md mx-0.5",
+          "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-none mx-0.5",
           isActive
             ? "bg-primary/5 text-primary font-bold"
             : "text-muted-foreground hover:bg-primary/5 font-medium"
@@ -224,7 +224,7 @@ function FolderTreeItem({
                 onToggle(folder.id);
               }}
               className={cn(
-                "flex h-8 w-6 items-center justify-center transition-colors rounded-md cursor-pointer",
+                "flex h-8 w-6 items-center justify-center transition-colors rounded-none cursor-pointer",
                 isActive
                   ? "text-primary/40 group-hover:text-primary"
                   : "text-muted-foreground/40 group-hover:text-foreground"
@@ -252,10 +252,10 @@ function FolderTreeItem({
           {itemCount > 0 && (
             <span
               className={cn(
-                "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-[9px] font-bold tabular-nums transition-all duration-200",
+                "shrink-0 w-5 h-5 flex items-center justify-center rounded-none text-[9px] font-bold tabular-nums transition-all duration-200",
                 isActive
                   ? "bg-primary/20 text-primary"
-                  : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
+                  : "bg-primary/5 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
               )}
             >
               {itemCount}
@@ -276,7 +276,7 @@ function FolderTreeItem({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-none transition-colors cursor-pointer"
                 tabIndex={-1}
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-slate-400" />

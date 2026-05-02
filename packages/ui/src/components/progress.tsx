@@ -9,7 +9,7 @@
  * ## Design Specifications
  *
  * - **Height**: 8px (h-2)
- * - **Border Radius**: Fully rounded (rounded-full)
+ * - **Border Radius**: Fully rounded-none (rounded-none)
  * - **Animation**: Width transition (300ms linear) for smooth progress updates
  * - **Variants**:
  *   - `default`: Primary blue (bg-primary-500)

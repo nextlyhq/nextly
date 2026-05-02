@@ -38,16 +38,16 @@ const PluginsOverviewPage: React.FC = () => {
             { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
             { label: "Plugins" },
           ]}
-          className="mb-8"
+          className="mb-6"
         />
 
         {/* Page header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+            <h1 className="text-xl font-semibold tracking-tight">
               Installed Plugins
             </h1>
-            <p className="text-sm sm:text-base text-muted-foreground mt-1">
+            <p className="text-sm font-normal text-primary/50 mt-1">
               View and manage the plugins currently installed in your
               application.
             </p>

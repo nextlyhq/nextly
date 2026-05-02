@@ -322,7 +322,7 @@ export function RichTextToolbar({
                 >
                   <Baseline className="h-4 w-4" />
                   <span
-                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-full"
+                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-none"
                     style={{ backgroundColor: fontColor }}
                   />
                   <input
@@ -352,7 +352,7 @@ export function RichTextToolbar({
                 >
                   <Paintbrush className="h-4 w-4" />
                   <span
-                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-full border"
+                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-none border"
                     style={{ backgroundColor: bgColor }}
                   />
                   <input

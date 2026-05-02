@@ -56,7 +56,7 @@ function AdminAppContent() {
   if (!isHydrated || !route) {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center adminapp">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        <div className="animate-spin rounded-none h-12 w-12 border-b-2 border-primary"></div>
       </div>
     );
   }
@@ -70,7 +70,7 @@ function AdminAppContent() {
       <Suspense
         fallback={
           <div className="flex-1 flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+            <div className="animate-spin rounded-none h-8 w-8 border-b-2 border-primary" />
           </div>
         }
       >
