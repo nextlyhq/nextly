@@ -72,7 +72,24 @@ export function ensureHmrListener(): void {
         record.action === "serverComponentChanges";
 
       if (isServerChange) {
-        g.__nextly_hmrReload = true;
+        // Proactively kick off the config reload so the schema is applied
+        // and browser tabs are reloaded without waiting for an incoming
+        // HTTP request to trigger getNextly(). If a reload is already
+        // in-flight (Promise), skip — the running reload will pick up
+        // the latest config.
+        if (!((g.__nextly_hmrReload as unknown) instanceof Promise)) {
+          const reload = (async () => {
+            try {
+              const { reloadNextlyConfig } = await import(
+                "../init/reload-config"
+              );
+              await reloadNextlyConfig();
+            } catch {
+              // Errors already logged inside reloadNextlyConfig.
+            }
+          })();
+          markHmrReloadInFlight(reload);
+        }
       }
     };
 

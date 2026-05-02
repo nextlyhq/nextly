@@ -550,6 +550,17 @@ export async function reloadNextlyConfig(opts?: {
     } catch {
       // Non-fatal: same reasoning as SchemaRegistry block above.
     }
+
+    // Signal all connected browser tabs to reload so they immediately
+    // reflect the updated schema without a manual F5.
+    try {
+      const { broadcastDevReload } = await import(
+        "../runtime/dev-reload-broadcaster"
+      );
+      broadcastDevReload();
+    } catch {
+      // Non-fatal.
+    }
   }
 
   if (!applyResult.success) {
