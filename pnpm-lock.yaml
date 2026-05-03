@@ -539,6 +539,9 @@ importers:
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      pluralize:
+        specifier: ^8.0.0
+        version: 8.0.0
       react-dropzone:
         specifier: ^14.3.8
         version: 14.3.8(react@19.2.0)
@@ -591,6 +594,9 @@ importers:
       '@types/node':
         specifier: ^24.10.0
         version: 24.10.0
+      '@types/pluralize':
+        specifier: ^0.0.33
+        version: 0.0.33
       '@types/react':
         specifier: 19.2.0
         version: 19.2.0
@@ -4316,6 +4322,9 @@ packages:
   '@types/pg@8.15.5':
     resolution: {integrity: sha512-LF7lF6zWEKxuT3/OR8wAZGzkg4ENGXFNyiV/JeOt9z5B+0ZVwbql9McqX5c/WStFq1GaGso7H1AzP/qSzmlCKQ==}
 
+  '@types/pluralize@0.0.33':
+    resolution: {integrity: sha512-JOqsl+ZoCpP4e8TDke9W79FDcSgPAR0l6pixx2JHkhnRjvShyYiAYw2LVsnA7K08Y6DeOnaU6ujmENO4os/cYg==}
+
   '@types/react-dom@19.2.0':
     resolution: {integrity: sha512-brtBs0MnE9SMx7px208g39lRmC5uHZs96caOJfTjFcYSLHNamvaSMfJNagChVNkup2SdtOxKX1FDBkRSJe1ZAg==}
     peerDependencies:
@@ -6997,6 +7006,10 @@ packages:
     resolution: {integrity: sha512-aFi5B0WovBHTEvpM3DzXTUaeN6eN0qWnTkKx4NQaH4Wvcmc153PdaY2UBdSYKaGYw+UyWXSVyxDUg5DoPEttjw==}
     engines: {node: '>=18'}
     hasBin: true
+
+  pluralize@8.0.0:
+    resolution: {integrity: sha512-Nc3IT5yHzflTfbjgqWcCPpo7DaKy4FnpB0l/zCAW0Tc7jxAiuqSxHasntB3D7887LSrA93kDJ9IXovxJYxyLCA==}
+    engines: {node: '>=4'}
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -11816,6 +11829,8 @@ snapshots:
       pg-protocol: 1.10.3
       pg-types: 2.2.0
 
+  '@types/pluralize@0.0.33': {}
+
   '@types/react-dom@19.2.0(@types/react@19.2.0)':
     dependencies:
       '@types/react': 19.2.0
@@ -12281,7 +12296,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.8(@types/node@20.19.17)(@vitest/ui@4.0.8)(happy-dom@20.9.0)(jiti@2.6.1)(jsdom@27.1.0)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3)
+      vitest: 4.0.8(@types/node@24.10.0)(@vitest/ui@4.0.8)(happy-dom@20.9.0)(jiti@2.6.1)(jsdom@27.1.0)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/utils@4.0.8':
     dependencies:
@@ -14928,6 +14943,8 @@ snapshots:
       playwright-core: 1.56.1
     optionalDependencies:
       fsevents: 2.3.2
+
+  pluralize@8.0.0: {}
 
   possible-typed-array-names@1.1.0: {}
 
