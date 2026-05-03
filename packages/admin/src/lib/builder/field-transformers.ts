@@ -137,11 +137,7 @@ export function addFieldToArray(
         if (block.fields && block.fields.length > 0) {
           return {
             ...block,
-            fields: addFieldToArray(
-              block.fields,
-              arrayFieldId,
-              newField
-            ),
+            fields: addFieldToArray(block.fields, arrayFieldId, newField),
           };
         }
         return block;
@@ -178,11 +174,7 @@ export function addFieldToGroup(
         if (block.fields && block.fields.length > 0) {
           return {
             ...block,
-            fields: addFieldToGroup(
-              block.fields,
-              groupFieldId,
-              newField
-            ),
+            fields: addFieldToGroup(block.fields, groupFieldId, newField),
           };
         }
         return block;
@@ -215,10 +207,7 @@ export function updateFieldById(
         if (block.fields && block.fields.length > 0) {
           return {
             ...block,
-            fields: updateFieldById(
-              block.fields,
-              updatedField
-            ),
+            fields: updateFieldById(block.fields, updatedField),
           };
         }
         return block;
@@ -288,11 +277,7 @@ export function reorderNestedFields(
         if (block.fields && block.fields.length > 0) {
           return {
             ...block,
-            fields: reorderNestedFields(
-              block.fields,
-              activeId,
-              overId
-            ),
+            fields: reorderNestedFields(block.fields, activeId, overId),
           };
         }
         return block;
@@ -527,7 +512,13 @@ export function convertToBuilderField(
       hidden: field.admin.hidden,
       description: field.admin.description,
       placeholder: field.admin.placeholder,
-      condition: field.admin.condition,
+      // Cast: FieldDefinitionAdmin.condition's operator is typed as
+      // string (broad) for storage flexibility; FieldCondition narrows
+      // operator to the ConditionOperator union. The runtime evaluator
+      // handles unknown operators (fail-open) so the cast is safe.
+      condition: field.admin.condition as
+        | import("@admin/components/features/schema-builder/types").FieldCondition
+        | undefined,
       hideGutter: field.admin.hideGutter,
     };
   }
