@@ -35,6 +35,22 @@ export {
   CollectionSourceBadge,
   type CollectionSource,
 } from "./CollectionSourceBadge";
+
+// Builder UI/UX redesign — new shared components (PR 1).
+export { BuilderSettingsModal } from "./BuilderSettingsModal";
+export type { BuilderSettingsValues } from "./BuilderSettingsModal";
+export { FieldPickerModal } from "./FieldPickerModal";
+export { FieldEditorSheet } from "./FieldEditorSheet";
+export { BuilderToolbar } from "./BuilderToolbar";
+export { BuilderFieldList } from "./BuilderFieldList";
+export { HooksEditorSheet } from "./HooksEditorSheet";
+export type {
+  BuilderConfig,
+  BuilderKind,
+  BasicsField,
+  AdvancedField,
+} from "./builder-config";
+
 export * from "./types";
 
 // Field Type Editors
