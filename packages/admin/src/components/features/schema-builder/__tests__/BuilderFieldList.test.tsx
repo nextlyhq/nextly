@@ -81,8 +81,11 @@ describe("BuilderFieldList", () => {
     // System field rows render as buttons with their name visible.
     expect(screen.getByText("title")).toBeInTheDocument();
     expect(screen.getByText("slug")).toBeInTheDocument();
+    // PR B (2026-05-03) flipped the default to ON, so the visible toggle
+    // is the inline X dismiss ("Hide system fields"), not the legacy
+    // "Show system fields" button.
     expect(
-      screen.getByRole("button", { name: /show system fields/i })
+      screen.getByRole("button", { name: /hide system fields/i })
     ).toBeInTheDocument();
   });
 
