@@ -206,7 +206,7 @@ function SettingsCard({
   return (
     <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
       {/* Card header */}
-      <div className="flex items-center gap-4 px-6 py-5  border-b border-primary/5 bg-primary/5">
+      <div className="flex items-center gap-4 px-6 py-5  border-b border-primary/5">
         <div className="shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
           {icon}
         </div>
@@ -322,7 +322,11 @@ const SettingsGeneralPage: React.FC = () => {
   return (
     <PageContainer>
       <Form {...form}>
-        <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }}>
+        <form
+          onSubmit={e => {
+            void form.handleSubmit(onSubmit)(e);
+          }}
+        >
           <SettingsLayout
             actions={
               <Button

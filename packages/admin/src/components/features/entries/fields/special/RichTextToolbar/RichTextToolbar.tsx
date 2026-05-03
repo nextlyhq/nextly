@@ -213,7 +213,7 @@ export function RichTextToolbar({
                     }
                   >
                     <SelectTrigger
-                      size="md"
+                      size="default"
                       className="h-8 w-[130px] text-xs gap-1"
                     >
                       <Type className="h-3.5 w-3.5 shrink-0" />
@@ -248,7 +248,7 @@ export function RichTextToolbar({
                 <div className="flex items-center">
                   <Select value={fontSize} onValueChange={applyFontSize}>
                     <SelectTrigger
-                      size="md"
+                      size="default"
                       className="h-8 w-[80px] text-xs gap-1"
                     >
                       <ALargeSmall className="h-3.5 w-3.5 shrink-0" />

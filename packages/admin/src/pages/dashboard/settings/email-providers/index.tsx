@@ -605,7 +605,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={false}
-              className="flex-1 max-w-sm bg-white text-black border-primary/5"
+              className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -633,7 +633,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={true}
-              className="flex-1 max-w-sm bg-white text-black border-primary/5"
+              className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -660,7 +660,7 @@ function EmailProviderTable() {
         {/* Right: Filters & Column visibility */}
         <div className="flex items-center gap-2">
           <Select value={type} onValueChange={handleTypeChange}>
-            <SelectTrigger className="w-[130px] bg-white text-black border-primary/5 hover:bg-white/90">
+            <SelectTrigger className="w-[130px] bg-background text-foreground border-primary/5 hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>
@@ -673,7 +673,7 @@ function EmailProviderTable() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="md">
+              <Button variant="outline" size="md" className="bg-background">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>

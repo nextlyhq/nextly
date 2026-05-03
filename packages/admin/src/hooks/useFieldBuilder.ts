@@ -45,7 +45,6 @@ import {
   updateFieldById,
   deleteFieldById,
   reorderNestedFields,
-  _nestedFieldPriorityCollision,
   findComponentFieldMissingReference,
   findSelectFieldMissingOptions,
 } from "@admin/lib/builder";

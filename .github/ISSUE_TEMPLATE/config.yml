@@ -3,8 +3,8 @@ blank_issues_enabled: false
 
 contact_links:
   - name: Questions & Discussions
-    url: https://github.com/revnix/nextly-dev/discussions
+    url: https://github.com/nextlyhq/nextly/discussions
     about: Ask questions, share ideas, or get help from the community.
   - name: Security Vulnerability
-    url: https://github.com/revnix/nextly-dev/security/advisories/new
+    url: https://github.com/nextlyhq/nextly/security/advisories/new
     about: Report a security vulnerability privately. Do NOT open a public issue.

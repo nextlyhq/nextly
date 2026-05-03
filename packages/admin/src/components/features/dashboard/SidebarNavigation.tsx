@@ -337,7 +337,7 @@ export function SidebarNavigation({
               placeholder="Search..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="pl-9 bg-white dark:bg-slate-900/50 border-primary/5 dark:border-primary/5 text-xs h-9"
+              className="pl-9 bg-background border-primary/5 dark:border-primary/5 text-xs h-9"
             />
           </div>
         </div>

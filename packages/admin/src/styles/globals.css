@@ -586,6 +586,8 @@
   /* Base colors - using Slate neutral scale */
   --background: 0 0% 100%;
   /* Pure white for weightless aesthetic */
+  --page-background: 0 0% 97.6%;
+  /* #f9f9f9 for page content area */
   --foreground: 222.2 47.4% 11.2%;
   /* slate-900 */
 
@@ -704,6 +706,7 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  --color-page-background: hsl(var(--page-background));
 }
 
 /* Dark theme overrides when using class-based theming */
@@ -711,6 +714,8 @@
   /* Base colors - using Slate dark scale */
   --background: 222 47% 4%;
   /* ultra deep dark background (darker than slate-950) */
+  --page-background: 222 47% 4%;
+  /* Matches background in dark mode */
   --foreground: 210 40% 98%;
   /* slate-50 */
 
@@ -824,6 +829,7 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  --color-page-background: hsl(var(--page-background));
 }
 
 .adminapp {
@@ -888,8 +894,6 @@ button[data-slot^="button"].bg-destructive,
   color: hsl(var(--destructive-foreground)) !important;
 }
 
-
-
 /* Ensure text colors work for destructive buttons */
 .text-destructive-foreground {
   color: hsl(var(--destructive-foreground)) !important;
@@ -929,8 +933,6 @@ button[data-slot^="button"].text-destructive-foreground,
 [data-slot^="button"].text-destructive-foreground {
   color: hsl(var(--destructive-foreground)) !important;
 }
-
-
 
 /* Ensure badge backgrounds work properly */
 [data-slot^="badge"].bg-primary {
@@ -1763,13 +1765,13 @@ button[data-slot="radio-group-item"][data-state="checked"],
   white-space: nowrap;
 }
 
-/* Page Container Dark Mode Fix */
+/* Page Container Background System */
 .adminapp .admin-page-container {
-  background-color: hsl(var(--background));
+  background-color: hsl(var(--page-background));
 }
 
 .adminapp.dark .admin-page-container {
-  background-color: transparent;
+  background-color: hsl(var(--page-background));
 }
 
 /* Admin Dropdown Styling (Antigravity Standard: 0px Radius) */
@@ -1925,6 +1927,12 @@ button[data-slot="radio-group-item"][data-state="checked"],
   color: inherit !important;
 }
 
+/* Exclude badges from aggressive color inheritance */
+.hover-subtle-row:hover [data-testid*="badge"],
+.hover-subtle-row:hover .badge {
+  color: white !important;
+}
+
 .hover-subtle-row:hover svg {
   color: inherit !important;
 }
@@ -1971,7 +1979,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 /* Table icon covers: flat shape with unified neutral background */
 .table-row-icon-cover {
-  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-black/20 text-black;
+  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary/5 text-black;
 }
 
 @media (prefers-color-scheme: dark) {

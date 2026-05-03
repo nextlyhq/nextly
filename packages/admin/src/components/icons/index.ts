@@ -83,6 +83,7 @@ export {
   FolderInput, // Media Library: move to folder
   FolderOpen, // Collection Builder: group field
   FolderPlus,
+  Github,
   Gift, // Collection Settings: icon picker
   Globe, // Collection Settings: icon picker
   GalleryHorizontalEnd, // Rich text editor: gallery

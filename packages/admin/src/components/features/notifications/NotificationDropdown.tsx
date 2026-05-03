@@ -17,6 +17,7 @@
  * @module components/features/notifications/NotificationDropdown
  */
 
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "@admin/components/ui";
@@ -27,7 +28,7 @@ import { NotificationRow } from "./NotificationRow";
 
 const PAGE_SIZE = JOURNAL_PAGE_SIZE;
 
-export function NotificationDropdown(): JSX.Element {
+export function NotificationDropdown(): ReactElement {
   const [extraRows, setExtraRows] = useState<JournalRow[]>([]);
   const [moreHasMore, setMoreHasMore] = useState<boolean>(false);
   const [loadingMore, setLoadingMore] = useState<boolean>(false);

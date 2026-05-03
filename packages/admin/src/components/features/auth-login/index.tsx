@@ -261,15 +261,7 @@ export function Login() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <div className="flex justify-between items-center">
-                      <FormLabel>Password</FormLabel>
-                      <Link
-                        href={ROUTES.FORGOT_PASSWORD}
-                        className="text-sm text-primary cursor-pointer hover-unified transition-colors font-medium"
-                      >
-                        Forgot password?
-                      </Link>
-                    </div>
+                    <FormLabel>Password</FormLabel>
                     <div className="relative">
                       <FormControl>
                         <Input
@@ -284,6 +276,7 @@ export function Login() {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
+                        tabIndex={-1}
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showPassword ? (
@@ -292,6 +285,14 @@ export function Login() {
                           <Eye className="h-5 w-5" />
                         )}
                       </button>
+                    </div>
+                    <div className="flex justify-end">
+                      <Link
+                        href={ROUTES.FORGOT_PASSWORD}
+                        className="text-sm text-primary cursor-pointer transition-colors font-medium mt-1"
+                      >
+                        Forgot password?
+                      </Link>
                     </div>
                     <FormMessage />
                   </FormItem>
@@ -320,7 +321,7 @@ export function Login() {
               Don&apos;t have an account?{" "}
               <Link
                 href={ROUTES.REGISTER}
-                className="text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="text-primary cursor-pointer font-medium transition-colors"
               >
                 Sign up
               </Link>

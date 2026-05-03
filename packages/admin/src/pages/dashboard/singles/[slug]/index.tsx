@@ -19,7 +19,10 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import type React from "react";
 
-import { SingleForm } from "@admin/components/features/singles";
+import {
+  SingleForm,
+  type SingleSchema,
+} from "@admin/components/features/singles";
 import { Code } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -293,7 +296,10 @@ export default function SingleEditPage({
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SingleForm
-          schema={schema}
+          // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
+          // expects FieldConfig[] (discriminated). The runtime payload is the
+          // same; widening here until the schema layer unifies on FieldConfig.
+          schema={schema as unknown as SingleSchema}
           document={document}
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}

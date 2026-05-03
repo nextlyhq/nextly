@@ -1,0 +1,27 @@
+name: Sync Labels
+
+on:
+  push:
+    # TODO: switch to [main] once validated on dev.
+    branches: [dev]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels-sync.yml
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sync:
+    name: Sync .github/labels.yml to GitHub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync labels
+        uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml
+          # Delete labels that exist on GitHub but are not in labels.yml.
+          # Set to false on first run if you want to migrate gradually.
+          delete-other-labels: true

@@ -62,15 +62,15 @@ export function NotificationBell({ className }: NotificationBellProps) {
           }
           data-testid="notification-bell"
           className={cn(
-            "relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row",
+            "relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group",
             className
           )}
         >
-          <Bell className="h-5 w-5" />
+          <Bell className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
           {unread > 0 && (
             <span
               data-testid="notification-bell-badge"
-              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-none bg-destructive text-destructive-foreground text-[10px] font-bold leading-[18px] text-center"
+              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-none bg-destructive text-destructive-foreground !text-destructive-foreground text-[10px] font-bold leading-[18px] text-center"
             >
               {unread > 9 ? "9+" : String(unread)}
             </span>

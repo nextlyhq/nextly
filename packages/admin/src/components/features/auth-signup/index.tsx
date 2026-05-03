@@ -228,6 +228,7 @@ export function Signup() {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
+                        tabIndex={-1}
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showPassword ? (
@@ -266,6 +267,7 @@ export function Signup() {
                         onClick={() =>
                           setShowConfirmPassword(!showConfirmPassword)
                         }
+                        tabIndex={-1}
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showConfirmPassword ? (
@@ -304,7 +306,7 @@ export function Signup() {
               Already have an account?{" "}
               <Link
                 href={ROUTES.LOGIN}
-                className="text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="text-primary cursor-pointer font-medium transition-colors"
               >
                 Sign in
               </Link>

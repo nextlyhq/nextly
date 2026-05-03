@@ -79,7 +79,7 @@ export function EntryFormHeader({
   onDelete,
   isDeleting = false,
   embedded = false,
-  _isDirty = false,
+  isDirty: _isDirty = false,
 }: EntryFormHeaderProps) {
   // Don't render header in embedded mode (modal)
   if (embedded) {
@@ -94,9 +94,13 @@ export function EntryFormHeader({
   return (
     <div className="flex items-center justify-between mb-8 gap-4">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          {title}
+        </h1>
         {mode === "edit" && entry?.id && (
-          <p className="text-sm font-normal text-primary/50 mt-1">ID: {entry.id}</p>
+          <p className="text-sm font-normal text-primary/50 mt-1">
+            ID: {entry.id}
+          </p>
         )}
       </div>
 
