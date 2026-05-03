@@ -25,8 +25,8 @@ import {
 } from "@revnixhq/ui";
 import { useState } from "react";
 
-import { AdminTab } from "./field-editor-sheet/AdminTab";
 import { AdvancedTab } from "./field-editor-sheet/AdvancedTab";
+import { DisplayTab } from "./field-editor-sheet/DisplayTab";
 import { GeneralTab } from "./field-editor-sheet/GeneralTab";
 import { ValidationTab } from "./field-editor-sheet/ValidationTab";
 import type { BuilderField } from "./types";
@@ -78,9 +78,13 @@ export function FieldEditorSheet({
         className="w-[560px] sm:max-w-[560px] p-0 flex flex-col"
       >
         <SheetHeader className="p-4 border-b border-border">
-          <SheetTitle className="flex items-center gap-2">
-            <span>{mode === "create" ? "New field" : draft.name}</span>
-            <span className="text-xs text-muted-foreground font-normal">
+          <SheetTitle className="flex items-center gap-2 justify-between">
+            {/* PR E1 -- name on the left, type+width chip on the right per
+                feedback Section 4. */}
+            <span className="truncate">
+              {mode === "create" ? "New field" : draft.name || "untitled"}
+            </span>
+            <span className="text-[10px] text-muted-foreground font-normal border border-border rounded-sm px-1.5 py-0.5 shrink-0">
               {draft.type} &middot; {widthLabel}
             </span>
           </SheetTitle>
@@ -100,7 +104,11 @@ export function FieldEditorSheet({
           <TabsList className="mx-4 mt-3">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="validation">Validation</TabsTrigger>
-            <TabsTrigger value="admin">Admin</TabsTrigger>
+            {/* PR E1: renamed "Admin" -> "Display" per feedback Section 4.
+                The tab `value` stays "admin" so existing localStorage / state
+                keyed on the value (if any) doesn't break; only the
+                user-visible label changes. */}
+            <TabsTrigger value="admin">Display</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
           </TabsList>
 
@@ -122,7 +130,11 @@ export function FieldEditorSheet({
               />
             </TabsContent>
             <TabsContent value="admin">
-              <AdminTab field={draft} readOnly={readOnly} onChange={setDraft} />
+              <DisplayTab
+                field={draft}
+                readOnly={readOnly}
+                onChange={setDraft}
+              />
             </TabsContent>
             <TabsContent value="advanced">
               <AdvancedTab
