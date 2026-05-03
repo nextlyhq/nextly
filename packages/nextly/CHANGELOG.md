@@ -24,7 +24,7 @@ Runtime checks that handled both legacy and canonical names now treat legacy nam
 
 ### Internal cleanup (Phase 4.10 / Category C)
 
-- Deleted 11 deprecated re-export shim files under `src/services/schema/*` and `src/services/dynamic-collections/*`. None were in the `package.json` exports map, so external consumers cannot have been depending on them through supported imports. Internal consumers updated to canonical locations under `src/domains/*/services/*`.
+- Deleted 12 deprecated re-export shim files under `src/services/schema/*` (7 files) and `src/services/dynamic-collections/*` (5 files). None were in the `package.json` exports map, so external consumers cannot have been depending on them through supported imports. Internal consumers updated to canonical locations under `src/domains/*/services/*`.
 - Dropped the `IStorageAdapter` and `StorageAdapterInfo` type re-exports from `storage/adapters/base-adapter.ts`. Import these types from `@revnixhq/nextly/storage` (or `storage/types` internally) directly. The `BaseStorageAdapter` abstract class stays in `storage/adapters/base-adapter.ts`; it has real consumers via `LocalStorageAdapter` and external storage plugins.
 
 ### Breaking changes (Phase 4.10 / Category D)
