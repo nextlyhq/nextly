@@ -1145,7 +1145,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     ) {
       return `'${value}'`;
     }
-    if (type === "checkbox" || type === "boolean") {
+    if (type === "checkbox") {
       if (this.dialect === "sqlite") return value ? "1" : "0";
       return value ? "TRUE" : "FALSE";
     }

@@ -254,8 +254,7 @@ function UserFieldInput({
   error,
   disabled,
 }: UserFieldInputProps) {
-  const isCheckbox =
-    fieldConfig.type === "checkbox" || fieldConfig.type === "boolean";
+  const isCheckbox = fieldConfig.type === "checkbox";
 
   return (
     <FieldWrapper

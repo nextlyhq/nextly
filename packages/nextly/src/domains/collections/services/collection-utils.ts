@@ -13,7 +13,6 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  */
 export const ALWAYS_JSON_TYPES = new Set([
   "richText",
-  "richtext", // Legacy alias
   "blocks",
   "repeater",
   "group",
@@ -98,10 +97,9 @@ export function isJsonFieldType(
 
 /**
  * Checks if a field is a relationship field.
- * Handles both dynamic collections ("relation") and code-defined collections ("relationship").
  */
 export function isRelationshipField(fieldType: string): boolean {
-  return fieldType === "relation" || fieldType === "relationship";
+  return fieldType === "relationship";
 }
 
 /**

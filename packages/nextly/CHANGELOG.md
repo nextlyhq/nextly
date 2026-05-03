@@ -1,5 +1,27 @@
 # @revnixhq/nextly
 
+## Unreleased
+
+### Breaking changes (Phase 4.10 / Category B)
+
+Dropped legacy field-type aliases and the legacy `defaultValue`/`relatedCollection`/top-level `relationType` fields. Pre-Alpha; no migration script. Existing UI-built collections persisted with legacy names need to be regenerated or the schema_definition column updated by hand.
+
+Field-type aliases removed (rename mapping):
+
+- `string` to `text`
+- `richtext` to `richText`
+- `decimal` to `number`
+- `boolean` to `checkbox`
+- `relation` to `relationship`
+
+`FieldDefinition` legacy fields removed:
+
+- `defaultValue` to `default`
+- `relatedCollection` to `relationTo`
+- top-level `relationType` to `options.relationType`
+
+Runtime checks that handled both legacy and canonical names now treat legacy names as unknown field types (loud "unknown field type" load errors, not silent corruption). The 6 mutation-service many-to-many checks now read both `options.relationType === "manyToMany"` and `hasMany === true` to cover code-first relationship fields per Lesson 3 in the deferred-tasks doc.
+
 ## 0.0.140
 
 ### Minor Changes — BREAKING
