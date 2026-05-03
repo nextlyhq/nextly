@@ -29,10 +29,18 @@ export function SortableRow({
   onEditField,
   onDeleteField,
 }: Props) {
-  const { setNodeRef, transform, transition, isDragging } = useSortable({
-    id: rowId,
-    disabled: readOnly,
-  });
+  // Why: previously only setNodeRef + transform/transition were extracted,
+  // so useSortable's pointer/keyboard listeners were never attached to the
+  // drag handle -- making the row visually styled but undraggable. Spread
+  // {attributes, listeners} on the handle inside the first card below.
+  const {
+    setNodeRef,
+    attributes,
+    listeners,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: rowId, disabled: readOnly });
 
   return (
     <div
@@ -45,11 +53,17 @@ export function SortableRow({
       }}
       className="flex gap-2"
     >
-      {fields.map(f => (
+      {fields.map((f, i) => (
         <FieldCard
           key={f.id}
           field={f}
           readOnly={readOnly}
+          // Why: only the first card in each row mounts the drag handle.
+          // The handle drives the whole row's reorder (rows are the
+          // sortable unit, not individual cards).
+          dragHandleProps={
+            i === 0 && !readOnly ? { attributes, listeners } : undefined
+          }
           onEdit={() => onEditField(f.id)}
           onDelete={() => onDeleteField(f.id)}
         />
@@ -58,14 +72,21 @@ export function SortableRow({
   );
 }
 
+type DragHandleProps = {
+  attributes: ReturnType<typeof useSortable>["attributes"];
+  listeners: ReturnType<typeof useSortable>["listeners"];
+};
+
 function FieldCard({
   field,
   readOnly,
+  dragHandleProps,
   onEdit,
   onDelete,
 }: {
   field: BuilderField;
   readOnly: boolean;
+  dragHandleProps?: DragHandleProps;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -88,13 +109,19 @@ function FieldCard({
       style={{ flex: `0 0 ${flexBasis}` }}
       className="border border-border rounded-md p-3 bg-background hover:border-primary/30 cursor-pointer flex items-center gap-2 group"
     >
-      {!readOnly && (
-        <span
-          className="text-muted-foreground select-none cursor-grab"
+      {!readOnly && dragHandleProps && (
+        <button
+          type="button"
           aria-label="Reorder field"
+          className="text-muted-foreground select-none cursor-grab"
+          {...dragHandleProps.attributes}
+          {...dragHandleProps.listeners}
+          // Why: stop the row's click-to-edit from firing when the user
+          // taps the handle (vs drags it).
+          onClick={e => e.stopPropagation()}
         >
           ⋮⋮
-        </span>
+        </button>
       )}
       <div className="min-w-0">
         <div className="text-sm font-medium truncate">

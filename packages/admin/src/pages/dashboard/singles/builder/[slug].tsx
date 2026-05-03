@@ -14,6 +14,7 @@
  */
 
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
 import type React from "react";
@@ -30,6 +31,7 @@ import {
   type BuilderSettingsValues,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
@@ -40,6 +42,8 @@ import {
   convertToFieldDefinition,
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
+import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
 
@@ -80,8 +84,11 @@ export default function SingleBuilderEditPage({
   const [hooks, setHooks] = useState<EnabledHook[]>([]);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
-  const [originalFieldsSnapshot, setOriginalFieldsSnapshot] = useState<
-    string | null
+  // Why: was a JSON string of just field IDs, which silently masked
+  // label / width / validation / options edits. Now a frozen array we
+  // diff via countDirtyFields so every meaningful edit bumps the badge.
+  const [originalFields, setOriginalFields] = useState<
+    readonly BuilderField[] | null
   >(null);
 
   const { mutate: updateSingle, isPending: isSaving } = useUpdateSingle();
@@ -103,9 +110,7 @@ export default function SingleBuilderEditPage({
     const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
     builder.setFields(allFields);
 
-    setOriginalFieldsSnapshot(
-      JSON.stringify(allFields.filter(f => !f.isSystem).map(f => f.id))
-    );
+    setOriginalFields(allFields.filter(f => !f.isSystem));
 
     const adminBlock = (single.admin ?? {}) as Record<string, unknown>;
     setSettings({
@@ -129,13 +134,15 @@ export default function SingleBuilderEditPage({
     [builder.fields]
   );
 
+  // Dirty count: number of user fields that were added, removed, or had
+  // any of their editable shape change since load.
   const unsavedCount = useMemo(() => {
-    if (!originalFieldsSnapshot) return 0;
-    const currentSnapshot = JSON.stringify(
-      builder.fields.filter(f => !f.isSystem).map(f => f.id)
+    if (!originalFields) return 0;
+    return countDirtyFields(
+      originalFields,
+      builder.fields.filter(f => !f.isSystem)
     );
-    return currentSnapshot !== originalFieldsSnapshot ? 1 : 0;
-  }, [builder.fields, originalFieldsSnapshot]);
+  }, [builder.fields, originalFields]);
 
   const handleSave = useCallback(() => {
     if (!slug || !settings) {
@@ -176,11 +183,7 @@ export default function SingleBuilderEditPage({
       {
         onSuccess: () => {
           toast.success("Single updated");
-          setOriginalFieldsSnapshot(
-            JSON.stringify(
-              builder.fields.filter(f => !f.isSystem).map(f => f.id)
-            )
-          );
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
         },
         onError: err => {
           const errorObj = err as { message?: string };
@@ -192,6 +195,41 @@ export default function SingleBuilderEditPage({
       }
     );
   }, [builder, hooks, settings, slug, updateSingle]);
+
+  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
+  // by width). We compute the OLD row layout, apply the row swap, and
+  // flatten back to a fields array for handleFieldsReorder. The legacy
+  // builder.handleDragEnd is built for the old palette+field-list model
+  // and ignores row IDs.
+  const handleRowDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
+        return;
+      }
+      const userFields = builder.fields.filter(f => !f.isSystem);
+      const systemFields = builder.fields.filter(f => f.isSystem);
+      const rows = packIntoRows(
+        userFields.map(f => ({
+          id: f.id,
+          width: parseWidth(f.admin?.width),
+          _field: f,
+        }))
+      );
+      const oldIdx = Number(activeIdStr.slice("row-".length));
+      const newIdx = Number(overIdStr.slice("row-".length));
+      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
+      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
+      const reorderedUserFields = reorderedRows.flatMap(row =>
+        row.map(r => (r as { _field: BuilderField })._field)
+      );
+      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
+    },
+    [builder]
+  );
 
   // ---------------------------- Loading / error guards ----------------------
 
@@ -256,7 +294,7 @@ export default function SingleBuilderEditPage({
       <DndContext
         sensors={builder.sensors}
         onDragStart={builder.handleDragStart}
-        onDragEnd={(event: DragEndEvent) => builder.handleDragEnd(event)}
+        onDragEnd={handleRowDragEnd}
       >
         <BuilderFieldList
           fields={builder.fields}

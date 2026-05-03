@@ -22,6 +22,7 @@
  */
 
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
 import type React from "react";
@@ -40,6 +41,7 @@ import {
   type BuilderSettingsValues,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
@@ -51,6 +53,8 @@ import {
   convertHooksToStoredFormat,
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
+import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
   schemaApi,
@@ -109,9 +113,11 @@ export default function CollectionBuilderEditPage({
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
 
-  /** Snapshot of fields at load time for dirty-detection (JSON-compared). */
-  const [originalFieldsSnapshot, setOriginalFieldsSnapshot] = useState<
-    string | null
+  // Why: was a JSON string of just field IDs, which silently masked
+  // label / width / validation / options edits. Now a frozen array we
+  // diff via countDirtyFields so every meaningful edit bumps the badge.
+  const [originalFields, setOriginalFields] = useState<
+    readonly BuilderField[] | null
   >(null);
 
   // Schema change confirmation state — preserved verbatim from legacy.
@@ -150,11 +156,9 @@ export default function CollectionBuilderEditPage({
     const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
     builder.setFields(allFields);
 
-    // Pin the load-time snapshot for dirty detection. JSON keeps it cheap
-    // and stable across in-place mutations from the editor sheet.
-    setOriginalFieldsSnapshot(
-      JSON.stringify(allFields.filter(f => !f.isSystem).map(f => f.id))
-    );
+    // Pin the load-time field array for dirty detection. countDirtyFields
+    // diffs the full editable shape, so every config edit bumps the badge.
+    setOriginalFields(allFields.filter(f => !f.isSystem));
 
     setSettings({
       singularName: singular,
@@ -195,16 +199,16 @@ export default function CollectionBuilderEditPage({
     [builder.fields]
   );
 
-  // Dirty count: did the user-fields list change shape since load? For
-  // PR 2 we use a coarse "1 if any change else 0" — exact diff comes
-  // later; the badge just needs to nudge the user to save.
+  // Dirty count: number of user fields that were added, removed, or had
+  // any of their editable shape change (label / width / validation /
+  // options / defaultValue / nested fields / etc.) since load.
   const unsavedCount = useMemo(() => {
-    if (!originalFieldsSnapshot) return 0;
-    const currentSnapshot = JSON.stringify(
-      builder.fields.filter(f => !f.isSystem).map(f => f.id)
+    if (!originalFields) return 0;
+    return countDirtyFields(
+      originalFields,
+      builder.fields.filter(f => !f.isSystem)
     );
-    return currentSnapshot !== originalFieldsSnapshot ? 1 : 0;
-  }, [builder.fields, originalFieldsSnapshot]);
+  }, [builder.fields, originalFields]);
 
   // Build validated field definitions from the builder state.
   // Shared by the preview path and the settings-only save path.
@@ -254,12 +258,8 @@ export default function CollectionBuilderEditPage({
           );
           setShowSchemaDialog(false);
           setPreviewData(null);
-          // Refresh the dirty snapshot so the unsaved badge clears.
-          setOriginalFieldsSnapshot(
-            JSON.stringify(
-              builder.fields.filter(f => !f.isSystem).map(f => f.id)
-            )
-          );
+          // Refresh the dirty baseline so the unsaved badge clears.
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
         } else {
           stopRestart(
             false,
@@ -353,6 +353,41 @@ export default function CollectionBuilderEditPage({
     }
   }, [slug, getValidatedFields, saveSettingsOnly]);
 
+  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
+  // by width). We compute the OLD row layout, apply the row swap, and
+  // flatten back to a fields array for handleFieldsReorder. The legacy
+  // builder.handleDragEnd is built for the old palette+field-list model
+  // and ignores row IDs.
+  const handleRowDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
+        return;
+      }
+      const userFields = builder.fields.filter(f => !f.isSystem);
+      const systemFields = builder.fields.filter(f => f.isSystem);
+      const rows = packIntoRows(
+        userFields.map(f => ({
+          id: f.id,
+          width: parseWidth(f.admin?.width),
+          _field: f,
+        }))
+      );
+      const oldIdx = Number(activeIdStr.slice("row-".length));
+      const newIdx = Number(overIdStr.slice("row-".length));
+      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
+      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
+      const reorderedUserFields = reorderedRows.flatMap(row =>
+        row.map(r => (r as { _field: BuilderField })._field)
+      );
+      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
+    },
+    [builder]
+  );
+
   // ----------------------------------------------------------------
   // Loading / error guards
   // ----------------------------------------------------------------
@@ -422,7 +457,7 @@ export default function CollectionBuilderEditPage({
       <DndContext
         sensors={builder.sensors}
         onDragStart={builder.handleDragStart}
-        onDragEnd={(event: DragEndEvent) => builder.handleDragEnd(event)}
+        onDragEnd={handleRowDragEnd}
       >
         <BuilderFieldList
           fields={builder.fields}
@@ -431,9 +466,9 @@ export default function CollectionBuilderEditPage({
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
           onReorder={() => {
-            // Reorder is driven by handleDragEnd above — useFieldBuilder
-            // owns the sortable wiring. This callback exists for parents
-            // that need notification but our state lives in the hook.
+            // Reorder is driven by handleRowDragEnd above. This callback
+            // exists for parents that need notification but our state
+            // lives in the useFieldBuilder hook.
           }}
         />
       </DndContext>

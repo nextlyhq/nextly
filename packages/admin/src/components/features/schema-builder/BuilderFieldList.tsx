@@ -11,6 +11,10 @@
 // sensors setup, the onDragEnd handler) lives in the parent page in
 // PR 2. This component provides the visual layout and click-to-edit; DnD
 // reordering will be hooked up alongside the page-level mount.
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { Button } from "@revnixhq/ui";
 
 import {
@@ -79,18 +83,27 @@ export function BuilderFieldList({
         {userFields.length === 0 ? (
           <EmptyState onAdd={() => onAddAt(0)} readOnly={readOnly} />
         ) : (
-          <div className="space-y-2">
-            {rows.map((row, idx) => (
-              <SortableRow
-                key={`row-${idx}`}
-                rowId={`row-${idx}`}
-                fields={row.map(r => r._field)}
-                readOnly={readOnly}
-                onEditField={onEditField}
-                onDeleteField={onDeleteField}
-              />
-            ))}
-          </div>
+          // Why: dnd-kit's useSortable inside SortableRow needs an
+          // enclosing SortableContext that knows the ordered list of
+          // sortable item IDs. Without this wrapper, useSortable never
+          // registers and pointer events are silently ignored.
+          <SortableContext
+            items={rows.map((_, idx) => `row-${idx}`)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-2">
+              {rows.map((row, idx) => (
+                <SortableRow
+                  key={`row-${idx}`}
+                  rowId={`row-${idx}`}
+                  fields={row.map(r => r._field)}
+                  readOnly={readOnly}
+                  onEditField={onEditField}
+                  onDeleteField={onDeleteField}
+                />
+              ))}
+            </div>
+          </SortableContext>
         )}
       </div>
     </div>
