@@ -82,6 +82,7 @@ import {
 } from "@admin/hooks/queries/useUserFields";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { navigateTo } from "@admin/lib/navigation";
+import { cn } from "@admin/lib/utils";
 import type {
   UserFieldDefinitionRecord,
   UserFieldType,

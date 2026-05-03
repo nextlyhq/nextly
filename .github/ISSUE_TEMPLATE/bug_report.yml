@@ -10,9 +10,9 @@ body:
         Thanks for taking the time to file a bug report! Please fill out the form below so we can reproduce and triage quickly.
 
         Before submitting, please:
-        - Search [existing issues](https://github.com/revnix/nextly-dev/issues?q=is%3Aissue) to avoid duplicates.
+        - Search [existing issues](https://github.com/nextlyhq/nextly/issues?q=is%3Aissue) to avoid duplicates.
         - Confirm you're on the latest version of the affected package.
-        - For security issues, use the [private advisory form](https://github.com/revnix/nextly-dev/security/advisories/new) instead.
+        - For security issues, use the [private advisory form](https://github.com/nextlyhq/nextly/security/advisories/new) instead.
 
   - type: dropdown
     id: package
@@ -55,24 +55,29 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: reproduction-link
+    attributes:
+      label: Link to a minimal reproduction
+      description: |
+        **Required.** A public Git repo (or StackBlitz / CodeSandbox) that reproduces the issue. Issues without a reproduction may be closed.
+
+        The fastest way to start one: `pnpm create nextly-app@latest`, then push the failing scenario to a fresh repo.
+      placeholder: "https://github.com/your-username/nextly-bug-repro"
+    validations:
+      required: true
+
   - type: textarea
     id: reproduction
     attributes:
       label: Steps to reproduce
-      description: Minimal, deterministic steps. A link to a minimal reproduction repo dramatically speeds up triage.
+      description: Minimal, deterministic steps based on the linked reproduction.
       value: |
         1.
         2.
         3.
     validations:
       required: true
-
-  - type: input
-    id: reproduction-link
-    attributes:
-      label: Reproduction repo (optional but encouraged)
-      description: Link to a minimal reproduction (StackBlitz, GitHub repo, etc.)
-      placeholder: "https://github.com/your-username/repro"
 
   - type: textarea
     id: expected
@@ -91,18 +96,85 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: environment
+  - type: input
+    id: node-version
     attributes:
-      label: Environment
-      description: Runtime details. Run `npx envinfo --system --binaries --browsers --npmPackages` and paste here.
-      render: shell
-      placeholder: |
-        - OS:
-        - Node:
-        - pnpm:
-        - Browser (if relevant):
-        - Database / driver (if relevant):
+      label: Node.js version
+      description: Output of `node -v`. Only LTS versions are supported.
+      placeholder: "20.11.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package-manager
+    attributes:
+      label: Package manager
+      multiple: false
+      options:
+        - pnpm
+        - npm
+        - yarn
+        - bun
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: package-manager-version
+    attributes:
+      label: Package manager version
+      placeholder: "9.15.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: false
+      options:
+        - macOS
+        - Linux (Debian / Ubuntu)
+        - Linux (RedHat / Fedora / CentOS)
+        - Linux (Other)
+        - Windows 10
+        - Windows 11
+        - Windows (WSL)
+        - Docker / Podman
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: database
+    attributes:
+      label: Database
+      description: Select the database driver in use. Pick "Not applicable" if the bug is unrelated to data storage.
+      multiple: false
+      options:
+        - PostgreSQL
+        - MySQL
+        - MariaDB
+        - SQLite
+        - Not applicable
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser (for admin / UI bugs)
+      description: Required only if the bug is in the admin panel or another browser-rendered UI. Pick "Not applicable" otherwise.
+      multiple: false
+      options:
+        - Not applicable
+        - Chrome
+        - Firefox
+        - Safari
+        - Edge
+        - Brave / Arc / other Chromium
+        - Other
     validations:
       required: true
 
@@ -122,4 +194,8 @@ body:
         - label: I'm using the latest version of the affected package.
           required: true
         - label: This is not a security vulnerability (those go to the private advisory form).
+          required: true
+        - label: I provided a minimal reproduction (issues without one may be closed).
+          required: true
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/nextlyhq/nextly/blob/main/CODE_OF_CONDUCT.md).
           required: true

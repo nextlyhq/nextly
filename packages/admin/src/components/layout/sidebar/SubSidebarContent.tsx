@@ -2,6 +2,7 @@ import { DynamicCollectionNav } from "@admin/components/features/dashboard/Dynam
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
+import * as Icons from "@admin/components/icons";
 import {
   Layers,
   Settings,
