@@ -22,11 +22,12 @@
  * }
  * ```
  *
- * Wire shape — Task 21 migration: every dispatch method wraps the inner
+ * Wire shape (Phase 4.6 migration): every dispatch method wraps the inner
  * route work in `withErrorHandler` so unmatched paths and service throws
- * surface as canonical `application/problem+json`. JSON responses use
- * `createSuccessResponse` / `createPaginatedResponse` per spec §10.2; the
- * legacy `{ success, statusCode, data }` double-wrap is removed. Per-route
+ * surface as canonical `application/problem+json`. JSON success bodies use
+ * the canonical respondX helpers (spec section 5.1): `respondList` for the
+ * paginated list, `respondDoc` for findByID, `respondMutation` for
+ * create/update, `respondAction` for delete/move (no-doc result). Per-route
  * `withTimezoneFormatting` still runs on JSON success bodies before they
  * leave the wrapper.
  *
@@ -78,11 +79,14 @@ import type {
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
-import {
-  createPaginatedResponse,
-  createSuccessResponse,
-} from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondData,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -258,8 +262,8 @@ async function handleListMedia(request: Request): Promise<Response> {
   const folderIdParam = searchParams.get("folderId");
   const options: ListMediaOptions = {
     page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-    pageSize: searchParams.get("pageSize")
-      ? Number(searchParams.get("pageSize"))
+    limit: searchParams.get("limit")
+      ? Number(searchParams.get("limit"))
       : 24,
     search: searchParams.get("search") || undefined,
     type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
@@ -274,10 +278,17 @@ async function handleListMedia(request: Request): Promise<Response> {
 
   const result = await mediaService.listMedia(options, context);
 
-  return createPaginatedResponse(result.data, {
-    total: result.pagination.total,
-    page: options.page ?? 1,
-    perPage: Math.max(1, options.pageSize ?? 24),
+  const page = options.page ?? 1;
+  const limit = Math.max(1, options.limit ?? 24);
+  const total = result.pagination.total;
+  const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+  return respondList(result.data, {
+    total,
+    page,
+    limit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
   });
 }
 
@@ -341,7 +352,7 @@ async function handleUploadMedia(request: Request): Promise<Response> {
     context
   );
 
-  return createSuccessResponse(mediaFile, { status: 201 });
+  return respondMutation("Media uploaded.", mediaFile, { status: 201 });
 }
 
 async function handleGetMedia(mediaId: string): Promise<Response> {
@@ -350,7 +361,7 @@ async function handleGetMedia(mediaId: string): Promise<Response> {
 
   const mediaFile = await mediaService.findById(mediaId, context);
 
-  return createSuccessResponse(mediaFile);
+  return respondDoc(mediaFile);
 }
 
 async function handleUpdateMedia(
@@ -372,7 +383,7 @@ async function handleUpdateMedia(
 
   const mediaFile = await mediaService.update(mediaId, validated, context);
 
-  return createSuccessResponse(mediaFile);
+  return respondMutation("Media updated.", mediaFile);
 }
 
 async function handleDeleteMedia(mediaId: string): Promise<Response> {
@@ -381,7 +392,9 @@ async function handleDeleteMedia(mediaId: string): Promise<Response> {
 
   await mediaService.delete(mediaId, context);
 
-  return createSuccessResponse({ success: true });
+  // Service returns void; surface the deleted id alongside the toast so the
+  // admin can update its local cache without a follow-up fetch.
+  return respondAction("Media deleted.", { id: mediaId });
 }
 
 async function handleMoveMedia(
@@ -395,7 +408,9 @@ async function handleMoveMedia(
 
   await mediaService.moveToFolder(mediaId, folderId ?? null, context);
 
-  return createSuccessResponse({ success: true });
+  // Service returns void; echo the target ids so the admin can update the
+  // moved record locally without re-fetching the affected folders.
+  return respondAction("Media moved.", { id: mediaId, folderId: folderId ?? null });
 }
 
 // ============================================================
@@ -415,7 +430,10 @@ async function handleListFolders(request: Request): Promise<Response> {
       ? await mediaService.listRootFolders(context)
       : await mediaService.listSubfolders(parentId, context);
 
-  return createSuccessResponse(folders);
+  // Folder listings are not server-paginated; use respondData with a named
+  // field to keep the bare-array payload addressable without a synthetic
+  // pagination envelope.
+  return respondData({ folders });
 }
 
 async function handleCreateFolder(request: Request): Promise<Response> {
@@ -453,7 +471,7 @@ async function handleCreateFolder(request: Request): Promise<Response> {
     context
   );
 
-  return createSuccessResponse(folder, { status: 201 });
+  return respondMutation("Folder created.", folder, { status: 201 });
 }
 
 async function handleGetFolder(folderId: string): Promise<Response> {
@@ -462,7 +480,7 @@ async function handleGetFolder(folderId: string): Promise<Response> {
 
   const folder = await mediaService.findFolderById(folderId, context);
 
-  return createSuccessResponse(folder);
+  return respondDoc(folder);
 }
 
 async function handleUpdateFolder(
@@ -475,7 +493,7 @@ async function handleUpdateFolder(
 
   const folder = await mediaService.updateFolder(folderId, body, context);
 
-  return createSuccessResponse(folder);
+  return respondMutation("Folder updated.", folder);
 }
 
 async function handleDeleteFolder(
@@ -490,7 +508,9 @@ async function handleDeleteFolder(
 
   await mediaService.deleteFolder(folderId, deleteContents, context);
 
-  return createSuccessResponse({ success: true });
+  // Service returns void; echo the deleted id so the admin can prune its
+  // folder tree locally without a follow-up fetch.
+  return respondAction("Folder deleted.", { id: folderId });
 }
 
 async function handleGetFolderContents(folderId: string): Promise<Response> {
@@ -499,7 +519,9 @@ async function handleGetFolderContents(folderId: string): Promise<Response> {
 
   const contents = await mediaService.getFolderContents(folderId, context);
 
-  return createSuccessResponse(contents);
+  // Folder contents is a structured object (folder, subfolders, mediaFiles,
+  // breadcrumbs); ship it bare via respondData for non-CRUD reads.
+  return respondData(contents as unknown as Record<string, unknown>);
 }
 
 async function handleGetRootContents(): Promise<Response> {
@@ -508,7 +530,7 @@ async function handleGetRootContents(): Promise<Response> {
 
   const contents = await mediaService.getFolderContents(null, context);
 
-  return createSuccessResponse(contents);
+  return respondData(contents as unknown as Record<string, unknown>);
 }
 
 // ============================================================

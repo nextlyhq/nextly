@@ -43,7 +43,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
     execute: async (svc, p) => {
       const result = await svc.listUsers({
         page: toNumber(p.page),
-        pageSize: toNumber(p.pageSize),
+        limit: toNumber(p.limit),
         search: p.search,
         emailVerified: toBoolean(p.emailVerified),
         hasPassword: toBoolean(p.hasPassword),

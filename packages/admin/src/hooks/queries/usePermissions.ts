@@ -1,4 +1,4 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { TableParams, ListResponse } from "@revnixhq/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -64,7 +64,7 @@ const defaultParams: TableParams = {
  *
  *   return (
  *     <div>
- *       {data.data.map(permission => (
+ *       {data.items.map(permission => (
  *         <PermissionCard key={permission.id} permission={permission} />
  *       ))}
  *       <Pagination meta={data.meta} />
@@ -76,7 +76,7 @@ const defaultParams: TableParams = {
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
 export function usePermissions(params?: TableParams) {
-  return useQuery<TableResponse<Permission>, Error>({
+  return useQuery<ListResponse<Permission>, Error>({
     queryKey: ["permissions", params],
     queryFn: async () => {
       return await fetchPermissions(params || defaultParams);

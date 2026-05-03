@@ -1,9 +1,8 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { ListResponse, TableParams } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
-import type { ListResponse, MutationResponse } from "../lib/api/response-types";
+import type { MutationResponse } from "../lib/api/response-types";
 import type { Permission } from "../types/entities";
 
 /**
@@ -47,22 +46,21 @@ const buildQuery = (params: TableParams): string => {
 /**
  * Fetch permissions with pagination, search, and sorting.
  *
- * Phase 4 (Task 19): server returns `ListResponse<ApiPermissionEntry>`
- * (`{ items, meta }`); we map to the table-component shape locally.
+ * Phase 4.7: pass canonical ListResponse through, mapping `items` over
+ * the toPermission shaper. The legacy normalizePagination adapter is gone.
  */
 export const fetchPermissions = async (
   params: TableParams
-): Promise<TableResponse<Permission>> => {
+): Promise<ListResponse<Permission>> => {
   const query = buildQuery(params);
   const url = `/permissions${query ? `?${query}` : ""}`;
 
   const result = await fetcher<ListResponse<ApiPermissionEntry>>(url, {}, true);
 
-  const data = (result.items ?? []).map(toPermission);
-  const { pageSize } = params.pagination;
-  const meta = normalizePagination(result.meta, pageSize, data.length);
-
-  return { data, meta };
+  return {
+    items: (result.items ?? []).map(toPermission),
+    meta: result.meta,
+  };
 };
 
 /**

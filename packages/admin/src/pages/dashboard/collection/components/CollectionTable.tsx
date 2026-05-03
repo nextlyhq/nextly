@@ -236,9 +236,9 @@ export default function CollectionTable() {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(collection => {
+    return data.items.filter(collection => {
       // Exclude plugin collections - they are managed separately in the Plugins section
       if (collection.admin?.isPlugin) {
         return false;
@@ -256,7 +256,7 @@ export default function CollectionTable() {
       }
       return true;
     });
-  }, [data?.data, sourceFilter, migrationFilter]);
+  }, [data?.items, sourceFilter, migrationFilter]);
 
   // Action handlers
   const handleEdit = useCallback((collection: ApiCollection) => {
@@ -631,7 +631,7 @@ export default function CollectionTable() {
 
   // Error and loading states within the unified layout
   const showLoadingSkeleton =
-    (isLoading || isFetching) && (!data || data.data.length === 0);
+    (isLoading || isFetching) && (!data || data.items.length === 0);
 
   // Render table with data
   const isEmpty = filteredData.length === 0;

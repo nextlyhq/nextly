@@ -29,11 +29,11 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
+import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   entryApi,
   entryKeys,
   type FindParams,
-  type PaginatedDocs,
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
@@ -49,7 +49,7 @@ export interface UseEntriesOptions<T = Entry> {
   enabled?: boolean;
   /** Additional TanStack Query options */
   queryOptions?: Omit<
-    UseQueryOptions<PaginatedDocs<T>, Error>,
+    UseQueryOptions<ListResponse<T>, Error>,
     "queryKey" | "queryFn" | "enabled"
   >;
 }
@@ -59,7 +59,8 @@ export interface UseEntriesOptions<T = Entry> {
  *
  * Fetches entries from a collection with pagination, search, and sorting support.
  * Automatically caches results and provides loading/error states.
- * Uses paginated response format with `docs`, `totalDocs`, `hasNextPage`, etc.
+ * Returns canonical ListResponse: `{ items, meta: { total, page, limit,
+ * totalPages, hasNext, hasPrev } }` per spec section 5.1.
  *
  * ## Features
  * - Automatic caching with 30 second staleTime
@@ -91,14 +92,14 @@ export interface UseEntriesOptions<T = Entry> {
  *
  *   return (
  *     <div>
- *       {data?.docs.map(post => (
+ *       {data?.items.map(post => (
  *         <PostCard key={post.id} post={post} />
  *       ))}
  *       <Pagination
- *         page={data?.page}
- *         totalPages={data?.totalPages}
- *         hasNextPage={data?.hasNextPage}
- *         hasPrevPage={data?.hasPrevPage}
+ *         page={data?.meta.page}
+ *         totalPages={data?.meta.totalPages}
+ *         hasNextPage={data?.meta.hasNext}
+ *         hasPrevPage={data?.meta.hasPrev}
  *       />
  *     </div>
  *   );
@@ -121,7 +122,7 @@ export interface UseEntriesOptions<T = Entry> {
  *     },
  *   });
  *
- *   return <PostGrid posts={data?.docs ?? []} />;
+ *   return <PostGrid posts={data?.items ?? []} />;
  * }
  * ```
  *
@@ -137,7 +138,7 @@ export interface UseEntriesOptions<T = Entry> {
  *     enabled: searchQuery.length >= 2, // Only search with 2+ characters
  *   });
  *
- *   return <SearchResults results={data?.docs} loading={isLoading} />;
+ *   return <SearchResults results={data?.items} loading={isLoading} />;
  * }
  * ```
  *
@@ -154,8 +155,8 @@ export interface UseEntriesOptions<T = Entry> {
  *     collectionSlug: 'posts',
  *   });
  *
- *   // data.docs is typed as Post[]
- *   return data?.docs.map(post => <h1>{post.title}</h1>);
+ *   // data.items is typed as Post[]
+ *   return data?.items.map(post => <h1>{post.title}</h1>);
  * }
  * ```
  *
@@ -167,13 +168,13 @@ export function useEntries<T = Entry>({
   enabled = true,
   queryOptions,
 }: UseEntriesOptions<T>) {
-  return useQuery<PaginatedDocs<T>, Error>({
+  return useQuery<ListResponse<T>, Error>({
     queryKey: entryKeys.list(collectionSlug, params),
     queryFn: async () => {
-      // Type assertion needed because entryApi.find returns PaginatedDocs<Entry>
+      // Type assertion needed because entryApi.find returns ListResponse<Entry>
       // but we want to support generic entry types
       const result = await entryApi.find(collectionSlug, params);
-      return result as PaginatedDocs<T>;
+      return result as ListResponse<T>;
     },
     enabled: enabled && !!collectionSlug,
     placeholderData: keepPreviousData,
@@ -203,8 +204,8 @@ export function useEntries<T = Entry>({
  *
  *   return (
  *     <div>
- *       <span>Total: {total?.totalDocs}</span>
- *       <span>Published: {published?.totalDocs}</span>
+ *       <span>Total: {total?.total}</span>
+ *       <span>Published: {published?.total}</span>
  *     </div>
  *   );
  * }

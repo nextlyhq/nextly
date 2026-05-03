@@ -74,7 +74,7 @@ export class MediaService extends BaseService {
     try {
       const {
         page = 1,
-        pageSize = 24,
+        limit = 24,
         search,
         type,
         folderId,
@@ -117,7 +117,7 @@ export class MediaService extends BaseService {
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);
 
-      const offset = (page - 1) * pageSize;
+      const offset = (page - 1) * limit;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const countResult = await (this.db as any)
@@ -135,10 +135,10 @@ export class MediaService extends BaseService {
 
       const results = await query
         .orderBy(orderByClause)
-        .limit(pageSize)
+        .limit(limit)
         .offset(offset);
 
-      const totalPages = Math.ceil(total / pageSize);
+      const totalPages = Math.ceil(total / limit);
 
       return {
         success: true,
@@ -148,7 +148,7 @@ export class MediaService extends BaseService {
         meta: {
           total,
           page,
-          pageSize,
+          limit,
           totalPages,
         },
       };

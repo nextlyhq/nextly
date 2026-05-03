@@ -11,12 +11,12 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: the JSON path returns the canonical
- * `{ data: { code } }` envelope per spec §10.2; the `?download=true` path
+ * Wire shape (Phase 4 envelope migration): the JSON path returns
+ * `{ code }` via `respondData` per spec §5.1; the `?download=true` path
  * returns the raw code as `text/plain` with a `Content-Disposition`
- * attachment header (the JSON envelope intentionally does not apply to
- * binary/text-stream responses). Errors flow through `withErrorHandler`
- * and serialize as `application/problem+json`.
+ * attachment header (binary/text-stream responses bypass JSON envelopes).
+ * Errors flow through `withErrorHandler` and serialize as
+ * `application/problem+json`.
  *
  * @example
  * ```typescript
@@ -36,7 +36,7 @@ import { CollectionExportService } from "../services/collections/collection-expo
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -125,7 +125,7 @@ export const GET = withErrorHandler(
       const extension = format === "typescript" ? ".ts" : ".js";
       const filename = `${slug}${extension}`;
 
-      // Binary/text-stream responses bypass `createSuccessResponse` so the
+      // Binary/text-stream responses bypass the JSON envelope helpers so the
       // body is the raw code rather than the JSON envelope.
       // `withErrorHandler` still sets `X-Request-Id` on the way out.
       return new Response(code, {
@@ -137,6 +137,6 @@ export const GET = withErrorHandler(
       });
     }
 
-    return createSuccessResponse({ code });
+    return respondData({ code });
   }
 );

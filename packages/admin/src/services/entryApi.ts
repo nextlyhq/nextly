@@ -11,51 +11,18 @@
  * // Use query keys for caching
  * const queryKey = entryKeys.list('posts', { page: 1, limit: 10 });
  *
- * // Fetch entries
+ * // Fetch entries (canonical ListResponse shape per spec section 5.1)
  * const result = await entryApi.find('posts', { page: 1, limit: 10 });
- * console.log(result.docs);       // Entry[]
- * console.log(result.totalDocs);  // Total count
- * console.log(result.hasNextPage); // boolean
+ * console.log(result.items);          // Entry[]
+ * console.log(result.meta.total);     // Total count
+ * console.log(result.meta.hasNext);   // boolean
  * ```
  */
 
-import type { TableResponse } from "@revnixhq/ui";
-
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
-
-// ============================================================================
-// Types
-// ============================================================================
-
-/**
- * Paginated response format
- */
-export interface PaginatedDocs<T = Entry> {
-  /** Array of documents */
-  docs: T[];
-  /** Total number of documents matching the query */
-  totalDocs: number;
-  /** Maximum number of documents per page */
-  limit: number;
-  /** Total number of pages */
-  totalPages: number;
-  /** Current page number (1-indexed) */
-  page: number;
-  /** Index of first document on current page (1-indexed) */
-  pagingCounter: number;
-  /** Whether there is a previous page */
-  hasPrevPage: boolean;
-  /** Whether there is a next page */
-  hasNextPage: boolean;
-  /** Previous page number, or null if on first page */
-  prevPage: number | null;
-  /** Next page number, or null if on last page */
-  nextPage: number | null;
-}
 
 /**
  * Parameters for find operation
@@ -140,12 +107,11 @@ export type UpdateEntryPayload = Record<string, EntryValue>;
 // canonical NextlyErrorCode string). Single source of truth + single
 // round-trip + structured per-item failure surface.
 
-// Phase 4 (Task 19): the LegacyPaginationMeta interface that mirrored the
-// pre-canonical `{ total, page, pageSize, totalPages }` shape was removed
-// because the dispatcher now emits canonical PaginationMeta exclusively
-// (via respondList). The fetchEntries legacy adapter below still produces
-// the pageSize-shaped output via normalizePagination so the table component
-// keeps working.
+// Phase 4.7: dropped the local PaginatedDocs envelope and the
+// fetchEntries->TableResponse adapter; the find() method now returns
+// canonical ListResponse directly. Consumers read result.items and
+// result.meta.{total,page,limit,totalPages,hasNext,hasPrev} per spec
+// section 5.1.
 
 // ============================================================================
 // Query Keys (TanStack Query v5 Pattern)
@@ -214,30 +180,31 @@ export const entryKeys = {
 // ============================================================================
 
 /**
- * Build paginated response
+ * Synthesize a canonical PaginationMeta when the upstream call did not
+ * carry one (Singles fallback below, edge cases). Mirrors the math in
+ * nextly's `respondList` helper so admin and server agree on the shape.
  */
-function buildPaginatedDocs<T>(
-  docs: T[],
-  options: {
-    totalDocs: number;
-    page: number;
-    limit: number;
-  }
-): PaginatedDocs<T> {
-  const { totalDocs, page, limit } = options;
-  const totalPages = Math.ceil(totalDocs / limit);
-
+function buildListMeta(options: {
+  total: number;
+  page: number;
+  limit: number;
+}): {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+} {
+  const { total, page, limit } = options;
+  const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
   return {
-    docs,
-    totalDocs,
+    total,
+    page,
     limit,
     totalPages,
-    page,
-    pagingCounter: (page - 1) * limit + 1,
-    hasPrevPage: page > 1,
-    hasNextPage: page < totalPages,
-    prevPage: page > 1 ? page - 1 : null,
-    nextPage: page < totalPages ? page + 1 : null,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
   };
 }
 
@@ -376,16 +343,15 @@ export const entryApi = {
    *   depth: 2,
    * });
    *
-   * console.log(result.docs);        // Entry[]
-   * console.log(result.totalDocs);   // 42
-   * console.log(result.hasNextPage); // true
-   * console.log(result.nextPage);    // 2
+   * console.log(result.items);          // Entry[]
+   * console.log(result.meta.total);     // 42
+   * console.log(result.meta.hasNext);   // true
    * ```
    */
   find: async (
     collectionSlug: string,
     params: FindParams = {}
-  ): Promise<PaginatedDocs<Entry>> => {
+  ): Promise<ListResponse<Entry>> => {
     const query = buildFindQuery(params);
     let url = `/collections/${collectionSlug}/entries${query ? `?${query}` : ""}`;
 
@@ -395,50 +361,40 @@ export const entryApi = {
     }
 
     try {
-      // Phase 4 (Task 19): server returns canonical `ListResponse<Entry>`
-      // (`{ items, meta }`). The dispatcher emits `respondList(items, meta)`
-      // for collection list endpoints (and the system /users alias).
+      // Server returns canonical ListResponse<Entry> via respondList.
       const result = await fetcher<ListResponse<Entry>>(url, {}, true);
 
-      const page = params.page ?? 1;
-      const limit = params.limit ?? 10;
-
-      const docs = result.items;
-
       if (result.meta) {
-        // Canonical meta carries `limit` (renamed from legacy `pageSize`).
-        return buildPaginatedDocs(docs, {
-          totalDocs: result.meta.total,
-          page: result.meta.page,
-          limit: result.meta.limit,
-        });
+        return result;
       }
 
-      // Fallback when meta is not provided
-      return buildPaginatedDocs(docs, {
-        totalDocs: docs.length,
-        page,
-        limit,
-      });
+      // Fallback when meta is missing (defensive: dispatchers always emit
+      // it post-Phase-4, but synthesize one if a custom handler skipped it).
+      const page = params.page ?? 1;
+      const limit = params.limit ?? 10;
+      return {
+        items: result.items,
+        meta: buildListMeta({ total: result.items.length, page, limit }),
+      };
     } catch (error: unknown) {
-      // Fallback for Singles: valid URL but might be a Single, not a Collection
-      // If the Collection API returns 404, try the Singles API
+      // Fallback for Singles: valid URL but might be a Single, not a Collection.
+      // If the Collection API returns 404, try the Singles API and project
+      // the bare doc into a single-item list.
       const status = (error as Record<string, unknown> | undefined)?.status;
       if (status === 404 && collectionSlug !== "users") {
         try {
-          // Phase 4 (Task 19): the singles getDocument endpoint returns the
-          // bare document via respondDoc; type the fetcher generic with the
-          // Entry shape directly.
           const singleUrl = `/singles/${collectionSlug}`;
           const singleResult = await fetcher<Entry>(singleUrl, {}, true);
 
           if (singleResult) {
-            // Return as a "list" of 1 item
-            return buildPaginatedDocs([singleResult], {
-              totalDocs: 1,
-              page: 1,
-              limit: params.limit ?? 10,
-            });
+            return {
+              items: [singleResult],
+              meta: buildListMeta({
+                total: 1,
+                page: 1,
+                limit: params.limit ?? 10,
+              }),
+            };
           }
         } catch (singleError) {
           // If both fail, throw the original error (Collection not found)
@@ -767,32 +723,6 @@ export const entryApi = {
   // ===========================================================================
 
   /**
-   * Fetch paginated entries for internal table component
-   *
-   * @deprecated Use `find` instead
-   * @internal
-   */
-  fetchEntries: async (
-    collectionSlug: string,
-    params: FindParams = {}
-  ): Promise<TableResponse<Entry>> => {
-    const result = await entryApi.find(collectionSlug, params);
-
-    const meta = normalizePagination(
-      {
-        page: result.page,
-        pageSize: result.limit,
-        total: result.totalDocs,
-        totalPages: result.totalPages,
-      },
-      result.limit,
-      result.docs.length
-    );
-
-    return { data: result.docs, meta };
-  },
-
-  /**
    * List all entries (non-paginated)
    *
    * @deprecated Use `find` with high limit instead
@@ -800,7 +730,7 @@ export const entryApi = {
    */
   list: async (collectionSlug: string): Promise<Entry[]> => {
     const result = await entryApi.find(collectionSlug, { limit: 1000 });
-    return result.docs;
+    return result.items;
   },
 
   /**

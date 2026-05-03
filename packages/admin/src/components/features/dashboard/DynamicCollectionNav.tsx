@@ -110,7 +110,7 @@ export function DynamicCollectionNav({
   });
 
   const { data: singlesData } = useSingles();
-  usePluginAutoRegistration(data?.data);
+  usePluginAutoRegistration(data?.items);
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
   const customGroups = branding?.customGroups;
@@ -132,7 +132,7 @@ export function DynamicCollectionNav({
   );
 
   // Filter to collections belonging to the "Collections" sidebar group
-  const visibleCollections = (data?.data ?? []).filter(collection => {
+  const visibleCollections = (data?.items ?? []).filter(collection => {
     if (collection.admin?.hidden) return false;
 
     // Filter by search query if provided
@@ -179,8 +179,8 @@ export function DynamicCollectionNav({
 
   // Build the unified sorted sections list
   const sections = useMemo(() => {
-    const allCollections = data?.data ?? [];
-    const allSingles = singlesData?.data ?? [];
+    const allCollections = data?.items ?? [];
+    const allSingles = singlesData?.items ?? [];
     // --- Ungrouped collections (belong to default "Collections" section) ---
     const ungroupedVisible = allCollections.filter(collection => {
       if (collection.admin?.hidden) return false;

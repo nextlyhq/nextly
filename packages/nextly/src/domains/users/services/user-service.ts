@@ -260,12 +260,12 @@ export class UserService {
   ): Promise<PaginatedResult<User>> {
     this.logger.debug("Listing users", { options });
 
-    const pageSize = options.pagination?.limit ?? 10;
+    const limit = options.pagination?.limit ?? 10;
     const page = options.pagination?.page ?? 1;
 
-    const legacyOptions: ListUsersOptions = {
+    const queryOptions: ListUsersOptions = {
       page,
-      pageSize,
+      limit,
       search: options.search,
       emailVerified: options.emailVerified,
       hasPassword: options.hasPassword,
@@ -276,17 +276,17 @@ export class UserService {
     // queryService.listUsers throws NextlyError on DB failures and returns
     // `{ data, meta }` directly. We propagate errors and shape the
     // PaginatedResult below.
-    const result = await this.queryService.listUsers(legacyOptions);
+    const result = await this.queryService.listUsers(queryOptions);
 
     const users = result.data.map(u => this.mapToUser(u));
     const total = result.meta.total;
-    const offset = (page - 1) * pageSize;
+    const offset = (page - 1) * limit;
 
     return {
       data: users,
       pagination: {
         total,
-        limit: pageSize,
+        limit,
         offset,
         hasMore: offset + users.length < total,
       },

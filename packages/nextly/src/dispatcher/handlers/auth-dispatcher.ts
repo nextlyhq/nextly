@@ -145,7 +145,7 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
     execute: async (c, p) => {
       const result = await c.roles.listRoles({
         page: toNumber(p.page),
-        pageSize: toNumber(p.pageSize),
+        limit: toNumber(p.limit),
         search: p.search,
         isSystem: toBoolean(p.isSystem),
         levelMin: toNumber(p.levelMin),
@@ -211,7 +211,7 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
     execute: async (c, p) => {
       const result = await c.permissions.listPermissions({
         page: toNumber(p.page),
-        pageSize: toNumber(p.pageSize),
+        limit: toNumber(p.limit),
         search: p.search,
         action: p.action,
         resource: p.resource,

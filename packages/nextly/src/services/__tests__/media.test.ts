@@ -157,20 +157,20 @@ describe("MediaService", () => {
       expect(result.meta).toEqual({
         total: 3,
         page: 1,
-        pageSize: 24,
+        limit: 24,
         totalPages: 1,
       });
     });
 
     it("should support pagination", async () => {
-      const result = await mediaService.listMedia({ page: 1, pageSize: 2 });
+      const result = await mediaService.listMedia({ page: 1, limit: 2 });
 
       expect(result.success).toBe(true);
       expect(result.data).toHaveLength(2);
       expect(result.meta).toEqual({
         total: 3,
         page: 1,
-        pageSize: 2,
+        limit: 2,
         totalPages: 2,
       });
     });

@@ -65,7 +65,7 @@ export function ComponentFieldEditor({
     filters: {},
   });
 
-  const availableComponents = componentsData?.data || [];
+  const availableComponents = componentsData?.items || [];
 
   // Determine current mode based on props
   const currentMode: ComponentFieldMode = useMemo(() => {

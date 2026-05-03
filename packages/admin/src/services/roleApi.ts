@@ -1,13 +1,11 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { ListResponse, TableParams } from "@revnixhq/ui";
 
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
 import type {
   ActionResponse,
-  ListResponse,
   MutationResponse,
 } from "../lib/api/response-types";
 import type {
@@ -69,22 +67,21 @@ const buildQuery = (params: TableParams): string => {
 /**
  * Fetch paginated list of roles.
  *
- * Phase 4 (Task 19): server returns `ListResponse<ApiRole>` (`{ items, meta }`);
- * we map `items` and the canonical meta into the table-component shape.
+ * Phase 4.7: pass canonical ListResponse through, applying transformRole
+ * over `items`. The legacy normalizePagination adapter is gone.
  */
 export const fetchRoles = async (
   params: TableParams
-): Promise<TableResponse<Role>> => {
+): Promise<ListResponse<Role>> => {
   const query = buildQuery(params);
   const url = `/roles${query ? `?${query}&includePermissions=true` : ""}`;
 
   const result = await fetcher<ListResponse<ApiRole>>(url, {}, true);
 
-  const roles = result.items.map(transformRole);
-  const { pageSize = 10 } = params.pagination;
-  const meta = normalizePagination(result.meta, pageSize, roles.length);
-
-  return { data: roles, meta };
+  return {
+    items: result.items.map(transformRole),
+    meta: result.meta,
+  };
 };
 
 /**

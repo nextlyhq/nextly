@@ -45,7 +45,7 @@ describe("PermissionService - Smoke Tests", () => {
       // Assert
       expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 3);
-      expectPaginationMeta(result, { total: 3, page: 1, pageSize: 10 });
+      expectPaginationMeta(result, { total: 3, page: 1, limit: 10 });
 
       // Verify all required fields are present including slug
       expect(result.data![0]).toHaveProperty("id");
@@ -375,7 +375,7 @@ describe("PermissionService - Smoke Tests", () => {
         // Act: Get first page
         const result = await service.listPermissions({
           page: 1,
-          pageSize: PAGE_SIZE,
+          limit: PAGE_SIZE,
         });
 
         // Assert
@@ -384,7 +384,7 @@ describe("PermissionService - Smoke Tests", () => {
         expectPaginationMeta(result, {
           total: TOTAL_ITEMS,
           page: 1,
-          pageSize: PAGE_SIZE,
+          limit: PAGE_SIZE,
           totalPages: EXPECTED_PAGES,
         });
       });
@@ -402,7 +402,7 @@ describe("PermissionService - Smoke Tests", () => {
         // Act
         const result = await service.listPermissions({
           page: 2,
-          pageSize: PAGE_SIZE,
+          limit: PAGE_SIZE,
         });
 
         // Assert
@@ -424,7 +424,7 @@ describe("PermissionService - Smoke Tests", () => {
         // Act
         const result = await service.listPermissions({
           page: EXPECTED_PAGES,
-          pageSize: PAGE_SIZE,
+          limit: PAGE_SIZE,
         });
 
         // Assert
@@ -451,7 +451,7 @@ describe("PermissionService - Smoke Tests", () => {
         const BEYOND_PAGE = 10;
         const result = await service.listPermissions({
           page: BEYOND_PAGE,
-          pageSize: PAGE_SIZE,
+          limit: PAGE_SIZE,
         });
 
         // Assert
@@ -584,7 +584,7 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions({
           action: "read",
           page: 1,
-          pageSize: 10,
+          limit: 10,
         });
 
         // Assert

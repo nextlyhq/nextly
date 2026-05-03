@@ -8,10 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: [...], meta: { total, page, perPage } }` envelope per
- * spec §10.2. Errors flow through the wrapper and serialize as
- * `application/problem+json`.
+ * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
+ * and return the canonical `{ items, meta: { total, page, limit, totalPages,
+ * hasNext, hasPrev } }` envelope per spec §5.1. Errors flow through the
+ * wrapper and serialize as `application/problem+json`.
  *
  * @example
  * ```typescript
@@ -27,7 +27,7 @@ import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
-import { createPaginatedResponse } from "./create-success-response";
+import { respondList } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getSingleRegistry(): Promise<SingleRegistryService> {
@@ -41,11 +41,11 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
  * Query Parameters:
  * - source: Filter by source type ("code" | "ui" | "built-in")
  * - search: Search query for slug and labels
- * - limit: Maximum results (default: 50, becomes `perPage` in response meta)
+ * - limit: Maximum results (default: 50, becomes `meta.limit` in response)
  * - offset: Number of results to skip (default: 0, derives `page` in meta)
  *
  * Response:
- * - 200 OK: `{ "data": [...], "meta": { total, page, perPage } }`
+ * - 200 OK: `{ "items": [...], "meta": { total, page, limit, totalPages, hasNext, hasPrev } }`
  * - On error: `application/problem+json` per spec §10.1.
  */
 export const GET = withErrorHandler(
@@ -73,17 +73,21 @@ export const GET = withErrorHandler(
       offset,
     });
 
-    // Translate offset-based pagination to the canonical page/perPage meta so
-    // every paginated route ships the same shape (spec §10.2). `perPage` is
+    // Translate offset-based pagination to the canonical page/limit meta so
+    // every paginated route ships the same shape (spec §5.1). `safeLimit` is
     // clamped to a minimum of 1 to keep the page-derivation safe when the
     // caller asks for `limit=0`.
-    const perPage = Math.max(1, limit);
-    const page = Math.floor(offset / perPage) + 1;
+    const safeLimit = Math.max(1, limit);
+    const page = Math.floor(offset / safeLimit) + 1;
+    const totalPages = Math.ceil(result.total / safeLimit);
     return withTimezoneFormatting(
-      createPaginatedResponse(result.data, {
+      respondList(result.data, {
         total: result.total,
         page,
-        perPage,
+        limit: safeLimit,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
       })
     );
   }

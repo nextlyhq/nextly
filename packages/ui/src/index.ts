@@ -301,13 +301,13 @@ export type {
 } from "./components/responsive-table";
 export type { ResponsiveTableRef } from "./types/responsive-table";
 
-// Types — Table
+// Types: Table
 export type {
   PaginationMeta,
   SortInfo,
   FilterInfo,
   TableParams,
-  TableResponse,
+  ListResponse,
   PaginationConfig,
   ActionCallbacks,
   DataFetcher,

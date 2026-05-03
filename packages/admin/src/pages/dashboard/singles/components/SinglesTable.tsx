@@ -211,9 +211,9 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(single => {
+    return data.items.filter(single => {
       // Filter by source
       if (sourceFilter !== "all" && single.source !== sourceFilter) {
         return false;
@@ -227,7 +227,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       }
       return true;
     });
-  }, [data?.data, sourceFilter, migrationFilter]);
+  }, [data?.items, sourceFilter, migrationFilter]);
 
   // Action handlers
   // Smart edit handler: UI Singles go to schema builder, locked Singles show error
@@ -602,7 +602,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
   }
 
   // Loading state (initial load only)
-  if ((isLoading || isFetching) && (!data || data.data.length === 0)) {
+  if ((isLoading || isFetching) && (!data || data.items.length === 0)) {
     return (
       <div className="space-y-4">
         <span className="sr-only">Loading Singles...</span>

@@ -16,11 +16,10 @@
  * export { POST } from '@revnixhq/nextly/api/storage-upload-url';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
- * The legacy double-wrap `{ success, statusCode, data }` is dropped;
- * admin / SDK callers reading `response.success` break until Task 10
- * migrates the consuming fetcher (F12 admin-gap ledger).
+ * Wire shape (Phase 4.6 migration): handler wraps `withErrorHandler` and
+ * returns the canonical respondData body (spec section 5.1); the
+ * `ClientUploadData` object is shipped bare (uploadUrl, path, method,
+ * headers, expiresAt).
  *
  * Adapter-specific failures (no plugin, `clientUploads` not enabled,
  * Vercel-Blob `handleUpload` style adapters) collapse to canonical
@@ -37,7 +36,7 @@ import { getCachedNextly } from "../init";
 import { getMediaStorage } from "../storage/storage";
 import type { ClientUploadData } from "../storage/types";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -68,9 +67,9 @@ const uploadUrlRequestSchema = z.object({
  * - 400 Bad Request: Invalid input or client uploads not enabled
  * - 500 Internal Server Error: URL generation failed
  *
- * Response: `{ "data": ClientUploadData }` — see the `ClientUploadData`
- * type for the field shape (`uploadUrl`, `path`, `method`, `headers`,
- * `expiresAt`).
+ * Response: bare `ClientUploadData` (respondData); see the
+ * `ClientUploadData` type for the field shape (`uploadUrl`, `path`,
+ * `method`, `headers`, `expiresAt`).
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -224,6 +223,6 @@ export const POST = withErrorHandler(
       });
     }
 
-    return createSuccessResponse(uploadData);
+    return respondData(uploadData as unknown as Record<string, unknown>);
   }
 );

@@ -1,4 +1,4 @@
-import type { DataFetcher, TableResponse } from "@revnixhq/ui";
+import type { DataFetcher, ListResponse } from "@revnixhq/ui";
 import { type ColumnDef } from "@tanstack/react-table";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -88,8 +88,15 @@ describe("DataTable", () => {
 
   it("calls fetcher on mount", async () => {
     const fetcher = vi.fn().mockResolvedValue({
-      data: [],
-      meta: { page: 0, pageSize: 10, total: 0, totalPages: 0 },
+      items: [],
+      meta: {
+        page: 1,
+        limit: 10,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false,
+      },
     });
 
     render(<DataTable columns={testColumns} fetcher={fetcher} />);
@@ -102,12 +109,19 @@ describe("DataTable", () => {
   it("shows loading state initially", () => {
     const fetcher = vi.fn(
       () =>
-        new Promise<TableResponse<TestUser>>(resolve =>
+        new Promise<ListResponse<TestUser>>(resolve =>
           setTimeout(
             () =>
               resolve({
-                data: [],
-                meta: { page: 0, pageSize: 10, total: 0, totalPages: 0 },
+                items: [],
+                meta: {
+                  page: 1,
+                  limit: 10,
+                  total: 0,
+                  totalPages: 0,
+                  hasNext: false,
+                  hasPrev: false,
+                },
               }),
             100
           )

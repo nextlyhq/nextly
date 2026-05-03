@@ -14,9 +14,8 @@ export interface ApiPermissionEntry {
   description: string | null;
 }
 
-// Phase 4 (Task 19): canonical pagination meta is { total, page, limit,
-// totalPages, hasNext, hasPrev } per spec §5.1. The legacy `pageSize` field
-// is gone server-side; consumers read `limit` instead.
+// Canonical pagination meta is { total, page, limit, totalPages, hasNext,
+// hasPrev } per spec §5.1. Consumers read `limit`.
 interface PermissionListMeta {
   total: number;
   page: number;
@@ -40,10 +39,7 @@ export const fetchPermissionsFromApi = async (options?: {
   search?: string;
   resource?: string;
   action?: string;
-  /** New (Phase 4): canonical name. */
   limit?: number;
-  /** Deprecated: use `limit`. Kept for callers not yet migrated. */
-  pageSize?: number;
   page?: number;
 }): Promise<PermissionListResult> => {
   const params = new URLSearchParams();
@@ -51,12 +47,7 @@ export const fetchPermissionsFromApi = async (options?: {
   if (options?.search) params.set("search", options.search);
   if (options?.resource) params.set("resource", options.resource);
   if (options?.action) params.set("action", options.action);
-  // Phase 4 (Task 19): keep emitting `pageSize` because the auth-dispatcher
-  // listPermissions handler reads `p.pageSize` (not `p.limit`). The
-  // `limit` option is accepted on the client side and forwarded to the
-  // same query param so callers can already adopt the canonical naming.
-  // Server-side rename to `limit` is a separate Task 23 cleanup.
-  params.set("pageSize", String(options?.limit ?? options?.pageSize ?? 200));
+  params.set("limit", String(options?.limit ?? 200));
   params.set("page", String(options?.page ?? 1));
   params.set("sortBy", "resource");
   params.set("sortOrder", "asc");
