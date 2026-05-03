@@ -94,4 +94,46 @@ describe("BasicsTab", () => {
     expect(last.singularName).toBe("Blogger");
     expect(last.slug).toBe("post");
   });
+
+  it("auto-derives plural from singular while plural is still auto", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["singularName", "pluralName"]}
+        initial={{ singularName: "", pluralName: "" }}
+        onChange={onChange}
+      />
+    );
+    await user.type(screen.getByLabelText(/singular name/i), "Person");
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    // 'Person' -> 'People' (irregular) confirms the pluralize lib is wired.
+    expect(last.pluralName).toBe("People");
+  });
+
+  it("stops auto-deriving plural once user manually edits it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["singularName", "pluralName"]}
+        initial={{ singularName: "Post", pluralName: "Posts" }}
+        onChange={onChange}
+      />
+    );
+    // Manually override plural to something the auto-derive would never
+    // produce.
+    const pluralInput = screen.getByLabelText(
+      /plural name/i
+    ) as HTMLInputElement;
+    await user.clear(pluralInput);
+    await user.type(pluralInput, "Articles");
+    onChange.mockClear();
+
+    // Now keep typing in singular. Plural must NOT change.
+    await user.type(screen.getByLabelText(/singular name/i), "ing");
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.singularName).toBe("Posting");
+    expect(last.pluralName).toBe("Articles");
+  });
 });
