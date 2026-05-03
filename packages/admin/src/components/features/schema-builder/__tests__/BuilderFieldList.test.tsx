@@ -65,7 +65,7 @@ const u3: BuilderField = {
 };
 
 describe("BuilderFieldList", () => {
-  it("renders the Built-in group with title + slug plus the system fields toggle", () => {
+  it("renders the System Fields row with title + slug as inert chips + the dismiss toggle", () => {
     render(
       withDndContext(
         <BuilderFieldList
@@ -77,13 +77,15 @@ describe("BuilderFieldList", () => {
         />
       )
     );
-    expect(screen.getByText(/built in/i)).toBeInTheDocument();
-    // System field rows render as buttons with their name visible.
+    // PR D renamed the group from "Built in" to "System Fields" and made
+    // every system row an inert chip (no role="button", no onClick).
+    expect(screen.getByText(/system fields/i)).toBeInTheDocument();
     expect(screen.getByText("title")).toBeInTheDocument();
     expect(screen.getByText("slug")).toBeInTheDocument();
-    // PR B (2026-05-03) flipped the default to ON, so the visible toggle
-    // is the inline X dismiss ("Hide system fields"), not the legacy
-    // "Show system fields" button.
+    // System chips are not buttons.
+    expect(screen.queryByRole("button", { name: /^title$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^slug$/i })).toBeNull();
+    // Default ON since PR B; visible toggle is the inline X dismiss.
     expect(
       screen.getByRole("button", { name: /hide system fields/i })
     ).toBeInTheDocument();

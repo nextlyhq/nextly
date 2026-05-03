@@ -16,6 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Button } from "@revnixhq/ui";
+import { useEffect, useState } from "react";
 
 import {
   packIntoRows,
@@ -23,9 +24,9 @@ import {
   type WidthField,
 } from "@admin/lib/builder/reflow";
 
-import { BuiltInGroup } from "./builder-field-list/BuiltInGroup";
 import { EmptyState } from "./builder-field-list/EmptyState";
 import { SortableRow } from "./builder-field-list/SortableRow";
+import { SystemFieldsRow } from "./builder-field-list/SystemFieldsRow";
 import type { BuilderField } from "./types";
 
 type Props = {
@@ -62,7 +63,7 @@ export function BuilderFieldList({
 
   return (
     <div className="space-y-6 p-4">
-      <BuiltInGroup systemFields={systemFields} onEditField={onEditField} />
+      <SystemFieldsContainer systemFields={systemFields} />
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -107,5 +108,38 @@ export function BuilderFieldList({
         )}
       </div>
     </div>
+  );
+}
+
+function SystemFieldsContainer({
+  systemFields,
+}: {
+  systemFields: readonly BuilderField[];
+}) {
+  // Why: state lives here so the inline dismiss + the Settings modal
+  // toggle both land back in the localStorage pref and broadcast via
+  // the existing 'builder:show-system-fields' window event.
+  const [showInternals, setShowInternals] = useState(true);
+
+  useEffect(() => {
+    const v = localStorage.getItem("builder.showSystemInternals");
+    setShowInternals(v === null ? true : v === "true");
+  }, []);
+
+  useEffect(() => {
+    const onUpdate = (e: Event) => {
+      setShowInternals((e as CustomEvent<boolean>).detail === true);
+    };
+    window.addEventListener("builder:show-system-fields", onUpdate);
+    return () =>
+      window.removeEventListener("builder:show-system-fields", onUpdate);
+  }, []);
+
+  return (
+    <SystemFieldsRow
+      systemFields={systemFields}
+      showInternals={showInternals}
+      onSetVisible={setShowInternals}
+    />
   );
 }
