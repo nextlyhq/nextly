@@ -292,6 +292,10 @@ export interface CreateCollectionPayload {
   sidebarGroup?: string;
   hidden?: boolean;
   useAsTitle?: string;
+  /** Whether records carry a Draft/Published status column. Default false. */
+  status?: boolean;
+  /** Whether to auto-generate createdAt/updatedAt. Default true. */
+  timestamps?: boolean;
   fields: FieldDefinition[];
   /** Pre-built hooks configured for this collection */
   hooks?: StoredHookConfig[];
@@ -306,6 +310,11 @@ export interface UpdateCollectionPayload {
   sidebarGroup?: string;
   hidden?: boolean;
   useAsTitle?: string;
+  /** Toggle Draft/Published. Toggling on adds a status column to the data
+   *  table; toggling off drops it (destructive change, gated by the
+   *  schema-change preview). */
+  status?: boolean;
+  timestamps?: boolean;
   fields?: FieldDefinition[];
   /** Pre-built hooks configured for this collection */
   hooks?: StoredHookConfig[];
