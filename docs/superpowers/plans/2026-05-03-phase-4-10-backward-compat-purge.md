@@ -129,7 +129,7 @@ git diff origin/dev 2>&1 | grep "^+" | grep "—"
 - Modify: `packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-schema-service.ts`
 - Modify: `packages/nextly/CHANGELOG.md` (add Category B entry)
 
-- [ ] **Step 1: Remove legacy aliases from `DynamicFieldType`**
+**Step 1: Remove legacy aliases from `DynamicFieldType`**
 
 In `packages/nextly/src/schemas/dynamic-collections.ts:46-76`, change the union type to drop the legacy entries. Before:
 
@@ -209,7 +209,7 @@ Also rewrite the JSDoc above it (lines 33-44):
  */
 ```
 
-- [ ] **Step 2: Remove legacy fields from `FieldDefinition`**
+**Step 2: Remove legacy fields from `FieldDefinition`**
 
 In the same file, lines 78-174, drop these three fields:
 - Line 87: `defaultValue?: unknown; // Keep for backward compatibility`
@@ -218,7 +218,7 @@ In the same file, lines 78-174, drop these three fields:
 
 Also drop the `// Legacy fields (keep for backward compatibility)` comment at line 171 entirely.
 
-- [ ] **Step 3: Remove `"richtext"` from field-type sets in `collection-utils.ts`**
+**Step 3: Remove `"richtext"` from field-type sets in `collection-utils.ts`**
 
 In `packages/nextly/src/domains/collections/services/collection-utils.ts:15-16`, drop the `"richtext"` entry. Verify line 32 if it has a similar entry. After this step the relevant field-type set lists each canonical name exactly once.
 
@@ -238,7 +238,7 @@ export function isRelationFieldType(fieldType: string): boolean {
 
 Update the JSDoc above it (line 101) to drop the "Handles both dynamic collections (relation) and code-defined collections (relationship)" sentence; replace with a single-line description.
 
-- [ ] **Step 4: Collapse `"relation" || "relationship"` checks in `collection-relationship-service.ts`**
+**Step 4: Collapse `"relation" || "relationship"` checks in `collection-relationship-service.ts`**
 
 For each occurrence in `packages/nextly/src/domains/collections/services/collection-relationship-service.ts`:
 - Line 49: `field.type === "relation" || field.type === "relationship"` becomes `field.type === "relationship"`. Update the JSDoc above it accordingly.
@@ -246,7 +246,7 @@ For each occurrence in `packages/nextly/src/domains/collections/services/collect
 - Lines 561, 588, 600: `f.type !== "relation"` becomes `f.type !== "relationship"` (these are guards excluding relationship fields from label-field selection; the inverted check now uses the canonical name).
 - Lines 717 and 1170: comments mentioning "Filter for both 'relation' and 'relationship' field types" become "Filter for relationship fields"; keep the actual filter as canonical-only.
 
-- [ ] **Step 5: Collapse the 6 mutation-service many-to-many checks**
+**Step 5: Collapse the 6 mutation-service many-to-many checks**
 
 In `packages/nextly/src/domains/collections/services/collection-mutation-service.ts`, the 6 sites at lines 373, 862, 1515, 1754, 2167, 2453 all read:
 
@@ -264,11 +264,11 @@ f =>
 
 Per Lesson 3 in the deferred-tasks doc §7: the `hasMany === true` branch covers code-first relationship fields where many-to-many is signalled via `hasMany` rather than `options.relationType`.
 
-- [ ] **Step 6: Drop `case "richtext":` from dynamic-collection schema service**
+**Step 6: Drop `case "richtext":` from dynamic-collection schema service**
 
 In `packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-schema-service.ts:1162-1163`, the `case "richtext":` arm of the switch falls through to `case "richText":`. Delete the `case "richtext":` line so the switch only has `case "richText":`.
 
-- [ ] **Step 7: Verify no orphan references**
+**Step 7: Verify no orphan references**
 
 Run:
 
@@ -284,7 +284,7 @@ grep -rn 'defaultValue\|relatedCollection' packages/nextly/src --include="*.ts" 
 
 Expected: empty (or only matches that are unrelated to the dropped FieldDefinition fields, e.g. non-FieldDefinition contexts).
 
-- [ ] **Step 8: Add CHANGELOG entry**
+**Step 8: Add CHANGELOG entry**
 
 Add to `packages/nextly/CHANGELOG.md` (create the file if missing) under an unreleased section:
 
@@ -303,11 +303,11 @@ Add to `packages/nextly/CHANGELOG.md` (create the file if missing) under an unre
 - The `field.type === "relation"` runtime check is gone. Code that referenced legacy aliases at runtime now treats them as unknown field types.
 ```
 
-- [ ] **Step 9: Run acceptance gates**
+**Step 9: Run acceptance gates**
 
 Run all five gates from the "Acceptance gates" section above. Expected: all pass; admin typecheck still 43; nextly tests still 273+.
 
-- [ ] **Step 10: Commit**
+**Step 10: Commit**
 
 ```bash
 git add packages/nextly/src/schemas/dynamic-collections.ts \
@@ -348,7 +348,7 @@ EOF
 - Modify: 7 consumer files to import `IStorageAdapter` from `storage/types` directly
 - Modify: `packages/nextly/CHANGELOG.md` (add Category C entry)
 
-- [ ] **Step 1: Update the single `services/schema/schema-generator` consumer**
+**Step 1: Update the single `services/schema/schema-generator` consumer**
 
 In `packages/nextly/src/cli/commands/migrate-fresh.ts:48`, change:
 
@@ -362,7 +362,7 @@ import type { SupportedDialect } from "../../domains/schema/services/schema-gene
 
 Verify the type exists at the new path: `grep -n "export type SupportedDialect\|export.*SupportedDialect" packages/nextly/src/domains/schema/services/schema-generator.ts`. Expected: at least one match.
 
-- [ ] **Step 2: Delete the 9 zero-consumer re-export shim files**
+**Step 2: Delete the 9 zero-consumer re-export shim files**
 
 ```bash
 git rm packages/nextly/src/services/dynamic-collections.ts \
@@ -376,13 +376,13 @@ git rm packages/nextly/src/services/dynamic-collections.ts \
        packages/nextly/src/services/schema/zod-generator.ts
 ```
 
-- [ ] **Step 3: Delete `services/schema/schema-generator.ts` (post-Step-1 it has zero consumers)**
+**Step 3: Delete `services/schema/schema-generator.ts` (post-Step-1 it has zero consumers)**
 
 ```bash
 git rm packages/nextly/src/services/schema/schema-generator.ts
 ```
 
-- [ ] **Step 4: Check whether `services/schema/index.ts` and `services/dynamic-collections/index.ts` (if any) still have content**
+**Step 4: Check whether `services/schema/index.ts` and `services/dynamic-collections/index.ts` (if any) still have content**
 
 ```bash
 ls packages/nextly/src/services/schema/ 2>/dev/null
@@ -398,7 +398,7 @@ rmdir packages/nextly/src/services/dynamic-collections/ 2>/dev/null || true
 
 If an `index.ts` remains, read it. If it only re-exports from the now-deleted files, delete it too. If it has its own content, leave it.
 
-- [ ] **Step 5: Drop the type re-export from `storage/adapters/base-adapter.ts`**
+**Step 5: Drop the type re-export from `storage/adapters/base-adapter.ts`**
 
 In `packages/nextly/src/storage/adapters/base-adapter.ts`, find this block near the top of the file:
 
@@ -409,7 +409,7 @@ export type { IStorageAdapter, StorageAdapterInfo } from "../types";
 
 Delete it entirely (both lines). The `BaseStorageAdapter` abstract class definition at line 50+ stays.
 
-- [ ] **Step 6: Update the 7 consumers that imported `IStorageAdapter` from base-adapter**
+**Step 6: Update the 7 consumers that imported `IStorageAdapter` from base-adapter**
 
 For each file, change the import source from `storage/adapters/base-adapter` to `storage/types`:
 
@@ -469,7 +469,7 @@ import type { IStorageAdapter } from "../storage/adapters/base-adapter";
 import type { IStorageAdapter } from "../storage/types";
 ```
 
-- [ ] **Step 7: Verify no orphan imports**
+**Step 7: Verify no orphan imports**
 
 ```bash
 grep -rn "services/dynamic-collections\|services/schema/" packages/ apps/ templates/ --include="*.ts" --include="*.tsx" 2>/dev/null | grep -v "node_modules\|/dist/\|/dynamic-collections.ts:\|schema-types.ts:" | head
@@ -483,7 +483,7 @@ grep -rn "from.*storage/adapters/base-adapter" packages/ --include="*.ts" 2>/dev
 
 Expected: only matches importing `BaseStorageAdapter` (the class), not the type re-exports.
 
-- [ ] **Step 8: Add CHANGELOG entry**
+**Step 8: Add CHANGELOG entry**
 
 Append to the same Unreleased section in `packages/nextly/CHANGELOG.md`:
 
@@ -494,11 +494,11 @@ Append to the same Unreleased section in `packages/nextly/CHANGELOG.md`:
 - Dropped the `IStorageAdapter` / `StorageAdapterInfo` type re-exports from `storage/adapters/base-adapter.ts`. Import these types from `storage/types` directly. The `BaseStorageAdapter` abstract class stays at its current location.
 ```
 
-- [ ] **Step 9: Run acceptance gates**
+**Step 9: Run acceptance gates**
 
 Run all five gates. Expected: all pass.
 
-- [ ] **Step 10: Commit**
+**Step 10: Commit**
 
 ```bash
 git add packages/nextly packages/nextly/CHANGELOG.md
@@ -535,7 +535,7 @@ EOF
 - Modify: `packages/nextly/src/routeHandler.ts`
 - Modify: `packages/nextly/CHANGELOG.md`
 
-- [ ] **Step 1: Drop legacy `db?` / `tables?` / `storage?` from `defineConfig` in `di/register.ts`**
+**Step 1: Drop legacy `db?` / `tables?` / `storage?` from `defineConfig` in `di/register.ts`**
 
 Read `packages/nextly/src/di/register.ts` end-to-end first to confirm structure (the audit showed deprecated fields at lines 116, 128, 134, 199 and a runtime branch around line 268+). The `RegisterOptions` (or similarly-named) interface has these fields with `@deprecated` JSDoc.
 
@@ -549,7 +549,7 @@ Apply these specific changes:
 
 After this step, `defineConfig({ adapter, ... })` is the only supported shape.
 
-- [ ] **Step 2: Verify no fallout from the runtime branch removal**
+**Step 2: Verify no fallout from the runtime branch removal**
 
 ```bash
 grep -rn "config\.db\|config\.tables\|providedDb\|providedTables\|resolvedDb" packages/nextly/src --include="*.ts" 2>/dev/null | grep -v "node_modules\|/dist/\|test\."
@@ -557,7 +557,7 @@ grep -rn "config\.db\|config\.tables\|providedDb\|providedTables\|resolvedDb" pa
 
 Expected: empty. If matches surface, those are leftover references that need cleaning up too.
 
-- [ ] **Step 3: Delete `StorageConfig` legacy interface**
+**Step 3: Delete `StorageConfig` legacy interface**
 
 In `packages/nextly/src/storage/types.ts`, delete lines 312-348 (the `// Legacy Types` section header through the closing `}` of `StorageConfig`). Verify no other file imports `StorageConfig`:
 
@@ -567,13 +567,13 @@ grep -rn "StorageConfig" packages/nextly/src --include="*.ts" 2>/dev/null | grep
 
 Expected: empty after the delete.
 
-- [ ] **Step 4: Drop `group?` field from plugin admin config**
+**Step 4: Drop `group?` field from plugin admin config**
 
 In `packages/nextly/src/plugins/plugin-context.ts:284-286`, find the `group?: string` field on the plugin admin config interface. Delete the JSDoc block above it (the `@deprecated Use placement with AdminPlacement constants instead.` comment) and the field itself.
 
 The fallback chain documented at line 286 (`host override > placement > group > "plugins"`) collapses to `host override > placement > "plugins"`. Update any inline comments mentioning `group` in this file.
 
-- [ ] **Step 5: Drop the deprecated method overloads in `general-settings-service.ts`**
+**Step 5: Drop the deprecated method overloads in `general-settings-service.ts`**
 
 In `packages/nextly/src/services/general-settings/general-settings-service.ts`, find the methods with `@deprecated Plugin placement is now author-defined via definePlugin(...)` JSDoc at lines 209 and 231. These are dead-branch overloads or methods kept for the old API surface.
 
@@ -585,14 +585,14 @@ grep -rn "<method-name>" packages/ apps/ templates/ --include="*.ts" --include="
 
 For each method whose only references are the definition itself and its `@deprecated` JSDoc, delete it.
 
-- [ ] **Step 6: Drop the `group` field reads in `routeHandler.ts`**
+**Step 6: Drop the `group` field reads in `routeHandler.ts`**
 
 In `packages/nextly/src/routeHandler.ts`:
 
 - Line 986: delete `group: plugin.admin?.group, // kept for backward compat` from whatever object is being constructed. Verify the object is still well-formed after the delete.
 - Line 1097: read the surrounding context. The audit showed `@deprecated Plugin placement overrides are no longer supported.` Delete the whole branch / function / dispatch case that this comment guards. If it's a switch arm, delete the arm. If it's a top-level conditional, delete the conditional and any subsequent dead code that depended on it.
 
-- [ ] **Step 7: Verify no orphan references**
+**Step 7: Verify no orphan references**
 
 ```bash
 grep -rn "\.group\b\|admin\.group" packages/nextly/src --include="*.ts" 2>/dev/null | grep -v "node_modules\|/dist/\|test\." | grep -E "plugin|placement"
@@ -606,7 +606,7 @@ grep -rn "config\.db\|config\.tables\|StorageConfig\|legacy storage" packages/ne
 
 Expected: empty.
 
-- [ ] **Step 8: Add CHANGELOG entry**
+**Step 8: Add CHANGELOG entry**
 
 Append to the same Unreleased section in `packages/nextly/CHANGELOG.md`:
 
@@ -619,11 +619,11 @@ Append to the same Unreleased section in `packages/nextly/CHANGELOG.md`:
 - `routeHandler` no longer reads `plugin.admin.group` and no longer honours the dead "plugin placement overrides" branch.
 ```
 
-- [ ] **Step 9: Run acceptance gates**
+**Step 9: Run acceptance gates**
 
 Run all five gates. Expected: all pass. If any test or admin file references the dropped fields, update it (no new tests; existing tests get rewritten where they assert on the removed behaviour).
 
-- [ ] **Step 10: Commit**
+**Step 10: Commit**
 
 ```bash
 git add packages/nextly/src/di/register.ts \
@@ -664,7 +664,7 @@ EOF
 - Modify: `packages/nextly/src/actions/upload-media.ts`
 - Modify: `packages/nextly/CHANGELOG.md`
 
-- [ ] **Step 1: Drop the legacy-cookie detection branch in `session.ts`**
+**Step 1: Drop the legacy-cookie detection branch in `session.ts`**
 
 In `packages/nextly/src/auth/handlers/session.ts`, the audit identified lines 44-67. Apply these changes:
 
@@ -702,7 +702,7 @@ Drop the `LEGACY_COOKIE_NAMES, serializeClearCookie` import at lines 16-19 if `s
 
 Drop the `Handles backward compatibility for old Auth.js cookies.` line in the file's docstring (line 5).
 
-- [ ] **Step 2: Delete `LEGACY_COOKIE_NAMES` from `cookie-config.ts`**
+**Step 2: Delete `LEGACY_COOKIE_NAMES` from `cookie-config.ts`**
 
 In `packages/nextly/src/auth/cookies/cookie-config.ts`, locate the `LEGACY_COOKIE_NAMES` const and any helper that used it. Verify with:
 
@@ -712,7 +712,7 @@ grep -rn "LEGACY_COOKIE_NAMES" packages/nextly/src --include="*.ts" 2>/dev/null 
 
 After Step 1 the only remaining match should be the definition in `cookie-config.ts`. Delete that const + its export. If `serializeClearCookie` was only used by the legacy-cookie clear path in session.ts (and no longer has consumers), delete it too. Re-run the grep above to confirm zero remaining references.
 
-- [ ] **Step 3: Drop `AUTH_SECRET` / `NEXTAUTH_SECRET` fallback from `env.ts`**
+**Step 3: Drop `AUTH_SECRET` / `NEXTAUTH_SECRET` fallback from `env.ts`**
 
 In `packages/nextly/src/shared/lib/env.ts`, the audit identified lines 35-70. Apply these changes:
 
@@ -757,7 +757,7 @@ Update each consumer to read `NEXTLY_SECRET` (or `env.NEXTLY_SECRET`) directly. 
 
 At line 158, the legacy-env-var migration-guidance message currently warns when `AUTH_SECRET` or `NEXTAUTH_SECRET` is set without `NEXTLY_SECRET`. Drop the entire warning block; if a user has the legacy vars set without `NEXTLY_SECRET`, the production check above will fail loudly with "NEXTLY_SECRET required".
 
-- [ ] **Step 4: Rewrite the upload-media JSDoc example**
+**Step 4: Rewrite the upload-media JSDoc example**
 
 In `packages/nextly/src/actions/upload-media.ts:59`, the JSDoc currently shows:
 
@@ -773,7 +773,7 @@ Replace with the canonical Nextly session pattern. Read the surrounding JSDoc to
 
 (Adjust the function name to whatever the canonical helper actually is. Verify with `grep -n "export.*getSession\|export.*auth" packages/nextly/src/auth/session/get-session.ts`.)
 
-- [ ] **Step 5: Verify no orphan references**
+**Step 5: Verify no orphan references**
 
 ```bash
 grep -rn "next-auth\|NextAuth\|NEXTAUTH\|AUTH_SECRET\|LEGACY_COOKIE_NAMES" packages/nextly/src --include="*.ts" 2>/dev/null | grep -v "node_modules\|/dist/\|test\.\|__tests__"
@@ -781,7 +781,7 @@ grep -rn "next-auth\|NextAuth\|NEXTAUTH\|AUTH_SECRET\|LEGACY_COOKIE_NAMES" packa
 
 Expected: empty (no remaining Auth.js-era references in production code).
 
-- [ ] **Step 6: Add CHANGELOG entry**
+**Step 6: Add CHANGELOG entry**
 
 Append to the same Unreleased section in `packages/nextly/CHANGELOG.md`:
 
@@ -794,11 +794,11 @@ Append to the same Unreleased section in `packages/nextly/CHANGELOG.md`:
 - The `NEXTLY_SECRET_RESOLVED` indirection is gone; consumers read `env.NEXTLY_SECRET` directly.
 ```
 
-- [ ] **Step 7: Run acceptance gates**
+**Step 7: Run acceptance gates**
 
 Run all five gates. Expected: all pass.
 
-- [ ] **Step 8: Commit**
+**Step 8: Commit**
 
 ```bash
 git add packages/nextly/src/auth/handlers/session.ts \
@@ -828,13 +828,13 @@ EOF
 
 ## Task 5: Push, open PR, and request code review
 
-- [ ] **Step 1: Push all four commits**
+**Step 1: Push all four commits**
 
 ```bash
 git push origin chore/phase-4-10-backward-compat-purge
 ```
 
-- [ ] **Step 2: Open PR against `dev`**
+**Step 2: Open PR against `dev`**
 
 ```bash
 gh pr create --base dev --head chore/phase-4-10-backward-compat-purge \
@@ -873,7 +873,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 3: Run code review via the code-reviewer agent**
+**Step 3: Run code review via the code-reviewer agent**
 
 Dispatch a `superpowers:code-reviewer` agent against the diff:
 
@@ -881,7 +881,7 @@ Dispatch a `superpowers:code-reviewer` agent against the diff:
 
 Address Critical/Important findings inline. Push the fix-up commit. If only Minor issues exist, document them and proceed.
 
-- [ ] **Step 4: Stop and ask the user for manual merge**
+**Step 4: Stop and ask the user for manual merge**
 
 Per the doc §4 "Never auto-merge PRs" rule. The user merges manually.
 
