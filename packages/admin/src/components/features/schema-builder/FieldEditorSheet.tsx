@@ -133,7 +133,11 @@ export function FieldEditorSheet({
             </div>
           ) : (
             <>
-              {!isSystem && (
+              {/* Why: Delete only makes sense in edit mode -- in create mode
+                  there's no committed field to delete (the draft hasn't been
+                  added to the list yet, so the right discard action is
+                  Cancel). */}
+              {!isSystem && mode === "edit" && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -147,7 +151,9 @@ export function FieldEditorSheet({
                 <Button variant="outline" onClick={onCancel}>
                   Cancel
                 </Button>
-                <Button onClick={() => onApply(draft)}>Apply</Button>
+                <Button onClick={() => onApply(draft)}>
+                  {mode === "create" ? "Add field" : "Apply"}
+                </Button>
               </div>
             </>
           )}
