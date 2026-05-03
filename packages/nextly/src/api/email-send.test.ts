@@ -1,6 +1,6 @@
-// Phase 4 Task 11: email-send handler tests pin the canonical respondAction
-// wire shape on the success path. The service result (`{ success, messageId? }`)
-// is spread onto the action body so existing consumers keep working.
+// Pins the canonical respondAction wire shape on the success path. The
+// service result (`{ success, messageId? }`) is spread onto the action body
+// so existing consumers keep working.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

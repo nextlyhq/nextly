@@ -4,10 +4,6 @@
  * No database hit -- purely stateless JWT verification.
  * Handles backward compatibility for old Auth.js cookies.
  */
-// Phase 4 (Task 10): respondData replaces the hand-rolled `{ data: ... }`
-// envelope on the authenticated success path. Error legs continue to
-// emit `{ error: { code, message } }` directly (refresh-coalescing
-// consumers already special-case those codes).
 import { respondData } from "../../api/response-shapes";
 import {
   clearAccessTokenCookie,
@@ -32,7 +28,7 @@ export async function handleSession(
   const result = await getSession(request, deps.secret);
 
   if (result.authenticated) {
-    // Phase 4 / spec §7.6: bare `{ user, accessToken }`. The access token
+    // Bare `{ user, accessToken }` per spec section 7.6. The access token
     // already verified successfully (it's how we got here), so reading it
     // back from the cookie is safe. We surface it in the body so
     // non-cookie SDK consumers (mobile, CLI) can pull the live token
@@ -56,8 +52,8 @@ export async function handleSession(
   // Only clear the access cookie when the JWT is tampered/malformed. For an
   // expired JWT we want the cookie to stay so the client can still receive
   // TOKEN_EXPIRED on parallel in-flight requests and participate in the
-  // single coalesced refresh — clearing here forces sibling requests into
-  // the no_token → AUTH_REQUIRED branch, which bypasses refresh.
+  // single coalesced refresh. Clearing here would force sibling requests into
+  // the no_token -> AUTH_REQUIRED branch, which bypasses refresh.
   if (result.reason === "invalid") {
     clearCookies.push(clearAccessTokenCookie());
   }

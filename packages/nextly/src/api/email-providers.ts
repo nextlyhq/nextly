@@ -14,13 +14,8 @@
  * export { GET, POST } from '@revnixhq/nextly/api/email-providers';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. The legacy
- * `meta: { total }` synthetic field on the GET list is dropped — listing
- * returns every provider the caller is allowed to see and admin code can
- * call `data.length` directly. Validation failures throw
- * `NextlyError.validation` with field-level `data.errors[]` (the helper
- * `nextlyValidationFromZod` converts ZodError to that shape per F11).
+ * The list endpoint is not server-paginated; admin code reads the array
+ * length directly. There is no synthetic `meta.total`.
  *
  * @module api/email-providers
  */
@@ -65,8 +60,7 @@ const createProviderSchema = z.object({
  * - 401 Unauthorized: Authentication required
  * - 500 Internal Server Error: Failed to fetch providers
  *
- * Response: `{ "data": EmailProvider[] }` — non-paginated list (the
- * legacy `meta: { total }` is dropped per Task 21 §10.1).
+ * Response: `{ "data": EmailProvider[] }`; non-paginated list.
  *
  * @example
  * ```bash
@@ -96,7 +90,7 @@ export const GET = withErrorHandler(
  *
  * Request Body:
  * - name: Display name (required)
- * - type: Provider type - "smtp", "resend", or "sendlayer" (required)
+ * - type: Provider type, one of "smtp", "resend", or "sendlayer" (required)
  * - fromEmail: From email address (required)
  * - fromName: From display name (optional)
  * - configuration: Provider-specific config object (required)
@@ -109,7 +103,7 @@ export const GET = withErrorHandler(
  * - 401 Unauthorized: Authentication required
  * - 500 Internal Server Error: Creation failed
  *
- * Response: `{ "data": EmailProvider }` — created provider with masked
+ * Response: `{ "data": EmailProvider }`; created provider with masked
  * configuration. Status 201.
  */
 export const POST = withErrorHandler(

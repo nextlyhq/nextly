@@ -14,9 +14,6 @@
  * export { GET, PATCH, DELETE } from '@revnixhq/nextly/api/email-templates-detail';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2.
- *
  * @module api/email-templates-detail
  */
 
@@ -117,7 +114,7 @@ export const PATCH = withErrorHandler(
  * DELETE handler for removing an email template.
  *
  * Requires authentication. Cannot delete layout templates (`_email-header`,
- * `_email-footer`) — use the layout endpoint to modify them.
+ * `_email-footer`); use the layout endpoint to modify them.
  *
  * Response Codes:
  * - 200 OK: Template deleted successfully

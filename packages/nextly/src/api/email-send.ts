@@ -10,17 +10,12 @@
  * export { POST } from '@revnixhq/nextly/api/email-send';
  * ```
  *
- * Wire shape: Phase 4 Task 11 migrates this handler off the legacy
- * `{ data: <result> }` envelope onto `respondAction` (spec §5.1). The
- * service returns `{ success, messageId? }`; the `messageId` is the
- * useful caller-facing field, paired with a server-authored toast.
- * Auth uses the existing `requireAuthentication` middleware bridged to
- * `NextlyError` via `toNextlyAuthError`. Validation errors flow through
- * `nextlyValidationFromZod` (F11). The attachment resolver throws
- * `NextlyError` directly (validation for caller-fixable failures,
- * internal for storage I/O); `withErrorHandler` produces the canonical
- * problem+json envelope. The machine-readable `EMAIL_ATTACHMENT_*` code
- * lives at `error.data.errors[0].code`.
+ * The service returns `{ success, messageId? }`; the `messageId` is the
+ * useful caller-facing field, paired with a server-authored toast via
+ * `respondAction`. The attachment resolver throws `NextlyError` directly
+ * (validation for caller-fixable failures, internal for storage I/O); the
+ * machine-readable `EMAIL_ATTACHMENT_*` code lives at
+ * `error.data.errors[0].code`.
  *
  * @module api/email-send
  */
@@ -115,10 +110,9 @@ export const POST = withErrorHandler(
 
     const service = await getEmailService();
     const result = await service.send(args);
-    // Phase 4: respondAction. Spread the service result (`{ success,
-    // messageId? }`) onto the action body so existing consumers that
-    // read `messageId` and `success` keep working alongside the new
-    // server-authored toast string.
+    // Spread the service result (`{ success, messageId? }`) onto the action
+    // body so consumers that read `messageId` and `success` keep working
+    // alongside the server-authored toast string.
     return respondAction("Email queued.", { ...result });
   }
 );

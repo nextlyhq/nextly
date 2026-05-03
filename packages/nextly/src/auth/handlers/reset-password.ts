@@ -13,9 +13,6 @@
 // unguessable secret, but CSRF still prevents cross-origin abuse of the
 // authenticated password-reset form. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
-// Phase 4 (Task 10): respondAction replaces hand-rolled `{ data: ... }`
-// envelope on the success path. Error legs continue to flow through the
-// existing problem+json builder.
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
@@ -138,7 +135,7 @@ export async function handleResetPassword(
       }
     }
 
-    // Phase 4 / spec §7.6: success body is just `{ message: "Password reset." }`.
+    // Success body is just `{ message: "Password reset." }` per spec section 7.6.
     return respondAction(
       "Password reset.",
       {},

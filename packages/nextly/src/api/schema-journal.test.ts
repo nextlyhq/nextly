@@ -1,9 +1,9 @@
-// F10 PR 4 — schema-journal route handler tests.
+// schema-journal route handler tests.
 //
 // Mocks the auth middleware + super-admin check + DI container so we
 // can exercise the handler's auth/permission/validation paths in
-// isolation. Real-DB roundtrip is covered by the
-// `migration-journal-roundtrip.integration.test.ts` from F10 PR 2.
+// isolation. Real-DB roundtrip is covered by
+// `migration-journal-roundtrip.integration.test.ts`.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,10 +19,8 @@ vi.mock("../auth/middleware/to-nextly-error", () => ({
 }));
 
 // `schema-journal.ts` calls `getCachedNextly()` (not `getNextly()`); the
-// pre-Phase-4 mock named the wrong export, which silently made the
-// success-path tests fail with a 500 from the route handler. Fixing it
-// here as part of Task 11 because the migrated assertions (no `data`
-// envelope) only pass once the success path runs to completion.
+// mock must name the correct export, otherwise the success-path tests
+// silently fail with a 500 from the route handler.
 vi.mock("../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue(undefined),
 }));
@@ -104,9 +102,9 @@ describe("getSchemaJournal", () => {
     const res = await getSchemaJournal(makeReq("http://x/api/schema/journal"));
 
     expect(res.status).toBe(200);
-    // Phase 4 (Task 11): respondData emits a bare body. Cursor-style reads
-    // (limit + before) skip the `respondList` envelope because there is no
-    // total / page / totalPages to surface.
+    // respondData emits a bare body. Cursor-style reads (limit + before)
+    // skip the `respondList` envelope because there is no total / page /
+    // totalPages to surface.
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
     expect(json).toEqual({

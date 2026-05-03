@@ -1,8 +1,5 @@
-// Phase 4: pin the listRoles wire shape so the canonical
-// `{ items, meta }` body cannot regress. Same migration story as
-// user-dispatcher-list-users: the original PR #125 fix wrapped via
-// `{ statusCode, data, meta }`; Phase 4 finishes by switching to a
-// Response built via respondList.
+// Pin the listRoles wire shape so the canonical `{ items, meta }` body
+// (a Response built via respondList) cannot regress.
 
 import { describe, expect, it, vi } from "vitest";
 

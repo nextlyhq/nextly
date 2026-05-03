@@ -6,10 +6,9 @@
  * `comp_*` table migrations directly against the DI-registered adapter
  * so UI-edited components have a usable backing table immediately.
  *
- * Phase 4 Task 9: every handler returns a Response built via the
- * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
- * passes the Response through unchanged. See spec §5.1 for the
- * canonical shape contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape contract.
  */
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
@@ -123,10 +122,9 @@ function registerComponentRuntimeSchema(
 
 const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   listComponents: {
-    // Phase 4: respondList. Registry returns BaseListResult `{data,total}`
-    // with limit/offset semantics; offsetPaginationToMeta synthesises the
-    // canonical PaginationMeta so the wire shape matches every other
-    // dispatcher.
+    // Registry returns BaseListResult `{data,total}` with limit/offset
+    // semantics; offsetPaginationToMeta synthesises the canonical
+    // PaginationMeta so the wire shape matches every other dispatcher.
     execute: async (svc, p) => {
       const limit = toNumber(p.limit);
       const offset = toNumber(p.offset);
@@ -228,8 +226,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         migrationStatus,
       });
 
-      // Phase 4: respondMutation 201. Migration status drives the toast
-      // copy so admins immediately know whether the table was applied.
+      // Migration status drives the toast copy so admins immediately
+      // know whether the table was applied.
       const message =
         migrationStatus === "applied"
           ? `Component "${b.slug}" created and table applied!`
@@ -239,8 +237,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   },
 
   getComponent: {
-    // Phase 4: respondDoc. registry.getComponent throws NextlyError on
-    // not-found, so we never see a null doc here.
+    // registry.getComponent throws NextlyError on not-found, so we never
+    // see a null doc here.
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Component slug");
       const component = await svc.registry.getComponent(slug);
@@ -262,10 +260,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        // Phase 4: throw a NextlyError so the dispatcher's error path
-        // emits the canonical singular `{ error: ... }` shape with a
-        // 403 status. Slug stays in logContext per §13.8 (never on
-        // the wire).
+        // Throw NextlyError so the dispatcher's error path emits the
+        // canonical singular `{ error: ... }` shape with a 403 status.
+        // Slug stays in logContext per §13.8 (never on the wire).
         throw NextlyError.forbidden({
           logContext: {
             reason: "component-locked",
@@ -369,9 +366,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         updateData as Parameters<typeof svc.registry.updateComponent>[1]
       );
 
-      // Phase 4: respondMutation 200. The toast copy varies by what
-      // changed (fields-with-applied vs fields-pending vs metadata-only)
-      // so the admin can react accordingly without parsing the body.
+      // The toast copy varies by what changed (fields-with-applied vs
+      // fields-pending vs metadata-only) so the admin can react
+      // accordingly without parsing the body.
       const message =
         migrationStatus === "applied"
           ? `Component "${slug}" updated and migration applied successfully.`
@@ -383,7 +380,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   },
 
   deleteComponent: {
-    // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete to
+    // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
     // respondMutation, but registry.deleteComponent returns void (no
     // deleted record to surface). We use respondAction here so the wire
     // shape is `{ message, slug }` rather than the awkward

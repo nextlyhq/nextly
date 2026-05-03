@@ -1,26 +1,25 @@
 /**
- * Phase 4 (Task 10) regression tests for auth-handler response shapes.
+ * Regression tests for auth-handler response shapes.
  *
  * One test per handler asserts the canonical respondX wire shape against
- * the spec §7.6 / §7.7 table:
+ * the spec section 7.6 / 7.7 table:
  *
- *   - login            → respondAction("Logged in.", { user, accessToken, ... })
- *   - logout           → respondAction("Logged out.")
- *   - refresh          → respondData({ user, accessToken, refreshToken, expiresAt })
- *   - register         → respondAction(message, ...)  [silent vs reveal paths]
- *   - setup-status     → respondData({ isSetup, requiresInitialUser })
- *   - setup            → respondAction("Setup complete.", { user, ... }, status 201)
- *   - forgot-password  → respondAction("If an account exists ...")  [no email leak]
- *   - reset-password   → respondAction("Password reset.")
- *   - verify-email     → respondAction("Email verified.", { email })
- *   - verify-email/resend → respondAction("Verification email sent.")
- *   - change-password  → respondAction("Password changed.")
- *   - session          → respondData({ user, accessToken })
- *   - csrf             → respondData({ token })
+ *   - login            -> respondAction("Logged in.", { user, accessToken, ... })
+ *   - logout           -> respondAction("Logged out.")
+ *   - refresh          -> respondData({ user, accessToken, refreshToken, expiresAt })
+ *   - register         -> respondAction(message, ...)  [silent vs reveal paths]
+ *   - setup-status     -> respondData({ isSetup, requiresInitialUser })
+ *   - setup            -> respondAction("Setup complete.", { user, ... }, status 201)
+ *   - forgot-password  -> respondAction("If an account exists ...")  [no email leak]
+ *   - reset-password   -> respondAction("Password reset.")
+ *   - verify-email     -> respondAction("Email verified.", { email })
+ *   - verify-email/resend -> respondAction("Verification email sent.")
+ *   - change-password  -> respondAction("Password changed.")
+ *   - session          -> respondData({ user, accessToken })
+ *   - csrf             -> respondData({ token })
  *
- * Every test also asserts the body has no `data` property. This is the
- * regression guard against a future maintainer accidentally re-introducing
- * the old `{ data: ... }` envelope.
+ * Every test also asserts the body has no `data` property, guarding
+ * against accidental re-introduction of a `{ data: ... }` envelope.
  */
 import { describe, expect, it, vi } from "vitest";
 

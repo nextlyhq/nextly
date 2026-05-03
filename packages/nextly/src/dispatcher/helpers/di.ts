@@ -34,8 +34,8 @@ export function getAdapterFromDI(): DrizzleAdapter | undefined {
   return undefined;
 }
 
-// F8 PR 5: lazy lookup for the MigrationJournal singleton. Returns
-// undefined if DI hasn't run yet — callers fall back to noop.
+// Lazy lookup for the MigrationJournal singleton. Returns undefined if
+// DI hasn't run yet; callers fall back to noop.
 export function getMigrationJournalFromDI():
   | DrizzleMigrationJournal
   | undefined {
@@ -161,11 +161,6 @@ export function getUserExtSchemaServiceFromDI():
   }
   return undefined;
 }
-
-// F8 PR 3 deleted `getSchemaChangeServiceFromDI`. The legacy preview
-// path now goes through `pipeline/preview.ts` + `legacy-preview/translate.ts`
-// (no DI lookup needed). The legacy `SchemaChangeService` class itself is
-// deleted in PR 4.
 
 export function getCollectionRegistryFromDI():
   | CollectionRegistryService

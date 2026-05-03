@@ -1,6 +1,6 @@
-// Phase 4 Task 8: regression tests for the collection-dispatcher op-types.
-// Pin the canonical Response shapes per spec §5.1 so the migrated handlers
-// cannot regress.
+// Regression tests for the collection-dispatcher op-types. Pin the
+// canonical Response shapes per spec §5.1 so the handlers cannot
+// regress.
 //
 // Coverage target (one representative test per op-type):
 //   respondList:     listCollections, listEntries (paginated)
@@ -11,21 +11,18 @@
 //   respondAction:   applySchemaChanges (composite mutation; non-CRUD)
 //   respondCount:    countEntries
 //   respondData:     previewSchemaChanges (custom preview payload)
-//
-// Bulk operations (bulkDeleteEntries, bulkUpdateEntries, bulkUpdateByQuery)
-// are intentionally NOT migrated in this task; their wire shape is deferred
-// to Phase 4.5 and stays unchanged here.
+//   respondBulk:     bulkDeleteEntries, bulkUpdateEntries,
+//                    bulkUpdateByQuery
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Phase 4 Task 8 (defect fix): the new respondAction test for
-// applySchemaChanges and the respondData test for previewSchemaChanges
-// need to drive code paths that pull dependencies out of the DI
-// container (registry, adapter, migration journal). The CRUD handlers
-// covered by the rest of this file go through the legacy
-// `services.collections` fallback and never read DI; mocking the di
-// helpers to return undefined for those (the default) leaves their
-// behaviour unchanged. The schema-pipeline factories
+// The respondAction test for applySchemaChanges and the respondData
+// test for previewSchemaChanges need to drive code paths that pull
+// dependencies out of the DI container (registry, adapter, migration
+// journal). The CRUD handlers covered by the rest of this file go
+// through the legacy `services.collections` fallback and never read DI;
+// mocking the di helpers to return undefined for those (the default)
+// leaves their behaviour unchanged. The schema-pipeline factories
 // (createApplyDesiredSchema, previewDesiredSchema,
 // translatePipelinePreviewToLegacy) are mocked so we exercise the
 // dispatcher's response-shape contract without spinning up a real
@@ -457,8 +454,8 @@ describe("dispatchCollections, counts (respondCount)", () => {
   });
 });
 
-describe("dispatchCollections, bulk ops migrated to respondBulk (Phase 4.5)", () => {
-  // Phase 4.5: bulk ops emit the canonical respondBulk envelope
+describe("dispatchCollections, bulk ops respondBulk envelope", () => {
+  // Bulk ops emit the canonical respondBulk envelope
   // `{ message, items, errors }` with HTTP 200 even on partial success.
   // Per-item failures live in `errors[]` with structured `{ id, code, message }`
   // (canonical NextlyErrorCode). Status 4xx is reserved for malformed
@@ -542,8 +539,8 @@ describe("dispatchCollections, bulk ops migrated to respondBulk (Phase 4.5)", ()
   });
 
   it("bulkUpdateEntries returns respondBulk with full-record items[]", async () => {
-    // Phase 4.5: update returns FULL records in items[] (not just ids) so
-    // the admin client can refresh local state without a re-fetch.
+    // Update returns FULL records in items[] (not just ids) so the
+    // admin client can refresh local state without a re-fetch.
     const updatedRecord = { id: "e1", title: "Updated", status: "published" };
     const fakeServiceResult: BulkOperationResult<typeof updatedRecord> = {
       successes: [updatedRecord],
@@ -604,12 +601,11 @@ describe("dispatchCollections, bulk ops migrated to respondBulk (Phase 4.5)", ()
   });
 });
 
-// Phase 4 Task 8 (defect fix): pin the canonical Response shapes for the
-// two non-CRUD schema ops the rest of the file's header advertises but
-// previously had no `it(...)` block for. applySchemaChanges -> respondAction;
-// previewSchemaChanges -> respondData. We mock the DI helpers + pipeline
-// factories so the dispatcher's response-shape contract is exercised in
-// isolation (no real drizzle-kit + no live DB).
+// Pin the canonical Response shapes for the two non-CRUD schema ops:
+// applySchemaChanges -> respondAction; previewSchemaChanges ->
+// respondData. We mock the DI helpers and pipeline factories so the
+// dispatcher's response-shape contract is exercised in isolation (no
+// real drizzle-kit, no live DB).
 
 // Helper: build a fake registry whose getCollectionBySlug/getAllCollections
 // return the seed values the apply/preview paths read out before delegating

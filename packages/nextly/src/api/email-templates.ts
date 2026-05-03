@@ -14,12 +14,8 @@
  * export { GET, POST } from '@revnixhq/nextly/api/email-templates';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. The legacy
- * `meta: { total }` synthetic field on the GET list is dropped — listing
- * returns every template the caller can see and admin code can call
- * `data.length` directly. Validation failures route through
- * `nextlyValidationFromZod` (F11).
+ * The list endpoint is not server-paginated; admin code reads the array
+ * length directly. There is no synthetic `meta.total`.
  *
  * @module api/email-templates
  */
@@ -77,8 +73,7 @@ const createTemplateSchema = z.object({
  * - 401 Unauthorized: Authentication required
  * - 500 Internal Server Error: Failed to fetch templates
  *
- * Response: `{ "data": EmailTemplate[] }` — non-paginated list (the legacy
- * `meta: { total }` is dropped per Task 21 §10.1).
+ * Response: `{ "data": EmailTemplate[] }`; non-paginated list.
  *
  * @example
  * ```bash
@@ -104,7 +99,7 @@ export const GET = withErrorHandler(
  * POST handler for creating a new email template.
  *
  * Requires authentication. Cannot use reserved slugs (`_email-header`,
- * `_email-footer`) — use the layout endpoint instead.
+ * `_email-footer`); use the layout endpoint instead.
  *
  * Request Body: see `createTemplateSchema` above for the full shape.
  *
@@ -114,7 +109,7 @@ export const GET = withErrorHandler(
  * - 401 Unauthorized: Authentication required
  * - 500 Internal Server Error: Creation failed
  *
- * Response: `{ "data": EmailTemplate }` — created template. Status 201.
+ * Response: `{ "data": EmailTemplate }`; the created template. Status 201.
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {

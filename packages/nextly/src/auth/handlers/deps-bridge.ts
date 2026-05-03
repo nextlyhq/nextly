@@ -297,11 +297,6 @@ export function buildAuthRouterDeps(
       await seedPermissions(adapter, { silent: true });
     },
 
-    // PR 5 (unified-error-system): the auth handlers (register,
-    // forgot-password, reset-password) now consume the throw-based service
-    // contract directly. The bridge passes through without translating
-    // back to a Result shape — the handler catches NextlyError and
-    // serialises via toResponseJSON.
     registerUser: async data => {
       const authService = getService("authService");
       const user = await authService.registerUser(data);
@@ -326,14 +321,13 @@ export function buildAuthRouterDeps(
     },
 
     changePassword: async (userId, currentPassword, newPassword) => {
-      // PR 4: changePassword returns void and throws NextlyError.
       const authService = getService("authService");
       try {
         await authService.changePassword(userId, currentPassword, newPassword);
         return { success: true };
       } catch (err) {
-        // §13.8 public-surface safety — only NextlyError.publicMessage is
-        // vetted; fall back to a generic string for anything else.
+        // Spec section 13.8 public-surface safety: only NextlyError.publicMessage
+        // is vetted; fall back to a generic string for anything else.
         return {
           success: false,
           error: NextlyError.is(err)
@@ -344,7 +338,6 @@ export function buildAuthRouterDeps(
     },
 
     verifyEmail: async token => {
-      // PR 4: verifyEmail returns `{ email }` and throws NextlyError.
       const authService = getService("authService");
       try {
         const result = await authService.verifyEmail(token);
@@ -353,8 +346,8 @@ export function buildAuthRouterDeps(
           email: result.email,
         };
       } catch (err) {
-        // §13.8 public-surface safety — only NextlyError.publicMessage is
-        // vetted; fall back to a generic string for anything else.
+        // Spec section 13.8 public-surface safety: only NextlyError.publicMessage
+        // is vetted; fall back to a generic string for anything else.
         return {
           success: false,
           error: NextlyError.is(err)
@@ -408,9 +401,9 @@ function readRevealRegistrationConflict(
 }
 
 /**
- * Audit C4 / T-005: read `security.trustProxy` from the NextlyConfig
- * registered in the DI container. Returns `false` (the safe default)
- * when the container is not yet initialised or the flag is unset.
+ * Read `security.trustProxy` from the NextlyConfig registered in the DI
+ * container. Returns `false` (the safe default) when the container is
+ * not yet initialised or the flag is unset.
  */
 function readTrustProxy(getService: (name: string) => unknown): boolean {
   try {
@@ -430,10 +423,9 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
 }
 
 /**
- * Audit H4 / T-016: read `security.authRateLimit` from the
- * NextlyConfig registered in the DI container. Falls back to the
- * default 30 req/IP/hour, 1-hour window when unset or the container
- * is not yet initialised.
+ * Read `security.authRateLimit` from the NextlyConfig registered in the
+ * DI container. Falls back to the default 30 req/IP/hour, 1-hour window
+ * when unset or the container is not yet initialised.
  */
 function readAuthRateLimit(
   getService: (name: string) => unknown

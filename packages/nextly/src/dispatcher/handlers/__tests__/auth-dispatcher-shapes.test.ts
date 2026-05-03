@@ -1,4 +1,4 @@
-// Phase 4: regression tests for auth + rbac dispatcher op-types beyond
+// Regression tests for auth + rbac dispatcher op-types beyond
 // listRoles. One test per op-type pattern; new methods adopting the
 // same pattern inherit shape correctness from the respondX helpers
 // (covered in api/__tests__/response-shapes.test.ts).

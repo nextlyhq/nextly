@@ -1,6 +1,6 @@
-// Phase 4 Task 11: api-keys handler tests pin the canonical respondX wire
-// shapes for all five endpoints (list / get / create / update / revoke).
-// We exercise the handlers in isolation, focusing on the response envelope.
+// Pins the canonical respondX wire shapes for all five api-keys endpoints
+// (list / get / create / update / revoke). The handlers are exercised in
+// isolation, focusing on the response envelope.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

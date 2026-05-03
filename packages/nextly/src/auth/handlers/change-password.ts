@@ -6,8 +6,6 @@
 // CSRF double-submit cookie + origin check. This endpoint is the highest-
 // value target for account takeover, so CSRF is non-negotiable here.
 // See docs/auth/csrf.md.
-// Phase 4 (Task 10): respondAction replaces the hand-rolled `{ data: ... }`
-// success envelope. Cleared cookies travel via the headers param.
 import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -28,11 +26,9 @@ export interface ChangePasswordHandlerDeps {
     newPassword: string
   ) => Promise<{ success: boolean; error?: string }>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
-  /** Audit M10 / T-022: writer for security-sensitive auth events. */
+  /** Writer for security-sensitive auth events. */
   auditLog: AuditLogWriter;
-  /** Audit C4 / T-005. */
   trustProxy: boolean;
-  /** Audit C4 / T-005. */
   trustedProxyIps: string[];
 }
 
@@ -89,10 +85,9 @@ export async function handleChangePassword(
   // Revoke all sessions (force re-login on all devices)
   await deps.deleteAllRefreshTokensForUser(sessionResult.user.id);
 
-  // Audit M10 / T-022: actor and target are the same user — change-password
-  // is always self-service in this handler. (Admin-driven password reset
-  // for another user runs through reset-password and gets its own audit
-  // hook in a follow-up.)
+  // Actor and target are the same user; change-password is always
+  // self-service in this handler. Admin-driven password reset for another
+  // user runs through reset-password and has its own audit hook.
   await deps.auditLog.write({
     kind: "password-changed",
     actorUserId: sessionResult.user.id,
@@ -106,7 +101,7 @@ export async function handleChangePassword(
 
   const clearCookies = [clearAccessTokenCookie(), clearRefreshTokenCookie()];
 
-  // Phase 4 / spec §7.6: success body is `{ message: "Password changed." }`.
+  // Success body is `{ message: "Password changed." }` per spec section 7.6.
   // Cleared cookies (forcing re-login on every device) ride the headers.
   return respondAction(
     "Password changed.",

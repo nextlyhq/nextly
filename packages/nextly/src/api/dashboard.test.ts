@@ -1,7 +1,7 @@
-// Phase 4 Task 11: dashboard handler tests pin the canonical respondData
-// wire shape for the three dashboard endpoints. The handlers are exercised
-// in isolation (auth + DI mocked) so the assertions focus on the response
-// envelope and not the underlying service queries.
+// Pins the canonical respondData wire shape for the three dashboard
+// endpoints. The handlers are exercised in isolation (auth + DI mocked) so
+// the assertions focus on the response envelope and not the underlying
+// service queries.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -84,7 +84,7 @@ describe("getDashboardStats", () => {
 
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
-    // Phase 4: bare body, no `{ data: ... }` wrapper.
+    // Bare body, no `{ data: ... }` wrapper.
     expect(json).not.toHaveProperty("data");
     expect((json as typeof stats).content.totalEntries).toBe(47);
     expect((json as typeof stats).status).toEqual({ draft: 1, published: 46 });

@@ -9,9 +9,9 @@
  *   role-inheritance operations that need access to multiple sub-services
  *   on the container, so the handler receives the full `ServiceContainer`.
  *
- * Phase 4: every handler returns a Response built via the respondX
- * helpers in `../../api/response-shapes.ts`. See spec §5.1 for the
- * canonical shape contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. See spec §5.1 for the canonical shape
+ * contract.
  */
 
 import {
@@ -22,7 +22,6 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { ServiceContainer } from "../../services";
-// Phase 4.9: shared `toPaginationMeta` (previously a local copy here).
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,
@@ -333,10 +332,9 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       if (p.permissionId) {
         // REST-style: DELETE /api/roles/123/permissions/456
         if (!p.roleId) throw new Error("RoleId parameter is required");
-        // PR 4 (unified-error-system): getPermissionById returns the
-        // permission directly and throws NextlyError(NOT_FOUND) for
-        // missing rows, which propagates to the caller as an error
-        // response.
+        // getPermissionById returns the permission directly and throws
+        // NextlyError(NOT_FOUND) for missing rows, which propagates to
+        // the caller as an error response.
         const perm = await c.permissions.getPermissionById(p.permissionId);
         await c.rolePermissions.removePermissionFromRole(p.roleId, {
           action: perm.action,

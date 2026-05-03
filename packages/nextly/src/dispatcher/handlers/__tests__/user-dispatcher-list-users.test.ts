@@ -1,14 +1,9 @@
-// Phase 4: pin the listUsers wire shape so the canonical
-// `{ items, meta }` body cannot regress. PR #125 fixed the original
-// "{ data: { data, meta } }" double-nest bug; Phase 4 finishes the
-// migration by switching the wire shape to `{ items, meta }` directly
-// (no `data` wrapper).
+// Pin the listUsers wire shape so the canonical `{ items, meta }` body
+// cannot regress.
 //
-// Pre-Phase-4: dispatchUser('listUsers') returned a plain object that
-// the dispatcher infrastructure wrapped in DispatchResult.
-// Post-Phase-4: dispatchUser('listUsers') returns a Response built by
-// respondList(items, meta). The dispatcher passes the Response through
-// (see dispatcher.ts `instanceof Response` branch).
+// dispatchUser('listUsers') returns a Response built by respondList
+// (items, meta). The dispatcher passes the Response through (see
+// dispatcher.ts `instanceof Response` branch).
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -91,9 +86,9 @@ describe("dispatchUser('listUsers')", () => {
       meta?: unknown;
     };
 
-    // The pre-Phase-4 bug shape was result.data === { data: [...], meta: {...} }.
-    // Phase 4 flattens to result.items being the user array directly, with
-    // no `data` wrapper anywhere.
+    // result.items must be the user array directly, with no `data`
+    // wrapper anywhere. Guards against the historical
+    // `{ data: { data, meta } }` double-nest regression.
     expect(Array.isArray(body.items)).toBe(true);
     expect(body).not.toHaveProperty("data");
     expect(body.items).not.toMatchObject({ data: expect.anything() });

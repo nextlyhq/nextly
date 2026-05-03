@@ -1,7 +1,7 @@
-// Phase 4 Task 11: general-settings handler tests pin the canonical
-// respondData (GET) and respondMutation (PATCH) wire shapes. The
-// timezone-formatting wrapper is a structural pass-through here because we
-// stub out the lookup that pulls the configured timezone.
+// Pins the canonical respondData (GET) and respondMutation (PATCH) wire
+// shapes for general-settings. The timezone-formatting wrapper is a
+// structural pass-through here because we stub out the lookup that pulls
+// the configured timezone.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

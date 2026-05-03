@@ -19,15 +19,6 @@
  * }
  * ```
  *
- * Wire shape (Phase 4.6 migration): handlers wrap `withErrorHandler` and
- * return canonical respondX bodies (spec section 5.1):
- *   - list: `respondList(items, { total, page, limit, totalPages, ... })`
- *   - findByID: `respondDoc(item)`
- *   - create/update: `respondMutation(message, item)`
- *   - delete/move (no doc): `respondAction(message, { id, ... })`
- * Errors flow through the wrapper as `application/problem+json`.
- * Validation failures surface field-level detail in `error.errors[]`.
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/media/route.ts

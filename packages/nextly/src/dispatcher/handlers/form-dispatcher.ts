@@ -9,10 +9,9 @@
  * `submitForm` additionally validates required fields and captures the
  * client IP / user-agent from the incoming `Request` for audit.
  *
- * Phase 4 Task 9: every handler returns a Response built via the
- * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
- * passes the Response through unchanged. See spec §5.1 for the
- * canonical shape contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape contract.
  */
 
 import {
@@ -24,11 +23,6 @@ import { NextlyError } from "../../errors";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { getCollectionsHandlerFromDI } from "../helpers/di";
-// Phase 4.9: shared dispatcher helpers. Previously this file kept local
-// copies of paginatedResponseToMeta + unwrapServiceResult. The local
-// unwrap also lacked the Bug 6 fix (status 400 to NextlyError.validation);
-// the shared version has it, so consolidating here brings form-dispatcher
-// into spec compliance without per-call-site changes.
 import {
   paginatedResponseToMeta,
   unwrapServiceResult,
@@ -65,10 +59,9 @@ type PaginatedShape = {
 
 const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
   listForms: {
-    // Phase 4: respondList. listEntries returns the legacy
-    // CollectionServiceResult wrapping a PaginatedResponse; we unwrap +
-    // translate to canonical PaginationMeta so the wire shape matches
-    // every other paginated read.
+    // listEntries returns the legacy CollectionServiceResult wrapping a
+    // PaginatedResponse; we unwrap and translate to canonical
+    // PaginationMeta so the wire shape matches every other paginated read.
     execute: async (svc, p) => {
       const result = await svc.collectionsHandler.listEntries({
         collectionName: "forms",
@@ -84,11 +77,11 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
   },
 
   getFormBySlug: {
-    // Phase 4: respondDoc. The "find by slug" use case uses listEntries
-    // under the hood (we don't have a slug-keyed get endpoint on the
-    // collections service), but the wire shape still wants a bare doc.
-    // Missing-form throws NotFound so the dispatcher's error path emits
-    // a canonical 404 response.
+    // The "find by slug" use case uses listEntries under the hood (we
+    // don't have a slug-keyed get endpoint on the collections service),
+    // but the wire shape still wants a bare doc. Missing-form throws
+    // NotFound so the dispatcher's error path emits a canonical 404
+    // response.
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Form slug");
 
@@ -124,11 +117,11 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
   },
 
   submitForm: {
-    // Phase 4: respondAction. submitForm is fundamentally a non-CRUD
-    // mutation: the public-facing event is "submission accepted" and
-    // the response surfaces a server-authored toast + the new
-    // submissionId. Validation/notFound branches throw NextlyError so
-    // the dispatcher's error path canonicalises the response.
+    // submitForm is a non-CRUD mutation: the public-facing event is
+    // "submission accepted" and the response surfaces a server-authored
+    // toast plus the new submissionId. Validation/notFound branches throw
+    // NextlyError so the dispatcher's error path canonicalises the
+    // response.
     execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Form slug");
       const submissionData = body as { data?: Record<string, unknown> };

@@ -26,17 +26,10 @@
  * - GET /admin/api/collections/[slug]/uploads/[id] - Get upload metadata
  * - DELETE /admin/api/collections/[slug]/uploads/[id] - Delete upload
  *
- * Wire shape (Phase 4.6 migration): handlers wrap `withErrorHandler` and
- * return canonical respondX bodies (spec section 5.1):
- *   - upload (POST):    `respondMutation("Upload created.", item, 201)`
- *   - getMetadata (GET single): `respondDoc(item)`
- *   - list (GET):       `respondList(items, pagination)`
- *   - delete (DELETE):  `respondAction("Upload deleted.", { id, ... })`
- *
  * `UploadServiceResult` (a result-shape, not a throw) is unwrapped via
- * `throwFromUploadResult`: 404 → `NextlyError.notFound`, 400 →
- * `NextlyError.validation` with field-level errors, 503 →
- * `NextlyError.serviceUnavailable`, anything else → `NextlyError.internal`.
+ * `throwFromUploadResult`: 404 to `NextlyError.notFound`, 400 to
+ * `NextlyError.validation` with field-level errors, 503 to
+ * `NextlyError.serviceUnavailable`, anything else to `NextlyError.internal`.
  *
  * @module api/uploads
  */
@@ -68,9 +61,9 @@ import {
 import { withErrorHandler } from "./with-error-handler";
 
 /**
- * Audit H13 (T-012): pull `security.limits` from the registered config
- * via DI. Falls back to defaults if config isn't initialized (test
- * harness) or has no `limits` block.
+ * Pull `security.limits` from the registered config via DI. Falls back to
+ * defaults if config isn't initialized (test harness) or has no `limits`
+ * block.
  */
 function resolveSecurityLimitsFromContainer(): ResolvedSecurityLimits {
   try {
@@ -130,9 +123,8 @@ function getUploadService(
 
 /** Re-exported for tests that exercise the singleton lifecycle. */
 export function resetUploadService(): void {
-  // No-op after Task 21 migration: the singleton was unused even pre-migration.
-  // Kept as an export so test imports don't break; the function intentionally
-  // does no work.
+  // No-op: the singleton was unused. Kept as an export so test imports don't
+  // break; the function intentionally does no work.
 }
 
 async function ensureServicesInitialized(): Promise<void> {
@@ -168,12 +160,12 @@ function requireSlug(slug: string): void {
  * Convert an `UploadServiceResult` failure into a thrown `NextlyError`.
  *
  * Status-to-code mapping:
- *   400 → `NextlyError.validation` with `errors[]` mapped from
- *         `result.errors` (`{field, message}` → `{path, code, message}`).
- *   404 → `NextlyError.notFound` (canonical "Not found." public message;
- *         the original `result.message` lives in `logContext`).
- *   503 → `NextlyError.serviceUnavailable`.
- *   else → `NextlyError.internal`.
+ *   400 to `NextlyError.validation` with `errors[]` mapped from
+ *       `result.errors` (`{field, message}` to `{path, code, message}`).
+ *   404 to `NextlyError.notFound` (canonical "Not found." public message;
+ *       the original `result.message` lives in `logContext`).
+ *   503 to `NextlyError.serviceUnavailable`.
+ *   else to `NextlyError.internal`.
  *
  * The `result.message` and the original status code are preserved in
  * `logContext` so operators can correlate the unified wire payload with
@@ -246,9 +238,9 @@ export const POST = withErrorHandler(
     const { slug } = await extractParams(context.params);
     requireSlug(slug);
 
-    // Audit H13 (T-012): cheap Content-Length guard. Reject obvious
-    // DoS bodies before they get buffered. Per-file size + per-request
-    // file-count caps are still enforced after parse below.
+    // Cheap Content-Length guard. Reject obvious DoS bodies before they get
+    // buffered. Per-file size + per-request file-count caps are still
+    // enforced after parse below.
     const limits = resolveSecurityLimitsFromContainer();
     const tooLarge = checkRequestSize(request, limits.multipart);
     if (tooLarge) return tooLarge;
@@ -265,9 +257,8 @@ export const POST = withErrorHandler(
       });
     }
 
-    // Audit H13 (T-012): per-file size cap. Cheap multipart bodies can
-    // pass the Content-Length check yet still ship one giant file; cap
-    // each file individually.
+    // Per-file size cap. Cheap multipart bodies can pass the Content-Length
+    // check yet still ship one giant file; cap each file individually.
     if (file.size > limits.fileSize) {
       return new Response(
         JSON.stringify({
@@ -280,15 +271,15 @@ export const POST = withErrorHandler(
       );
     }
 
-    // `_payload` is optional metadata. Invalid JSON is tolerated to
-    // preserve the pre-migration "ignore unparseable _payload" semantic.
+    // `_payload` is optional metadata. Invalid JSON is tolerated; we ignore
+    // unparseable `_payload` rather than failing the upload.
     const payloadStr = formData.get("_payload") as string | null;
     let additionalData: Record<string, unknown> = {};
     if (payloadStr) {
       try {
         additionalData = JSON.parse(payloadStr);
       } catch {
-        // Intentional swallow — see comment above.
+        // Intentional swallow; see comment above.
       }
     }
 
@@ -382,16 +373,15 @@ export const GET = withErrorHandler(
 
 /**
  * Handle list request for uploads in a collection. Currently returns an
- * empty list — a real implementation would query a database or enumerate
- * the storage adapter; that work is out of scope for this mechanical
- * migration. Wire shape is the canonical respondList envelope.
+ * empty list; a real implementation would query a database or enumerate
+ * the storage adapter. Wire shape is the canonical respondList envelope.
  */
 async function handleList(request: Request, _slug: string): Promise<Response> {
   const { searchParams } = new URL(request.url);
 
   const page = parseInt(searchParams.get("page") || "1", 10);
-  // Audit M21 / T-026: clamp `limit` to MAX_QUERY_LIMIT so a client
-  // can't yank an entire upload list in one round-trip.
+  // Clamp `limit` to MAX_QUERY_LIMIT so a client can't yank an entire upload
+  // list in one round-trip.
   const limit = clampLimit(searchParams.get("limit"), { defaultLimit: 10 });
 
   const total = 0;

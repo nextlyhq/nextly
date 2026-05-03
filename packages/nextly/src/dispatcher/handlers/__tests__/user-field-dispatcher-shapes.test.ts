@@ -1,6 +1,6 @@
-// Phase 4 Task 9: regression tests for the user-field-dispatcher op-types.
-// Pin the canonical Response shapes per spec §5.1 so the migrated
-// handlers cannot regress.
+// Regression tests for the user-field-dispatcher op-types. Pin the
+// canonical Response shapes per spec §5.1 so the handlers cannot
+// regress.
 //
 // Coverage target (one representative test per op-type):
 //   respondData:     listUserFields (non-paginated, surfaces adminConfig)

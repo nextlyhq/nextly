@@ -8,11 +8,6 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
- * and return canonical `respondX` envelopes per spec §5.1
- * (`{ items, meta }` for the paginated list, `{ message, item }` for the
- * create). Errors serialize as `application/problem+json`.
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/collections/schema/route.ts
@@ -253,7 +248,7 @@ export const POST = withErrorHandler(async (request: Request) => {
 // NOTE: previewSchemaChanges and applySchemaChanges live in the
 // dispatcher (collection-dispatcher.ts). Wire-routes:
 //   POST /api/collections/schema/{slug}/preview -> dispatcher.previewSchemaChanges()
-//     -> pipeline/preview.ts (Phase A diff + Phase B classify)
+//     -> pipeline/preview.ts (diff + classify)
 //     -> legacy-preview/translate.ts (legacy SchemaPreviewResult shape)
 //   POST /api/collections/schema/{slug}/apply -> dispatcher.applySchemaChanges()
 //     -> applyDesiredSchema (full pipeline including pre-cleanup + pushSchema)

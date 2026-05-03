@@ -11,9 +11,6 @@
  * export { PATCH } from '@revnixhq/nextly/api/user-fields-reorder';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
- *
  * @module api/user-fields-reorder
  */
 
@@ -59,7 +56,7 @@ const reorderSchema = z.object({
  * - 401 Unauthorized: Authentication required
  * - 500 Internal Server Error: Reorder failed
  *
- * Response: `{ "data": UserFieldDefinition[] }` — the updated field list
+ * Response: `{ "data": UserFieldDefinition[] }`; the updated field list
  * in the new order.
  */
 export const PATCH = withErrorHandler(

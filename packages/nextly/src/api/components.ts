@@ -8,11 +8,6 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4.6c): handlers wrap `withErrorHandler` and emit canonical
- * `respondX` shapes per spec §5.1 (`respondList` for paginated reads,
- * `respondMutation` for create). Errors flow through the canonical singular
- * `{ error: NextlyErrorJSON }` envelope (spec §6).
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/components/route.ts
@@ -94,7 +89,7 @@ export const GET = withErrorHandler(async (request: Request) => {
 
   const source = searchParams.get("source") as "code" | "ui" | null;
   const search = searchParams.get("search") || undefined;
-  // Audit M21 / T-026: clamp `limit` to MAX_QUERY_LIMIT.
+  // Clamp `limit` to MAX_QUERY_LIMIT.
   const limit = clampLimit(searchParams.get("limit"), { defaultLimit: 50 });
   const offset = searchParams.get("offset")
     ? parseInt(searchParams.get("offset")!, 10)

@@ -13,10 +13,6 @@ import { NextlyError } from "../errors/nextly-error";
  *
  * The full `issues` array is preserved in `logContext.zodIssues` so operators
  * can triage from the raw payload.
- *
- * Hoisted from per-route copies in PR 7 (collections-schema, components,
- * image-sizes, general-settings) per finding F11. Reused by PRs 8–11 and
- * the eventual contract test in PR 12.
  */
 export function nextlyValidationFromZod(err: z.ZodError): NextlyError {
   return NextlyError.validation({

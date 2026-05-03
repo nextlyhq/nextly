@@ -7,14 +7,6 @@
  * **IMPORTANT:** For storage plugins to work, initialize Nextly with your config
  * via instrumentation.ts before these routes are called.
  *
- * Wire shape (Phase 4.6 migration): handlers wrap `withErrorHandler` and
- * return canonical respondX bodies (spec section 5.1):
- *   - list/contents: `respondData({ folders })` / `respondData(contents)`
- *   - findByID: `respondDoc(folder)`
- *   - create/update: `respondMutation(message, folder)`
- *   - delete (no doc): `respondAction(message, { id })`
- * Errors still flow through `withErrorHandler` as `application/problem+json`.
- *
  * @example
  * ```typescript
  * // app/api/media/folders/route.ts

@@ -7,7 +7,7 @@
  * IMPORTANT: Before using these routes, you must initialize the service layer by calling
  * `registerServices()` during your application startup.
  *
- * Wire shape (Phase 4.5 migration):
+ * Wire shape:
  *   - DELETE returns the canonical respondBulk envelope:
  *     `{ message, items, errors }` where items are minimal `{id}` records
  *     for deleted files and errors are id-keyed PerItemError entries.
@@ -45,10 +45,10 @@ import { withErrorHandler } from "./with-error-handler";
 
 function getMediaService(): MediaService {
   if (!isServicesRegistered()) {
-    // Per F10 / Task 6: surface initialization failures via the canonical
-    // 503 factory so the public response sticks to the §13.8-canonical
-    // sentence emitted by `serviceUnavailable()`. The setup hint goes to
-    // `logContext` so operators see it without leaking into the wire.
+    // Surface initialization failures via the canonical 503 factory so the
+    // public response sticks to the spec §13.8-canonical sentence emitted by
+    // `serviceUnavailable()`. The setup hint goes to `logContext` so operators
+    // see it without leaking into the wire.
     throw NextlyError.serviceUnavailable({
       logMessage: "Media bulk handler called before registerServices()",
       logContext: {
@@ -61,7 +61,7 @@ function getMediaService(): MediaService {
 
 /**
  * Build a request context with user info. Passing null produces a context
- * with no user — `media.uploaded_by` is nullable, so this is valid for
+ * with no user; `media.uploaded_by` is nullable, so this is valid for
  * system-context uploads.
  */
 function createAuthenticatedContext(userId: string | null): RequestContext {
@@ -98,7 +98,7 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
  * Items are full MediaFile records for newly-uploaded files; errors are
  * positional BulkUploadError entries. Pre-upload validation failures fold
  * into the same `errors` array (no parallel `validationErrors` field;
- * unified failure list per Phase 4.5 D3). Status 200 for partial-success.
+ * unified failure list). Status 200 for partial-success.
  *
  * 4xx applies only to fully-malformed requests: empty `files` array, or
  * every entry failed input validation (no useful service work to do).
@@ -133,11 +133,10 @@ export const POST = withErrorHandler(
       size: number;
       originalIndex: number;
     }> = [];
-    // Phase 4.5: pre-upload validation failures fold into the same
-    // failures list as upload failures from the service. One unified
-    // `errors[]` on the wire keeps the consumer iteration simple and
-    // honest (a failed file is a failed file, regardless of where in
-    // the pipeline it failed).
+    // Pre-upload validation failures fold into the same failures list as
+    // upload failures from the service. One unified `errors[]` on the wire
+    // keeps the consumer iteration simple and honest: a failed file is a
+    // failed file, regardless of where in the pipeline it failed.
     const failures: BulkUploadError[] = [];
 
     for (let i = 0; i < filesInput.length; i++) {

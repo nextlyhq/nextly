@@ -10,10 +10,8 @@
  * export { POST } from '@revnixhq/nextly/api/email-templates-preview';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
  * The rendered subject/html stay JSON-encoded inside `data` (no raw HTML
- * response — admin renders the preview in an iframe sandbox).
+ * response; admin renders the preview in an iframe sandbox).
  *
  * @module api/email-templates-preview
  */

@@ -3,10 +3,6 @@
  * Rotates the refresh token and issues a new access token.
  * Re-fetches roles from DB (guarantees fresh roles within 15 min).
  */
-// Phase 4 (Task 10): respondData replaces hand-rolled `{ data: ... }` on
-// the silent rotation success path. The error legs stay on the discrete
-// `{ error: { code, message } }` shape. Refresh is a non-NextlyError
-// path and the spec §7.6 entry is `respondData (none, silent)`.
 import { respondData } from "../../api/response-shapes";
 import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -63,9 +59,9 @@ export interface RefreshHandlerDeps {
   } | null>;
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
-  /** Audit C4 / T-005: gate XFF parsing on this. Default false. */
+  /** Gate XFF parsing on this. Default false. */
   trustProxy: boolean;
-  /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
+  /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
 }
 
@@ -93,10 +89,10 @@ export async function handleRefresh(
     return clearAndDeny("Refresh token expired");
   }
 
-  // Audit H3 / T-015: enforce refresh-token UA + trusted-IP binding before
-  // honoring rotation. A hard mismatch (IP family flip or /24 ÷ /48 prefix
-  // change) revokes every refresh token for the user, since one confirmed
-  // network mismatch suggests theft rather than benign rotation.
+  // Enforce refresh-token UA + trusted-IP binding before honoring rotation.
+  // A hard mismatch (IP family flip or /24 / /48 prefix change) revokes
+  // every refresh token for the user, since one confirmed network mismatch
+  // suggests theft rather than benign rotation.
   const currentUserAgent = request.headers.get("user-agent");
   const currentIp = getTrustedClientIp(request, {
     trustProxy: deps.trustProxy,
@@ -177,7 +173,7 @@ export async function handleRefresh(
     setRefreshTokenCookie(newRawToken, deps.refreshTokenTTL, deps.isProduction),
   ];
 
-  // Phase 4 / spec §7.6: silent rotation, no `message`. Body surfaces the
+  // Silent rotation per spec section 7.6, no `message`. Body surfaces the
   // freshly-rotated tokens so non-cookie clients (mobile / SDK) can replace
   // their stored values; browser clients keep using the HttpOnly cookies.
   return respondData(

@@ -1,6 +1,6 @@
-// Phase 4 Task 11: email-send-template handler tests pin the canonical
-// respondAction wire shape. The body adds `templateId` so callers can
-// correlate the queued message back to the template slug.
+// Pins the canonical respondAction wire shape for email-send-template.
+// The body adds `templateId` so callers can correlate the queued message
+// back to the template slug.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
