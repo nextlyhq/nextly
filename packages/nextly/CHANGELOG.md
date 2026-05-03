@@ -34,6 +34,13 @@ Runtime checks that handled both legacy and canonical names now treat legacy nam
 - Plugin admin `group` field is gone. Use `placement: AdminPlacement.X` exclusively. The deprecated `getPluginPlacements` / `updatePluginPlacements` methods on `GeneralSettingsService` are removed.
 - `routeHandler` no longer reads `plugin.admin.group` (the admin-meta payload's `group` field is gone) and no longer serves the dead `PATCH /api/admin-meta/plugin-placements` endpoint (returned 410 Gone; now 404 from the catch-all).
 
+### Breaking changes (Phase 4.10 / Category E)
+
+- Auth.js legacy cookie detection on `/auth/session` is gone. The `SESSION_UPGRADED` 401 response code is deleted. Existing logged-in Auth.js sessions get a normal `AUTH_REQUIRED` 401 and force-logout cleanly. The `/auth/logout` handler no longer clears legacy Auth.js cookies either.
+- `LEGACY_COOKIE_NAMES` const deleted from `auth/cookies/cookie-config.ts`.
+- `AUTH_SECRET` and `NEXTAUTH_SECRET` env var fallbacks are gone. Set `NEXTLY_SECRET` (32+ characters in production) directly. The runtime no longer reads or warns about the legacy var names.
+- `NEXTLY_SECRET_RESOLVED` indirection on the env interface is gone. Consumers read `env.NEXTLY_SECRET` directly. (~13 internal call sites updated.)
+
 ## 0.0.140
 
 ### Minor Changes — BREAKING
