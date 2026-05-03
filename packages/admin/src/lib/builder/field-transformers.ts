@@ -1,6 +1,7 @@
 import { arrayMove } from "@dnd-kit/sortable";
 
 import type { BuilderField } from "@admin/components/features/schema-builder";
+import type { FieldCondition } from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
 
 /**
@@ -516,9 +517,7 @@ export function convertToBuilderField(
       // string (broad) for storage flexibility; FieldCondition narrows
       // operator to the ConditionOperator union. The runtime evaluator
       // handles unknown operators (fail-open) so the cast is safe.
-      condition: field.admin.condition as
-        | import("@admin/components/features/schema-builder/types").FieldCondition
-        | undefined,
+      condition: field.admin.condition as FieldCondition | undefined,
       hideGutter: field.admin.hideGutter,
     };
   }
