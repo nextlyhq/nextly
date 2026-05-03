@@ -1,0 +1,57 @@
+name: Documentation Issue
+description: Report a problem with the docs (typo, broken link, missing/unclear content).
+title: "[Docs]: "
+labels: ["type: docs", "status: needs-triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the Nextly docs. Please describe what's wrong or missing and where you found it.
+
+        For larger documentation proposals (new guides, restructures), open a [Discussion](https://github.com/revnix/nextly-dev/discussions) first.
+
+  - type: input
+    id: page-url
+    attributes:
+      label: Page URL
+      description: Link to the affected docs page (or leave blank if it's a missing page).
+      placeholder: "https://nextly.dev/docs/..."
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of issue
+      options:
+        - "Typo or grammar"
+        - "Broken link"
+        - "Inaccurate / out of date"
+        - "Unclear or confusing"
+        - "Missing content"
+        - "Code sample doesn't work"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What's wrong, and what would the correct or clearer version look like?
+      placeholder: The page says X, but it should say Y because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, related pages, suggested wording, etc.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true

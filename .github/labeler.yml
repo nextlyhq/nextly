@@ -1,0 +1,51 @@
+# Path-based PR labeler config — consumed by actions/labeler@v5.
+# Each PR gets every scope: label whose globs match a changed file.
+
+"scope: core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/nextly/**
+
+"scope: ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/ui/**
+
+"scope: admin":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/admin/**
+
+"scope: db-adapter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/adapter-*/**
+
+"scope: storage-adapter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/storage-*/**
+
+"scope: plugin":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/plugin-*/**
+
+"scope: cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/create-nextly-app/**
+
+"scope: deps":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/package.json"
+          - pnpm-lock.yaml
+          - pnpm-workspace.yaml
+
+"type: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - "**/*.md"
+          - "**/*.mdx"
