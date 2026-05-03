@@ -8,8 +8,8 @@
  * Settings/Add/Edit tabs) with:
  *   BuilderToolbar at top (sticky)
  *   BuilderFieldList in body (WYSIWYG row pack)
- *   Overlays: BuilderSettingsModal / FieldPickerModal / FieldEditorSheet /
- *             HooksEditorSheet (only one open at a time)
+ *   Overlays: BuilderSettingsModal / FieldPickerModal / FieldEditorSheet
+ *   (only one open at a time)
  *
  * Schema-change preview + apply pipeline is preserved verbatim from the
  * legacy page — same SafeChangeConfirmDialog / SchemaChangeDialog, same
@@ -35,7 +35,6 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
-  HooksEditorSheet,
   SafeChangeConfirmDialog,
   SchemaChangeDialog,
   type BuilderSettingsValues,
@@ -95,8 +94,10 @@ type ActiveOverlay =
   // Apply we append to builder.fields, on Cancel we discard. Avoids the
   // legacy bug where canceling left an empty placeholder in the list.
   | { kind: "create"; draft: BuilderField }
-  | { kind: "edit"; fieldId: string }
-  | { kind: "hooks" };
+  | { kind: "edit"; fieldId: string };
+// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
+// removed from the toolbar (feedback Section 2). HooksEditor component
+// stays in the codebase; backend hooks support unchanged.
 
 interface CollectionBuilderEditPageProps {
   params?: { slug?: string };
@@ -194,10 +195,6 @@ export default function CollectionBuilderEditPage({
   }, [collection, builder, isInitialized, slug]);
 
   const isLocked = collection?.locked === true;
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
-  );
 
   // Dirty count: number of user fields that were added, removed, or had
   // any of their editable shape change (label / width / validation /
@@ -447,12 +444,9 @@ export default function CollectionBuilderEditPage({
       <BuilderToolbar
         config={COLLECTION_BUILDER_CONFIG}
         name={settings.singularName || slug}
-        icon={settings.icon}
-        source={collection.source as "code" | "ui" | undefined}
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        onOpenHooks={() => setActive({ kind: "hooks" })}
         onSave={() => void handleSave()}
       />
 
@@ -557,16 +551,10 @@ export default function CollectionBuilderEditPage({
         />
       )}
 
-      {/* Hooks editor sheet — wraps the existing HooksEditor. */}
-      {active.kind === "hooks" && (
-        <HooksEditorSheet
-          open
-          hooks={hooks}
-          fieldNames={fieldNames}
-          onClose={() => setActive({ kind: "none" })}
-          onChange={setHooks}
-        />
-      )}
+      {/* Hooks UI removed in PR D (feedback Section 2). The HooksEditor
+          component still exists in the codebase and code-first hooks in
+          nextly.config.ts continue to work; only the toolbar button +
+          sheet are gone. */}
 
       {/* Safe-change confirmation (additive). */}
       {previewData && previewData.classification === "safe" && (

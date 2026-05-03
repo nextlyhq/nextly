@@ -27,9 +27,7 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
-  HooksEditorSheet,
   type BuilderSettingsValues,
-  type EnabledHook,
 } from "@admin/components/features/schema-builder";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -37,7 +35,6 @@ import { toast } from "@admin/components/ui";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import {
-  convertHooksToStoredFormat,
   convertToBuilderField,
   convertToFieldDefinition,
   DEFAULT_SYSTEM_FIELDS,
@@ -65,8 +62,9 @@ type ActiveOverlay =
   // Why: NEW in PR C. Sheet renders in create mode against this draft;
   // on Apply we append, on Cancel we discard.
   | { kind: "create"; draft: BuilderField }
-  | { kind: "edit"; fieldId: string }
-  | { kind: "hooks" };
+  | { kind: "edit"; fieldId: string };
+// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
+// removed from the toolbar (feedback Section 2).
 
 interface SingleBuilderEditPageProps {
   params?: { slug?: string };
@@ -84,7 +82,6 @@ export default function SingleBuilderEditPage({
   });
 
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
-  const [hooks, setHooks] = useState<EnabledHook[]>([]);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
   // Why: was a JSON string of just field IDs, which silently masked
@@ -132,10 +129,6 @@ export default function SingleBuilderEditPage({
   }, [single, builder, isInitialized]);
 
   const isLocked = single?.locked === true;
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
-  );
 
   // Dirty count: number of user fields that were added, removed, or had
   // any of their editable shape change since load.
@@ -163,7 +156,6 @@ export default function SingleBuilderEditPage({
     }
 
     const fieldDefinitions = userFields.map(convertToFieldDefinition);
-    const storedHooks = convertHooksToStoredFormat(hooks);
 
     updateSingle(
       {
@@ -180,7 +172,10 @@ export default function SingleBuilderEditPage({
           // Status pass-through; the typed Partial<ApiSingle> doesn't
           // include status yet, so cast at the boundary.
           ...(settings.status === true ? { status: true } : {}),
-          ...(storedHooks.length > 0 ? { hooks: storedHooks } : {}),
+          // Why: hooks payload removed in PR D -- the Singles page
+          // never hydrated `hooks` state from `single.hooks`, so this
+          // spread always sent `undefined`. Hooks for Singles are still
+          // configurable code-first via nextly.config.ts.
         },
       },
       {
@@ -197,7 +192,7 @@ export default function SingleBuilderEditPage({
         },
       }
     );
-  }, [builder, hooks, settings, slug, updateSingle]);
+  }, [builder, settings, slug, updateSingle]);
 
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and
@@ -285,12 +280,9 @@ export default function SingleBuilderEditPage({
       <BuilderToolbar
         config={SINGLE_BUILDER_CONFIG}
         name={settings.singularName || slug}
-        icon={settings.icon}
-        source={single.source as "code" | "ui" | undefined}
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        onOpenHooks={() => setActive({ kind: "hooks" })}
         onSave={() => handleSave()}
       />
 
@@ -385,15 +377,7 @@ export default function SingleBuilderEditPage({
         />
       )}
 
-      {active.kind === "hooks" && (
-        <HooksEditorSheet
-          open
-          hooks={hooks}
-          fieldNames={fieldNames}
-          onClose={() => setActive({ kind: "none" })}
-          onChange={setHooks}
-        />
-      )}
+      {/* Hooks UI removed in PR D (feedback Section 2). */}
 
       {isSaving && (
         <div aria-live="polite" className="sr-only">

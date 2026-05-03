@@ -275,12 +275,9 @@ export default function ComponentBuilderEditPage({
       <BuilderToolbar
         config={COMPONENT_BUILDER_CONFIG}
         name={settings.singularName || slug}
-        icon={settings.icon}
-        source={component.source}
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        // No onOpenHooks — Components don't support hooks
         onSave={() => handleSave()}
       />
 
