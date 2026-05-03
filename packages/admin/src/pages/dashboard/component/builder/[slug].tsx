@@ -14,11 +14,16 @@ import type React from "react";
 import { useState, useCallback, useEffect } from "react";
 import { z } from "zod";
 
-import { BuilderPageTemplate } from "@admin/components/features/schema-builder";
+import {
+  BuilderPageTemplate,
+  SafeChangeConfirmDialog,
+  SchemaChangeDialog,
+} from "@admin/components/features/schema-builder";
 import * as Icons from "@admin/components/icons";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
+import { useRestart } from "@admin/context/RestartContext";
 import {
   useComponent,
   useUpdateComponent,
@@ -29,6 +34,12 @@ import {
   convertToBuilderField,
 } from "@admin/lib/builder";
 import { navigateTo } from "@admin/lib/navigation";
+import { componentApi } from "@admin/services/componentApi";
+import type {
+  FieldResolution,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
@@ -67,6 +78,14 @@ export default function ComponentBuilderEditPage({
   const [isInitialized, setIsInitialized] = useState(false);
   const { mutate: updateComponent, isPending: isSaving } = useUpdateComponent();
 
+  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
+    null
+  );
+  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
+  const [showSafeDialog, setShowSafeDialog] = useState(false);
+  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
+  const { startRestart, stopRestart } = useRestart();
+
   // Initialize form with component data
   useEffect(() => {
     if (component && !isInitialized) {
@@ -100,6 +119,98 @@ export default function ComponentBuilderEditPage({
     }
   }, [component, builder, isInitialized]);
 
+  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
+    const userFields = builder.fields.filter(f => !f.isSystem);
+    const validation = builder.validateFields(userFields);
+    if (!validation.valid) {
+      toast.error(validation.errorMessage);
+      return null;
+    }
+    return userFields.map(convertToFieldDefinition);
+  }, [builder]);
+
+  const saveComponentSettings = useCallback(
+    (fieldDefinitions: FieldDefinition[]) => {
+      if (!slug) return;
+      const formData = builder.form.getValues();
+      updateComponent(
+        {
+          componentSlug: slug,
+          updates: {
+            label: formData.singularName,
+            description: componentSettings.description,
+            fields: fieldDefinitions as unknown as Record<string, unknown>[],
+            admin: componentSettings.admin
+              ? {
+                  category: componentSettings.admin.category,
+                  icon: componentSettings.admin.icon,
+                  hidden: componentSettings.admin.hidden,
+                  imageURL: componentSettings.admin.imageURL,
+                }
+              : undefined,
+          },
+        },
+        {
+          onSuccess: () => toast.success("Component updated successfully"),
+          onError: err => {
+            const errorObj = err as { message?: string };
+            toast.error(
+              errorObj?.message ||
+                "An unexpected error occurred while updating the component."
+            );
+          },
+        }
+      );
+    },
+    [builder, slug, updateComponent, componentSettings]
+  );
+
+  const applyComponentSchemaChanges = useCallback(
+    async (
+      fieldDefinitions: FieldDefinition[],
+      schemaVersion: number,
+      resolutions: Record<string, FieldResolution>,
+      renameResolutions: SchemaRenameResolution[]
+    ) => {
+      if (!slug) return;
+      setIsApplyingSchema(true);
+      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
+      startRestart();
+      try {
+        const result = await componentApi.applySchemaChanges(
+          slug,
+          fieldDefinitions,
+          schemaVersion,
+          resolutions,
+          renameResolutions
+        );
+        if (result.success) {
+          const componentLabel =
+            builder.form.getValues("singularName")?.trim() || slug;
+          stopRestart(true, `${componentLabel} schema updated`);
+          setShowSchemaDialog(false);
+          setPreviewData(null);
+        } else {
+          stopRestart(
+            false,
+            result.message || "Failed to apply schema changes"
+          );
+        }
+      } catch (err) {
+        const errorObj = err as { message?: string };
+        stopRestart(
+          false,
+          errorObj?.message || "An error occurred while applying changes"
+        );
+      } finally {
+        setIsApplyingSchema(false);
+        if (typeof window !== "undefined")
+          window.__nextlySchemaApplying = false;
+      }
+    },
+    [slug, startRestart, stopRestart, builder.form]
+  );
+
   const handleSave = useCallback(async () => {
     if (!slug) {
       toast.error("Component slug is missing");
@@ -112,47 +223,33 @@ export default function ComponentBuilderEditPage({
       return;
     }
 
-    const userFields = builder.fields.filter(f => !f.isSystem);
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return;
-    }
+    const fieldDefinitions = getValidatedFields();
+    if (!fieldDefinitions) return;
 
-    const formData = builder.form.getValues();
-    const fieldDefinitions = userFields.map(convertToFieldDefinition);
+    try {
+      const preview = await componentApi.previewSchemaChanges(
+        slug,
+        fieldDefinitions
+      );
 
-    updateComponent(
-      {
-        componentSlug: slug,
-        updates: {
-          label: formData.singularName,
-          description: componentSettings.description,
-          fields: fieldDefinitions as unknown as Record<string, unknown>[],
-          admin: componentSettings.admin
-            ? {
-                category: componentSettings.admin.category,
-                icon: componentSettings.admin.icon,
-                hidden: componentSettings.admin.hidden,
-                imageURL: componentSettings.admin.imageURL,
-              }
-            : undefined,
-        },
-      },
-      {
-        onSuccess: () => {
-          toast.success("Component updated successfully");
-        },
-        onError: err => {
-          const errorObj = err as { message?: string };
-          toast.error(
-            errorObj?.message ||
-              "An unexpected error occurred while updating the component."
-          );
-        },
+      if (!preview.hasChanges) {
+        saveComponentSettings(fieldDefinitions);
+        return;
       }
-    );
-  }, [builder, slug, updateComponent, componentSettings]);
+
+      if (preview.classification === "safe") {
+        setPreviewData(preview);
+        setShowSafeDialog(true);
+        return;
+      }
+
+      setPreviewData(preview);
+      setShowSchemaDialog(true);
+    } catch (err) {
+      const errorObj = err as { message?: string };
+      toast.error(errorObj?.message || "Failed to preview schema changes");
+    }
+  }, [builder, slug, getValidatedFields, saveComponentSettings]);
 
   if (!slug) {
     return (
@@ -200,36 +297,85 @@ export default function ComponentBuilderEditPage({
   }
 
   return (
-    <BuilderPageTemplate
-      builder={builder}
-      breadcrumbItems={[
-        {
-          href: ROUTES.DASHBOARD,
-          label: "Dashboard",
-          isDashboard: true,
-        },
-        { href: ROUTES.COMPONENTS, label: "Components" },
-      ]}
-      breadcrumbCurrentLabel="Edit Component"
-      headerIcon={<Icons.Puzzle className="h-5 w-5" />}
-      headerTitle={builder.form.watch("singularName") || "Edit Component"}
-      headerDescription="Define the internal structure of this component"
-      onSave={() => {
-        void handleSave();
-      }}
-      onCancel={() => navigateTo(ROUTES.COMPONENTS)}
-      isSaving={isSaving}
-      saveLabel="Update"
-      entityType="component"
-      settingsSlot={
-        <ComponentSettings
-          settings={componentSettings}
-          onSettingsChange={setComponentSettings}
-          isExpanded={true}
-          isAdvancedOpen={true}
-          variant="none"
+    <>
+      <BuilderPageTemplate
+        builder={builder}
+        breadcrumbItems={[
+          {
+            href: ROUTES.DASHBOARD,
+            label: "Dashboard",
+            isDashboard: true,
+          },
+          { href: ROUTES.COMPONENTS, label: "Components" },
+        ]}
+        breadcrumbCurrentLabel="Edit Component"
+        headerIcon={<Icons.Puzzle className="h-5 w-5" />}
+        headerTitle={builder.form.watch("singularName") || "Edit Component"}
+        headerDescription="Define the internal structure of this component"
+        onSave={() => {
+          void handleSave();
+        }}
+        onCancel={() => navigateTo(ROUTES.COMPONENTS)}
+        isSaving={isSaving || isApplyingSchema}
+        saveLabel="Update"
+        entityType="component"
+        settingsSlot={
+          <ComponentSettings
+            settings={componentSettings}
+            onSettingsChange={setComponentSettings}
+            isExpanded={true}
+            isAdvancedOpen={true}
+            variant="none"
+          />
+        }
+      />
+
+      {previewData && previewData.classification === "safe" && (
+        <SafeChangeConfirmDialog
+          open={showSafeDialog}
+          onOpenChange={setShowSafeDialog}
+          collectionName={slug}
+          changes={previewData.changes}
+          onConfirm={() => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applyComponentSchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                {},
+                []
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
         />
-      }
-    />
+      )}
+
+      {previewData && previewData.classification !== "safe" && (
+        <SchemaChangeDialog
+          open={showSchemaDialog}
+          onOpenChange={setShowSchemaDialog}
+          collectionName={slug}
+          hasDestructiveChanges={previewData.hasDestructiveChanges}
+          classification={previewData.classification}
+          changes={previewData.changes}
+          renamed={previewData.renamed}
+          warnings={previewData.warnings}
+          interactiveFields={previewData.interactiveFields}
+          onConfirm={(resolutions, renameResolutions) => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applyComponentSchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                resolutions,
+                renameResolutions
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+    </>
   );
 }

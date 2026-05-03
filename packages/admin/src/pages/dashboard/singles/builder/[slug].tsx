@@ -17,12 +17,15 @@ import { z } from "zod";
 import {
   BuilderPageTemplate,
   HooksEditor,
+  SafeChangeConfirmDialog,
+  SchemaChangeDialog,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
 import * as Icons from "@admin/components/icons";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
+import { useRestart } from "@admin/context/RestartContext";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import {
@@ -30,6 +33,12 @@ import {
   convertToBuilderField,
 } from "@admin/lib/builder";
 import { navigateTo } from "@admin/lib/navigation";
+import type {
+  FieldResolution,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "@admin/services/schemaApi";
+import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
 
@@ -62,6 +71,14 @@ export default function SingleBuilderEditPage({
   const [settings, setSettings] = useState<SingleSettingsData>({});
   const [hooks, setHooks] = useState<EnabledHook[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
+
+  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
+    null
+  );
+  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
+  const [showSafeDialog, setShowSafeDialog] = useState(false);
+  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
+  const { startRestart, stopRestart } = useRestart();
 
   const fieldNames = useMemo(
     () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
@@ -97,6 +114,93 @@ export default function SingleBuilderEditPage({
     }
   }, [single, builder, isInitialized]);
 
+  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
+    const userFields = builder.fields.filter(f => !f.isSystem);
+    const validation = builder.validateFields(userFields);
+    if (!validation.valid) {
+      toast.error(validation.errorMessage);
+      return null;
+    }
+    return userFields.map(convertToFieldDefinition);
+  }, [builder]);
+
+  const saveSingleSettings = useCallback(
+    (fieldDefinitions: FieldDefinition[]) => {
+      if (!slug) return;
+      const formData = builder.form.getValues();
+      updateSingle(
+        {
+          slug,
+          updates: {
+            label: formData.singularName,
+            description: settings.description,
+            fields: fieldDefinitions as unknown as ApiSingle["fields"],
+            admin: settings.admin,
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success("Single updated successfully");
+          },
+          onError: err => {
+            const errorObj = err as { message?: string };
+            toast.error(
+              errorObj?.message ||
+                "An unexpected error occurred while updating the Single."
+            );
+          },
+        }
+      );
+    },
+    [builder, slug, updateSingle, settings]
+  );
+
+  const applySingleSchemaChanges = useCallback(
+    async (
+      fieldDefinitions: FieldDefinition[],
+      schemaVersion: number,
+      resolutions: Record<string, FieldResolution>,
+      renameResolutions: SchemaRenameResolution[]
+    ) => {
+      if (!slug) return;
+      setIsApplyingSchema(true);
+      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
+      startRestart();
+      try {
+        const result = await singleApi.applySchemaChanges(
+          slug,
+          fieldDefinitions,
+          schemaVersion,
+          resolutions,
+          renameResolutions
+        );
+        if (result.success) {
+          const singleLabel =
+            builder.form.getValues("singularName")?.trim() || slug;
+          stopRestart(true, `${singleLabel} schema updated`);
+          setShowSchemaDialog(false);
+          setPreviewData(null);
+        } else {
+          stopRestart(
+            false,
+            result.message || "Failed to apply schema changes"
+          );
+        }
+      } catch (err) {
+        const errorObj = err as { message?: string };
+        stopRestart(
+          false,
+          errorObj?.message || "An error occurred while applying changes"
+        );
+      } finally {
+        setIsApplyingSchema(false);
+        if (typeof window !== "undefined")
+          window.__nextlySchemaApplying = false;
+      }
+    },
+    [slug, startRestart, stopRestart, builder.form]
+  );
+
   const handleSave = useCallback(async () => {
     if (!slug) {
       toast.error("Single slug is missing");
@@ -109,40 +213,33 @@ export default function SingleBuilderEditPage({
       return;
     }
 
-    const userFields = builder.fields.filter(f => !f.isSystem);
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return;
-    }
+    const fieldDefinitions = getValidatedFields();
+    if (!fieldDefinitions) return;
 
-    const formData = builder.form.getValues();
-    const fieldDefinitions = userFields.map(convertToFieldDefinition);
-
-    updateSingle(
-      {
+    try {
+      const preview = await singleApi.previewSchemaChanges(
         slug,
-        updates: {
-          label: formData.singularName,
-          description: settings.description,
-          fields: fieldDefinitions as unknown as ApiSingle["fields"],
-          admin: settings.admin,
-        },
-      },
-      {
-        onSuccess: () => {
-          toast.success("Single updated successfully");
-        },
-        onError: err => {
-          const errorObj = err as { message?: string };
-          toast.error(
-            errorObj?.message ||
-              "An unexpected error occurred while updating the Single."
-          );
-        },
+        fieldDefinitions
+      );
+
+      if (!preview.hasChanges) {
+        saveSingleSettings(fieldDefinitions);
+        return;
       }
-    );
-  }, [builder, settings, slug, updateSingle]);
+
+      if (preview.classification === "safe") {
+        setPreviewData(preview);
+        setShowSafeDialog(true);
+        return;
+      }
+
+      setPreviewData(preview);
+      setShowSchemaDialog(true);
+    } catch (err) {
+      const errorObj = err as { message?: string };
+      toast.error(errorObj?.message || "Failed to preview schema changes");
+    }
+  }, [builder, slug, getValidatedFields, saveSingleSettings]);
 
   if (!slug) {
     return (
@@ -188,44 +285,93 @@ export default function SingleBuilderEditPage({
   }
 
   return (
-    <BuilderPageTemplate
-      builder={builder}
-      breadcrumbItems={[
-        {
-          href: ROUTES.DASHBOARD,
-          label: "Dashboard",
-          isDashboard: true,
-        },
-        { href: ROUTES.SINGLES, label: "Singles" },
-      ]}
-      breadcrumbCurrentLabel="Edit Single"
-      headerIcon={<Icons.FileText className="h-5 w-5" />}
-      headerTitle={builder.form.watch("singularName") || "Edit Single"}
-      headerDescription="Define the structure of this global content"
-      onSave={() => {
-        void handleSave();
-      }}
-      onCancel={() => navigateTo(ROUTES.SINGLES)}
-      isSaving={isSaving}
-      saveLabel="Update"
-      entityType="single"
-      settingsSlot={
-        <>
-          <SingleSettings
-            settings={settings}
-            onSettingsChange={setSettings}
-            isExpanded={true}
-            isAdvancedOpen={true}
-            variant="none"
-          />
-          <HooksEditor
-            hooks={hooks}
-            onHooksChange={setHooks}
-            fieldNames={fieldNames}
-            isExpanded={true}
-          />
-        </>
-      }
-    />
+    <>
+      <BuilderPageTemplate
+        builder={builder}
+        breadcrumbItems={[
+          {
+            href: ROUTES.DASHBOARD,
+            label: "Dashboard",
+            isDashboard: true,
+          },
+          { href: ROUTES.SINGLES, label: "Singles" },
+        ]}
+        breadcrumbCurrentLabel="Edit Single"
+        headerIcon={<Icons.FileText className="h-5 w-5" />}
+        headerTitle={builder.form.watch("singularName") || "Edit Single"}
+        headerDescription="Define the structure of this global content"
+        onSave={() => {
+          void handleSave();
+        }}
+        onCancel={() => navigateTo(ROUTES.SINGLES)}
+        isSaving={isSaving || isApplyingSchema}
+        saveLabel="Update"
+        entityType="single"
+        settingsSlot={
+          <>
+            <SingleSettings
+              settings={settings}
+              onSettingsChange={setSettings}
+              isExpanded={true}
+              isAdvancedOpen={true}
+              variant="none"
+            />
+            <HooksEditor
+              hooks={hooks}
+              onHooksChange={setHooks}
+              fieldNames={fieldNames}
+              isExpanded={true}
+            />
+          </>
+        }
+      />
+
+      {previewData && previewData.classification === "safe" && (
+        <SafeChangeConfirmDialog
+          open={showSafeDialog}
+          onOpenChange={setShowSafeDialog}
+          collectionName={slug}
+          changes={previewData.changes}
+          onConfirm={() => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applySingleSchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                {},
+                []
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {previewData && previewData.classification !== "safe" && (
+        <SchemaChangeDialog
+          open={showSchemaDialog}
+          onOpenChange={setShowSchemaDialog}
+          collectionName={slug}
+          hasDestructiveChanges={previewData.hasDestructiveChanges}
+          classification={previewData.classification}
+          changes={previewData.changes}
+          renamed={previewData.renamed}
+          warnings={previewData.warnings}
+          interactiveFields={previewData.interactiveFields}
+          onConfirm={(resolutions, renameResolutions) => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applySingleSchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                resolutions,
+                renameResolutions
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+    </>
   );
 }
