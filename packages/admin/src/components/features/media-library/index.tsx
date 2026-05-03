@@ -938,30 +938,44 @@ export function MediaLibrary({
         {/* Media Content - Grid or List view */}
         <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
           {viewMode === "grid" ? (
-            <div className="p-6">
-              <MediaGrid
-                media={data?.data || []}
-                isLoading={isLoading}
-                error={error}
-                selectedIds={selectedIds}
-                onSelectionChange={handleSelectionChange}
-                onItemClick={handleEditMedia}
-                onEdit={handleEditMedia}
-                onDelete={(media: Media) => handleDeleteItem(media)}
-                onCopyUrl={(url: string) => {
-                  void navigator.clipboard.writeText(url);
-                }}
-                onDownload={(media: Media) => {
-                  const a = document.createElement("a");
-                  a.href = media.url;
-                  a.download = media.filename;
-                  a.click();
-                }}
-                onRetry={() => {
-                  void refetch();
-                }}
-              />
-            </div>
+            <>
+              <div className="p-6">
+                <MediaGrid
+                  media={data?.data || []}
+                  isLoading={isLoading}
+                  error={error}
+                  selectedIds={selectedIds}
+                  onSelectionChange={handleSelectionChange}
+                  onItemClick={handleEditMedia}
+                  onEdit={handleEditMedia}
+                  onDelete={(media: Media) => handleDeleteItem(media)}
+                  onCopyUrl={(url: string) => {
+                    void navigator.clipboard.writeText(url);
+                  }}
+                  onDownload={(media: Media) => {
+                    const a = document.createElement("a");
+                    a.href = media.url;
+                    a.download = media.filename;
+                    a.click();
+                  }}
+                  onRetry={() => {
+                    void refetch();
+                  }}
+                />
+              </div>
+              {/* Pagination for Grid View */}
+              {!isLoading && !error && data && data.data.length > 0 && (
+                <Pagination
+                  currentPage={page}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[12, 24, 48, 96]}
+                  showPageSizeSelector
+                  onPageChange={handlePageChange}
+                  onPageSizeChange={handlePageSizeChange}
+                />
+              )}
+            </>
           ) : (
             <>
               <MediaListView
@@ -979,9 +993,8 @@ export function MediaLibrary({
                 }}
               />
 
-              {/* Pagination for List View - Inside Boxed Container */}
+              {/* Pagination for List View */}
               {!isLoading && !error && data && data.data.length > 0 && (
-                // <div className="border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
                 <Pagination
                   currentPage={page}
                   totalPages={totalPages}
@@ -991,7 +1004,6 @@ export function MediaLibrary({
                   onPageChange={handlePageChange}
                   onPageSizeChange={handlePageSizeChange}
                 />
-                // </div>
               )}
             </>
           )}

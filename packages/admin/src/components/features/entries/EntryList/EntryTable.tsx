@@ -46,7 +46,6 @@ import {
   forwardRef,
 } from "react";
 
-
 import { BulkActionBar } from "./BulkActionBar";
 import {
   generateEntryColumns,
@@ -621,15 +620,12 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
             </div>
 
             {/* Pagination */}
-            <div className="table-footer border-t border-primary/5 bg-[hsl(var(--table-header-bg))]">
-              <EntryTablePagination
-                pagination={pagination}
-                onPageChange={onPageChange}
-                onLimitChange={onLimitChange}
-                isLoading={isLoading}
-                className="p-4"
-              />
-            </div>
+            <EntryTablePagination
+              pagination={pagination}
+              onPageChange={onPageChange}
+              onLimitChange={onLimitChange}
+              isLoading={isLoading}
+            />
           </div>
         )}
       </div>
