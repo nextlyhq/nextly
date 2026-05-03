@@ -148,7 +148,7 @@ export function createComponentsNamespace(
       }
 
       const { calculateSchemaHash } = await import(
-        "../../services/schema/schema-hash"
+        "../../domains/schema/services/schema-hash"
       );
       const fieldsTyped =
         args.fields as unknown as import("../../collections/fields/types").FieldConfig[];
@@ -209,7 +209,7 @@ export function createComponentsNamespace(
           .fields as unknown as import("../../collections/fields/types").FieldConfig[];
         updateData.fields = fieldsTyped;
         const { calculateSchemaHash } = await import(
-          "../../services/schema/schema-hash"
+          "../../domains/schema/services/schema-hash"
         );
         updateData.schemaHash = calculateSchemaHash(fieldsTyped);
       }

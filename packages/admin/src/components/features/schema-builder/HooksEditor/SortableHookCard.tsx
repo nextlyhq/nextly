@@ -72,8 +72,8 @@ export function SortableHookCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "rounded-none border bg-background",
-        hook.enabled ? "border-border" : "border-border/50 opacity-60"
+        "rounded-none  border border-primary/5 bg-background",
+        hook.enabled ? "border-primary/5" : "border-primary/5 opacity-60"
       )}
     >
       {/* Hook Header */}
@@ -141,7 +141,7 @@ export function SortableHookCard({
 
       {/* Expanded Content */}
       {isExpanded && (
-        <div className="border-t border-border p-3 space-y-3">
+        <div className="border-t border-primary/5 p-3 space-y-3">
           {/* Description */}
           <p className="text-xs text-muted-foreground">
             {hookConfig.description}

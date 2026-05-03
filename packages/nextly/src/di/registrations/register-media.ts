@@ -12,7 +12,7 @@
 import { MediaService as LegacyMediaService } from "../../services/media";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { MediaFolderService } from "../../services/media-folder";
-import type { IStorageAdapter } from "../../storage/adapters/base-adapter";
+import type { IStorageAdapter } from "../../storage/types";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";

@@ -4,18 +4,6 @@ export const COOKIE_NAMES = {
   csrf: "nextly_csrf",
 } as const;
 
-// Legacy cookie names to clear on upgrade from Auth.js
-export const LEGACY_COOKIE_NAMES = [
-  "nextly_cms_session",
-  "nextly_cms_csrf",
-  "nextly_cms_callback",
-  "nextly_cms_state",
-  "nextly_cms_pkce",
-  "authjs.session-token",
-  "authjs.csrf-token",
-  "authjs.callback-url",
-] as const;
-
 export const COOKIE_PATHS = {
   accessToken: "/admin",
   refreshToken: "/admin/api/auth/refresh",

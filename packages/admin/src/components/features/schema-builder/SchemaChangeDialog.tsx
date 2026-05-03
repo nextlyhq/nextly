@@ -155,11 +155,11 @@ export function SchemaChangeDialog({
 
         {/* Changes list */}
         {hasChanges && (
-          <div className="max-h-64 overflow-y-auto rounded-none border border-border bg-primary/5 p-3">
+          <div className="max-h-64 overflow-y-auto rounded-none  border border-primary/5 bg-primary/5 p-3">
             {changes.added.map(field => (
               <div
                 key={`add-${field.name}`}
-                className="flex items-center gap-2.5 py-1.5 text-sm [&+&]:border-t [&+&]:border-border"
+                className="flex items-center gap-2.5 py-1.5 text-sm [&+&] :border-t border-primary/5 [&+&]:border-primary/5"
               >
                 <Badge variant="success">added</Badge>
                 <span>
@@ -172,7 +172,7 @@ export function SchemaChangeDialog({
             {changes.removed.map(field => (
               <div
                 key={`rm-${field.name}`}
-                className="flex flex-col gap-1 py-1.5 text-sm [&+&]:border-t [&+&]:border-border"
+                className="flex flex-col gap-1 py-1.5 text-sm [&+&] :border-t border-primary/5 [&+&]:border-primary/5"
               >
                 <div className="flex items-center gap-2.5">
                   <Badge variant="destructive">removed</Badge>
@@ -194,7 +194,7 @@ export function SchemaChangeDialog({
             {changes.changed.map(field => (
               <div
                 key={`ch-${field.name}`}
-                className="flex flex-col gap-1 py-1.5 text-sm [&+&]:border-t [&+&]:border-border"
+                className="flex flex-col gap-1 py-1.5 text-sm [&+&] :border-t border-primary/5 [&+&]:border-primary/5"
               >
                 <div className="flex items-center gap-2.5">
                   <Badge variant="warning">changed</Badge>
@@ -225,7 +225,7 @@ export function SchemaChangeDialog({
             only the first rename runs; the second drop falls through as
             drop_and_add. F8 may revisit this once the Classifier ships. */}
         {candidatesByDrop.size > 0 && (
-          <div className="space-y-3 rounded-none border border-border bg-primary/5 p-3">
+          <div className="space-y-3 rounded-none  border border-primary/5 bg-primary/5 p-3">
             <Label className="text-sm font-medium">
               Possible column renames
             </Label>
@@ -286,7 +286,7 @@ export function SchemaChangeDialog({
 
         {/* Interactive fields -- need user input */}
         {interactiveFields.length > 0 && (
-          <div className="space-y-3 rounded-none border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+          <div className="space-y-3 rounded-none  border border-primary/5 border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
             {interactiveFields.map(field => (
               <div key={field.name} className="space-y-2">
                 <Label className="text-sm font-medium">

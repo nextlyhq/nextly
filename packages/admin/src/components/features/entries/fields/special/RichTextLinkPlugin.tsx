@@ -296,7 +296,7 @@ export function RichTextLinkPlugin({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent size="sm" onKeyDown={handleKeyDown}>
+      <DialogContent size="md" onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link className="h-5 w-5" />

@@ -262,7 +262,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // table immediately without a server restart.
             try {
               const { generateRuntimeSchema } = await import(
-                "../../services/schema/runtime-schema-generator"
+                "../../domains/schema/services/runtime-schema-generator"
               );
               const dialect = adapter.getCapabilities().dialect;
               const { table: runtimeTable } = generateRuntimeSchema(
@@ -651,7 +651,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // Re-register runtime schema with updated fields.
               try {
                 const { generateRuntimeSchema } = await import(
-                  "../../services/schema/runtime-schema-generator"
+                  "../../domains/schema/services/runtime-schema-generator"
                 );
                 const dialect = adapter.getCapabilities().dialect;
                 const { table: runtimeTable } = generateRuntimeSchema(

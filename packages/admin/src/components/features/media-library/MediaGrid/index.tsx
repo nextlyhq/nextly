@@ -156,7 +156,7 @@ export function MediaGrid({
             <div>
               <Button
                 variant="outline"
-                size="sm"
+                size="md"
                 onClick={onRetry}
                 className="w-full sm:w-auto"
               >

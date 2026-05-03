@@ -49,7 +49,7 @@ function SortableFieldRow({
   return (
     <tr
       ref={setNodeRef}
-      className={`hover-unified ${isDragging ? "bg-primary/10" : ""}`}
+      className={`hover-unified ${isDragging ? "bg-primary/5" : ""}`}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
       <td className="px-6 py-4 whitespace-nowrap text-sm">

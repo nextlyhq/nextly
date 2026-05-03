@@ -292,7 +292,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
                           </SidebarMenuSubButton>
                         </CollapsibleTrigger>
                         <CollapsibleContent>
-                          <div className="ml-4 border-l border-sidebar-border/30 pl-2">
+                          <div className="ml-4  border-l border-primary/5 border-sidebar-border/30 pl-2">
                             {categoryComponents.map(component => {
                               const href = getComponentUrl(component);
                               const isSubActive = isActive(href);

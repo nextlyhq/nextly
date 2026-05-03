@@ -370,7 +370,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -859,7 +861,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -1512,7 +1516,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -1751,7 +1757,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -2164,7 +2172,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -2450,7 +2460,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 

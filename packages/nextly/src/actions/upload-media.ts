@@ -56,7 +56,7 @@
  * must be provided by the consumer's authentication implementation.
  *
  * Examples:
- * - NextAuth: `const session = await auth(); uploadedBy: session.user.id`
+ * - Nextly: `const result = await getSession(request, secret); uploadedBy: result.user?.id`
  * - Clerk: `const { userId } = auth(); uploadedBy: userId`
  * - Custom: `const user = await getUser(); uploadedBy: user.id`
  *

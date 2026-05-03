@@ -175,7 +175,7 @@ function DraggableFieldItem({
       type="button"
       onClick={() => onAdd(type)}
       title={description}
-      className={`flex items-center gap-3 w-full px-2 py-2 rounded-md text-left group hover:bg-muted/50 transition-all duration-150 cursor-grab active:cursor-grabbing active:scale-[0.98] ${
+      className={`flex items-center gap-3 w-full px-2 py-2 rounded-none text-left group hover:bg-primary/5/50 transition-all duration-150 cursor-grab active:cursor-grabbing active:scale-[0.98] ${
         isDragging ? "opacity-50 bg-primary/5" : ""
       }`}
       {...attributes}
@@ -183,7 +183,7 @@ function DraggableFieldItem({
     >
       {/* Blue icon box — same as Collection Builder FieldPalette */}
       <div
-        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
+        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
         style={{
           borderRadius: "6px",
           border: "1px solid hsl(var(--primary) / 0.25)",
@@ -356,7 +356,7 @@ export function FieldLibrary() {
   return (
     <div className="h-full flex flex-col bg-background">
       {/* Search */}
-      <div className="px-3 py-3 border-b border-border">
+      <div className="px-3 py-3 border-b border-primary/5">
         <div className="relative">
           <svg
             className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50"
@@ -373,7 +373,7 @@ export function FieldLibrary() {
             placeholder={`Search ${activeFieldCount} field types...`}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="text-[13px] pl-9 flex h-9 w-full rounded-md border border-input bg-muted/20 px-3 py-1 text-sm shadow-none transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="text-[13px] pl-9 flex h-9 w-full rounded-none border border-input bg-primary/5/20 px-3 py-1 text-sm shadow-none transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             style={{ borderRadius: "6px", height: "38px" }}
           />
         </div>
@@ -416,7 +416,7 @@ export function FieldLibrary() {
       </div>
 
       {/* Footer hint */}
-      <div className="px-3 py-2.5 border-t border-border">
+      <div className="px-3 py-2.5 border-t border-primary/5">
         <p className="text-[11px] text-muted-foreground/50 text-center">
           Drag fields to the canvas to add them
         </p>

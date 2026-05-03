@@ -1,8 +1,7 @@
 /**
  * GET /auth/session
  * Returns the current session user from the access token.
- * No database hit -- purely stateless JWT verification.
- * Handles backward compatibility for old Auth.js cookies.
+ * No database hit; purely stateless JWT verification.
  */
 // Phase 4 (Task 10): respondData replaces the hand-rolled `{ data: ... }`
 // envelope on the authenticated success path. Error legs continue to
@@ -13,10 +12,6 @@ import {
   clearAccessTokenCookie,
   readAccessTokenCookie,
 } from "../cookies/access-token-cookie";
-import {
-  LEGACY_COOKIE_NAMES,
-  serializeClearCookie,
-} from "../cookies/cookie-config";
 import { getSession } from "../session/get-session";
 
 import { jsonResponse, buildCookieHeaders } from "./handler-utils";
@@ -32,49 +27,29 @@ export async function handleSession(
   const result = await getSession(request, deps.secret);
 
   if (result.authenticated) {
-    // Phase 4 / spec §7.6: bare `{ user, accessToken }`. The access token
-    // already verified successfully (it's how we got here), so reading it
-    // back from the cookie is safe. We surface it in the body so
-    // non-cookie SDK consumers (mobile, CLI) can pull the live token
-    // without owning cookie storage.
+    // Phase 4 / spec section 7.6: bare `{ user, accessToken }`. The access
+    // token already verified successfully (it's how we got here), so reading
+    // it back from the cookie is safe. We surface it in the body so
+    // non-cookie SDK consumers (mobile, CLI) can pull the live token without
+    // owning cookie storage.
     const accessToken = readAccessTokenCookie(request);
     return respondData({ user: result.user, accessToken });
   }
 
-  // Check if this is a legacy Auth.js cookie (backward compatibility)
-  const cookieHeader = request.headers.get("cookie") || "";
-  const hasLegacyCookie = LEGACY_COOKIE_NAMES.some(name =>
-    cookieHeader.includes(name)
-  );
-
-  const clearCookies: string[] = [];
-  if (hasLegacyCookie) {
-    clearCookies.push(
-      ...LEGACY_COOKIE_NAMES.map(name => serializeClearCookie(name, "/admin"))
-    );
-  }
   // Only clear the access cookie when the JWT is tampered/malformed. For an
   // expired JWT we want the cookie to stay so the client can still receive
   // TOKEN_EXPIRED on parallel in-flight requests and participate in the
-  // single coalesced refresh — clearing here forces sibling requests into
-  // the no_token → AUTH_REQUIRED branch, which bypasses refresh.
+  // single coalesced refresh; clearing here forces sibling requests into
+  // the no_token to AUTH_REQUIRED branch, which bypasses refresh.
+  const clearCookies: string[] = [];
   if (result.reason === "invalid") {
     clearCookies.push(clearAccessTokenCookie());
   }
 
   const code =
-    hasLegacyCookie && result.reason === "no_token"
-      ? "SESSION_UPGRADED"
-      : result.reason === "expired"
-        ? "TOKEN_EXPIRED"
-        : "AUTH_REQUIRED";
-
+    result.reason === "expired" ? "TOKEN_EXPIRED" : "AUTH_REQUIRED";
   const message =
-    code === "SESSION_UPGRADED"
-      ? "Session upgraded. Please log in again."
-      : code === "TOKEN_EXPIRED"
-        ? "Session expired"
-        : "Not authenticated";
+    code === "TOKEN_EXPIRED" ? "Session expired" : "Not authenticated";
 
   if (clearCookies.length > 0) {
     return new Response(JSON.stringify({ error: { code, message } }), {

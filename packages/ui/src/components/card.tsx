@@ -14,11 +14,11 @@ import { cn } from "../lib/utils";
  * - Border radius: 0px (rounded-none)
  * - Padding: 24px (p-6) for header/content, 16px 24px for footer
  * - Shadow: sm (default), md (hover/elevated)
- * - Border: 1px solid border color
+ * - Border: 1px solid  border border-primary/5 color
  *
  * Variants:
  * - default: Standard card with subtle shadow
- * - interactive: Hover effects for clickable cards (border highlight, shadow increase)
+ * - interactive: Hover effects for clickable cards  (border border-primary/5 highlight, shadow increase)
  *   ⚠️ IMPORTANT: When using the interactive variant, you MUST add appropriate
  *   accessibility attributes:
  *   - Add role="button" or use an actual <button> wrapper
@@ -55,7 +55,7 @@ import { cn } from "../lib/utils";
  * - Use aria-label or aria-labelledby for cards without visible text labels
  */
 const cardVariants = cva(
-  "bg-card text-foreground rounded-none border border-border   transition-all duration-200",
+  "bg-card text-foreground rounded-none  border border-primary/5   transition-all duration-200",
   {
     variants: {
       variant: {
@@ -89,8 +89,8 @@ Card.displayName = "Card";
 
 export interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {
   /**
-   * Whether to hide the bottom border separator between header and content.
-   * Default: false (border is shown per design spec)
+   * Whether to hide the bottom  border border-primary/5 separator between header and content.
+   * Default: false  (border border-primary/5 is shown per design spec)
    */
   noBorder?: boolean;
 }
@@ -103,7 +103,7 @@ const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
         data-slot="card-header"
         className={cn(
           "flex flex-col p-4",
-          !noBorder && "border-b border-border",
+          !noBorder && "border-b border-primary/5",
           className
         )}
         {...props}
@@ -186,7 +186,7 @@ const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
         ref={ref}
         data-slot="card-footer"
         className={cn(
-          "flex items-center px-6 py-4 border-t border-border bg-primary/5",
+          "flex items-center px-6 py-4  border-t border-primary/5 bg-primary/5",
           className
         )}
         {...props}

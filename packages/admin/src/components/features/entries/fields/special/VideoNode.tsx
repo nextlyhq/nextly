@@ -166,7 +166,7 @@ function VideoComponent({
 
   if (!embedUrl) {
     return (
-      <div className="my-4 p-4 border rounded-none bg-primary/5 text-center text-sm text-muted-foreground">
+      <div className="my-4 p-4  border border-primary/5 rounded-none bg-primary/5 text-center text-sm text-muted-foreground">
         Unsupported video URL
       </div>
     );
@@ -191,7 +191,7 @@ function VideoComponent({
           <Button
             type="button"
             variant="secondary"
-            size="sm"
+            size="md"
             className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10"
             onClick={handleEdit}
           >
@@ -281,7 +281,7 @@ function VideoComponent({
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleSave}>
+            <Button size="md" type="button" onClick={handleSave}>
               Save Changes
             </Button>
           </DialogFooter>
@@ -374,7 +374,7 @@ export class VideoNode extends DecoratorNode<React.JSX.Element> {
     const iframe = document.createElement("iframe");
     iframe.setAttribute("src", getEmbedUrl(this.__provider, this.__videoId));
     iframe.setAttribute("allowfullscreen", "true");
-    iframe.setAttribute("frameborder", "0");
+    iframe.setAttribute("fram eborder border-primary/5", "0");
     iframe.style.width = "100%";
     iframe.style.aspectRatio = "16/9";
     div.appendChild(iframe);

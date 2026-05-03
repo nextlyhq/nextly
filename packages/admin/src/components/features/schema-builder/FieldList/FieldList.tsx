@@ -133,7 +133,7 @@ export function FieldList({
             items={fields.map(f => f.id)}
             strategy={verticalListSortingStrategy}
           >
-            <div className="flex flex-col border border-border rounded-none overflow-hidden bg-background [&>*:last-child]:border-b-0">
+            <div className="flex flex-col  border border-primary/5 rounded-none overflow-hidden bg-background [&>*:last-child]:border-b-0">
               {fields.map(field => (
                 <FieldRenderer
                   key={field.id}

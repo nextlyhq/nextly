@@ -111,7 +111,7 @@ export function HookSelectorModal({
             placeholder="Search hooks..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="h-9 pl-8 text-sm"
+            className="pl-8 text-sm"
           />
         </div>
 
@@ -153,10 +153,10 @@ export function HookSelectorModal({
                         onClick={() => !isAdded && handleSelect(hook.id)}
                         disabled={isAdded}
                         className={cn(
-                          "w-full text-left p-3 rounded-none border transition-colors",
+                          "w-full text-left p-3 rounded-none  border border-primary/5 transition-colors",
                           isAdded
-                            ? "bg-primary/5 border-border cursor-not-allowed opacity-60"
-                            : "bg-background border-border hover:border-primary hover:bg-accent"
+                            ? "bg-primary/5 border-primary/5 cursor-not-allowed opacity-60"
+                            : "bg-background border-primary/5 hover:border-primary hover:bg-accent"
                         )}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -208,7 +208,7 @@ export function HookSelectorModal({
         </div>
 
         {/* Footer Note */}
-        <div className="flex items-start gap-2 pt-3 border-t border-border">
+        <div className="flex items-start gap-2 pt-3  border-t border-primary/5">
           <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground">
             For advanced hooks with custom logic, use the code-first approach in

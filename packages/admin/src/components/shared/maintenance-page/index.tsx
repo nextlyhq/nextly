@@ -22,7 +22,7 @@ export function MaintenancePage() {
         </div>
 
         {/* Badge */}
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-amber-50 text-amber-700 mb-6 border border-amber-200/50">
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-medium bg-amber-50 text-amber-700 mb-6  border border-primary/5 border-amber-200/50">
           <Settings className="h-3 w-3 animate-spin duration-[3000ms]" />
           Maintenance Mode
         </div>
@@ -36,7 +36,7 @@ export function MaintenancePage() {
         <div className="flex items-center justify-center gap-4 w-full sm:w-auto">
           <Button
             variant="outline"
-            className="w-full sm:w-[140px] gap-2 rounded-none font-medium text-slate-700 border-slate-200"
+            className="w-full sm:w-[140px] gap-2 rounded-none font-medium text-slate-700 border-primary/5"
             onClick={() => window.history.back()}
           >
             <ArrowLeft className="h-4 w-4" />

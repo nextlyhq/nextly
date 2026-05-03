@@ -242,8 +242,8 @@ function FolderTreePickerItem({
           className={cn(
             "flex shrink-0 items-center justify-center rounded-none transition-colors",
             isSelected
-              ? "text-primary/70 hover:text-primary hover:bg-primary/10"
-              : "text-muted-foreground group-hover:text-primary hover:bg-primary/10",
+              ? "text-primary/70 hover:text-primary hover:bg-primary/5"
+              : "text-muted-foreground group-hover:text-primary hover:bg-primary/5",
             compact ? "h-4 w-4" : "h-5 w-5"
           )}
         >

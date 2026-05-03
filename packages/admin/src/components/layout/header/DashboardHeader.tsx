@@ -16,7 +16,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
   return (
     <header
       className={cn(
-        "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
+        "h-16  border-b border-primary/5 bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
         "flex items-center justify-between px-6",
         className
       )}

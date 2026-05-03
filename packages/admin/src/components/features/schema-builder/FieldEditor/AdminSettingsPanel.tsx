@@ -104,7 +104,7 @@ export function AdminSettingsPanel({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-6 text-xs text-muted-foreground"
               onClick={() => onConditionUpdate(null)}
             >
@@ -114,7 +114,7 @@ export function AdminSettingsPanel({
         </div>
 
         {localField.admin?.condition ? (
-          <div className="space-y-2 p-3 rounded-none border border-border bg-background">
+          <div className="space-y-2 p-3 rounded-none  border border-primary/5 bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Show this field when:
             </p>
@@ -157,7 +157,7 @@ export function AdminSettingsPanel({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             className="w-full h-8 text-xs"
             onClick={() => onConditionUpdate({ field: "", equals: "" })}
           >

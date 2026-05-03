@@ -64,7 +64,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
-import type { IStorageAdapter } from "../../../storage/adapters/base-adapter";
+import type { IStorageAdapter } from "../../../storage/types";
 import type { ImageProcessor } from "../../../storage/image-processor";
 import {
   isImageMimeType,

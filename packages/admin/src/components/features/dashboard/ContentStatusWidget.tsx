@@ -25,7 +25,7 @@ function StatusItem({
   color: string;
 }) {
   return (
-    <div className="flex items-center justify-between p-3 rounded-none hover:bg-primary/[0.03] transition-all duration-500 group/item border border-transparent hover:border-primary/10">
+    <div className="flex items-center justify-between p-3 rounded-none hover:bg-primary/[0.03] transition-all duration-500 group/item  border border-primary/5 border-transparent hover:border-primary/5">
       <div className="flex items-center gap-3.5">
         <div
           className="h-2 w-2 rounded-none ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
@@ -44,7 +44,7 @@ function StatusItem({
         <span className="text-[13px] font-black tabular-nums text-foreground/80">
           {count}
         </span>
-        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-none border border-primary/10 min-w-[36px] text-center">
+        <span className="text-[10px] font-black text-primary/60 bg-primary/5 px-2 py-0.5 rounded-none  border border-primary/5 min-w-[36px] text-center">
           {percentage}%
         </span>
       </div>
@@ -80,7 +80,7 @@ export const ContentStatusWidget: React.FC = () => {
   ];
 
   return (
-    <Card className="border-border/60 bg-card/60 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/20">
+    <Card className="border-primary/5 bg-card/60 backdrop-blur-md rounded-none] overflow-hidden transition-all duration-500 hover:border-primary/5">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
@@ -102,7 +102,7 @@ export const ContentStatusWidget: React.FC = () => {
           </div>
         ) : total === 0 ? (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="p-6 rounded-none] bg-primary/5 border border-border/10">
+            <div className="p-6 rounded-none] bg-primary/5  border border-primary/5">
               <FileText className="h-10 w-10 text-muted-foreground/10" />
             </div>
             <div className="space-y-2">
@@ -137,7 +137,7 @@ export const ContentStatusWidget: React.FC = () => {
               </div>
             </div>
 
-            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none] border border-border/5">
+            <div className="w-full space-y-1.5 bg-primary/5 p-2 rounded-none]  border border-primary/5">
               <StatusItem
                 label="Published"
                 count={published}

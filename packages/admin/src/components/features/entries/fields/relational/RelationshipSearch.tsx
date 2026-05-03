@@ -204,7 +204,7 @@ export function RelationshipSearch({
   }, []);
 
   return (
-    <div className={cn("rounded-none border bg-card p-4   space-y-4", className)}>
+    <div className={cn("rounded-none  border border-primary/5 bg-card p-4   space-y-4", className)}>
       {/* Header with title and close button */}
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium">Search Related</h4>
@@ -228,7 +228,7 @@ export function RelationshipSearch({
               key={col}
               type="button"
               variant={selectedCollection === col ? "default" : "outline"}
-              size="sm"
+              size="md"
               onClick={() => handleCollectionChange(col)}
               className="capitalize"
             >
@@ -291,7 +291,7 @@ export function RelationshipSearch({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
+                  size="md"
                   onClick={handleLoadMore}
                   disabled={isLoading}
                   className="w-full"

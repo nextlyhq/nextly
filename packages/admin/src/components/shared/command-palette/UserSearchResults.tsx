@@ -48,7 +48,7 @@ const FIRST_PAGE = 0; // Zero-indexed first page for pagination
  *
  * @design-spec
  * - Icons: 16×16px (h-4 w-4)
- * - Avatars: 32×32px (size="sm")
+ * - Avatars: 32×32px (size="md")
  * - Items: 36px desktop (h-9), 44px mobile (h-11)
  * - Email: Right-aligned, text-muted-foreground
  * - Spacing: mr-2 for avatars, gap-2 for content
@@ -190,7 +190,7 @@ export function UserSearchResults({
             onSelect(() => router.push(`/admin/users/${user.id}`))
           }
         >
-          <Avatar size="sm" className="mr-2">
+          <Avatar size="md" className="mr-2">
             <AvatarImage src={user.image || undefined} alt={user.name} />
             <AvatarFallback>{getInitials(user.name)}</AvatarFallback>
           </Avatar>

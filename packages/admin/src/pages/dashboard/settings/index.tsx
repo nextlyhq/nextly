@@ -204,9 +204,9 @@ function SettingsCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-none border border-border bg-card overflow-hidden">
+    <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
       {/* Card header */}
-      <div className="flex items-center gap-4 px-6 py-5 border-b border-border/60 bg-primary/5">
+      <div className="flex items-center gap-4 px-6 py-5  border-b border-primary/5 bg-primary/5">
         <div className="shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
           {icon}
         </div>
@@ -600,17 +600,17 @@ const SettingsGeneralPage: React.FC = () => {
                               type="button"
                               onClick={() => setTheme(value)}
                               className={[
-                                "group relative flex flex-col items-center gap-2.5 rounded-none border p-4 text-center transition-all duration-200 cursor-pointer",
+                                "group relative flex flex-col items-center gap-2.5 rounded-none  border border-primary/5 p-4 text-center transition-all duration-200 cursor-pointer",
                                 isActive
-                                  ? "border-primary bg-primary/5 text-primary dark:bg-primary/10"
-                                  : "border-border bg-background hover:border-primary/40 hover-unified text-muted-foreground hover:text-foreground",
+                                  ? "border-primary bg-primary/5 text-primary dark:bg-primary/5"
+                                  : "border-primary/5 bg-background hover:border-primary/40 hover-unified text-muted-foreground hover:text-foreground",
                               ].join(" ")}
                             >
                               <div
                                 className={[
                                   "flex items-center justify-center w-10 h-10 rounded-none transition-colors",
                                   isActive
-                                    ? "bg-primary/10 text-primary dark:bg-primary/20"
+                                    ? "bg-primary/5 text-primary dark:bg-primary/20"
                                     : "bg-primary/5 text-muted-foreground group-hover-unified",
                                 ].join(" ")}
                               >

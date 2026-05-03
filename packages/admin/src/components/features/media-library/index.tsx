@@ -476,14 +476,14 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-card border border-border rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-white  border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
                   "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   folderViewMode === "sidebar"
-                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setFolderViewMode("sidebar")}
@@ -497,7 +497,7 @@ export function MediaLibrary({
                 className={cn(
                   "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   folderViewMode === "grid"
-                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setFolderViewMode("grid")}
@@ -507,14 +507,14 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-card border border-border rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-white  border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
                   "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   viewMode === "grid"
-                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setViewMode("grid")}
@@ -528,7 +528,7 @@ export function MediaLibrary({
                 className={cn(
                   "h-8 w-8 rounded-none transition-all duration-200 !cursor-pointer",
                   viewMode === "list"
-                    ? "bg-primary/10 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
+                    ? "bg-primary/5 text-primary shadow-none hover:bg-primary/20 hover:text-primary"
                     : "text-muted-foreground hover:bg-primary/5 hover:text-primary"
                 )}
                 onClick={() => setViewMode("list")}
@@ -580,7 +580,7 @@ export function MediaLibrary({
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-card">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white text-black border-primary/5 hover:bg-white/90">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -609,8 +609,8 @@ export function MediaLibrary({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="h-9 hover-unified px-4 shrink-0"
+                  size="md"
+                  className="hover-unified bg-white text-black border-primary/5 hover:bg-white/90 px-4 shrink-0"
                 >
                   <Columns className="mr-2 h-4 w-4 text-muted-foreground" />
                   Columns
@@ -618,7 +618,7 @@ export function MediaLibrary({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="w-48 shadow-none border-border/50"
+                className="w-48 shadow-none border-primary/5"
               >
                 <DropdownMenuLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 px-2 py-1.5">
                   Toggle Columns
@@ -686,10 +686,10 @@ export function MediaLibrary({
                   type="button"
                   onClick={() => setActiveFolderId(null)}
                   className={cn(
-                    "group flex items-center gap-3 rounded-none border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                    "group flex items-center gap-3 rounded-none  border border-primary/5 px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                     !activeFolderId
-                      ? "border-primary/20 bg-primary/5"
-                      : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
+                      ? "border-primary/5 bg-primary/5"
+                      : "border-primary/5 bg-card hover:bg-primary/5 hover:border-primary/5-strong"
                   )}
                 >
                   <LayoutDashboard
@@ -721,10 +721,10 @@ export function MediaLibrary({
                         type="button"
                         onClick={() => setActiveFolderId(folder.id)}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-none border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                          "flex w-full items-center gap-3 rounded-none  border border-primary/5 px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                           isActive
-                            ? "border-primary/20 bg-primary/5 ring-1 ring-primary/20"
-                            : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
+                            ? "border-primary/5 bg-primary/5 ring-1 ring-primary/20"
+                            : "border-primary/5 bg-card hover:bg-primary/5 hover:border-primary/5-strong"
                         )}
                       >
                         <FolderIconComponent
@@ -766,7 +766,7 @@ export function MediaLibrary({
                           <DropdownMenuTrigger asChild>
                             <button
                               type="button"
-                              className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/10 transition-colors !cursor-pointer"
+                              className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/5 transition-colors !cursor-pointer"
                               onClick={e => e.stopPropagation()}
                             >
                               <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
@@ -774,7 +774,7 @@ export function MediaLibrary({
                           </DropdownMenuTrigger>
                           <DropdownMenuContent
                             align="end"
-                            className="w-48 shadow-none border-border/50"
+                            className="w-48 shadow-none border-primary/5"
                           >
                             <DropdownMenuItem
                               onClick={e => {
@@ -821,7 +821,7 @@ export function MediaLibrary({
 
             {/* Subfolders Row (Only shown when inside a folder) */}
             {activeFolderId && hasFoldersToDisplay && (
-              <div className="animate-in fade-in slide-in-from-top-2 duration-300 border-t border-border/50 pt-4 mt-2">
+              <div className="animate-in fade-in slide-in-from-top-2 duration-300  border-t border-primary/5 pt-4 mt-2">
                 <div className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest mb-3 px-1">
                   {activeFolderId ? "Subfolders" : "Folders"}
                 </div>
@@ -834,10 +834,10 @@ export function MediaLibrary({
                           type="button"
                           onClick={() => setActiveFolderId(folder.id)}
                           className={cn(
-                            "flex w-full items-center gap-3 rounded-none border px-3 py-3 text-left transition-all duration-200 cursor-pointer",
+                            "flex w-full items-center gap-3 rounded-none  border border-primary/5 px-3 py-3 text-left transition-all duration-200 cursor-pointer",
                             isActive
-                              ? "border-primary/20 bg-primary/5 ring-1 ring-primary/20"
-                              : "border-border bg-card hover:bg-primary/5 hover:border-border-strong"
+                              ? "border-primary/5 bg-primary/5 ring-1 ring-primary/20"
+                              : "border-primary/5 bg-card hover:bg-primary/5 hover:border-primary/5-strong"
                           )}
                         >
                           <FolderIconComponent
@@ -879,7 +879,7 @@ export function MediaLibrary({
                             <DropdownMenuTrigger asChild>
                               <button
                                 type="button"
-                                className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/10 transition-colors !cursor-pointer"
+                                className="flex h-7 w-7 items-center justify-center rounded-none hover:bg-primary/5 transition-colors !cursor-pointer"
                                 onClick={e => e.stopPropagation()}
                               >
                                 <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground/50" />
@@ -887,7 +887,7 @@ export function MediaLibrary({
                             </DropdownMenuTrigger>
                             <DropdownMenuContent
                               align="end"
-                              className="w-48 shadow-none border-border/50"
+                              className="w-48 shadow-none border-primary/5"
                             >
                               <DropdownMenuItem
                                 onClick={e => {
@@ -936,32 +936,46 @@ export function MediaLibrary({
         )}
 
         {/* Media Content - Grid or List view */}
-        <div className="rounded-none border border-border bg-card overflow-hidden">
+        <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
           {viewMode === "grid" ? (
-            <div className="p-6">
-              <MediaGrid
-                media={data?.data || []}
-                isLoading={isLoading}
-                error={error}
-                selectedIds={selectedIds}
-                onSelectionChange={handleSelectionChange}
-                onItemClick={handleEditMedia}
-                onEdit={handleEditMedia}
-                onDelete={(media: Media) => handleDeleteItem(media)}
-                onCopyUrl={(url: string) => {
-                  void navigator.clipboard.writeText(url);
-                }}
-                onDownload={(media: Media) => {
-                  const a = document.createElement("a");
-                  a.href = media.url;
-                  a.download = media.filename;
-                  a.click();
-                }}
-                onRetry={() => {
-                  void refetch();
-                }}
-              />
-            </div>
+            <>
+              <div className="p-6">
+                <MediaGrid
+                  media={data?.data || []}
+                  isLoading={isLoading}
+                  error={error}
+                  selectedIds={selectedIds}
+                  onSelectionChange={handleSelectionChange}
+                  onItemClick={handleEditMedia}
+                  onEdit={handleEditMedia}
+                  onDelete={(media: Media) => handleDeleteItem(media)}
+                  onCopyUrl={(url: string) => {
+                    void navigator.clipboard.writeText(url);
+                  }}
+                  onDownload={(media: Media) => {
+                    const a = document.createElement("a");
+                    a.href = media.url;
+                    a.download = media.filename;
+                    a.click();
+                  }}
+                  onRetry={() => {
+                    void refetch();
+                  }}
+                />
+              </div>
+              {/* Pagination for Grid View */}
+              {!isLoading && !error && data && data.data.length > 0 && (
+                <Pagination
+                  currentPage={page}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[12, 24, 48, 96]}
+                  showPageSizeSelector
+                  onPageChange={handlePageChange}
+                  onPageSizeChange={handlePageSizeChange}
+                />
+              )}
+            </>
           ) : (
             <>
               <MediaListView
@@ -979,19 +993,17 @@ export function MediaLibrary({
                 }}
               />
 
-              {/* Pagination for List View - Inside Boxed Container */}
+              {/* Pagination for List View */}
               {!isLoading && !error && data && data.data.length > 0 && (
-                <div className="border-t border-border bg-[hsl(var(--table-header-bg))] p-4">
-                  <Pagination
-                    currentPage={page}
-                    totalPages={totalPages}
-                    pageSize={pageSize}
-                    pageSizeOptions={[12, 24, 48, 96]}
-                    showPageSizeSelector
-                    onPageChange={handlePageChange}
-                    onPageSizeChange={handlePageSizeChange}
-                  />
-                </div>
+                <Pagination
+                  currentPage={page}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[12, 24, 48, 96]}
+                  showPageSizeSelector
+                  onPageChange={handlePageChange}
+                  onPageSizeChange={handlePageSizeChange}
+                />
               )}
             </>
           )}

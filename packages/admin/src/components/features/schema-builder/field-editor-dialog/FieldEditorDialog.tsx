@@ -246,7 +246,7 @@ export function FieldEditorDialog({
                     </SelectTrigger>
                     <SelectContent
                       position="popper"
-                      className="bg-popover border-border shadow-xl"
+                      className="bg-popover border-primary/5 shadow-xl"
                       sideOffset={5}
                       align="start"
                     >

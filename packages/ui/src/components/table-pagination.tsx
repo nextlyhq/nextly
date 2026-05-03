@@ -34,10 +34,10 @@ function renderPageNumbers(
 ) {
   // Common button class
   const getBtnClass = (active: boolean) =>
-    `flex h-8 w-8 items-center justify-center border-y border-r text-xs z-10 -ml-px transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+    `flex h-8 w-8 items-center justify-center  border-y border-primary/5  border-r border-primary/5 text-xs z-10 -ml-px transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
       active
         ? "!bg-primary !text-primary-foreground !border-primary z-20"
-        : "!bg-background !border-input hover-muted disabled:opacity-50"
+        : "!bg-background !border-primary/5 hover-muted disabled:opacity-50"
     }`;
 
   // Case 1: Few pages - show all without ellipsis
@@ -79,7 +79,7 @@ function renderPageNumbers(
       pages.push(
         <span
           key="ellipsis-start"
-          className="flex h-8 w-8 items-center justify-center border-y border-r !border-input !bg-background text-muted-foreground text-xs -ml-px"
+          className="flex h-8 w-8 items-center justify-center  border-y border-primary/5  border-r border-primary/5 !border-primary/5 !bg-background text-muted-foreground text-xs -ml-px"
           aria-hidden="true"
         >
           ...
@@ -110,7 +110,7 @@ function renderPageNumbers(
       pages.push(
         <span
           key="ellipsis-end"
-          className="flex h-8 w-8 items-center justify-center border-y border-r !border-input !bg-background text-muted-foreground text-xs -ml-px"
+          className="flex h-8 w-8 items-center justify-center  border-y border-primary/5  border-r border-primary/5 !border-primary/5 !bg-background text-muted-foreground text-xs -ml-px"
           aria-hidden="true"
         >
           ...
@@ -149,7 +149,7 @@ export function TablePagination({
   } = config || {};
 
   return (
-    <div className="flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground">
+    <div className="flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground p-4 border-t border-primary/5">
       {/* Left: Info. `meta.page` is 1-based per spec section 5.1; the
           0-based UI page index lives in this component's local state via
           the React Table `pageIndex` prop. We render the displayed range
@@ -175,7 +175,7 @@ export function TablePagination({
                   const newPageSize = Number(e.target.value);
                   onPageSizeChange(newPageSize);
                 }}
-                className="h-8 w-[70px] appearance-none rounded-none border border-input bg-background px-2 py-1 text-sm font-medium focus-visible:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 hover-muted cursor-pointer"
+                className="h-8 w-[70px] appearance-none rounded-none  border border-primary/5 bg-background px-2 py-1 text-sm font-medium focus-visible:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 hover-muted cursor-pointer"
                 disabled={isLoading}
               >
                 {pageSizeOptions.map(size => (
@@ -209,7 +209,7 @@ export function TablePagination({
           <button
             onClick={() => onPageChange(0)}
             disabled={meta.page === 0 || isLoading}
-            className="hidden sm:flex h-8 w-8 items-center justify-center rounded-none border border-input bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+            className="hidden sm:flex h-8 w-8 items-center justify-center rounded-none  border border-primary/5 bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
             aria-label="First page"
           >
             <ChevronsLeft className="h-4 w-4" />
@@ -219,7 +219,7 @@ export function TablePagination({
           <button
             onClick={() => onPageChange(meta.page - 1)}
             disabled={meta.page === 0 || isLoading}
-            className="flex h-8 w-8 items-center justify-center rounded-none sm:rounded-none border border-input bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+            className="flex h-8 w-8 items-center justify-center rounded-none sm:rounded-none  border border-primary/5 bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
             aria-label="Previous page"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -239,7 +239,7 @@ export function TablePagination({
           <button
             onClick={() => onPageChange(meta.page + 1)}
             disabled={meta.page >= meta.totalPages - 1 || isLoading}
-            className="flex h-8 w-8 items-center justify-center rounded-none sm:rounded-none border-y border-x sm:border-r border-input bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+            className="flex h-8 w-8 items-center justify-center rounded-none sm:rounded-none  border-y border-primary/5  border-x border-primary/5 sm :border-r border-primary/5 bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
             aria-label="Next page"
           >
             <ChevronRight className="h-4 w-4" />
@@ -249,7 +249,7 @@ export function TablePagination({
           <button
             onClick={() => onPageChange(meta.totalPages - 1)}
             disabled={meta.page >= meta.totalPages - 1 || isLoading}
-            className="hidden sm:flex h-8 w-8 items-center justify-center rounded-none border border-input bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+            className="hidden sm:flex h-8 w-8 items-center justify-center rounded-none  border border-primary/5 bg-background hover-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
             aria-label="Last page"
           >
             <ChevronsRight className="h-4 w-4" />

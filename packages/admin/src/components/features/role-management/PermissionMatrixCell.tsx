@@ -21,7 +21,7 @@ export function PermissionMatrixCell({
   contentTypeName,
   action,
   onToggle,
-  className = "p-4 text-center border-b border-border align-middle w-[120px]",
+  className = "p-4 text-center  border-b border-primary/5 align-middle w-[120px]",
 }: PermissionMatrixCellProps) {
   if (!permission) {
     return (
@@ -38,7 +38,7 @@ export function PermissionMatrixCell({
         onCheckedChange={checked => onToggle(permission.id, !!checked)}
         disabled={disabled || locked}
         aria-label={`${action} permission for ${contentTypeName}`}
-        className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+        className="border-primary/5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
       />
     </td>
   );

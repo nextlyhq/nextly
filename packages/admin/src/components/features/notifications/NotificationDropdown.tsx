@@ -71,7 +71,7 @@ export function NotificationDropdown(): JSX.Element {
       data-testid="notification-dropdown"
       className="w-96 max-h-[480px] overflow-y-auto"
     >
-      <div className="px-4 py-3 border-b border-border">
+      <div className="px-4 py-3  border-b border-primary/5">
         <h3 className="font-semibold text-sm">Recent schema changes</h3>
       </div>
 
@@ -90,7 +90,7 @@ export function NotificationDropdown(): JSX.Element {
           className="px-4 py-6 text-center text-sm"
         >
           <p className="text-destructive mb-2">Failed to load.</p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+          <Button variant="outline" size="md" onClick={() => void refetch()}>
             Try again
           </Button>
         </div>
@@ -113,13 +113,13 @@ export function NotificationDropdown(): JSX.Element {
             ))}
           </div>
           {hasMore && (
-            <div className="px-4 py-3 border-t border-border text-center">
+            <div className="px-4 py-3  border-t border-primary/5 text-center">
               {moreError && (
                 <p className="text-destructive text-xs mb-2">{moreError}</p>
               )}
               <Button
                 variant="outline"
-                size="sm"
+                size="md"
                 onClick={() => void loadMore()}
                 disabled={loadingMore}
                 data-testid="notification-dropdown-load-more"
