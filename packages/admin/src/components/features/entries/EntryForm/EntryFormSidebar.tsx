@@ -114,7 +114,7 @@ export function EntryFormSidebar({
           <div>
             <div
               onClick={() => setIsDocInfoOpen(!isDocInfoOpen)}
-              className="w-full flex items-center justify-between bg-primary/5 text-primary px-6 py-3 transition-all duration-200 cursor-pointer  border-y border-primary/5 border-primary/5 hover:border-primary/50 relative z-10"
+              className="w-full flex items-center justify-between bg-primary/5 text-primary px-6 py-3 transition-all duration-200 cursor-pointer  border-y border-primary/5 border-primary/5 hover:border-primary/5 relative z-10"
             >
               <h3 className="text-sm font-medium">Document Info</h3>
               <ChevronDown

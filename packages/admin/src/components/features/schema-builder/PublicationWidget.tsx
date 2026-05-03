@@ -78,7 +78,7 @@ export function PublicationWidget({
         >
           {isSaving ? (
             <>
-              <Spinner size="sm" className="mr-2" />
+              <Spinner size="md" className="mr-2" />
               Saving...
             </>
           ) : (

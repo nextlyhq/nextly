@@ -574,9 +574,9 @@ export function MediaEditDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={() => media && onDelete(media)}
-                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
+                  className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
@@ -588,9 +588,9 @@ export function MediaEditDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={() => media && onCopyUrl(media.url)}
-                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
+                  className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
                   <Copy className="mr-2 h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
@@ -602,9 +602,9 @@ export function MediaEditDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={() => media && onDownload(media)}
-                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
+                  className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
                   <Download className="mr-2 h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
@@ -621,14 +621,15 @@ export function MediaEditDialog({
                 variant="outline"
                 onClick={() => onOpenChange(false)}
                 disabled={isPending}
-                className="h-9 px-4 text-xs font-semibold tracking-tight bg-card border-primary/5"
+                className="px-4 text-xs font-semibold tracking-tight bg-card border-primary/5"
               >
                 Cancel
               </Button>
               <Button
+                size="md"
                 type="submit"
                 disabled={isPending}
-                className="h-9 px-6 bg-primary text-primary-foreground text-xs font-semibold tracking-tight hover:opacity-90 shadow-sm"
+                className="px-6 bg-primary text-primary-foreground text-xs font-semibold tracking-tight hover:opacity-90 shadow-sm"
               >
                 {isPending ? (
                   <>

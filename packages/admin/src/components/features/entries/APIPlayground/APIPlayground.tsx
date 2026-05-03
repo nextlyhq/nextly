@@ -451,7 +451,7 @@ export function APIPlayground({
             </div>
             <Button
               variant="ghost"
-              size="sm"
+              size="md"
               onClick={handleReset}
               className="gap-2 h-8 px-4 rounded-none text-[10px] uppercase font-bold tracking-widest text-primary/60 hover:text-primary transition-colors"
             >

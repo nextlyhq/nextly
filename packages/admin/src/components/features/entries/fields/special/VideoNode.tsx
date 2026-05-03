@@ -191,7 +191,7 @@ function VideoComponent({
           <Button
             type="button"
             variant="secondary"
-            size="sm"
+            size="md"
             className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10"
             onClick={handleEdit}
           >
@@ -281,7 +281,7 @@ function VideoComponent({
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleSave}>
+            <Button size="md" type="button" onClick={handleSave}>
               Save Changes
             </Button>
           </DialogFooter>

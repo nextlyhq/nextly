@@ -88,7 +88,7 @@ export function FolderTreeView({
         </span>
         <Button
           variant="ghost"
-          size="sm"
+          size="md"
           className="h-8 w-8 p-0 hover:bg-primary/5 transition-colors text-slate-400"
           onClick={() => onCreateFolder()}
           title="Create folder"

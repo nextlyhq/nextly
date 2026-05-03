@@ -74,6 +74,7 @@ export function SingleFormActions({
         )}
 
         <Button
+          size="md" 
           type="submit"
           disabled={isSubmitting}
           className="flex-1 shadow-none bg-primary hover:bg-primary/90 text-primary-foreground"

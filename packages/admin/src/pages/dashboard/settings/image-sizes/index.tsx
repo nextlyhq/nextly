@@ -567,7 +567,7 @@ function ImageSizesContent({
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+              <Button variant="secondary" size="md">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -667,7 +667,7 @@ export default function ImageSizesSettingsPage() {
                 setEditingSize(null);
                 setIsFormOpen(true);
               }}
-              size="sm"
+              size="md"
               className="flex items-center gap-1.5"
             >
               <Plus className="h-4 w-4" />

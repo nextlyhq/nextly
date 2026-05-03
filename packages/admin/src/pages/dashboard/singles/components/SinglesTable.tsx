@@ -491,7 +491,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon-sm">
                 <MoreHorizontal className="h-4 w-4" />
                 <span className="sr-only">Open menu</span>
               </Button>
@@ -658,7 +658,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 relative bg-white text-black border-primary/5 hover:bg-white/90">
+                <Button variant="secondary" size="md" className="relative">
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
                   {(sourceFilter !== "all" || migrationFilter !== "all") && (
@@ -730,7 +730,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+                <Button variant="secondary" size="md">
                   <Icons.Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>

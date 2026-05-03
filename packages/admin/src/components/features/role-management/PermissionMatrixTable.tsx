@@ -90,7 +90,7 @@ export function PermissionMatrixTable({
           {searchTerm && (
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={onClearSearch}
               className="mx-auto"
             >

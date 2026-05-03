@@ -169,7 +169,7 @@ export function ShowJSONDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="ghost" size="sm" className="gap-2">
+          <Button variant="ghost" size="md">
             <Code className="h-4 w-4" />
             Show JSON
           </Button>
@@ -214,7 +214,7 @@ export function ShowJSONDialog({
           <div className="flex gap-2">
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={handleOpenInNewTab}
               className="gap-2"
             >
@@ -223,7 +223,7 @@ export function ShowJSONDialog({
             </Button>
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => { void handleCopy(); }}
               disabled={!jsonString || isLoading}
               className="gap-2"

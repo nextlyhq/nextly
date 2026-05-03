@@ -298,7 +298,7 @@ export function MoveToFolderDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={handleCancelCreate}
                   disabled={isCreating}
                 >
@@ -306,7 +306,7 @@ export function MoveToFolderDialog({
                 </Button>
                 <Button
                   type="submit"
-                  size="sm"
+                  size="md"
                   disabled={isCreating || !newFolderName.trim()}
                 >
                   {isCreating ? "Creating..." : "Create"}

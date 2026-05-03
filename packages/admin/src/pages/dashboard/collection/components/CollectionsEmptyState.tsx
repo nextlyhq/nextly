@@ -75,7 +75,7 @@ export const CollectionsEmptyState: React.FC<CollectionsEmptyStateProps> = ({
       {/* CTA (only show when not searching/filtering) */}
       {!isSearching && (
         <Link href={ROUTES.COLLECTIONS_BUILDER}>
-          <Button className="inline-flex items-center gap-2">
+          <Button size="md">
             <Plus className="h-4 w-4" />
             Create Collection
           </Button>

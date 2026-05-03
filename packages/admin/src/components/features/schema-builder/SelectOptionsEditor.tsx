@@ -336,7 +336,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-6 text-xs"
             onClick={() => setIsImportModalOpen(true)}
           >
@@ -346,7 +346,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-6 text-xs"
             onClick={handleAddOption}
           >
@@ -389,7 +389,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="mt-2 h-7 text-xs"
             onClick={handleAddOption}
           >
@@ -443,7 +443,7 @@ export function SelectOptionsEditor({
               <Button
                 type="button"
                 variant={importFormat === "csv" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 onClick={() => setImportFormat("csv")}
               >
                 CSV
@@ -451,7 +451,7 @@ export function SelectOptionsEditor({
               <Button
                 type="button"
                 variant={importFormat === "json" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 onClick={() => setImportFormat("json")}
               >
                 JSON

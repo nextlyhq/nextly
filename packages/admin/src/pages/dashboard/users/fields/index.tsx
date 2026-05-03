@@ -399,7 +399,7 @@ function SortableFieldRow({
       <TableCell className="whitespace-nowrap text-sm">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Button variant="ghost" size="icon-sm">
               <MoreHorizontal className="h-4 w-4" />
               <span className="sr-only">Open menu</span>
             </Button>
@@ -659,7 +659,7 @@ function UserFieldsTable() {
             </span>
             <Button
               variant="ghost"
-              size="sm"
+              size="md"
               onClick={() => setShowRestartBanner(false)}
             >
               Dismiss
@@ -683,7 +683,7 @@ function UserFieldsTable() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+          <Button variant="secondary" size="md">
             <Columns className="mr-2 h-4 w-4" />
             Columns
           </Button>
@@ -801,7 +801,7 @@ const UserFieldsPage: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <Link href={ROUTES.USERS_FIELDS_CREATE}>
-                <Button size="sm" className="h-9 flex items-center gap-1 shrink-0">
+                <Button size="md" className="flex items-center gap-1 shrink-0">
                   <Plus className="h-4 w-4" />
                   <span>Add Field</span>
                 </Button>

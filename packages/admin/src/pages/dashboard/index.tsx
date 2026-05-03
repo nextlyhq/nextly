@@ -37,7 +37,7 @@ const DashboardErrorFallback = (
           <Button
             onClick={() => window.location.reload()}
             variant="outline"
-            size="sm"
+            size="md"
           >
             Reload Page
           </Button>

@@ -75,7 +75,7 @@ export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
       {/* CTA (only show when not searching/filtering) */}
       {!isSearching && (
         <Link href={ROUTES.COMPONENTS_BUILDER}>
-          <Button className="inline-flex items-center gap-2">
+          <Button size="md" >
             <Plus className="h-4 w-4" />
             Create Component
           </Button>

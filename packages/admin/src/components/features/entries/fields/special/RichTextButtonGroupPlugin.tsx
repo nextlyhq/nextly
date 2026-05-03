@@ -332,7 +332,7 @@ export function RichTextButtonGroupPlugin({
               <Button
                 type="button"
                 variant={alignment === "left" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("left")}
               >
@@ -342,7 +342,7 @@ export function RichTextButtonGroupPlugin({
               <Button
                 type="button"
                 variant={alignment === "center" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("center")}
               >
@@ -352,7 +352,7 @@ export function RichTextButtonGroupPlugin({
               <Button
                 type="button"
                 variant={alignment === "right" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("right")}
               >
@@ -486,7 +486,7 @@ export function RichTextButtonGroupPlugin({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               className="w-full"
               onClick={addButton}
             >

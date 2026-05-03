@@ -286,7 +286,7 @@ export function MediaListView({
           </p>
           {onRetry && (
             <div>
-              <Button variant="outline" size="sm" onClick={onRetry}>
+              <Button variant="outline" size="md" onClick={onRetry}>
                 Retry
               </Button>
             </div>

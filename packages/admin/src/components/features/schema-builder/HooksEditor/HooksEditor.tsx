@@ -214,7 +214,7 @@ export function HooksEditor({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               className="h-7 text-xs"
               onClick={() => setIsSelectorOpen(true)}
             >
@@ -262,7 +262,7 @@ export function HooksEditor({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                size="md"
                 className="h-8 text-xs"
                 onClick={() => setIsSelectorOpen(true)}
               >

@@ -237,7 +237,7 @@ export function JoinField({ field, className }: JoinFieldProps) {
           <Button
             type="button"
             variant="link"
-            size="sm"
+            size="md"
             className="h-auto p-0 text-xs"
             onClick={() => {
               // Navigate to the collection list with a filter

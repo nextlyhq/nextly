@@ -610,8 +610,8 @@ export function MediaLibrary({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="h-9 hover-unified bg-white text-black border-primary/5 hover:bg-white/90 px-4 shrink-0"
+                  size="md"
+                  className="hover-unified bg-white text-black border-primary/5 hover:bg-white/90 px-4 shrink-0"
                 >
                   <Columns className="mr-2 h-4 w-4 text-muted-foreground" />
                   Columns

@@ -95,7 +95,7 @@ function CreateEntryPageSkeleton() {
 
           {/* Header skeleton */}
           <div className="mb-8">
-            <Skeleton className="h-9 w-48 mb-2" />
+            <Skeleton className="w-48 mb-2" />
             <Skeleton className="h-5 w-96" />
           </div>
 

@@ -94,7 +94,7 @@ export function MediaBulkActionBar({
         {/* Clear selection button */}
         <Button
           variant="ghost"
-          size="sm"
+          size="md"
           onClick={onClear}
           disabled={isDeleting}
           className="text-muted-foreground hover:text-foreground h-8 text-xs font-normal"
@@ -108,7 +108,7 @@ export function MediaBulkActionBar({
         {/* Move to folder button */}
         <Button
           variant="outline"
-          size="sm"
+          size="md"
           onClick={onMoveToFolder}
           disabled={isDeleting}
           className="gap-1.5 h-8 text-xs font-normal bg-card border-primary/5 text-primary hover:bg-primary/5"
@@ -120,7 +120,7 @@ export function MediaBulkActionBar({
         {/* Delete button - Black and White scheme */}
         <Button
           variant="default"
-          size="sm"
+          size="md"
           onClick={onDelete}
           disabled={isDeleting}
           className="h-8 text-xs font-normal px-4 rounded-none"

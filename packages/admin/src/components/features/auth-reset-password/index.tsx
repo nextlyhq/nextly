@@ -282,7 +282,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
               />
 
               <Button
-                size="lg"
+                size="md"
                 type="submit"
                 disabled={isLoading}
                 className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"

@@ -390,7 +390,7 @@ export function MediaDetailDialog({
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
+                        size="md"
                         className="h-10 px-4 shrink-0 text-xs font-semibold"
                         onClick={() => { void handleCopyUrl(); }}
                       >
@@ -418,7 +418,7 @@ export function MediaDetailDialog({
                 <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
-                    size="sm"
+                    size="md"
                     onClick={() => { void handleDownload(); }}
                     className="h-8 text-xs font-semibold gap-2 border-primary/5 hover-unified"
                   >
@@ -428,7 +428,7 @@ export function MediaDetailDialog({
 
                   <Button
                     variant="destructive"
-                    size="sm"
+                    size="md"
                     onClick={handleDeleteClick}
                     className="h-8 text-xs font-semibold gap-2 hover:bg-destructive/90"
                   >

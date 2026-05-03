@@ -289,7 +289,7 @@ function VariableEditor({
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          size="md"
           onClick={() => append({ name: "", description: "", required: false })}
         >
           <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -436,7 +436,7 @@ function DefaultAttachmentsSection({
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          size="md"
           onClick={() => setPickerOpen(true)}
         >
           <Plus className="mr-1.5 h-3.5 w-3.5" />

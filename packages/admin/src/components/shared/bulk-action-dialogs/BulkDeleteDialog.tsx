@@ -250,7 +250,7 @@ export function BulkDeleteDialog({
             onClick={onConfirm}
             disabled={isLoading}
           >
-            {isLoading && <Spinner size="sm" className="mr-2" />}
+            {isLoading && <Spinner size="md" className="mr-2" />}
             Delete {count} {entityLabel}
           </Button>
         </DialogFooter>

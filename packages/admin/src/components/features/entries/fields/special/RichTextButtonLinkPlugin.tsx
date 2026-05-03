@@ -381,7 +381,7 @@ export function RichTextButtonLinkPlugin({
               <Button
                 type="button"
                 variant={alignment === "left" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("left")}
               >
@@ -391,7 +391,7 @@ export function RichTextButtonLinkPlugin({
               <Button
                 type="button"
                 variant={alignment === "center" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("center")}
               >
@@ -401,7 +401,7 @@ export function RichTextButtonLinkPlugin({
               <Button
                 type="button"
                 variant={alignment === "right" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("right")}
               >
@@ -422,7 +422,7 @@ export function RichTextButtonLinkPlugin({
                     type="color"
                     value={bgColor}
                     onChange={e => setBgColor(e.target.value)}
-                    className="h-9 w-9 rounded-none  border border-primary/5 cursor-pointer p-0.5"
+                    className="w-9 rounded-none  border border-primary/5 cursor-pointer p-0.5"
                   />
                   <Input
                     value={bgColor}
@@ -441,7 +441,7 @@ export function RichTextButtonLinkPlugin({
                   type="color"
                   value={textColor}
                   onChange={e => setTextColor(e.target.value)}
-                  className="h-9 w-9 rounded-none  border border-primary/5 cursor-pointer p-0.5"
+                  className="w-9 rounded-none  border border-primary/5 cursor-pointer p-0.5"
                 />
                 <Input
                   value={textColor}

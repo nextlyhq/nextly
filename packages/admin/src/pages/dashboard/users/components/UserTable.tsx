@@ -400,7 +400,7 @@ export default function UserTable() {
           const initial = firstName.charAt(0).toUpperCase();
           return (
             <div className="flex items-center gap-3">
-              <Avatar className="h-9 w-9 rounded-none">
+              <Avatar className="w-9 rounded-none">
                 <AvatarImage src={user.image} alt={user.name} />
                 <AvatarFallback className="rounded-none bg-primary/5 text-primary">
                   {initial}
@@ -608,14 +608,14 @@ export default function UserTable() {
         <div className="flex items-center gap-2">
           {showLoadingSkeleton ? (
             <>
-              <Skeleton className="h-9 w-[80px]" />
-              <Skeleton className="h-9 w-[100px]" />
+              <Skeleton className="w-[80px]" />
+              <Skeleton className="w-[100px]" />
             </>
           ) : (
             /* Columns Dropdown */
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+                <Button variant="secondary" size="md">
                   <Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>

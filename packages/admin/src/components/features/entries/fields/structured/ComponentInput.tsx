@@ -461,7 +461,7 @@ function MultiComponentNonRepeatable({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               onClick={handleClear}
               className="text-muted-foreground hover:text-destructive"
             >

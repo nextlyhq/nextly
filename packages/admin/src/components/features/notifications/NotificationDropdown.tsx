@@ -90,7 +90,7 @@ export function NotificationDropdown(): JSX.Element {
           className="px-4 py-6 text-center text-sm"
         >
           <p className="text-destructive mb-2">Failed to load.</p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+          <Button variant="outline" size="md" onClick={() => void refetch()}>
             Try again
           </Button>
         </div>
@@ -119,7 +119,7 @@ export function NotificationDropdown(): JSX.Element {
               )}
               <Button
                 variant="outline"
-                size="sm"
+                size="md"
                 onClick={() => void loadMore()}
                 disabled={loadingMore}
                 data-testid="notification-dropdown-load-more"

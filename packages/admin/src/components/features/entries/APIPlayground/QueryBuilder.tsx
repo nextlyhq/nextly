@@ -313,7 +313,7 @@ export function QueryBuilder({
             </Label>
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={addWhereCondition}
               className="gap-2 h-8 px-4 rounded-none text-[10px] uppercase font-bold tracking-widest border-primary/5 hover:bg-primary/5 hover:text-primary transition-all"
             >

@@ -128,7 +128,7 @@ export function PageErrorFallback({
             <Button
               onClick={() => window.location.reload()}
               variant="default"
-              size="lg"
+              size="md"
               className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold active:scale-95 transition-all duration-200"
             >
               <RefreshCw className="mr-2 h-4 w-4" />
@@ -140,7 +140,7 @@ export function PageErrorFallback({
               <Button
                 onClick={reset}
                 variant="outline"
-                size="lg"
+                size="md"
                 className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold border-primary/5 hover:bg-accent active:scale-95 transition-all duration-200"
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
@@ -153,7 +153,7 @@ export function PageErrorFallback({
               <Link href={ROUTES.DASHBOARD} className="w-full sm:w-auto">
                 <Button
                   variant="ghost"
-                  size="lg"
+                  size="md"
                   className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold text-muted-foreground hover:text-foreground active:scale-95 transition-all duration-200"
                 >
                   <LayoutDashboard className="mr-2 h-4 w-4" />

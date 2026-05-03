@@ -100,7 +100,7 @@ export function BuilderHeader({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             onClick={onCancel}
             disabled={isSaving}
           >
@@ -111,14 +111,14 @@ export function BuilderHeader({
           {/* Save button */}
           <Button
             type="button"
-            size="sm"
+            size="md"
             onClick={onSave}
             disabled={isSaving}
             className="flex items-center gap-2"
           >
             {isSaving ? (
               <>
-                <Spinner size="sm" />
+                <Spinner size="md" />
                 <span>Saving...</span>
               </>
             ) : (

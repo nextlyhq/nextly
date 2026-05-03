@@ -37,7 +37,7 @@ export function UserProfileDropdown({
             className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus-visible:ring-2 focus-visible:ring-primary/20 focus:outline-none hover-subtle-row group"
             aria-label="User profile menu"
           >
-            <Avatar className="h-8 w-8 rounded-none  border border-primary/5 group-hover:border-primary/5 transition-colors">
+            <Avatar className="h-11 w-11 rounded-none bg-transparent  border border-primary/5 group-hover:border-primary/5 transition-colors">
               <AvatarImage
                 src={user?.avatar}
                 alt={user?.name || "User"}

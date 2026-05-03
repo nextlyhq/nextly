@@ -493,7 +493,7 @@ export default function ComponentTable() {
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon-sm">
                 <MoreHorizontal className="h-4 w-4" />
                 <span className="sr-only">Open menu</span>
               </Button>
@@ -608,8 +608,8 @@ export default function ComponentTable() {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {showLoadingSkeleton ? (
               <>
-                <Skeleton className="h-9 w-20" />
-                <Skeleton className="h-9 w-24" />
+                <Skeleton className="w-20" />
+                <Skeleton className="w-24" />
               </>
             ) : (
               <>
@@ -617,8 +617,8 @@ export default function ComponentTable() {
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="outline"
-                      size="sm"
-                      className="h-9 relative bg-white text-black border-primary/5 hover:bg-white/90"
+                      size="md"
+                      className="relative bg-white text-black border-primary/5 hover:bg-white/90"
                     >
                       <Filter className="mr-2 h-4 w-4" />
                       Filter
@@ -700,7 +700,7 @@ export default function ComponentTable() {
                 </DropdownMenu>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+                    <Button variant="secondary" size="md">
                       <Icons.Columns className="mr-2 h-4 w-4" />
                       Columns
                     </Button>

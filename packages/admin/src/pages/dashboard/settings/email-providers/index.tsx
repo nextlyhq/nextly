@@ -659,7 +659,7 @@ function EmailProviderTable() {
         {/* Right: Filters & Column visibility */}
         <div className="flex items-center gap-2">
           <Select value={type} onValueChange={handleTypeChange}>
-            <SelectTrigger className="h-9 w-[130px] bg-white text-black border-primary/5 hover:bg-white/90">
+            <SelectTrigger className="w-[130px] bg-white text-black border-primary/5 hover:bg-white/90">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>
@@ -672,7 +672,7 @@ function EmailProviderTable() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+              <Button variant="secondary" size="md">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -752,7 +752,7 @@ const EmailProvidersPage: React.FC = () => {
           actions={
             <div className="flex items-center gap-3">
               <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE}>
-                <Button size="sm" className="flex items-center gap-1">
+                <Button size="md" className="flex items-center gap-1">
                   <Plus className="h-4 w-4" />
                   <span>Add Provider</span>
                 </Button>

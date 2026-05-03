@@ -75,7 +75,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
                       </div>
                     ) : colIdx === 1 ? (
                       <div className="flex items-center gap-3">
-                        <Skeleton className="h-9 w-9 rounded-none shrink-0" />
+                        <Skeleton className="w-9 rounded-none shrink-0" />
                         <div className="space-y-1.5 flex-1">
                           <Skeleton className="h-4 w-[120px]" />
                           <Skeleton className="h-3 w-[80px]" />

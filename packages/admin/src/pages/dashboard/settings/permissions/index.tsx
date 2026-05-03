@@ -317,7 +317,7 @@ function PermissionsContent() {
             <Button
               key={f}
               variant={typeFilter === f ? "default" : "outline"}
-              size="sm"
+              size="md"
               onClick={() => setTypeFilter(f)}
               className="capitalize"
             >
@@ -355,7 +355,7 @@ function PermissionsContent() {
           {(search || typeFilter !== "all") && (
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               className="mt-4"
               onClick={() => {
                 setSearch("");

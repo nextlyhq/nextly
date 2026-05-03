@@ -486,7 +486,7 @@ export function SingleSettings({
                 />
                 <Button
                   type="button"
-                  size="sm"
+                  size="md"
                   variant="outline"
                   className="h-8 px-2"
                   onClick={() => { void handleCreateGroup(); }}
@@ -495,7 +495,7 @@ export function SingleSettings({
                 </Button>
                 <Button
                   type="button"
-                  size="sm"
+                  size="md"
                   variant="ghost"
                   className="h-8 px-2"
                   onClick={() => setIsCreatingGroup(false)}

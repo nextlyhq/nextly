@@ -174,7 +174,7 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="default"
-                size="sm"
+                size="md"
                 disabled={isAssigningRole || isAnyActionLoading}
               >
                 <Shield className="mr-2 h-4 w-4" />
@@ -198,7 +198,7 @@ export function BulkActionBar({
           {/* Delete */}
           <Button
             variant="destructive"
-            size="sm"
+            size="md"
             onClick={onDelete}
             disabled={isDeleteDisabled}
             title={!canDelete ? deleteDisabledReason : undefined}
@@ -213,7 +213,7 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                size="sm"
+                size="md"
                 disabled={isTogglingStatus || isAnyActionLoading}
               >
                 <ToggleLeft className="mr-2 h-4 w-4" />
@@ -244,7 +244,7 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="default"
-                size="lg"
+                size="md"
                 disabled={isAssigningRole || isAnyActionLoading}
                 className="min-h-[44px] min-w-[44px]"
               >
@@ -270,7 +270,7 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                size="lg"
+                size="md"
                 disabled={isAnyActionLoading}
                 className="min-h-[44px] min-w-[44px]"
               >
@@ -308,7 +308,7 @@ export function BulkActionBar({
         </div>
 
         {/* Clear button (right-aligned) */}
-        <Button variant="ghost" size="sm" onClick={onClear} className="ml-auto">
+        <Button variant="ghost" size="md" onClick={onClear} className="ml-auto">
           <X className="mr-2 h-4 w-4" />
           Clear
         </Button>

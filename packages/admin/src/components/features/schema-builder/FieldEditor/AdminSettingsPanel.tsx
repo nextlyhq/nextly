@@ -104,7 +104,7 @@ export function AdminSettingsPanel({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-6 text-xs text-muted-foreground"
               onClick={() => onConditionUpdate(null)}
             >
@@ -157,7 +157,7 @@ export function AdminSettingsPanel({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             className="w-full h-8 text-xs"
             onClick={() => onConditionUpdate({ field: "", equals: "" })}
           >

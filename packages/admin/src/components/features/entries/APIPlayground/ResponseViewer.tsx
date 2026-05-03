@@ -161,7 +161,7 @@ export function ResponseViewer({
         </span>
         <Button
           variant="ghost"
-          size="sm"
+          size="md"
           onClick={() => {
             void handleCopy();
           }}

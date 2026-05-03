@@ -78,7 +78,7 @@ export function PermissionMatrix({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => onChange(permissions.map(p => p.id))}
               disabled={disabled || value.length === permissions.length}
               aria-label="Select all permissions"
@@ -90,7 +90,7 @@ export function PermissionMatrix({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => onChange([])}
               disabled={disabled || value.length === 0}
               aria-label="Clear all permissions"

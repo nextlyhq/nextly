@@ -274,7 +274,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.bold ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("bold")}
               title="Bold (Cmd+B)"
@@ -286,7 +286,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.italic ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("italic")}
               title="Italic (Cmd+I)"
@@ -298,7 +298,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.underline ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("underline")}
               title="Underline (Cmd+U)"
@@ -310,7 +310,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.strikethrough ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("strikethrough")}
               title="Strikethrough"
@@ -330,7 +330,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={insertUnorderedList}
               title="Bullet List"
@@ -341,7 +341,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={insertOrderedList}
               title="Numbered List"
@@ -360,7 +360,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => setMediaPickerOpen(true)}
               title="Insert Image"
@@ -377,7 +377,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
           <Button
             type="button"
             variant={activeFormats.code ? "default" : "ghost"}
-            size="sm"
+            size="md"
             className="h-8 w-8 p-0"
             onClick={() => formatText("code")}
             title="Inline Code"

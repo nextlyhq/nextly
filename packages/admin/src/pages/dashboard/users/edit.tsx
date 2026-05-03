@@ -293,7 +293,7 @@ export default function EditUserPage(): ReactElement {
 
         {/* Header skeleton */}
         <div className="mb-8">
-          <Skeleton className="h-9 w-48 mb-2" />
+          <Skeleton className="w-48 mb-2" />
           <Skeleton className="h-5 w-96" />
         </div>
 
@@ -313,7 +313,7 @@ export default function EditUserPage(): ReactElement {
               {getErrorMessage(userError, USER_MESSAGES.LOAD_USER_ERROR)}
             </span>
             <Button
-              size="sm"
+              size="md"
               variant="outline"
               onClick={() => {
                 void refetchUser();
@@ -380,7 +380,7 @@ export default function EditUserPage(): ReactElement {
             >
               {isUpdating ? (
                 <>
-                  <Spinner size="sm" className="mr-2" />
+                  <Spinner size="md" className="mr-2" />
                   Saving Changes...
                 </>
               ) : rolesError ? (

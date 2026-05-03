@@ -228,7 +228,7 @@ export function RelationshipSearch({
               key={col}
               type="button"
               variant={selectedCollection === col ? "default" : "outline"}
-              size="sm"
+              size="md"
               onClick={() => handleCollectionChange(col)}
               className="capitalize"
             >
@@ -291,7 +291,7 @@ export function RelationshipSearch({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
+                  size="md"
                   onClick={handleLoadMore}
                   disabled={isLoading}
                   className="w-full"

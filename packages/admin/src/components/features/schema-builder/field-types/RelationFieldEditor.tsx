@@ -462,7 +462,7 @@ export function RelationFieldEditor({
                         </div>
                         <Button
                           type="button"
-                          size="sm"
+                          size="md"
                           variant="outline"
                           className="h-7"
                         >

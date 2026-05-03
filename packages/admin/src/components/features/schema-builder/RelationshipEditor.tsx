@@ -229,7 +229,7 @@ export function RelationshipEditor({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                size="md"
                 className="w-full justify-start text-xs h-8"
               >
                 <Icons.Plus className="h-3 w-3 mr-1.5" />
@@ -415,7 +415,7 @@ export function RelationshipEditor({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-6 text-xs text-muted-foreground"
               onClick={() => handleFilterUpdate(null)}
             >
@@ -451,7 +451,7 @@ export function RelationshipEditor({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             className="w-full h-8 text-xs"
             onClick={() => handleFilterUpdate({ field: "", equals: "" })}
           >

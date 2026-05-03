@@ -334,7 +334,7 @@ export function ComponentSelector({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent size="lg" className="max-h-[85vh] flex flex-col">
+      <DialogContent size="md" className="max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Puzzle className="h-5 w-5" />

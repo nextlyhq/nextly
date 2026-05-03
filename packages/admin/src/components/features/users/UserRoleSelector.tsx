@@ -119,7 +119,7 @@ export function UserRoleSelector({
       {/* Loading state */}
       {isLoading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground py-3">
-          <Spinner size="sm" />
+          <Spinner size="md" />
           <span>Loading roles...</span>
         </div>
       )}
@@ -132,7 +132,7 @@ export function UserRoleSelector({
             {onRetry && (
               <Button
                 type="button"
-                size="sm"
+                size="md"
                 variant="outline"
                 onClick={onRetry}
                 className="ml-2 shrink-0"

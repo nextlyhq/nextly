@@ -888,10 +888,7 @@ button[data-slot^="button"].bg-destructive,
   color: hsl(var(--destructive-foreground)) !important;
 }
 
-button[data-slot^="button"].bg-secondary,
-[data-slot^="button"].bg-secondary {
-  background-color: hsl(var(--secondary)) !important;
-}
+
 
 /* Ensure text colors work for destructive buttons */
 .text-destructive-foreground {
@@ -933,10 +930,7 @@ button[data-slot^="button"].text-destructive-foreground,
   color: hsl(var(--destructive-foreground)) !important;
 }
 
-button[data-slot^="button"].text-secondary-foreground,
-[data-slot^="button"].text-secondary-foreground {
-  color: hsl(var(--secondary-foreground)) !important;
-}
+
 
 /* Ensure badge backgrounds work properly */
 [data-slot^="badge"].bg-primary {
@@ -1136,11 +1130,11 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 /* Force background class to work in portals */
 .bg-background {
-  background-color: hsl(var(--background)) !important;
+  background-color: hsl(var(--background));
 }
 
 .bg-card {
-  background-color: hsl(var(--card)) !important;
+  background-color: hsl(var(--card));
 }
 
 /**

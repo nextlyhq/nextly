@@ -293,7 +293,7 @@ export function RelationshipQuickEdit({
             </div>
             <Button
               variant="ghost"
-              size="sm"
+              size="md"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => window.open(fullEditorUrl, "_blank")}
             >

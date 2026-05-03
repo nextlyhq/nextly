@@ -753,7 +753,7 @@ export function MediaPickerDialog({
                           <Button
                             type="button"
                             variant="ghost"
-                            size="sm"
+                            size="md"
                             className="h-6 px-2 text-xs"
                             onClick={handleCancelCreateFolder}
                             disabled={isCreatingFolderPending}
@@ -762,7 +762,7 @@ export function MediaPickerDialog({
                           </Button>
                           <Button
                             type="submit"
-                            size="sm"
+                            size="md"
                             className="h-6 px-2 text-xs"
                             disabled={
                               isCreatingFolderPending || !newFolderName.trim()
