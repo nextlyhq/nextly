@@ -627,7 +627,9 @@ function EmailTemplateTable() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer"
-                onClick={() => { void handleDuplicate(template); }}
+                onClick={() => {
+                  void handleDuplicate(template);
+                }}
               >
                 <Copy className="h-4 w-4" />
                 Duplicate
@@ -664,17 +666,17 @@ function EmailTemplateTable() {
   if (isError) {
     return (
       <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex-1 max-w-md w-full">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search templates by name, slug, or subject..."
-            isLoading={false}
-            className="bg-white text-black border-primary/5"
-          />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder="Search templates by name, slug, or subject..."
+              isLoading={false}
+              className="bg-white text-black border-primary/5"
+            />
+          </div>
         </div>
-      </div>
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -691,17 +693,17 @@ function EmailTemplateTable() {
   if (isLoading && templates.length === 0) {
     return (
       <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex-1 max-w-md w-full">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search templates by name, slug, or subject..."
-            isLoading={true}
-            className="bg-white text-black border-primary/5"
-          />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder="Search templates by name, slug, or subject..."
+              isLoading={true}
+              className="bg-white text-black border-primary/5"
+            />
+          </div>
         </div>
-      </div>
         <TableSkeleton columns={7} />
       </div>
     );
@@ -756,18 +758,16 @@ function EmailTemplateTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {totalPages > 0 && (
-          <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
-            <Pagination
-              currentPage={page}
-              totalPages={totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={totalItems}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+            totalItems={totalItems}
+          />
         )}
       </div>
 

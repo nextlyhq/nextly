@@ -296,16 +296,14 @@ export default function PluginsTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {totalCount > 0 && (
-          <div className="border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
-            <Pagination
-              currentPage={page}
-              totalPages={Math.ceil(totalCount / pageSize)}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={setPageSize}
-              totalItems={totalCount}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={Math.ceil(totalCount / pageSize)}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            totalItems={totalCount}
+          />
         )}
       </div>
     </div>

@@ -149,7 +149,7 @@ export function TablePagination({
   } = config || {};
 
   return (
-    <div className="flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground">
+    <div className="flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground p-4 border-t border-primary/5">
       {/* Left: Info. `meta.page` is 1-based per spec section 5.1; the
           0-based UI page index lives in this component's local state via
           the React Table `pageIndex` prop. We render the displayed range

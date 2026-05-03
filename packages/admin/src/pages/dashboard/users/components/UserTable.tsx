@@ -668,18 +668,16 @@ export default function UserTable() {
 
         {/* Pagination */}
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              totalItems={data.meta.total}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={data.meta.totalPages}
+            totalItems={data.meta.total}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+          />
         )}
       </div>
 

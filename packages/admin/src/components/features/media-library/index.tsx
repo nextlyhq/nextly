@@ -981,17 +981,17 @@ export function MediaLibrary({
 
               {/* Pagination for List View - Inside Boxed Container */}
               {!isLoading && !error && data && data.data.length > 0 && (
-                <div className="border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
-                  <Pagination
-                    currentPage={page}
-                    totalPages={totalPages}
-                    pageSize={pageSize}
-                    pageSizeOptions={[12, 24, 48, 96]}
-                    showPageSizeSelector
-                    onPageChange={handlePageChange}
-                    onPageSizeChange={handlePageSizeChange}
-                  />
-                </div>
+                // <div className="border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
+                <Pagination
+                  currentPage={page}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[12, 24, 48, 96]}
+                  showPageSizeSelector
+                  onPageChange={handlePageChange}
+                  onPageSizeChange={handlePageSizeChange}
+                />
+                // </div>
               )}
             </>
           )}

@@ -31,7 +31,7 @@ const buttonVariants = cva(
         primary: "bg-primary text-primary-foreground hover:opacity-90",
         destructive:
           "bg-destructive text-destructive-foreground hover:opacity-90",
-        outline: "border border-primary/5 hover-unified",
+        outline: "border border-primary/5 hover-unified bg-white",
         secondary:
           "bg-white border border-primary/5 text-foreground hover:bg-primary/5",
         ghost: "text-foreground hover-unified",
@@ -67,10 +67,10 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     ref
   ) => {
     const Comp = asChild ? Slot : "button";
-    
+
     // Automatically apply gap-2 if there are multiple children (e.g., icon + text)
     const hasMultipleChildren = React.Children.count(children) > 1;
-    
+
     return (
       <Comp
         data-slot={`button.${variant}`}

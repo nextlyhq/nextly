@@ -367,7 +367,9 @@ function ImageSizesContent({
   const [isLoading, setIsLoading] = React.useState(true);
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(10);
-  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(new Set());
+  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(
+    new Set()
+  );
 
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
@@ -607,20 +609,18 @@ function ImageSizesContent({
             tableWrapperClassName="border-0 rounded-none shadow-none"
             footer={
               (filteredSizes.length > 0 || isLoading) && (
-                <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
-                  <Pagination
-                    currentPage={page}
-                    totalPages={Math.max(
-                      1,
-                      Math.ceil(filteredSizes.length / pageSize)
-                    )}
-                    totalItems={filteredSizes.length}
-                    pageSize={pageSize}
-                    onPageChange={setPage}
-                    onPageSizeChange={setPageSize}
-                    isLoading={isLoading}
-                  />
-                </div>
+                <Pagination
+                  currentPage={page}
+                  totalPages={Math.max(
+                    1,
+                    Math.ceil(filteredSizes.length / pageSize)
+                  )}
+                  totalItems={filteredSizes.length}
+                  pageSize={pageSize}
+                  onPageChange={setPage}
+                  onPageSizeChange={setPageSize}
+                  isLoading={isLoading}
+                />
               )
             }
           />

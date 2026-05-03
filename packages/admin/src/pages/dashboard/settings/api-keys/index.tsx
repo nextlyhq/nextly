@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@revnixhq/ui";
+import { Button, TableSkeleton } from "@revnixhq/ui";
 import type React from "react";
 import { useCallback, useState } from "react";
 
@@ -12,6 +12,7 @@ import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { SearchBar } from "@admin/components/shared/search-bar";
 import { ROUTES } from "@admin/constants/routes";
 import { useApiKeys } from "@admin/hooks/queries/useApiKeys";
 import { navigateTo } from "@admin/lib/navigation";
@@ -55,7 +56,11 @@ const ApiKeysContent: React.FC = () => {
 
   // ── Error handling ──────────────────────────────────────────
   if (isError) {
-    return <PageErrorFallback error={error || new Error("Failed to load API keys")} />;
+    return (
+      <PageErrorFallback
+        error={error || new Error("Failed to load API keys")}
+      />
+    );
   }
 
   // ── Loading handling ────────────────────────────────────────
@@ -64,7 +69,13 @@ const ApiKeysContent: React.FC = () => {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex-1 max-w-md w-full">
-            <SearchBar value="" onChange={() => {}} placeholder="Search API keys..." isLoading={true} className="bg-white text-black border-primary/5" />
+            <SearchBar
+              value=""
+              onChange={() => {}}
+              placeholder="Search API keys..."
+              isLoading={true}
+              className="bg-white text-black border-primary/5"
+            />
           </div>
         </div>
         <TableSkeleton columns={7} rowCount={8} />

@@ -259,12 +259,16 @@ function StaticFieldRow({ field }: { field: StaticField }) {
 
       {/* Source */}
       <TableCell className="whitespace-nowrap text-base">
-        <Badge variant="default" className="shadow-none">Built-in</Badge>
+        <Badge variant="default" className="shadow-none">
+          Built-in
+        </Badge>
       </TableCell>
 
       {/* Status */}
       <TableCell className="whitespace-nowrap text-base">
-        <Badge variant="success" className="shadow-none">Active</Badge>
+        <Badge variant="success" className="shadow-none">
+          Active
+        </Badge>
       </TableCell>
 
       {/* Created */}
@@ -375,18 +379,26 @@ function SortableFieldRow({
       {/* Source */}
       <TableCell className="whitespace-nowrap text-sm">
         {isCode ? (
-          <Badge variant="default" className="shadow-none">Code</Badge>
+          <Badge variant="default" className="shadow-none">
+            Code
+          </Badge>
         ) : (
-          <Badge variant="primary" className="shadow-none">Custom</Badge>
+          <Badge variant="primary" className="shadow-none">
+            Custom
+          </Badge>
         )}
       </TableCell>
 
       {/* Status */}
       <TableCell className="whitespace-nowrap text-sm">
         {field.isActive ? (
-          <Badge variant="success" className="shadow-none">Active</Badge>
+          <Badge variant="success" className="shadow-none">
+            Active
+          </Badge>
         ) : (
-          <Badge variant="warning" className="shadow-none">Inactive</Badge>
+          <Badge variant="warning" className="shadow-none">
+            Inactive
+          </Badge>
         )}
       </TableCell>
 
@@ -719,7 +731,9 @@ function UserFieldsTable() {
                   <TableHead>Required</TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="hidden lg:table-cell">Created</TableHead>
+                  <TableHead className="hidden lg:table-cell">
+                    Created
+                  </TableHead>
                   <TableHead className="w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -752,17 +766,17 @@ function UserFieldsTable() {
           </DndContext>
 
           {/* Pagination inside table wrapper - always show if table is shown */}
-          <div className="table-footer  border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
-            <Pagination
-              currentPage={page}
-              totalPages={Math.max(1, totalPages)}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              totalItems={totalItems + filteredStaticFields.length}
-            />
-          </div>
+          {/* <div className="table-footer  border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4"> */}
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, totalPages)}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            totalItems={totalItems + filteredStaticFields.length}
+          />
+          {/* </div> */}
         </div>
       )}
 
@@ -794,7 +808,9 @@ const UserFieldsPage: React.FC = () => {
           {/* Page Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">User Fields</h1>
+              <h1 className="text-xl font-semibold tracking-tight">
+                User Fields
+              </h1>
               <p className="text-sm font-normal text-primary/50 mt-1">
                 Manage custom attributes for user accounts
               </p>

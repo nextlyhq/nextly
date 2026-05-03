@@ -63,21 +63,21 @@ export function SingleFormActions({
       <div className="flex items-center gap-3 w-full">
         {onCancel && (
           <Button
+            size="md"
             type="button"
             variant="outline"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="flex-1 shadow-none bg-background border-primary/5 hover-unified"
           >
             Cancel
           </Button>
         )}
 
         <Button
-          size="md" 
+          size="md"
           type="submit"
           disabled={isSubmitting}
-          className="flex-1 shadow-none bg-primary hover:bg-primary/90 text-primary-foreground"
+          className="flex-1"
         >
           {isSubmitting ? (
             <>

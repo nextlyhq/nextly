@@ -493,18 +493,16 @@ export default function RoleTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={data.meta.total}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={data.meta.totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+            totalItems={data.meta.total}
+          />
         )}
       </div>
 
