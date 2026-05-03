@@ -74,6 +74,9 @@ type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
   | { kind: "picker"; insertAt: number }
+  // Why: NEW in PR C. Sheet renders in create mode against this draft;
+  // on Apply we append, on Cancel we discard.
+  | { kind: "create"; draft: BuilderField }
   | { kind: "edit"; fieldId: string };
 
 interface ComponentBuilderEditPageProps {
@@ -409,10 +412,35 @@ export default function ComponentBuilderEditPage({
           open
           excludedTypes={COMPONENT_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
-          onSelect={type => {
-            builder.handleFieldAdd(type);
+          // Why: PR C flow change -- pick opens sheet in create mode.
+          onSelect={type =>
+            setActive({
+              kind: "create",
+              draft: {
+                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                name: "",
+                label: "",
+                type,
+                validation: {},
+              },
+            })
+          }
+        />
+      )}
+
+      {active.kind === "create" && (
+        <FieldEditorSheet
+          open
+          mode="create"
+          field={active.draft}
+          siblingNames={builder.fields.map(f => f.name)}
+          readOnly={isLocked}
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            builder.setFields([...builder.fields, next]);
             setActive({ kind: "none" });
           }}
+          onDelete={() => setActive({ kind: "none" })}
         />
       )}
 

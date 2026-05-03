@@ -13,14 +13,7 @@ import type { BuilderConfig } from "../builder-config";
 const collectionConfig: BuilderConfig = {
   kind: "collection",
   basicsFields: ["singularName", "pluralName", "slug", "description", "icon"],
-  advancedFields: [
-    "adminGroup",
-    "order",
-    "useAsTitle",
-    "status",
-    "i18n",
-    "timestamps",
-  ],
+  advancedFields: ["adminGroup", "order", "status", "i18n", "showSystemFields"],
   toolbar: { showHooks: true, previewSchemaChange: true },
   picker: {},
 };

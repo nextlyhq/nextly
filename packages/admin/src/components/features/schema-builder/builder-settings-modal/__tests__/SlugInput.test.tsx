@@ -1,8 +1,9 @@
-// Why: SlugInput shows the auto-derived slug with an AUTO badge, and reveals
-// an editable input on Edit. Once the user overrides, onChange propagates
-// each keystroke so the parent form sees the override immediately. These
-// tests lock the read/edit modes and the onChange contract so a refactor
-// can't silently break the auto-derive UX.
+// Why: SlugInput shows the auto-derived slug with a dim "Slug:" label, the
+// value bold next to it, and a Lucide pencil icon button to enter edit
+// mode (PR B redesign). Once in edit mode, onChange propagates each
+// keystroke so the parent form sees the override immediately. These tests
+// lock the read/edit modes and the onChange contract so a refactor can't
+// silently break the auto-derive UX.
 //
 // Note: SlugInput is a controlled component, so tests use a stateful wrapper
 // (`<Controlled>`) that feeds onChange back into value — same pattern any
@@ -34,16 +35,25 @@ function Controlled(props: {
 }
 
 describe("SlugInput", () => {
-  it("renders the slug value with an AUTO badge in read mode", () => {
+  it("renders the slug value with a dim 'Slug:' label in read mode", () => {
     render(<Controlled initial="blog_post" />);
     expect(screen.getByText("blog_post")).toBeInTheDocument();
-    expect(screen.getByText("AUTO")).toBeInTheDocument();
+    expect(screen.getByText(/^Slug:/)).toBeInTheDocument();
+  });
+
+  it("renders a pencil icon edit button (no 'AUTO' badge, no 'Edit' text)", () => {
+    render(<Controlled initial="blog_post" />);
+    expect(screen.queryByText("AUTO")).not.toBeInTheDocument();
+    const button = screen.getByRole("button", { name: /edit slug/i });
+    // The button should contain an SVG (the pencil), not text 'Edit'.
+    expect(button.querySelector("svg")).not.toBeNull();
+    expect(button).not.toHaveTextContent(/^Edit$/);
   });
 
   it("reveals an input pre-filled with current value when Edit is clicked", async () => {
     const user = userEvent.setup();
     render(<Controlled initial="blog_post" />);
-    await user.click(screen.getByRole("button", { name: /edit/i }));
+    await user.click(screen.getByRole("button", { name: /edit slug/i }));
     expect(screen.getByRole("textbox", { name: /slug/i })).toHaveValue(
       "blog_post"
     );
@@ -53,17 +63,10 @@ describe("SlugInput", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<Controlled initial="blog_post" onChange={onChange} />);
-    await user.click(screen.getByRole("button", { name: /edit/i }));
+    await user.click(screen.getByRole("button", { name: /edit slug/i }));
     const input = screen.getByRole("textbox", { name: /slug/i });
     await user.clear(input);
     await user.type(input, "post");
     expect(onChange).toHaveBeenLastCalledWith("post");
-  });
-
-  it("hides the AUTO badge once the user has clicked Edit", async () => {
-    const user = userEvent.setup();
-    render(<Controlled initial="blog_post" />);
-    await user.click(screen.getByRole("button", { name: /edit/i }));
-    expect(screen.queryByText("AUTO")).not.toBeInTheDocument();
   });
 });

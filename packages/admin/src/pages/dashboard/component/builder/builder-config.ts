@@ -16,7 +16,8 @@ import type { BuilderConfig } from "@admin/components/features/schema-builder/bu
 export const COMPONENT_BUILDER_CONFIG: BuilderConfig = {
   kind: "component",
   basicsFields: ["singularName", "slug", "description", "icon"],
-  advancedFields: ["category", "i18n"],
+  // showSystemFields added in PR B so components also surface the toggle.
+  advancedFields: ["category", "i18n", "showSystemFields"],
   toolbar: { showHooks: false, previewSchemaChange: false },
   picker: {},
 };

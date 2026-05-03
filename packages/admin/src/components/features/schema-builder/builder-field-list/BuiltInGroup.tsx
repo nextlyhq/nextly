@@ -2,14 +2,14 @@
 // the top of the field list. We always show title + slug because they're
 // part of the user's mental model (real columns in record lists, drive
 // URLs). The infrastructure ones (id, createdAt, updatedAt) are
-// SYNTHESIZED here as informational rows — they're not real entries in
+// SYNTHESIZED here as informational rows -- they're not real entries in
 // builder.fields, so we don't filter them out, we generate them.
 //
-// The "Show / Hide system fields" toggle persists the user's choice in
-// localStorage so the preference sticks across sessions. Per the audit
-// the synthesized rows are display-only — clicking them is a no-op
-// because they're managed by the runtime (id from primary-key, timestamps
-// from the timestamps toggle in BuilderSettingsModal).
+// PR B (2026-05-03): default visible = true. Inline X dismiss button
+// next to the "Built in" label hides them without opening Settings. The
+// Settings modal's "Show system fields" switch flips the same
+// localStorage key, and dispatches a window event so this component
+// stays in sync without a refresh.
 import { useEffect, useState } from "react";
 
 import type { BuilderField } from "../types";
@@ -34,22 +34,52 @@ const INTERNAL_ROWS: ReadonlyArray<{
 ];
 
 export function BuiltInGroup({ systemFields, onEditField }: Props) {
-  const [showInternals, setShowInternals] = useState(false);
+  // Why: default true per Mobeen 2026-05-03. localStorage === "false"
+  // honors an explicit user dismissal across sessions.
+  const [showInternals, setShowInternals] = useState(true);
 
   useEffect(() => {
-    setShowInternals(localStorage.getItem(STORAGE_KEY) === "true");
+    const v = localStorage.getItem(STORAGE_KEY);
+    setShowInternals(v === null ? true : v === "true");
   }, []);
 
-  const toggle = () => {
-    const next = !showInternals;
+  // Listen for the Settings modal's "Show system fields" switch flipping
+  // the same key so we update without a refresh.
+  useEffect(() => {
+    const onUpdate = (e: Event) => {
+      const next = (e as CustomEvent<boolean>).detail;
+      setShowInternals(next === true);
+    };
+    window.addEventListener("builder:show-system-fields", onUpdate);
+    return () =>
+      window.removeEventListener("builder:show-system-fields", onUpdate);
+  }, []);
+
+  const setVisible = (next: boolean) => {
     setShowInternals(next);
     localStorage.setItem(STORAGE_KEY, String(next));
   };
 
   return (
     <div className="space-y-2">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-        Built in
+      <div className="flex items-center gap-2">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Built in
+        </div>
+        {showInternals && (
+          // Why: tiny inline dismiss so the user can hide system internals
+          // without opening Settings. Mirrors the toggle in
+          // BuilderSettingsModal Advanced > Show system fields.
+          <button
+            type="button"
+            aria-label="Hide system fields"
+            className="text-[10px] text-muted-foreground hover:text-foreground leading-none"
+            onClick={() => setVisible(false)}
+            title="Hide system internals (id, createdAt, updatedAt)"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {systemFields.map(f => (
@@ -68,33 +98,31 @@ export function BuiltInGroup({ systemFields, onEditField }: Props) {
         </button>
       ))}
 
-      {showInternals && (
-        <>
-          {INTERNAL_ROWS.map(row => (
-            <div
-              key={row.name}
-              data-row-id={`system-${row.name}`}
-              className="flex items-center gap-2 px-3 py-2 rounded-md border border-dashed border-border bg-muted/20 text-sm text-muted-foreground cursor-default"
-              title={row.hint}
-            >
-              <span className="font-medium">{row.name}</span>
-              <span className="text-xs">{row.type}</span>
-              <span className="ml-auto text-[10px] border border-current rounded-sm px-1 py-0.5 opacity-50">
-                MANAGED
-              </span>
-            </div>
-          ))}
-        </>
-      )}
+      {showInternals &&
+        INTERNAL_ROWS.map(row => (
+          <div
+            key={row.name}
+            data-row-id={`system-${row.name}`}
+            className="flex items-center gap-2 px-3 py-2 rounded-md border border-dashed border-border bg-muted/20 text-sm text-muted-foreground cursor-default"
+            title={row.hint}
+          >
+            <span className="font-medium">{row.name}</span>
+            <span className="text-xs">{row.type}</span>
+            <span className="ml-auto text-[10px] border border-current rounded-sm px-1 py-0.5 opacity-50">
+              MANAGED
+            </span>
+          </div>
+        ))}
 
-      <button
-        type="button"
-        onClick={toggle}
-        className="text-xs text-muted-foreground hover:text-foreground"
-      >
-        {showInternals ? "▾ Hide" : "▸ Show"} system fields (
-        {INTERNAL_ROWS.length})
-      </button>
+      {!showInternals && (
+        <button
+          type="button"
+          onClick={() => setVisible(true)}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          ▸ Show system fields ({INTERNAL_ROWS.length})
+        </button>
+      )}
     </div>
   );
 }

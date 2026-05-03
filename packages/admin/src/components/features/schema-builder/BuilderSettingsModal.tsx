@@ -30,8 +30,12 @@ import { BasicsTab } from "./builder-settings-modal/BasicsTab";
 
 /**
  * Form-state shape shared by both modes. Optional fields are present so the
- * type covers all three kinds (Collections use plural+timestamps, Singles
- * skip them, Components use category instead of adminGroup, etc.).
+ * type covers all three kinds (Collections use plural, Singles skip it,
+ * Components use category instead of adminGroup, etc.).
+ *
+ * `useAsTitle` and `timestamps` were removed in PR B per feedback Section
+ * 1: the system `title` column is always the display, and timestamps are
+ * always emitted. Power users override either via code-first config.
  */
 export type BuilderSettingsValues = {
   singularName: string;
@@ -42,10 +46,8 @@ export type BuilderSettingsValues = {
   adminGroup?: string;
   category?: string;
   order?: number;
-  useAsTitle?: string;
   status?: boolean;
   i18n?: boolean;
-  timestamps?: boolean;
 };
 
 type Props = {

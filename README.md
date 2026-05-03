@@ -1,406 +1,142 @@
-# Nextly
+<!-- Add a social preview image at GitHub repo Settings → Social preview to control the link card shown when this repo is shared. -->
 
-An open-source CMS and app framework for Next.js. Define your content schema with Code-First configuration or the Visual Schema Builder, then consume it with a type-safe API.
+<p align="center">
+  <a href="https://nextlyhq.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/logo-dark-mode.svg">
+      <img alt="Nextly" src="./.github/assets/logo.svg" width="100">
+    </picture>
+  </a>
+</p>
+
+<h1 align="center">Nextly</h1>
+
+<h3 align="center">The open-source CMS and app framework for Next.js</h3>
+
+<p align="center">
+  Code-first or visual schema builder. Type-safe APIs.<br/>
+  Self-hosted, MIT-licensed, no vendor lock-in.
+</p>
+
+<p align="center">
+  <a href="https://nextlyhq.com/docs"><strong>Docs</strong></a> ·
+  <a href="https://github.com/nextlyhq/nextly/discussions"><strong>Discussions</strong></a> ·
+  <a href="https://github.com/nextlyhq/nextly/issues"><strong>Issues</strong></a> ·
+  <a href="https://nextlyhq.com"><strong>Website</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/nextly"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/nextly?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/nextlyhq/nextly/ci.yml?branch=main&style=flat-square&label=CI" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://github.com/nextlyhq/nextly/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/nextlyhq/nextly?style=flat-square&color=yellow" /></a>
+</p>
+
+<br/>
+
+Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST + GraphQL API and a customizable admin dashboard out of the box. No SaaS, no proprietary cloud — your data, your stack.
+
+- Define collections in TypeScript with the [**code-first config**](https://nextlyhq.com/docs/concepts), or build them visually in the [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/schema-builder)
+- Auto-generated [**REST**](https://nextlyhq.com/docs/api/rest) & [**GraphQL**](https://nextlyhq.com/docs/api/graphql) APIs with full TypeScript types
+- Granular [**Roles & Permissions**](https://nextlyhq.com/docs/access-control) and field-level access control out of the box
+- First-class [**PostgreSQL**, **MySQL**, and **SQLite**](https://nextlyhq.com/docs/database/support) support via pluggable adapters
+- Built-in [**Media Library**](https://nextlyhq.com/docs/media) with **S3**, **Vercel Blob**, and **UploadThing** storage adapters
+- Extensible [**plugin system**](https://nextlyhq.com/docs/plugins) and customizable admin dashboard
+- 100% [**TypeScript**](https://nextlyhq.com/docs/typescript), MIT-licensed, self-hosted
+
+> Explore all features at **[nextlyhq.com](https://nextlyhq.com)**
+
+> [!IMPORTANT]
+> Nextly is in active development heading toward v1.0. Star this repo to follow along — releases land every few weeks.
+
+## Quickstart
+
+```bash
+pnpm create nextly-app@latest
+```
+
+That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.
+
+> Prefer a manual setup? See the [installation guide](https://nextlyhq.com/docs/installation) for clone-and-configure instructions, Docker, and database options.
 
 ## Packages
 
 ### Core
 
-| Package            | Description                                             |
-| ------------------ | ------------------------------------------------------- |
-| **nextly**         | Core CMS functionality - database, services, APIs, RBAC |
-| **@nextly/admin**  | Admin dashboard and management interface                |
-| **@nextly/client** | Client SDK for browser-based applications _(scaffold)_  |
-| **@nextly/ui**     | Headless UI components for plugins _(scaffold)_         |
+| Package                         | Description                                               |
+| ------------------------------- | --------------------------------------------------------- |
+| **@revnixhq/nextly**            | Core CMS — database, services, APIs, RBAC                 |
+| **@revnixhq/admin**             | Admin dashboard and management interface                  |
+| **@revnixhq/client**            | Type-safe client SDK for browser-based applications       |
+| **@revnixhq/ui**                | Headless UI components shared across packages and plugins |
+| **@revnixhq/create-nextly-app** | CLI scaffold for new Nextly projects                      |
 
-### Database Adapters
+### Database adapters
 
-| Package                      | Description                     |
-| ---------------------------- | ------------------------------- |
-| **@nextly/adapter-postgres** | PostgreSQL adapter _(scaffold)_ |
-| **@nextly/adapter-mysql**    | MySQL adapter _(scaffold)_      |
-| **@nextly/adapter-sqlite**   | SQLite adapter _(scaffold)_     |
+| Package                        | Description         |
+| ------------------------------ | ------------------- |
+| **@revnixhq/adapter-postgres** | PostgreSQL adapter  |
+| **@revnixhq/adapter-mysql**    | MySQL adapter       |
+| **@revnixhq/adapter-sqlite**   | SQLite adapter      |
+| **@revnixhq/adapter-drizzle**  | Drizzle ORM adapter |
 
-### Configuration
+### Storage adapters
 
-| Package                     | Description                     |
-| --------------------------- | ------------------------------- |
-| **@nextly/eslint-config**   | Shared ESLint configuration     |
-| **@nextly/tsconfig**        | Shared TypeScript configuration |
-| **@nextly/prettier-config** | Shared Prettier configuration   |
+| Package                           | Description                                |
+| --------------------------------- | ------------------------------------------ |
+| **@revnixhq/storage-s3**          | Amazon S3 (or compatible: R2, MinIO, etc.) |
+| **@revnixhq/storage-vercel-blob** | Vercel Blob storage                        |
+| **@revnixhq/storage-uploadthing** | UploadThing storage                        |
+
+### Plugins
+
+| Package                           | Description                       |
+| --------------------------------- | --------------------------------- |
+| **@revnixhq/plugin-form-builder** | Drag-and-drop form builder plugin |
 
 ## Requirements
 
-Adopting Nextly into a Next.js application needs the following:
-
-### Runtime
-
 | Tool    | Minimum                                                     |
 | ------- | ----------------------------------------------------------- |
-| Node.js | 18+ (Node 22 LTS is what we test against)                   |
-| pnpm    | 8+                                                          |
+| Node.js | 18+ (Node 22 LTS recommended)                               |
+| pnpm    | 9+ (recommended) — npm and Yarn also work                   |
 | Next.js | 15+ for production; 16+ recommended for Turbopack-based dev |
 
-### Database
+### Database support
 
-Nextly verifies your database version at connect time. Older real PostgreSQL/MySQL/SQLite versions hard-fail at boot with a clear upgrade pointer.
+| Database   | Minimum | Notes                                                                 |
+| ---------- | ------- | --------------------------------------------------------------------- |
+| PostgreSQL | 15.0+   | Standard PG, Neon, Supabase, RDS, Aurora PG all supported.            |
+| MySQL      | 8.0+    | MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess work on best-effort. |
+| SQLite     | 3.38+   | Bundled with `better-sqlite3`.                                        |
 
-| Database   | Minimum | Notes                                                                                                                                                          |
-| ---------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PostgreSQL | 15.0+   | Standard PG, Neon, Supabase, RDS, Aurora PG all supported.                                                                                                     |
-| MySQL      | 8.0+    | MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) recognized at connect with a warning and continue to work on best-effort support. |
-| SQLite     | 3.38+   | Bundled with `better-sqlite3` (currently 3.45+).                                                                                                               |
+See the [database support docs](https://nextlyhq.com/docs/database/support) for full version policy and cloud-provider notes.
 
-See [database support docs](./docs/database/support.mdx) for the full version policy, cloud-provider compatibility, and upgrade guidance.
+## Documentation
 
-## Monorepo Structure
+- [**Installation**](https://nextlyhq.com/docs/installation) — get started in minutes
+- [**Concepts**](https://nextlyhq.com/docs/concepts) — collections, fields, hooks, access control
+- [**API reference**](https://nextlyhq.com/docs/api) — REST and GraphQL
+- [**Admin customization**](https://nextlyhq.com/docs/admin) — extend the dashboard
+- [**Plugin development**](https://nextlyhq.com/docs/plugins) — build your own integrations
 
-```
-nextly-dev/
-├── apps/
-│   └── playground/           # Development/testing app
-├── packages/
-│   ├── nextly/               # Core CMS (nextly)
-│   ├── create-nextly-app/    # CLI scaffold tool
-│   ├── admin/                # Admin UI (@nextly/admin)
-│   ├── client/               # Client SDK (@nextly/client)
-│   ├── ui/                   # UI components (@nextly/ui)
-│   ├── adapter-postgres/     # PostgreSQL adapter
-│   ├── adapter-mysql/        # MySQL adapter
-│   ├── adapter-sqlite/       # SQLite adapter
-│   ├── eslint-config/        # ESLint config
-│   ├── tsconfig/             # TypeScript config
-│   └── prettier-config/      # Prettier config
-├── templates/                # Project starter templates
-│   ├── base/                 # Shared foundation (admin, API routes)
-│   ├── blank/                # Empty starter
-│   └── blog/                 # Blog with posts, authors, categories
-├── scripts/                  # Monorepo scripts
-└── docs/                     # Documentation
-```
+## Community
 
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- pnpm 9+
-- Docker Desktop (for local database)
-
-### Quick Start (3 Steps)
-
-1. **Clone and install dependencies:**
-
-```sh
-git clone https://github.com/nextlyhq/nextly.git
-cd nextly
-pnpm install
-```
-
-2. **Setup database:**
-
-```sh
-# Start PostgreSQL database
-pnpm docker:up
-
-# Copy environment variables and run migrations
-cp .env.docker .env
-cd packages/nextly
-pnpm drizzle:migrate
-pnpm db:seed:all
-cd ../..
-```
-
-3. **Run the development server:**
-
-```sh
-pnpm dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### Running Tests
-
-Nextly has two test suites: unit (no DB needed) and integration (real Docker-backed PG/MySQL).
-
-```sh
-# Unit suite — no setup needed
-pnpm test:unit
-
-# Integration suite — start Docker test stack first
-docker compose -f docker-compose.test.yml up -d
-pnpm test:integration
-docker compose -f docker-compose.test.yml down
-```
-
-For the full test workflow including per-dialect runs, writing new integration tests, and CI details, see the [Testing section in CONTRIBUTING.md](./CONTRIBUTING.md#testing).
-
----
-
-## Docker Development Environment
-
-Nextly uses Docker Compose to provide a consistent development environment across all platforms (macOS, Linux, Windows).
-
-### Services
-
-- **PostgreSQL 16**: Main database (`localhost:5432`)
-- **Adminer**: Database management UI ([http://localhost:8080](http://localhost:8080))
-- **Redis** (optional): Caching layer (`localhost:6379`)
-
-### Quick Commands
-
-```bash
-# Start all services
-pnpm docker:up
-
-# Stop all services
-pnpm docker:down
-
-# View logs (all services or specific)
-pnpm docker:logs
-pnpm docker:logs postgres
-
-# Open PostgreSQL shell
-pnpm docker:shell
-
-# Create database backup
-pnpm docker:backup
-
-# Restore from backup
-pnpm docker:restore backups/backup-20250108-143022.sql
-
-# Reset database (deletes all data!)
-pnpm docker:reset
-
-# Check service status
-pnpm docker:status
-
-# Restart services
-pnpm docker:restart
-```
-
-### Database Connection
-
-When using Docker, your application connects to:
-
-```env
-DATABASE_URL=postgresql://postgres:dev_password_change_in_production@localhost:5432/nextly_dev
-```
-
-**Adminer Access:**
-
-- URL: http://localhost:8080
-- System: PostgreSQL
-- Server: `postgres`
-- Username: `postgres`
-- Password: `dev_password_change_in_production`
-- Database: `nextly_dev`
-
-### Database Migrations & Seeding
-
-After starting Docker for the first time:
-
-```bash
-# 1. Update your .env file
-cp .env.docker .env
-
-# 2. Run migrations (from packages/nextly)
-cd packages/nextly
-pnpm drizzle:migrate
-
-# 3. Seed initial data (RBAC permissions)
-pnpm db:seed
-
-# 4. Start development
-cd ../..
-pnpm dev
-```
-
-**Complete workflow guide:** Database integration documentation coming soon.
-
-### Optional: Redis Cache
-
-To start with Redis:
-
-```bash
-docker compose --profile with-redis up -d
-```
-
-### Troubleshooting
-
-**Port already in use:**
-
-```bash
-# Check what's using port 5432
-lsof -i :5432
-
-# Change port in .env.docker
-DB_PORT=5433
-```
-
-**Data persistence:**
-Data is stored in Docker volumes and persists across restarts. Only `pnpm docker:reset` deletes data.
-
-**Reset everything:**
-
-```bash
-pnpm docker:down
-docker volume prune  # Remove all unused volumes
-pnpm docker:up
-```
-
----
-
-## Common Scripts
-
-Nextly uses consistent script naming across all packages. Run these commands from the root directory:
-
-### Development
-
-```bash
-pnpm dev              # Start all watchers in parallel (preferred — see below)
-pnpm dev:parallel     # Same, with parallel concurrency mode
-pnpm dev:core         # Only @revnixhq/nextly in watch mode
-pnpm dev:admin        # Only @revnixhq/admin (JS + CSS via scripts/dev.mjs)
-pnpm dev:app          # Only the playground app (no upstream watchers)
-```
-
-`pnpm dev` from the **monorepo root** is the canonical dev loop. Turborepo runs every package's `dev` script in parallel, so edits to any workspace package's `src/` flow into the playground without a manual rebuild. Client packages (`@revnixhq/ui`, `@revnixhq/admin`, `@revnixhq/plugin-form-builder`) are aliased to source — Turbopack reads their `.ts/.tsx` directly. Server-side packages (`@revnixhq/nextly`, adapters, storage) keep producing `dist/` via their own `tsup --watch` because Node loads them via `serverExternalPackages`. See [CONTRIBUTING.md → Development Workflow](./CONTRIBUTING.md#development-workflow) for the full architecture.
-
-### Building
-
-```bash
-pnpm build            # Build all packages (uses Turbo cache)
-```
-
-### Code Quality
-
-```bash
-pnpm lint             # Lint all packages
-pnpm lint:fix         # Auto-fix linting issues
-pnpm check-types      # Type check all packages
-pnpm format           # Format code with Prettier
-```
-
-### Testing
-
-```bash
-pnpm test             # Run all tests
-pnpm test:watch       # Run tests in watch mode
-pnpm test:ui          # Open Vitest UI
-pnpm test:coverage    # Generate coverage report
-pnpm test:e2e         # Run Playwright E2E tests
-pnpm test:e2e:ui      # Run E2E tests with Playwright UI
-```
-
-### Cleaning
-
-```bash
-pnpm clean            # Clean all dist/ folders
-pnpm clean:cache      # Clear Turbo cache
-pnpm clean:all        # Clean everything (dist + cache + tsbuildinfo)
-pnpm fresh            # Nuclear option: clean all + reinstall + rebuild
-```
-
-**For detailed script conventions**, see each package's `package.json` file.
-
----
-
-## Package Development
-
-### Working on Core Package (nextly)
-
-```bash
-pnpm dev:core         # Watch mode for core package
-pnpm --filter nextly test          # Run core tests
-pnpm --filter nextly check-types   # Type check core
-```
-
-### Working on Admin Package (@nextly/admin)
-
-```bash
-pnpm dev:admin        # Watch mode for admin package
-pnpm --filter @nextly/admin test   # Run admin tests
-pnpm --filter @nextly/admin check-types  # Type check admin
-```
-
-### Working on Multiple Packages
-
-```bash
-pnpm dev:packages     # Watch mode for all @nextly/* packages
-```
-
----
-
-## Turborepo Task Configuration
-
-Nextly uses [Turborepo](https://turbo.build) to orchestrate tasks across the monorepo. Tasks are configured in `turbo.jsonc` with smart caching and dependency management.
-
-### Task Execution Order
-
-Tasks respect package dependencies using the `^` prefix (e.g., `"dependsOn": ["^build"]`). This ensures:
-
-- **Dependencies are processed first**: When you run `turbo run build`, it builds `nextly` before `@nextly/admin` (which depends on it)
-- **Topological sorting**: Turbo automatically determines the correct execution order based on your package.json dependencies
-- **Parallel execution**: Independent packages build concurrently for maximum speed
-
-### Key Tasks
-
-| Task          | Cache | Dependencies | Purpose                                   |
-| ------------- | ----- | ------------ | ----------------------------------------- |
-| `build`       | Yes   | `^build`     | Builds all packages in dependency order   |
-| `check-types` | Yes   | `^build`     | TypeScript type checking                  |
-| `clean`       | No    | `^clean`     | Removes dist/ folders (topological order) |
-| `dev`         | No    | `^build`     | Starts development servers (persistent)   |
-| `format`      | No    | None         | Formats code with Prettier                |
-| `lint`        | Yes   | `^build`     | Lints all packages                        |
-| `test`        | Yes   | `^build`     | Runs all tests with coverage              |
-
-### Why Some Tasks Don't Cache
-
-- **`clean`**: Destructive operation - always runs to ensure clean state
-- **`format`**: Modifies files in-place - caching would prevent formatting
-- **`dev`**: Long-running server - no benefit from caching
-- **`lint:fix`**: Modifies files - needs to run to apply fixes
-
-### Input Exclusions
-
-Turbo automatically excludes from task inputs:
-
-- `node_modules/**` (dependencies)
-- `.git/**` (version control)
-- `dist/**` (build outputs)
-- Files in `.gitignore`
-
-No need to explicitly exclude these in most cases.
-
-**For more details on Turbo configuration, see:** [Turborepo Docs](https://turbo.build/repo/docs)
-
----
-
-## Architecture
-
-Architecture documentation coming soon. For now, explore the codebase:
-
-- **Core package:** `packages/nextly/src/`
-- **Admin package:** `packages/admin/src/`
-- **Analysis reports:** `reports/` folder
+- [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) — questions, ideas, show-and-tell
+- [**Issues**](https://github.com/nextlyhq/nextly/issues) — bug reports and feature requests
+- [**Contributing guide**](./CONTRIBUTING.md) — local setup, development workflow, conventions
+- [**Code of Conduct**](./CODE_OF_CONDUCT.md) — how we behave as a community
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+Contributions of every size are welcome — from typo fixes to new database adapters. Start with the [Contributing guide](./CONTRIBUTING.md) for local setup, the development workflow, and our PR/commit conventions. First-time contributors should look for issues tagged [`good first issue`](https://github.com/nextlyhq/nextly/labels/good%20first%20issue).
 
 ## Telemetry
 
-The Nextly CLI (`create-nextly-app` and `nextly`) collects anonymous usage
-data to help us improve the tool. No personal information, project contents,
-file paths, or secrets are collected. Telemetry is automatically disabled in
-CI, Docker, production, and non-interactive shells.
+The Nextly CLI (`create-nextly-app` and `nextly`) collects anonymous usage data to help us improve the tool. No personal information, project contents, file paths, or secrets are collected. Telemetry is automatically disabled in CI, Docker, production, and non-interactive shells.
 
-See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for
-the full list of what is and is not collected, and for instructions on
-opting out (`nextly telemetry disable` or `NEXTLY_TELEMETRY_DISABLED=1`).
+See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the full list of what is and is not collected, and for instructions on opting out (`nextly telemetry disable` or `NEXTLY_TELEMETRY_DISABLED=1`).
 
 ## License
 
-MIT
+[MIT](./LICENSE) — free to use, modify, and distribute.
