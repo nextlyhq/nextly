@@ -7,21 +7,34 @@
 // - Width segmented control gains visible dividers between options.
 // - Conditional visibility stays as the JSON textarea here; PR E2 will
 //   rebuild it into a visual rule builder.
-import { Button, Label, Switch, Textarea } from "@revnixhq/ui";
+import { Button, Label, Switch } from "@revnixhq/ui";
 
 import {
   FIELD_WIDTH_OPTIONS,
   type BuilderField,
+  type FieldCondition,
   type FieldWidth,
 } from "../types";
 
+import { ConditionBuilder } from "./ConditionBuilder";
+
 type Props = {
   field: BuilderField;
+  /**
+   * PR E2: full sibling fields so ConditionBuilder can look up each
+   * one's type for the operator filter.
+   */
+  siblingFields: readonly BuilderField[];
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
 };
 
-export function DisplayTab({ field, readOnly = false, onChange }: Props) {
+export function DisplayTab({
+  field,
+  siblingFields,
+  readOnly = false,
+  onChange,
+}: Props) {
   const a = field.admin ?? {};
   const setA = (next: Partial<NonNullable<BuilderField["admin"]>>) =>
     onChange({ ...field, admin: { ...a, ...next } });
@@ -59,30 +72,26 @@ export function DisplayTab({ field, readOnly = false, onChange }: Props) {
         />
       </div>
 
-      <details className="space-y-1">
+      <details
+        className="space-y-2"
+        open={field.admin?.condition !== undefined}
+      >
         <summary className="cursor-pointer text-sm">
           Conditional visibility
         </summary>
-        {/* PR E2 (next) replaces this JSON textarea with a visual rule
-            builder. For now we keep the existing behavior so the field
-            stays editable end-to-end. */}
-        <Textarea
-          rows={3}
-          placeholder='e.g. { "field": "status", "equals": "published" }'
-          value={a.condition ? JSON.stringify(a.condition) : ""}
-          disabled={readOnly}
-          onChange={e => {
-            try {
-              const parsed = e.target.value
-                ? JSON.parse(e.target.value)
-                : undefined;
-              setA({ condition: parsed });
-            } catch {
-              /* keep previous condition */
+        {/* PR E2: visual rule builder replaces the JSON textarea per
+            feedback Section 4. ConditionBuilder accepts the legacy
+            { field, equals } shape via backwards-compat normalization. */}
+        <div className="mt-2">
+          <ConditionBuilder
+            condition={field.admin?.condition}
+            siblingFields={siblingFields.filter(f => f.id !== field.id)}
+            readOnly={readOnly}
+            onChange={(next: FieldCondition | undefined) =>
+              setA({ condition: next })
             }
-          }}
-          className="mt-2 font-mono text-xs"
-        />
+          />
+        </div>
       </details>
     </div>
   );

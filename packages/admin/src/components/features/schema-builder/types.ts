@@ -39,14 +39,81 @@ export type FieldPosition = "main" | "sidebar";
 // ============================================================
 
 /**
- * Simplified condition for field visibility
- * Shows field when another field equals a specific value
+ * Operator union for FieldCondition. PR E2 (2026-05-03) extends the
+ * legacy { field, equals } shape with type-aware operators per Q6 = (b).
+ *
+ * Operator semantics:
+ *   - equals / notEquals      -- universal scalar equality
+ *   - contains / notContains  -- substring (text-style only)
+ *   - startsWith / endsWith   -- substring at boundary (text-style only)
+ *   - isEmpty / isNotEmpty    -- emptiness check (text-style only); no value
+ *   - greaterThan / lessThan / greaterThanOrEqual / lessThanOrEqual
+ *                              -- numeric comparison (number/date)
+ *   - between                  -- inclusive range (number/date); value is { min, max }
+ *   - before / after           -- date comparison (alias for less/greater on dates)
+ *   - isTrue / isNotTrue       -- boolean-only; no value
+ */
+export type ConditionOperator =
+  | "equals"
+  | "notEquals"
+  | "contains"
+  | "notContains"
+  | "startsWith"
+  | "endsWith"
+  | "isEmpty"
+  | "isNotEmpty"
+  | "greaterThan"
+  | "lessThan"
+  | "greaterThanOrEqual"
+  | "lessThanOrEqual"
+  | "between"
+  | "before"
+  | "after"
+  | "isTrue"
+  | "isNotTrue";
+
+/**
+ * Value shape for the `between` operator.
+ */
+export interface ConditionRangeValue {
+  min: number | string;
+  max: number | string;
+}
+
+/**
+ * Field visibility condition.
+ *
+ * PR E2 extended this from `{ field, equals }` to support type-aware
+ * operators. Legacy shape is preserved as an OPTIONAL `equals` for
+ * backwards-compat at the runtime evaluator boundary; new code writes
+ * `{ field, operator, value? }`.
+ *
+ * Use the `evaluateCondition` helper in `lib/builder/condition-evaluator`
+ * to evaluate at runtime. It normalizes both shapes to the same logic.
  */
 export interface FieldCondition {
-  /** The field name to check */
+  /** The source field name to check. */
   field: string;
-  /** The value that field should equal */
-  equals: string;
+  /**
+   * Operator. Optional only for backwards-compat with the legacy
+   * `{ field, equals }` shape; new code always sets this.
+   */
+  operator?: ConditionOperator;
+  /**
+   * Value to compare against. Type depends on operator:
+   *   - string for text-style operators
+   *   - number for numeric comparison
+   *   - string (ISO 8601) for date comparison
+   *   - { min, max } for between
+   *   - undefined for isEmpty/isNotEmpty/isTrue/isNotTrue
+   */
+  value?: string | number | boolean | ConditionRangeValue;
+  /**
+   * @deprecated Legacy shape from before PR E2. Treated as `{ operator:
+   * "equals", value: equals }` at the evaluator boundary. New code should
+   * use `operator` + `value`.
+   */
+  equals?: string;
 }
 
 // ============================================================

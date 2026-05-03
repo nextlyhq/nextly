@@ -35,8 +35,14 @@ type Props = {
   open: boolean;
   mode: "create" | "edit";
   field: BuilderField;
-  /** Existing field names in the same parent scope — for uniqueness checks. */
-  siblingNames: readonly string[];
+  /**
+   * Existing fields in the same parent scope. Used by GeneralTab for
+   * name-uniqueness checks AND by DisplayTab's ConditionBuilder for
+   * the source-field dropdown. PR E2 (2026-05-03) widened this from
+   * `siblingNames: string[]` to `siblingFields: BuilderField[]` so
+   * ConditionBuilder can see each sibling's type.
+   */
+  siblingFields: readonly BuilderField[];
   /** Lock all editing affordances (used for code-first collections). */
   readOnly?: boolean;
   onCancel: () => void;
@@ -58,7 +64,7 @@ export function FieldEditorSheet({
   open,
   mode,
   field,
-  siblingNames,
+  siblingFields,
   readOnly = false,
   onCancel,
   onApply,
@@ -116,7 +122,7 @@ export function FieldEditorSheet({
             <TabsContent value="general">
               <GeneralTab
                 field={draft}
-                siblingNames={siblingNames}
+                siblingNames={siblingFields.map(f => f.name)}
                 readOnly={readOnly}
                 onChange={setDraft}
                 onAddNestedField={onAddNestedField}
@@ -132,6 +138,7 @@ export function FieldEditorSheet({
             <TabsContent value="admin">
               <DisplayTab
                 field={draft}
+                siblingFields={siblingFields}
                 readOnly={readOnly}
                 onChange={setDraft}
               />
