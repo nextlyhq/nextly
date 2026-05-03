@@ -75,7 +75,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Sign In
@@ -128,7 +128,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
                 Go to Sign In
                 <ArrowRight className="h-4 w-4 ml-2" />
@@ -158,7 +158,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
           <div className="mt-2 text-left">
             <Link
               href={ROUTES.LOGIN}
-              className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+              className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
             >
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Sign In

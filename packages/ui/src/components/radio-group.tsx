@@ -54,7 +54,7 @@ const RadioGroupItem = forwardRef<
       ref={ref}
       data-slot="radio-group-item"
       className={cn(
-        "peer h-4 w-4 shrink-0 rounded-none  border border-primary/5 bg-background cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 hover:border-ring data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
+        "peer h-4 w-4 shrink-0 rounded-none border border-primary/5 bg-background cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/30 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
         className
       )}
       {...props}

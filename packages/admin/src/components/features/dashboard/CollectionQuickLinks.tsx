@@ -149,7 +149,9 @@ export const CollectionQuickLinks: React.FC = () => {
 
   const counts = useMemo(() => {
     const raw = statsData?.collectionCounts ?? [];
-    const allowed = new Set((collectionsData?.items ?? []).map(col => col.name));
+    const allowed = new Set(
+      (collectionsData?.items ?? []).map(col => col.name)
+    );
     if (allowed.size === 0) return raw;
     return raw.filter(item => allowed.has(item.slug));
   }, [statsData?.collectionCounts, collectionsData?.items]);
@@ -185,7 +187,7 @@ export const CollectionQuickLinks: React.FC = () => {
             </p>
             <Link
               href={ROUTES.COLLECTIONS_CREATE}
-              className="text-[10px] font-bold uppercase tracking-widest text-primary hover-unified flex items-center justify-center gap-2 transition-all"
+              className="text-[10px] font-bold uppercase tracking-widest text-primary flex items-center justify-center gap-2 transition-all"
             >
               Create Collection <ChevronRight className="h-3.5 w-3.5" />
             </Link>

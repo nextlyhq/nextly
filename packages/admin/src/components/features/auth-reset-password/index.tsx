@@ -125,7 +125,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.FORGOT_PASSWORD}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Request New Link
@@ -156,7 +156,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
                 Go to Sign In
                 <ArrowRight className="h-4 w-4 ml-2" />
@@ -304,7 +304,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
               Remember your password?{" "}
               <Link
                 href={ROUTES.LOGIN}
-                className="text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="text-primary cursor-pointer font-medium transition-colors"
               >
                 Sign in
               </Link>

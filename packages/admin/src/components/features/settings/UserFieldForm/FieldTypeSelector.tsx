@@ -1,6 +1,5 @@
 "use client";
 
-
 import {
   AlignLeft,
   Calendar,
@@ -114,7 +113,7 @@ export function FieldTypePicker({
               className={`
                 shrink-0 flex items-center justify-center w-9 h-9 transition-all duration-200
                 bg-primary/5 text-primary  border border-primary/5 border-primary/5 rounded-none]
-                ${isSelected ? "border border-primary/25" : ""}
+                ${isSelected ? "border border-primary/5" : ""}
               `}
             >
               <Icon className="h-5 w-5" />

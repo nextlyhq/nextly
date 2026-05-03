@@ -282,18 +282,17 @@ export function CreateApiKeyForm({
   return (
     <div className="space-y-6">
       <Form {...form}>
-        <form onSubmit={(e) => { void form.handleSubmit(handleSubmit)(e); }} className="space-y-6">
+        <form
+          onSubmit={e => {
+            void form.handleSubmit(handleSubmit)(e);
+          }}
+          className="space-y-6"
+        >
           <div className="bg-card  border border-primary/5 rounded-none overflow-hidden">
             {/* Page Header */}
             <div className="border-b border-primary/5 bg-primary/5 px-6 py-5">
               <div className="flex items-center gap-3">
-                <div
-                  className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary"
-                  style={{
-                    borderRadius: "6px",
-                    border: "1px solid hsl(var(--primary) / 0.25)",
-                  }}
-                >
+                <div className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary">
                   <Key className="h-4 w-4" />
                 </div>
                 <div>
@@ -500,7 +499,7 @@ export function CreateApiKeyForm({
                     <CollapsibleTrigger asChild>
                       <button
                         type="button"
-                        className="flex w-full items-center justify-between rounded-none  border border-primary/5 px-3 py-2.5 text-sm font-medium transition-colors hover-unified"
+                        className="flex w-full items-center justify-between rounded-none  border border-primary/5 px-3 py-2.5 text-sm font-medium transition-colors"
                       >
                         <span>What can this key access?</span>
                         {accessPreviewOpen ? (
