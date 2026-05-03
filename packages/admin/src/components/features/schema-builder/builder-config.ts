@@ -17,10 +17,9 @@ export type AdvancedField =
   | "adminGroup"
   | "category"
   | "order"
-  | "useAsTitle"
   | "status"
   | "i18n"
-  | "timestamps";
+  | "showSystemFields";
 
 export type BuilderConfig = {
   kind: BuilderKind;

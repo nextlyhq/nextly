@@ -52,12 +52,13 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         icon: values.icon,
         group: values.adminGroup?.trim() || undefined,
         order: values.order,
-        useAsTitle: values.useAsTitle?.trim() || undefined,
         status: values.status === true,
-        timestamps: values.timestamps !== false,
+        // Why: useAsTitle + timestamps removed in PR B. Backend defaults
+        // (timestamps always on, useAsTitle = system title) take over.
+        // Code-first config can still override either.
         // Empty user-fields list: the API auto-injects system columns
-        // (id, title, slug, timestamps if enabled, status if enabled).
-        // The user adds custom fields on the next page.
+        // (id, title, slug, timestamps, status if enabled). The user
+        // adds custom fields on the next page.
         fields: [],
       },
       {

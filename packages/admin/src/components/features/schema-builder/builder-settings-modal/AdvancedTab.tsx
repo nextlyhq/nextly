@@ -1,13 +1,16 @@
 // Why: Advanced-tab fields for the BuilderSettingsModal. Like BasicsTab,
-// renders only the fields listed in the per-kind config. The Status switch
-// is the new Draft/Published toggle wired to the per-collection/single
-// `status` boolean (covered end-to-end in Task 7's schema infrastructure).
-// The i18n row is intentionally a disabled switch with a "Soon" badge —
-// the toggle is reserved so visual layout is stable when i18n ships.
+// renders only the fields listed in the per-kind config. PR B (2026-05-03)
+// removed Use as Title (system title is always the display) and Timestamps
+// (always emitted) from the UI. The i18n row stays as a disabled placeholder
+// with a neutral "Coming Soon" chip. New "Show system fields" switch
+// mirrors localStorage so BuiltInGroup stays in sync.
 import { Input, Label, Switch } from "@revnixhq/ui";
+import { useEffect, useState } from "react";
 
 import type { AdvancedField } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
+
+const SHOW_SYSTEM_STORAGE_KEY = "builder.showSystemInternals";
 
 type Props = {
   fields: readonly AdvancedField[];
@@ -23,15 +26,33 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
 
   return (
     <div className="space-y-4 py-2">
-      {fields.includes("adminGroup") && (
-        <div className="space-y-1">
-          <Label htmlFor="adminGroup">Admin group</Label>
-          <Input
-            id="adminGroup"
-            value={values.adminGroup ?? ""}
-            onChange={e => set("adminGroup", e.target.value)}
-            placeholder="e.g. Content"
-          />
+      {(fields.includes("adminGroup") || fields.includes("order")) && (
+        // Why: admin group + order paired in a 50/50 row per feedback
+        // Section 1.
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {fields.includes("adminGroup") && (
+            <div className="space-y-1">
+              <Label htmlFor="adminGroup">Admin group</Label>
+              <Input
+                id="adminGroup"
+                value={values.adminGroup ?? ""}
+                onChange={e => set("adminGroup", e.target.value)}
+                placeholder="e.g. Content"
+              />
+            </div>
+          )}
+
+          {fields.includes("order") && (
+            <div className="space-y-1">
+              <Label htmlFor="order">Order in sidebar</Label>
+              <Input
+                id="order"
+                type="number"
+                value={values.order ?? 0}
+                onChange={e => set("order", Number(e.target.value))}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -43,31 +64,6 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
             value={values.category ?? ""}
             onChange={e => set("category", e.target.value)}
             placeholder="e.g. Layout"
-          />
-        </div>
-      )}
-
-      {fields.includes("order") && (
-        <div className="space-y-1">
-          <Label htmlFor="order">Order in sidebar</Label>
-          <Input
-            id="order"
-            type="number"
-            value={values.order ?? 0}
-            onChange={e => set("order", Number(e.target.value))}
-            className="max-w-[120px]"
-          />
-        </div>
-      )}
-
-      {fields.includes("useAsTitle") && (
-        <div className="space-y-1">
-          <Label htmlFor="useAsTitle">Use as title</Label>
-          <Input
-            id="useAsTitle"
-            value={values.useAsTitle ?? "title"}
-            onChange={e => set("useAsTitle", e.target.value)}
-            placeholder="title"
           />
         </div>
       )}
@@ -90,19 +86,11 @@ export function AdvancedTab({ fields, values, onChange }: Props) {
           checked={false}
           onChange={() => {}}
           disabled
-          badge="Soon"
+          badge="Coming Soon"
         />
       )}
 
-      {fields.includes("timestamps") && (
-        <SwitchRow
-          ariaLabel="Timestamps"
-          label="Timestamps"
-          help="Adds createdAt and updatedAt columns."
-          checked={values.timestamps ?? true}
-          onChange={v => set("timestamps", v)}
-        />
-      )}
+      {fields.includes("showSystemFields") && <ShowSystemFieldsSwitch />}
     </div>
   );
 }
@@ -136,7 +124,9 @@ function SwitchRow({
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{label}</span>
           {badge && (
-            <span className="text-[10px] border border-amber-400/40 text-amber-300 rounded-sm px-1 py-0.5">
+            // Why: neutral disabled-chip styling (was amber, which read as
+            // alarming for a future-feature placeholder).
+            <span className="text-[10px] border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
               {badge}
             </span>
           )}
@@ -144,5 +134,53 @@ function SwitchRow({
         <div className="text-xs text-muted-foreground">{help}</div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Show / hide system internals (id, createdAt, updatedAt) in the field
+ * list. Stored as a global localStorage pref so both this switch and the
+ * inline dismiss in BuiltInGroup share state. A window event keeps the
+ * two surfaces in sync without a refresh.
+ */
+function ShowSystemFieldsSwitch() {
+  // Why: default ON per Mobeen 2026-05-03 -- system internals visible by
+  // default; legacy localStorage value === "false" honors an explicit user
+  // dismissal across sessions.
+  const [checked, setChecked] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const v = window.localStorage.getItem(SHOW_SYSTEM_STORAGE_KEY);
+    return v === null ? true : v === "true";
+  });
+
+  // Listen for the inline BuiltInGroup dismiss button so this switch
+  // updates without remounting.
+  useEffect(() => {
+    const onUpdate = (e: Event) => {
+      setChecked((e as CustomEvent<boolean>).detail === true);
+    };
+    window.addEventListener("builder:show-system-fields", onUpdate);
+    return () =>
+      window.removeEventListener("builder:show-system-fields", onUpdate);
+  }, []);
+
+  const set = (next: boolean) => {
+    setChecked(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(next));
+      window.dispatchEvent(
+        new CustomEvent("builder:show-system-fields", { detail: next })
+      );
+    }
+  };
+
+  return (
+    <SwitchRow
+      ariaLabel="Show system fields"
+      label="Show system fields"
+      help="Show id, createdAt, updatedAt as informational rows in the field list. Saved to your browser."
+      checked={checked}
+      onChange={set}
+    />
   );
 }

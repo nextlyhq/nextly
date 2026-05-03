@@ -1,10 +1,11 @@
-// Why: AdvancedTab is config-driven (only fields in advancedFields render),
-// the i18n switch is always disabled with a "Soon" badge until i18n ships,
-// and the status switch toggles the Draft/Published flag. These tests lock
-// each contract.
+// Why: AdvancedTab is config-driven (only fields in advancedFields
+// render), the i18n switch is always disabled with a "Coming Soon" chip
+// until i18n ships, and the status switch toggles the Draft/Published
+// flag. PR B: timestamps + useAsTitle removed (always emit / system title
+// always wins); new "Show system fields" toggle persists to localStorage.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
@@ -25,7 +26,6 @@ function Controlled(props: {
     icon: "FileText",
     status: false,
     i18n: false,
-    timestamps: true,
     ...props.initial,
   });
   return (
@@ -48,14 +48,14 @@ describe("AdvancedTab", () => {
     expect(
       screen.queryByRole("switch", { name: /status/i })
     ).not.toBeInTheDocument();
-    expect(screen.queryByText(/soon/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
   });
 
-  it("renders i18n as a disabled switch with a Soon badge when configured", () => {
+  it("renders i18n as a disabled switch with a Coming Soon chip", () => {
     render(<Controlled fields={["i18n"]} />);
     const sw = screen.getByRole("switch", { name: /internationalization/i });
     expect(sw).toBeDisabled();
-    expect(screen.getByText(/soon/i)).toBeInTheDocument();
+    expect(screen.getByText("Coming Soon")).toBeInTheDocument();
   });
 
   it("toggles status when the status switch is clicked", async () => {
@@ -65,15 +65,6 @@ describe("AdvancedTab", () => {
     await user.click(screen.getByRole("switch", { name: /status/i }));
     const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
     expect(last.status).toBe(true);
-  });
-
-  it("toggles timestamps off (defaults to on)", async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<Controlled fields={["timestamps"]} onChange={onChange} />);
-    await user.click(screen.getByRole("switch", { name: /timestamps/i }));
-    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
-    expect(last.timestamps).toBe(false);
   });
 
   it("emits adminGroup and order changes through onChange", async () => {
@@ -86,5 +77,37 @@ describe("AdvancedTab", () => {
     const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
     expect(last.adminGroup).toBe("Content");
     expect(last.order).toBe(5);
+  });
+});
+
+describe("AdvancedTab -- showSystemFields", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("renders the system-fields toggle when included", () => {
+    render(<Controlled fields={["showSystemFields"]} />);
+    expect(screen.getByLabelText("Show system fields")).toBeInTheDocument();
+  });
+
+  it("defaults to ON when no prior localStorage value exists", () => {
+    render(<Controlled fields={["showSystemFields"]} />);
+    const sw = screen.getByLabelText("Show system fields");
+    expect(sw.getAttribute("data-state")).toBe("checked");
+  });
+
+  it("persists toggle state to localStorage when flipped off", async () => {
+    const user = userEvent.setup();
+    render(<Controlled fields={["showSystemFields"]} />);
+    const sw = screen.getByLabelText("Show system fields");
+    await user.click(sw);
+    expect(localStorage.getItem("builder.showSystemInternals")).toBe("false");
+  });
+
+  it("respects an existing localStorage = 'false' on initial render", () => {
+    localStorage.setItem("builder.showSystemInternals", "false");
+    render(<Controlled fields={["showSystemFields"]} />);
+    const sw = screen.getByLabelText("Show system fields");
+    expect(sw.getAttribute("data-state")).toBe("unchecked");
   });
 });

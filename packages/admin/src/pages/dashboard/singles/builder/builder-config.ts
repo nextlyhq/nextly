@@ -15,7 +15,8 @@ import type { BuilderConfig } from "@admin/components/features/schema-builder/bu
 export const SINGLE_BUILDER_CONFIG: BuilderConfig = {
   kind: "single",
   basicsFields: ["singularName", "slug", "description", "icon"],
-  advancedFields: ["adminGroup", "order", "status", "i18n"],
+  // showSystemFields added in PR B so singles can also surface the toggle.
+  advancedFields: ["adminGroup", "order", "status", "i18n", "showSystemFields"],
   toolbar: { showHooks: true, previewSchemaChange: false },
   picker: {},
 };
