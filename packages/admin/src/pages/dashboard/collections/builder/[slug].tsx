@@ -170,14 +170,9 @@ export default function CollectionBuilderEditPage({
       order: (collection.admin as Record<string, unknown>)?.order as
         | number
         | undefined,
-      useAsTitle: collection.admin?.useAsTitle,
-      // collection.status is the new flag from PR 1; default false for
-      // collections written before the column existed (column itself
-      // defaults false on insert per Task 7's meta-table schema).
+      // collection.status is the Draft/Published flag from PR 1; default
+      // false for collections written before the column existed.
       status: (collection as { status?: boolean }).status === true,
-      // Same fallback rule applies to timestamps: column default is true,
-      // so a missing value means "true" for legacy rows.
-      timestamps: (collection as { timestamps?: boolean }).timestamps !== false,
     });
 
     if (collection.hooks && Array.isArray(collection.hooks)) {
@@ -297,10 +292,12 @@ export default function CollectionBuilderEditPage({
             description: settings.description,
             icon: settings.icon,
             group: settings.adminGroup,
-            useAsTitle: settings.useAsTitle,
             order: settings.order,
             status: settings.status === true,
-            timestamps: settings.timestamps !== false,
+            // Why: useAsTitle + timestamps were removed from the modal in
+            // PR B (system title is always the display; timestamps always
+            // emitted). Backend defaults take over -- code-first config can
+            // still override.
             fields: fieldDefinitions,
             hooks: storedHooks.length > 0 ? storedHooks : undefined,
           },
