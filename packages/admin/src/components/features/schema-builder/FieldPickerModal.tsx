@@ -18,6 +18,8 @@ import {
 } from "@revnixhq/ui";
 import { useMemo, useState } from "react";
 
+import * as Icons from "@admin/components/icons";
+import type { LucideIcon } from "@admin/components/icons";
 import type { FieldPrimitiveType } from "@admin/types/collection";
 
 import {
@@ -25,6 +27,15 @@ import {
   type FieldTypeCategory,
   type FieldTypeEntry,
 } from "./field-picker-modal/field-types-catalog";
+
+// Why: catalog stores Lucide icon names as strings; resolve them lazily
+// here instead of importing each named icon at the top. Defaults to
+// FileText if a name doesn't resolve (defensive -- the catalog test
+// pins the icon column so this fallback shouldn't fire in practice).
+const iconMap = Icons as unknown as Record<string, LucideIcon>;
+function resolveIcon(name: string): LucideIcon {
+  return iconMap[name] ?? Icons.FileText;
+}
 
 type Props = {
   open: boolean;
@@ -113,20 +124,14 @@ export function FieldPickerModal({
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {entries.map(e => (
-                    <button
+                    <FieldTypeRow
                       key={e.type}
-                      type="button"
-                      onClick={() => {
+                      entry={e}
+                      onSelect={type => {
                         setQuery("");
-                        onSelect(e.type);
+                        onSelect(type);
                       }}
-                      className="text-left p-2 rounded-md border border-border bg-background hover:bg-accent transition-colors"
-                    >
-                      <div className="text-sm font-medium">{e.label}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {e.hint}
-                      </div>
-                    </button>
+                    />
                   ))}
                 </div>
               </div>
@@ -141,5 +146,42 @@ export function FieldPickerModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function FieldTypeRow({
+  entry,
+  onSelect,
+}: {
+  entry: FieldTypeEntry;
+  onSelect: (type: FieldPrimitiveType) => void;
+}) {
+  const Icon = resolveIcon(entry.icon);
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(entry.type)}
+      // Why: cursor-pointer + hover state so the row reads as actionable.
+      // group/group-hover is used to fade the Add chip in on hover.
+      className="group text-left flex items-center gap-3 p-2 rounded-md border border-border bg-background hover:bg-accent transition-colors cursor-pointer"
+    >
+      <span className="shrink-0 w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </span>
+      <span className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{entry.label}</div>
+        <div className="text-xs text-muted-foreground truncate">
+          {entry.hint}
+        </div>
+      </span>
+      <span
+        // Why: small chip appears on row hover/focus so users see the
+        // affordance. Whole row is the click target -- chip is visual
+        // reinforcement only.
+        className="shrink-0 text-[10px] uppercase tracking-wider border border-border bg-background text-muted-foreground rounded-sm px-1.5 py-0.5 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+      >
+        Add
+      </span>
+    </button>
   );
 }

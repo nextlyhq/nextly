@@ -90,6 +90,11 @@ type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
   | { kind: "picker"; insertAt: number }
+  // Why: NEW in PR C. The user has chosen a type but hasn't committed
+  // the field yet. Sheet renders in create mode against this draft; on
+  // Apply we append to builder.fields, on Cancel we discard. Avoids the
+  // legacy bug where canceling left an empty placeholder in the list.
+  | { kind: "create"; draft: BuilderField }
   | { kind: "edit"; fieldId: string }
   | { kind: "hooks" };
 
@@ -491,17 +496,46 @@ export default function CollectionBuilderEditPage({
           open
           excludedTypes={COLLECTION_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
-          onSelect={type => {
-            // Add the field via the hook's existing API so the new field
-            // gets a fresh id and lands at the end of the list. The picker
-            // closes; the user can immediately edit via the Edit button.
-            builder.handleFieldAdd(type);
-            setActive({ kind: "none" });
-          }}
+          // Why: PR C flow change. Don't append a placeholder field;
+          // build a draft and open the sheet in create mode. The field
+          // is only committed on Apply -- Cancel discards cleanly.
+          onSelect={type =>
+            setActive({
+              kind: "create",
+              draft: {
+                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                name: "",
+                label: "",
+                type,
+                validation: {},
+              },
+            })
+          }
         />
       )}
 
-      {/* Field editor sheet — opens when a field card is clicked. */}
+      {/* Field editor sheet -- create mode for a brand-new field that
+          hasn't been committed yet. Apply appends to builder.fields. */}
+      {active.kind === "create" && (
+        <FieldEditorSheet
+          open
+          mode="create"
+          field={active.draft}
+          siblingNames={builder.fields.map(f => f.name)}
+          readOnly={isLocked}
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            builder.setFields([...builder.fields, next]);
+            setActive({ kind: "none" });
+          }}
+          // Why: Delete is hidden in create mode (sheet checks mode), so
+          // this handler shouldn't be reachable. Provide a no-op so the
+          // type contract is satisfied.
+          onDelete={() => setActive({ kind: "none" })}
+        />
+      )}
+
+      {/* Field editor sheet -- opens when a field card is clicked. */}
       {active.kind === "edit" && editingField && (
         <FieldEditorSheet
           open
