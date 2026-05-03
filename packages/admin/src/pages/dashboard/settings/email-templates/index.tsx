@@ -515,143 +515,146 @@ function EmailTemplateTable() {
   // Table columns
   const ALWAYS_VISIBLE = new Set(["id", "name"]);
 
-  const columnDefs: Column<EmailTemplateRecord>[] = [
-    {
-      key: "name",
-      label: "Name",
-      render: (_value, template) => (
-        <div className="flex items-center gap-2">
-          <span
-            className="font-medium cursor-pointer hover-unified"
-            onClick={() => handleEdit(template)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={e => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleEdit(template);
-              }
-            }}
-          >
-            {template.name}
-          </span>
-          {BUILT_IN_SLUGS.has(template.slug) && (
-            <Badge variant="outline">Built-in</Badge>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "slug",
-      label: "Slug",
-      hideOnMobile: true,
-      render: slug => (
-        <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
-          {slug as string}
-        </code>
-      ),
-    },
-    {
-      key: "subject",
-      label: "Subject",
-      render: subject => (
-        <span className="text-sm truncate max-w-[200px] block">
-          {subject as string}
-        </span>
-      ),
-    },
-    {
-      key: "providerId",
-      label: "Provider",
-      hideOnMobile: true,
-      render: providerId => (
-        <Badge variant={providerId ? "primary" : "default"}>
-          {providerId ? "Custom" : "Default"}
-        </Badge>
-      ),
-    },
-    {
-      key: "isActive",
-      label: "Status",
-      hideOnMobile: true,
-      render: (_value, template) => (
-        <div className="flex gap-1.5">
-          {template.isActive ? (
-            <Badge variant="success">Active</Badge>
-          ) : (
-            <Badge variant="warning">Inactive</Badge>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "createdAt",
-      label: "Created",
-      hideOnMobile: true,
-      render: createdAt => (
-        <span className="text-sm">{formatDate(createdAt as string)}</span>
-      ),
-    },
-    {
-      key: "id",
-      label: "Actions",
-      render: (_value, template) => {
-        const isBuiltIn = BUILT_IN_SLUGS.has(template.slug);
-
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="h-8 w-8 p-0  border border-primary/5"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => handleEdit(template)}
-              >
-                <Edit className="h-4 w-4" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => handlePreview(template)}
-              >
-                <Eye className="h-4 w-4" />
-                Preview
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => {
-                  void handleDuplicate(template);
-                }}
-              >
-                <Copy className="h-4 w-4" />
-                Duplicate
-              </DropdownMenuItem>
-              {!isBuiltIn && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="cursor-pointer text-destructive focus:text-destructive"
-                    onClick={() => handleDelete(template)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
+  const columnDefs = useMemo<Column<EmailTemplateRecord>[]>(
+    () => [
+      {
+        key: "name",
+        label: "Name",
+        render: (_value, template) => (
+          <div className="flex items-center gap-2">
+            <span
+              className="font-medium cursor-pointer hover-unified"
+              onClick={() => handleEdit(template)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleEdit(template);
+                }
+              }}
+            >
+              {template.name}
+            </span>
+            {BUILT_IN_SLUGS.has(template.slug) && (
+              <Badge variant="outline">Built-in</Badge>
+            )}
+          </div>
+        ),
       },
-    },
-  ];
+      {
+        key: "slug",
+        label: "Slug",
+        hideOnMobile: true,
+        render: slug => (
+          <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+            {slug as string}
+          </code>
+        ),
+      },
+      {
+        key: "subject",
+        label: "Subject",
+        render: subject => (
+          <span className="text-sm truncate max-w-[200px] block">
+            {subject as string}
+          </span>
+        ),
+      },
+      {
+        key: "providerId",
+        label: "Provider",
+        hideOnMobile: true,
+        render: providerId => (
+          <Badge variant={providerId ? "primary" : "default"}>
+            {providerId ? "Custom" : "Default"}
+          </Badge>
+        ),
+      },
+      {
+        key: "isActive",
+        label: "Status",
+        hideOnMobile: true,
+        render: (_value, template) => (
+          <div className="flex gap-1.5">
+            {template.isActive ? (
+              <Badge variant="success">Active</Badge>
+            ) : (
+              <Badge variant="warning">Inactive</Badge>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: "createdAt",
+        label: "Created",
+        hideOnMobile: true,
+        render: createdAt => (
+          <span className="text-sm">{formatDate(createdAt as string)}</span>
+        ),
+      },
+      {
+        key: "id",
+        label: "Actions",
+        render: (_value, template) => {
+          const isBuiltIn = BUILT_IN_SLUGS.has(template.slug);
+
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="h-8 w-8 p-0  border border-primary/5"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => handleEdit(template)}
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => handlePreview(template)}
+                >
+                  <Eye className="h-4 w-4" />
+                  Preview
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => {
+                    void handleDuplicate(template);
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                  Duplicate
+                </DropdownMenuItem>
+                {!isBuiltIn && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="cursor-pointer text-destructive focus:text-destructive"
+                      onClick={() => handleDelete(template)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
+      },
+    ],
+    [handleEdit, handlePreview, handleDuplicate, handleDelete]
+  );
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
@@ -673,7 +676,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={false}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -700,7 +703,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={true}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -726,7 +729,7 @@ function EmailTemplateTable() {
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="md">
+              <Button variant="outline" size="md" className="bg-background">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>

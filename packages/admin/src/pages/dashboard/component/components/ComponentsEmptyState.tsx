@@ -49,15 +49,10 @@ export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
   isSearching = false,
 }) => {
   return (
-    <div className="rounded-none bg-card  border border-primary/5 p-12 text-center border-dashed">
+    <div className="rounded-none bg-card  border border-primary/5 p-12 text-center">
       {/* Icon */}
-      <div className="flex justify-center mb-4">
-        <div className="rounded-none bg-accent p-3">
-          <Puzzle
-            className="h-6 w-6 text-muted-foreground"
-            aria-hidden="true"
-          />
-        </div>
+      <div className="flex justify-center mb-6">
+        <Puzzle className="h-10 w-10 text-primary/30" aria-hidden="true" />
       </div>
 
       {/* Headline */}
@@ -75,7 +70,7 @@ export const ComponentsEmptyState: React.FC<ComponentsEmptyStateProps> = ({
       {/* CTA (only show when not searching/filtering) */}
       {!isSearching && (
         <Link href={ROUTES.COMPONENTS_BUILDER}>
-          <Button size="md" >
+          <Button size="md">
             <Plus className="h-4 w-4" />
             Create Component
           </Button>

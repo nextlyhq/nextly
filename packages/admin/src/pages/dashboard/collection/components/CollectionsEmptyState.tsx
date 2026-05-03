@@ -27,7 +27,7 @@
  */
 
 import { Button } from "@revnixhq/ui";
-import { Database, Plus } from "lucide-react";
+import { Layers, Plus } from "lucide-react";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -49,15 +49,10 @@ export const CollectionsEmptyState: React.FC<CollectionsEmptyStateProps> = ({
   isSearching = false,
 }) => {
   return (
-    <div className="rounded-none bg-card  border border-primary/5 p-12 text-center border-dashed">
+    <div className="rounded-none bg-card  border border-primary/5 p-12 text-center">
       {/* Icon */}
-      <div className="flex justify-center mb-4">
-        <div className="rounded-none bg-accent p-3">
-          <Database
-            className="h-6 w-6 text-muted-foreground"
-            aria-hidden="true"
-          />
-        </div>
+      <div className="flex justify-center mb-6">
+        <Layers className="h-10 w-10 text-primary/30" aria-hidden="true" />
       </div>
 
       {/* Headline */}

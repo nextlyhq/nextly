@@ -74,7 +74,7 @@ const ApiKeysContent: React.FC = () => {
               onChange={() => {}}
               placeholder="Search API keys..."
               isLoading={true}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
