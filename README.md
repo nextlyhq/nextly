@@ -1,15 +1,11 @@
-<!--
-  TODO before launch:
-  1. Drop your logo at one of:
-     - https://nextlyhq.com/logo.svg  (recommended — separates README from repo asset weight)
-     - .github/assets/logo.svg        (works if you'd rather keep the asset in the repo)
-     Then update the <img src="..."> below to point at it.
-  2. Add a social preview image: GitHub repo Settings → Social preview.
--->
+<!-- Add a social preview image at GitHub repo Settings → Social preview to control the link card shown when this repo is shared. -->
 
 <p align="center">
   <a href="https://nextlyhq.com">
-    <img src="https://nextlyhq.com/logo.svg" width="280" alt="Nextly" onerror="this.style.display='none'" />
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/logo-dark-mode.svg">
+      <img alt="Nextly" src="./.github/assets/logo.svg" width="100">
+    </picture>
   </a>
 </p>
 
