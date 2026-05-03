@@ -109,6 +109,22 @@ export function BuilderFieldList({
             </div>
           </SortableContext>
         )}
+
+        {!readOnly && userFields.length > 0 && (
+          // Why: a second "+ Add field" affordance below the last row
+          // matches the natural reading order -- after seeing all fields,
+          // the user can add another without scrolling back to the top.
+          // Hidden on the empty state because the empty-state CTA already
+          // serves that purpose. Feedback Section 5 last item.
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onAddAt(userFields.length)}
+            className="self-start mt-2"
+          >
+            + Add field
+          </Button>
+        )}
       </div>
     </div>
   );
