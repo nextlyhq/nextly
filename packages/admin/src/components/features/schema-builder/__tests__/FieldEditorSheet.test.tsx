@@ -37,7 +37,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -57,7 +57,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -77,7 +77,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={systemField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -94,7 +94,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -111,7 +111,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         readOnly
         onCancel={vi.fn()}
         onApply={vi.fn()}
@@ -137,7 +137,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={onApply}
         onDelete={vi.fn()}

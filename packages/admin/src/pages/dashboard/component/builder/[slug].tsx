@@ -469,13 +469,11 @@ export default function ComponentBuilderEditPage({
           open
           mode="create"
           field={active.draft}
-          siblingNames={
+          siblingFields={
             active.parentFieldId
-              ? (
-                  builder.fields.find(f => f.id === active.parentFieldId)
-                    ?.fields ?? []
-                ).map(f => f.name)
-              : builder.fields.map(f => f.name)
+              ? (builder.fields.find(f => f.id === active.parentFieldId)
+                  ?.fields ?? [])
+              : builder.fields
           }
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
@@ -496,9 +494,7 @@ export default function ComponentBuilderEditPage({
           open
           mode="edit"
           field={editingField}
-          siblingNames={builder.fields
-            .filter(f => f.id !== editingField.id)
-            .map(f => f.name)}
+          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
