@@ -1,7 +1,7 @@
 name: Bug Report
 description: Report something that isn't working as expected.
 title: "[Bug]: "
-labels: ["bug", "triage"]
+labels: ["type: bug", "status: needs-triage"]
 
 body:
   - type: markdown
@@ -22,7 +22,6 @@ body:
       options:
         - "@revnixhq/nextly"
         - "@revnixhq/admin"
-        - "@revnixhq/client"
         - "@revnixhq/ui"
         - "@revnixhq/adapter-postgres"
         - "@revnixhq/adapter-mysql"
