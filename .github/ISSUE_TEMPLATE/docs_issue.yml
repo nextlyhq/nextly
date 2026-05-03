@@ -9,7 +9,7 @@ body:
       value: |
         Thanks for helping improve the Nextly docs. Please describe what's wrong or missing and where you found it.
 
-        For larger documentation proposals (new guides, restructures), open a [Discussion](https://github.com/revnix/nextly-dev/discussions) first.
+        For larger documentation proposals (new guides, restructures), open a [Discussion](https://github.com/nextlyhq/nextly/discussions) first.
 
   - type: input
     id: page-url
@@ -54,4 +54,6 @@ body:
       label: Pre-submission checklist
       options:
         - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/nextlyhq/nextly/blob/main/CODE_OF_CONDUCT.md).
           required: true

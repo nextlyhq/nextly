@@ -10,8 +10,8 @@ body:
         Thanks for suggesting an idea! Please describe the **problem** first, then the proposed solution. Feature requests grounded in a real use case are far more likely to land.
 
         Before submitting:
-        - Search [existing issues](https://github.com/revnix/nextly-dev/issues?q=is%3Aissue) and [discussions](https://github.com/revnix/nextly-dev/discussions) to see if it's already proposed.
-        - Open-ended ideas without a clear problem are better suited to [Discussions](https://github.com/revnix/nextly-dev/discussions).
+        - Search [existing issues](https://github.com/nextlyhq/nextly/issues?q=is%3Aissue) and [discussions](https://github.com/nextlyhq/nextly/discussions) to see if it's already proposed.
+        - Open-ended ideas without a clear problem are better suited to [Discussions](https://github.com/nextlyhq/nextly/discussions).
 
   - type: dropdown
     id: package
@@ -88,3 +88,5 @@ body:
           required: true
         - label: I'd be open to discussing the design and trade-offs.
           required: false
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/nextlyhq/nextly/blob/main/CODE_OF_CONDUCT.md).
+          required: true
