@@ -16,19 +16,21 @@ import type {
 } from "../types/entities";
 import type { ApiRoleWithRelations } from "../types/role";
 
-// Phase 4 (Task 19): the role-permissions sub-resource is a non-CRUD read
-// returning a bare list of permission objects via respondDoc. We type the
-// fetcher with the bare array shape.
+// The role-permissions sub-resource is a non-CRUD read. The dispatcher
+// emits `respondData({ permissions })` (named field per spec section 5.1
+// rule 3 so the shape can grow without breaking the contract), so the
+// wire body is `{ permissions: [...] }`, not a bare array.
 const fetchRolePermissionIds = async (roleId: string): Promise<string[]> => {
-  const result = await fetcher<
-    Array<{
+  const result = await fetcher<{
+    permissions: Array<{
       id: string;
       action: string;
       resource: string;
-    }>
-  >(`/roles/${roleId}/permissions`, {}, true);
+    }>;
+  }>(`/roles/${roleId}/permissions`, {}, true);
 
-  return normalizePermissions(result.map(permission => permission.id));
+  const permissions = result.permissions ?? [];
+  return normalizePermissions(permissions.map(permission => permission.id));
 };
 
 // Transform API role to our Role interface
@@ -155,9 +157,9 @@ export const getRoleById = async (roleId: string): Promise<Role> => {
  * Fetch role once and also provide extracted childRoleIds to avoid extra
  * requests.
  *
- * Phase 4 (Task 19): the sub-resources `/roles/:id/parents` and
- * `/roles/:id` both return bare bodies (respondDoc); we type the generic
- * with the inner shape directly.
+ * `/roles/:id` returns the bare role doc via respondDoc.
+ * `/roles/:id/parents` returns `{ roles: string[] }` via respondData
+ * (named field per spec section 5.1 rule 3 so the shape can grow).
  */
 export const getRoleDetails = async (
   roleId: string
@@ -169,9 +171,8 @@ export const getRoleDetails = async (
   const [apiRole, permissionIds, parentRoleIds] = await Promise.all([
     fetcher<ApiRoleWithRelations>(`/roles/${roleId}`, {}, true),
     fetchRolePermissionIds(roleId),
-    // The parents endpoint returns a bare string[] via respondDoc.
-    fetcher<string[]>(`/roles/${roleId}/parents`, {}, true).then(
-      ids => ids || []
+    fetcher<{ roles: string[] }>(`/roles/${roleId}/parents`, {}, true).then(
+      result => result.roles ?? []
     ),
   ]);
 
