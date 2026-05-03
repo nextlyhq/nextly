@@ -36,6 +36,8 @@ import type {
 import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
+import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
+
 import { FieldWrapper } from "./FieldWrapper";
 import { UploadInput } from "./media/UploadInput";
 import { NumberInput } from "./number/NumberInput";
@@ -274,12 +276,11 @@ export function FieldRenderer({
     disabled: !conditionFieldPath,
   });
 
-  // Evaluate condition: if condition exists but is not met, don't render the field
+  // PR E2: delegate to the shared evaluator. Supports the full operator
+  // surface (equals / contains / between / before-after / isTrue / etc.)
+  // AND backwards-compat with the legacy { field, equals } shape.
   if (condition && conditionFieldPath) {
-    const targetValue = condition.equals;
-    // Compare as strings to handle both string and number values
-    const currentValue = String(conditionFieldValue ?? "");
-    if (currentValue !== targetValue) {
+    if (!evaluateCondition(condition, conditionFieldValue)) {
       return null;
     }
   }
