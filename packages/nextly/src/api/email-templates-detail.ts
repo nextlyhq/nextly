@@ -25,8 +25,12 @@ import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondDoc,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 interface RouteContext {
@@ -59,7 +63,7 @@ export const GET = withErrorHandler(
     const service = await getEmailTemplateService();
     const template = await service.getTemplate(id);
 
-    return createSuccessResponse(template);
+    return respondDoc(template);
   }
 );
 
@@ -105,7 +109,7 @@ export const PATCH = withErrorHandler(
     const service = await getEmailTemplateService();
     const template = await service.updateTemplate(id, updateData);
 
-    return createSuccessResponse(template);
+    return respondMutation("Email template updated.", template);
   }
 );
 
@@ -133,6 +137,9 @@ export const DELETE = withErrorHandler(
 
     await service.deleteTemplate(id);
 
-    return createSuccessResponse({ success: true });
+    // Service returns void. Echo the deleted id (named `templateId` to
+    // match the dispatcher route's wire shape) so the admin can prune
+    // its local list without a follow-up fetch.
+    return respondAction("Email template deleted.", { templateId: id });
   }
 );

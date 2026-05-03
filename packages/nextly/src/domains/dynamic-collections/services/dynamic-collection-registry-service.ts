@@ -43,7 +43,7 @@ export interface CollectionMetadata {
 
 export interface ListCollectionsOptions {
   page?: number;
-  pageSize?: number;
+  limit?: number;
   search?: string;
   sortBy?: "slug" | "createdAt" | "updatedAt";
   sortOrder?: "asc" | "desc";
@@ -59,7 +59,7 @@ export interface ListCollectionsResponse<
     : Omit<CollectionMetadata, "fields">[];
   total: number;
   page: number;
-  pageSize: number;
+  limit: number;
   totalPages: number;
 }
 
@@ -184,7 +184,7 @@ export class DynamicCollectionRegistryService extends BaseService {
   ): Promise<ListCollectionsResponse<TIncludeSchema>> {
     const {
       page = 1,
-      pageSize = 10,
+      limit = 10,
       search,
       sortBy = "createdAt",
       sortOrder = "desc",
@@ -224,7 +224,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         orderByClause = orderFn(this.dynamicCollections.createdAt);
     }
 
-    const offset = (page - 1) * pageSize;
+    const offset = (page - 1) * limit;
 
      
     const countResult = await (this.db as any)
@@ -233,7 +233,7 @@ export class DynamicCollectionRegistryService extends BaseService {
       .where(whereClause);
 
     const total = Number(countResult[0]?.value ?? 0);
-    const totalPages = Math.ceil(total / pageSize);
+    const totalPages = Math.ceil(total / limit);
 
     const collections = includeSchema
       ?  
@@ -242,7 +242,7 @@ export class DynamicCollectionRegistryService extends BaseService {
           .from(this.dynamicCollections)
           .where(whereClause)
           .orderBy(orderByClause)
-          .limit(pageSize)
+          .limit(limit)
           .offset(offset)
       :  
         await (this.db as any)
@@ -266,14 +266,14 @@ export class DynamicCollectionRegistryService extends BaseService {
           .from(this.dynamicCollections)
           .where(whereClause)
           .orderBy(orderByClause)
-          .limit(pageSize)
+          .limit(limit)
           .offset(offset);
 
     return {
       collections,
       total,
       page,
-      pageSize,
+      limit,
       totalPages,
     } as ListCollectionsResponse<TIncludeSchema>;
   }

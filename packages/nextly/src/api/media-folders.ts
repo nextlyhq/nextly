@@ -7,11 +7,13 @@
  * **IMPORTANT:** For storage plugins to work, initialize Nextly with your config
  * via instrumentation.ts before these routes are called.
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
- * return the canonical `{ data: <result> }` envelope per spec §10.2.
- * Errors flow through the wrapper as `application/problem+json`. The
- * legacy double-wrap `{ success, statusCode, data }` is replaced with
- * `{ data }`; the delete response becomes `{ data: { success: true } }`.
+ * Wire shape (Phase 4.6 migration): handlers wrap `withErrorHandler` and
+ * return canonical respondX bodies (spec section 5.1):
+ *   - list/contents: `respondData({ folders })` / `respondData(contents)`
+ *   - findByID: `respondDoc(folder)`
+ *   - create/update: `respondMutation(message, folder)`
+ *   - delete (no doc): `respondAction(message, { id })`
+ * Errors still flow through `withErrorHandler` as `application/problem+json`.
  *
  * @example
  * ```typescript
@@ -37,8 +39,13 @@ import { getCachedNextly } from "../init";
 import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondData,
+  respondDoc,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getMediaService(): Promise<MediaService> {
@@ -68,7 +75,8 @@ function createAuthenticatedContext(userId: string): RequestContext {
  * - ?root=true - List only root folders (no parent)
  * - ?parentId=xxx - List subfolders of a specific parent
  *
- * Response: `{ "data": Folder[] }`.
+ * Response: `{ "folders": Folder[] }` (non-paginated; respondData with a
+ * named field).
  */
 export const GET = withErrorHandler(
   async (request: NextRequest): Promise<Response> => {
@@ -84,7 +92,7 @@ export const GET = withErrorHandler(
         ? await mediaService.listRootFolders(context)
         : await mediaService.listSubfolders(parentId, context);
 
-    return createSuccessResponse(folders);
+    return respondData({ folders });
   }
 );
 
@@ -101,7 +109,7 @@ export const GET = withErrorHandler(
  * - parentId?: string | null
  * - createdBy: string (required)
  *
- * Response: `{ "data": Folder }` (status 201).
+ * Response: `{ "message", "item": Folder }` (status 201).
  */
 export const POST = withErrorHandler(
   async (request: NextRequest): Promise<Response> => {
@@ -139,7 +147,7 @@ export const POST = withErrorHandler(
       context
     );
 
-    return createSuccessResponse(folder, { status: 201 });
+    return respondMutation("Folder created.", folder, { status: 201 });
   }
 );
 
@@ -163,7 +171,7 @@ export function getFolderById(
 
       const folder = await mediaService.findFolderById(params.id, context);
 
-      return createSuccessResponse(folder);
+      return respondDoc(folder);
     }
   )(request, routeContext);
 }
@@ -196,7 +204,7 @@ export function updateFolder(
 
       const folder = await mediaService.updateFolder(params.id, body, context);
 
-      return createSuccessResponse(folder);
+      return respondMutation("Folder updated.", folder);
     }
   )(request, routeContext);
 }
@@ -207,7 +215,7 @@ export function updateFolder(
  * Delete folder
  * Query params: ?deleteContents=true/false
  *
- * Response: `{ "data": { "success": true } }`.
+ * Response: `{ "message", "id" }` (respondAction; service returns void).
  */
 export function deleteFolder(
   request: NextRequest,
@@ -227,7 +235,9 @@ export function deleteFolder(
 
       await mediaService.deleteFolder(params.id, deleteContents, context);
 
-      return createSuccessResponse({ success: true });
+      // Service returns void; echo the deleted id so the admin can prune
+      // its folder tree locally without a follow-up fetch.
+      return respondAction("Folder deleted.", { id: params.id });
     }
   )(request, routeContext);
 }
@@ -252,7 +262,10 @@ export function getFolderContents(
 
       const contents = await mediaService.getFolderContents(params.id, context);
 
-      return createSuccessResponse(contents);
+      // Folder contents is a structured object (folder, subfolders,
+      // mediaFiles, breadcrumbs); ship it bare via respondData for the
+      // non-CRUD read shape.
+      return respondData(contents as unknown as Record<string, unknown>);
     }
   )(request, routeContext);
 }
@@ -269,6 +282,6 @@ export const getRootFolderContents = withErrorHandler(
 
     const contents = await mediaService.getFolderContents(null, context);
 
-    return createSuccessResponse(contents);
+    return respondData(contents as unknown as Record<string, unknown>);
   }
 );

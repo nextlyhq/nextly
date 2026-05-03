@@ -8,9 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. Errors are
- * serialized as `application/problem+json`.
+ * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
+ * and return the canonical `respondX` envelopes per spec §5.1 (bare doc on
+ * GET, `{ message, item }` on PATCH). Errors are serialized as
+ * `application/problem+json`.
  *
  * @example
  * ```typescript
@@ -32,8 +33,8 @@ import type { SingleEntryService } from "../services/singles/single-entry-servic
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import { respondDoc, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -128,7 +129,7 @@ function parseRichTextFormat(value: string | null): RichTextOutputFormat {
  *   - "both": Return object with both { json, html } properties
  *
  * Response:
- * - 200 OK: `{ "data": { ... } }`
+ * - 200 OK: bare document object (canonical `respondDoc` shape).
  * - On error: `application/problem+json` per spec §10.1.
  */
 export const GET = withErrorHandler(
@@ -165,7 +166,7 @@ export const GET = withErrorHandler(
       }
     }
 
-    return withTimezoneFormatting(createSuccessResponse(responseData));
+    return withTimezoneFormatting(respondDoc(responseData));
   }
 );
 
@@ -183,7 +184,7 @@ export const GET = withErrorHandler(
  * - System fields (id, createdAt) are ignored if included
  *
  * Response:
- * - 200 OK: `{ "data": { ... } }` (updated document)
+ * - 200 OK: `{ "message": "...", "item": { ... } }` (updated document).
  * - On error: `application/problem+json` per spec §10.1.
  */
 export const PATCH = withErrorHandler(
@@ -204,7 +205,11 @@ export const PATCH = withErrorHandler(
       throwFromSingleResult(result, slug);
     }
 
-    return withTimezoneFormatting(createSuccessResponse(result.data));
+    // PATCH on a Single document: canonical mutation envelope so admins
+    // get a server-authored toast plus the refreshed document body.
+    return withTimezoneFormatting(
+      respondMutation("Single updated.", result.data)
+    );
   }
 );
 
@@ -217,14 +222,14 @@ export const PATCH = withErrorHandler(
  * Requires authentication.
  *
  * Response:
- * - 200 OK: `{ "data": { slug, label, fields, ... } }`
+ * - 200 OK: bare schema object (canonical `respondDoc` shape).
  * - 401 / 404 / 500: `application/problem+json` per spec §10.1.
  *
  * @example
  * ```bash
  * curl -H "Authorization: Bearer <token>" \
  *   "http://localhost:3000/api/singles/site-settings/schema"
- * # => {"data":{"slug":"site-settings","label":"Site Settings","fields":[...]}}
+ * # => {"slug":"site-settings","label":"Site Settings","fields":[...]}
  * ```
  */
 export function getSchema(request: Request, slug: string): Promise<Response> {
@@ -240,6 +245,6 @@ export function getSchema(request: Request, slug: string): Promise<Response> {
       throw NextlyError.notFound({ logContext: { slug } });
     }
 
-    return createSuccessResponse(single);
+    return respondDoc(single);
   })(request);
 }

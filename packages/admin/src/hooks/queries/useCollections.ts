@@ -26,7 +26,7 @@
  * @see hooks/queries/useRoles.ts - Similar CRUD pattern
  */
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { TableParams, ListResponse } from "@revnixhq/ui";
 import {
   useMutation,
   useQuery,
@@ -140,7 +140,7 @@ export const collectionKeys = {
  *
  *   return (
  *     <div>
- *       {data.data.map(collection => (
+ *       {data.items.map(collection => (
  *         <CollectionCard key={collection.id} collection={collection} />
  *       ))}
  *       <Pagination meta={data.meta} />
@@ -154,12 +154,12 @@ export const collectionKeys = {
 export function useCollections(
   params?: TableParams,
   options?: Omit<
-    UseQueryOptions<TableResponse<ApiCollection>, Error>,
+    UseQueryOptions<ListResponse<ApiCollection>, Error>,
     "queryKey" | "queryFn"
   >
 ) {
   const effectiveParams = params || defaultParams;
-  return useQuery<TableResponse<ApiCollection>, Error>({
+  return useQuery<ListResponse<ApiCollection>, Error>({
     queryKey: collectionKeys.list(effectiveParams), // Use query key factory for stable keys
     queryFn: async () => {
       return await collectionApi.fetchCollections(effectiveParams);

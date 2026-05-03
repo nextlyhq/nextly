@@ -151,15 +151,15 @@ export function RelationshipSearch({
 
   // Accumulate results when new data arrives
   useEffect(() => {
-    if (data?.docs) {
+    if (data?.items) {
       if (currentPage === 1) {
         // First page - replace all results
-        setAccumulatedResults(data.docs);
+        setAccumulatedResults(data.items);
       } else {
         // Subsequent pages - append only new results (avoid duplicates)
         setAccumulatedResults(prev => {
           const existingIds = new Set(prev.map(item => item.id));
-          const newItems = (data.docs as SearchResultItem[]).filter(
+          const newItems = (data.items as SearchResultItem[]).filter(
             item => !existingIds.has(item.id)
           );
           return [...prev, ...newItems];
@@ -173,9 +173,9 @@ export function RelationshipSearch({
     item => !excludeIds.includes(item.id)
   );
 
-  // Check if there are more pages to load
-  const hasMore = data?.hasNextPage ?? false;
-  const totalDocs = data?.totalDocs ?? 0;
+  // Check if there are more pages to load (canonical meta per spec section 5.1).
+  const hasMore = data?.meta.hasNext ?? false;
+  const totalDocs = data?.meta.total ?? 0;
 
   const handleSelect = useCallback(
     (item: SearchResultItem) => {

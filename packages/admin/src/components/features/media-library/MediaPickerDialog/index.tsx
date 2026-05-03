@@ -261,7 +261,7 @@ export function MediaPickerDialog({
     isFetchingNextPage,
     refetch,
   } = useInfiniteMedia({
-    pageSize: INITIAL_PAGE_SIZE,
+    limit: INITIAL_PAGE_SIZE,
     search: search || undefined,
     type: effectiveTypeFilter,
     folderId: activeFolderId ?? undefined,

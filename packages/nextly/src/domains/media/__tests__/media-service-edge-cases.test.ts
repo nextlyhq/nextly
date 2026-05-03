@@ -292,7 +292,7 @@ describe("MediaService — Edge Cases", () => {
         statusCode: 200,
         message: "OK",
         data: [],
-        meta: { total: 0, page: 1, pageSize: 24, totalPages: 0 },
+        meta: { total: 0, page: 1, limit: 24, totalPages: 0 },
       });
 
       const result = await service.listMedia({}, context);
@@ -319,10 +319,10 @@ describe("MediaService — Edge Cases", () => {
         statusCode: 200,
         message: "OK",
         data: [mediaItem],
-        meta: { total: 5, page: 1, pageSize: 1, totalPages: 5 },
+        meta: { total: 5, page: 1, limit: 1, totalPages: 5 },
       });
 
-      const result = await service.listMedia({ page: 1, pageSize: 1 }, context);
+      const result = await service.listMedia({ page: 1, limit: 1 }, context);
 
       expect(result.pagination.hasMore).toBe(true);
       expect(result.pagination.total).toBe(5);
@@ -345,10 +345,10 @@ describe("MediaService — Edge Cases", () => {
         statusCode: 200,
         message: "OK",
         data: [mediaItem],
-        meta: { total: 5, page: 5, pageSize: 1, totalPages: 5 },
+        meta: { total: 5, page: 5, limit: 1, totalPages: 5 },
       });
 
-      const result = await service.listMedia({ page: 5, pageSize: 1 }, context);
+      const result = await service.listMedia({ page: 5, limit: 1 }, context);
 
       expect(result.pagination.hasMore).toBe(false);
     });

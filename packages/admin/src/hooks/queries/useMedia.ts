@@ -67,7 +67,7 @@ import { useBulkMutation } from "../useBulkMutation";
  */
 const defaultParams: MediaParams = {
   page: 1,
-  pageSize: 24, // Grid: 6 columns × 4 rows
+  limit: 24, // Grid: 6 columns × 4 rows
   sortBy: "uploadedAt",
   sortOrder: "desc",
 };
@@ -99,7 +99,7 @@ const defaultParams: MediaParams = {
  * function MediaLibrary() {
  *   const { data, isLoading, error } = useMedia({
  *     page: 1,
- *     pageSize: 24,
+ *     limit: 24,
  *     search: 'logo',
  *     type: 'image',
  *     sortBy: 'uploadedAt',
@@ -141,7 +141,7 @@ export function useMedia(
  * useInfiniteMedia - Infinite query hook for fetching media with infinite scroll
  *
  * Fetches media items with infinite scroll pagination. Automatically loads more
- * pages as user scrolls. Each page contains pageSize items.
+ * pages as user scrolls. Each page contains `limit` items.
  *
  * ## Query Key Structure
  * `["media-infinite", params]` - Separate key from useMedia to avoid conflicts
@@ -154,7 +154,7 @@ export function useMedia(
  * - Deduplication of items across pages
  * - TypeScript type safety
  *
- * @param params - Media filter parameters (search, type, sort, pageSize)
+ * @param params - Media filter parameters (search, type, sort, limit)
  * @returns TanStack InfiniteQuery result with pages of media data
  *
  * @example
@@ -168,7 +168,7 @@ export function useMedia(
  *     hasNextPage,
  *     isFetchingNextPage,
  *   } = useInfiniteMedia({
- *     pageSize: 20,
+ *     limit: 20,
  *     search: 'logo',
  *     type: 'image',
  *     sortBy: 'uploadedAt',
@@ -206,8 +206,8 @@ export function useInfiniteMedia(params?: Omit<MediaParams, "page">) {
     getNextPageParam: (lastPage, allPages) => {
       // Check if there are more pages
       const currentPage = allPages.length;
-      const pageSize = params?.pageSize || defaultParams.pageSize || 20;
-      const totalPages = Math.ceil(lastPage.meta.total / pageSize);
+      const limit = params?.limit || defaultParams.limit || 20;
+      const totalPages = Math.ceil(lastPage.meta.total / limit);
 
       if (currentPage < totalPages) {
         return currentPage + 1;

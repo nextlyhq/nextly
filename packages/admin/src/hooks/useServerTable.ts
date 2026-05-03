@@ -138,11 +138,16 @@ export function useServerTable<TData>({
   const [serverData, setServerData] = useState<TData[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Phase 4.7: PaginationMeta is canonical wire shape (limit/hasNext/hasPrev).
+  // The 0-based admin `page` index gets mapped to 1-based `meta.page` by the
+  // server when the fetcher actually fires.
   const [paginationMeta, setPaginationMeta] = useState<PaginationMeta>({
-    page: initialParams?.pagination?.page ?? 0,
-    pageSize: initialParams?.pagination?.pageSize ?? paginationConfig.pageSize,
     total: 0,
+    page: (initialParams?.pagination?.page ?? 0) + 1,
+    limit: initialParams?.pagination?.pageSize ?? paginationConfig.pageSize,
     totalPages: 0,
+    hasNext: false,
+    hasPrev: false,
   });
 
   // Sorting state
@@ -241,7 +246,7 @@ export function useServerTable<TData>({
 
       try {
         const response = await fetcher(params);
-        setServerData(response.data);
+        setServerData(response.items);
         setPaginationMeta(response.meta);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load data");

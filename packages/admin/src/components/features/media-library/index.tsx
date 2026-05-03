@@ -242,10 +242,11 @@ export function MediaLibrary({
     return () => clearTimeout(timer);
   }, [search]);
 
-  // Build query params
+  // Build query params. Local React state name `pageSize` (admin-internal,
+  // Phase 4.7 will rename) maps to canonical wire field `limit`.
   const queryParams: MediaParams = {
     page: page + 1,
-    pageSize,
+    limit: pageSize,
     search: debouncedSearch || undefined,
     type: typeFilter === "all" ? undefined : typeFilter,
     folderId: activeFolderId,
@@ -451,9 +452,7 @@ export function MediaLibrary({
   // const hasSelection = selectedIds.size > 0;
 
   return (
-    <div
-      className={cn("flex min-h-[calc(100vh-4rem)]", className)}
-    >
+    <div className={cn("flex min-h-[calc(100vh-4rem)]", className)}>
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         {/* Page Breadcrumb (Move above the title) */}

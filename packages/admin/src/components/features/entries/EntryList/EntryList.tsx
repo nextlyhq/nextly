@@ -23,12 +23,13 @@ import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useColumnVisibility } from "@admin/hooks/useColumnVisibility";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
+import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
   type InjectionPointProps,
 } from "@admin/lib/plugins/component-registry";
-import type { PaginatedDocs } from "@admin/services/entryApi";
+import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
@@ -64,11 +65,13 @@ export interface EntryListProps {
 // ============================================================================
 
 /**
- * Converts PaginatedDocs response to EntryTablePagination format.
- * Handles the 1-indexed to 0-indexed page conversion.
+ * Converts canonical ListResponse meta into the EntryTable's local
+ * pagination shape. Handles the 1-indexed to 0-indexed page conversion
+ * (canonical wire is 1-based per spec section 5.1; the table component
+ * uses a 0-based React index internally).
  */
 function toTablePagination(
-  response: PaginatedDocs | undefined,
+  response: ListResponse<Entry> | undefined,
   limit: number
 ): EntryTablePagination {
   if (!response) {
@@ -81,11 +84,10 @@ function toTablePagination(
   }
 
   return {
-    // Convert from 1-indexed (API) to 0-indexed (table)
-    page: response.page - 1,
-    limit: response.limit,
-    total: response.totalDocs,
-    totalPages: response.totalPages,
+    page: response.meta.page - 1,
+    limit: response.meta.limit,
+    total: response.meta.total,
+    totalPages: response.meta.totalPages,
   };
 }
 
@@ -334,7 +336,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     [collection, collectionSlug]
   );
 
-  const entries = entriesResponse?.docs ?? [];
+  const entries = entriesResponse?.items ?? [];
   const pagination = toTablePagination(entriesResponse, limit);
 
   // ---------------------------------------------------------------------------

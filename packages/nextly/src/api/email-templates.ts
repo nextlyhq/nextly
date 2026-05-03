@@ -31,8 +31,8 @@ import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import { respondData, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -94,7 +94,9 @@ export const GET = withErrorHandler(
     const service = await getEmailTemplateService();
     const templates = await service.listTemplates();
 
-    return createSuccessResponse(templates);
+    // Non-paginated list; wrap in a named field for the canonical
+    // respondData shape (spec §5.1 rule 3).
+    return respondData({ templates });
   }
 );
 
@@ -131,6 +133,6 @@ export const POST = withErrorHandler(
     const service = await getEmailTemplateService();
     const template = await service.createTemplate(validated);
 
-    return createSuccessResponse(template, { status: 201 });
+    return respondMutation("Email template created.", template, { status: 201 });
   }
 );

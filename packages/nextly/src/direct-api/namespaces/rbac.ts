@@ -78,7 +78,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
       const result = await ctx.rbacRoleService.listRoles({
         search: args.search,
         page: args.page ?? 1,
-        pageSize: args.limit ?? 10,
+        limit: args.limit ?? 10,
       });
 
       // The query selects `slug` at runtime but the RoleQueryService return
@@ -254,7 +254,7 @@ export function createPermissionsNamespace(
       // `{ data, meta }` directly and throws NextlyError on failure.
       const result = await ctx.rbacPermissionService.listPermissions({
         page,
-        pageSize: limit,
+        limit,
         search: args.search,
         resource: args.resource,
         action: args.action,

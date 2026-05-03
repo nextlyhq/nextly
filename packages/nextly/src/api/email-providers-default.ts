@@ -22,7 +22,7 @@ import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
+import { respondAction } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 interface RouteContext {
@@ -60,6 +60,9 @@ export const PATCH = withErrorHandler(
 
     const provider = await service.setDefault(id);
 
-    return createSuccessResponse(provider);
+    // Set-default is a non-CRUD mutation (no new resource, just a flag
+    // flip). Match the dispatcher route's wire shape so REST + dispatcher
+    // surfaces stay in lockstep.
+    return respondAction("Default email provider updated.", { provider });
   }
 );

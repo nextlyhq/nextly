@@ -210,9 +210,9 @@ export default function UserTable() {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(user => {
+    return data.items.filter(user => {
       // Filter by role
       if (roleFilter !== "all") {
         const hasRole = user.roles.some(role => role.id === roleFilter);
@@ -220,7 +220,7 @@ export default function UserTable() {
       }
       return true;
     });
-  }, [data?.data, roleFilter]);
+  }, [data?.items, roleFilter]);
 
   // TanStack Query: Delete user mutation
   const { mutate: deleteUser, isPending: isDeleting } = useDeleteUser();

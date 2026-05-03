@@ -124,7 +124,7 @@ export function UserSearchResults({
     }
   );
 
-  const users = usersResponse?.data || [];
+  const users = usersResponse?.items || [];
   const shouldShow = debouncedSearch.length >= MIN_SEARCH_LENGTH;
 
   // Don't render if search query too short

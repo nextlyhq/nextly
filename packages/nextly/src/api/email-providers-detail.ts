@@ -27,8 +27,12 @@ import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondDoc,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 interface RouteContext {
@@ -61,7 +65,7 @@ export const GET = withErrorHandler(
     const service = await getEmailProviderService();
     const provider = await service.getProvider(id);
 
-    return createSuccessResponse(provider);
+    return respondDoc(provider);
   }
 );
 
@@ -109,7 +113,7 @@ export const PATCH = withErrorHandler(
     const service = await getEmailProviderService();
     const provider = await service.updateProvider(id, updateData);
 
-    return createSuccessResponse(provider);
+    return respondMutation("Email provider updated.", provider);
   }
 );
 
@@ -137,6 +141,9 @@ export const DELETE = withErrorHandler(
 
     await service.deleteProvider(id);
 
-    return createSuccessResponse({ success: true });
+    // Service returns void. Echo the deleted id (named `providerId` to
+    // match the dispatcher route's wire shape) so the admin can prune
+    // its local list without a follow-up fetch.
+    return respondAction("Email provider deleted.", { providerId: id });
   }
 );

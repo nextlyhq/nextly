@@ -69,7 +69,7 @@ export interface ListMediaOptions {
   /** Page number (1-indexed) */
   page?: number;
   /** Items per page */
-  pageSize?: number;
+  limit?: number;
   /** Search query (filename, altText) */
   search?: string;
   /** Filter by media type (image, video, audio, document) */

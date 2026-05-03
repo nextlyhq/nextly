@@ -130,14 +130,14 @@ describe("DynamicCollectionService", () => {
     it("should work with pagination when includeSchema is false", async () => {
       const result = await service.listCollections({
         page: 1,
-        pageSize: 2,
+        limit: 2,
         includeSchema: false,
       });
 
       expect(result.collections).toHaveLength(2);
       expect(result.total).toBe(3);
       expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(2);
+      expect(result.limit).toBe(2);
       expect(result.totalPages).toBe(2);
 
       result.collections.forEach(collection => {
@@ -179,7 +179,7 @@ describe("DynamicCollectionService", () => {
     it.skip("should work with all options combined when includeSchema is false", async () => {
       const result = await service.listCollections({
         page: 1,
-        pageSize: 10,
+        limit: 10,
         search: "o",
         sortBy: "name",
         sortOrder: "asc",
@@ -199,7 +199,7 @@ describe("DynamicCollectionService", () => {
     it.skip("should work with all options combined when includeSchema is true", async () => {
       const result = await service.listCollections({
         page: 1,
-        pageSize: 10,
+        limit: 10,
         search: "o",
         sortBy: "name",
         sortOrder: "asc",
@@ -236,14 +236,14 @@ describe("DynamicCollectionService", () => {
 
       const result = await service.listCollections({
         page: 2,
-        pageSize: 5,
+        limit: 5,
         includeSchema: false,
       });
 
       expect(result.collections).toHaveLength(5);
       expect(result.total).toBe(18);
       expect(result.page).toBe(2);
-      expect(result.pageSize).toBe(5);
+      expect(result.limit).toBe(5);
       expect(result.totalPages).toBe(4);
 
       result.collections.forEach(collection => {

@@ -197,9 +197,9 @@ export default function ComponentTable() {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(component => {
+    return data.items.filter(component => {
       // Filter by source
       if (sourceFilter !== "all" && component.source !== sourceFilter) {
         return false;
@@ -213,7 +213,7 @@ export default function ComponentTable() {
       }
       return true;
     });
-  }, [data?.data, sourceFilter, migrationFilter]);
+  }, [data?.items, sourceFilter, migrationFilter]);
 
   // Action handlers
   const handleEdit = useCallback((component: ApiComponent) => {
@@ -571,7 +571,7 @@ export default function ComponentTable() {
 
   // Error and loading states within the unified layout
   const showLoadingSkeleton =
-    (isLoading || isFetching) && (!data || data.data.length === 0);
+    (isLoading || isFetching) && (!data || data.items.length === 0);
 
   // Render table with data
   const isEmpty = filteredData.length === 0;

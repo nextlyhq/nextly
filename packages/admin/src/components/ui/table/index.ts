@@ -25,7 +25,7 @@ export type {
   SortInfo,
   FilterInfo,
   TableParams,
-  TableResponse,
+  ListResponse,
   PaginationConfig,
   ActionCallbacks,
   DataFetcher,

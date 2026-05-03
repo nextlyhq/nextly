@@ -150,7 +150,7 @@ describe("Direct API - Media Operations", () => {
           search: "photo",
           type: "image",
           folderId: "folder-1",
-          pageSize: 10,
+          limit: 10,
           page: 2,
           sortBy: "uploadedAt",
           sortOrder: "desc",

@@ -46,7 +46,7 @@ export interface BuildQueryOptions {
  *   validSortFields: ['name', 'level'],
  *   includeFilters: true,
  * });
- * // Returns: "page=1&pageSize=10&sortBy=name&sortOrder=asc"
+ * // Returns: "page=1&limit=10&sortBy=name&sortOrder=asc"
  * ```
  */
 export const buildQuery = (
@@ -61,11 +61,13 @@ export const buildQuery = (
   } = options;
 
   const query = new URLSearchParams();
+  // `pageSize` is the admin-internal TableParams field name; URL emits the
+  // canonical `limit` query param (Phase 4.8). The TableParams field rename
+  // itself is deferred to Phase 4.7.
   const { page, pageSize } = params.pagination;
   const search = params.filters?.search?.trim();
 
-  // Always send pageSize to ensure backend gets the correct value
-  if (pageSize) query.set("pageSize", String(pageSize));
+  if (pageSize) query.set("limit", String(pageSize));
 
   // Handle search — force page=1 when searching
   if (search) {
