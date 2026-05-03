@@ -68,10 +68,22 @@ export interface FieldDefinitionAdmin {
   description?: string;
   /** Placeholder text for the input */
   placeholder?: string;
-  /** Conditional logic for showing/hiding the field */
+  /**
+   * Conditional logic for showing/hiding the field.
+   * PR E2 (2026-05-03) widened this to support type-aware operators.
+   * Legacy `{ field, equals }` shape stays valid (the runtime evaluator
+   * normalizes it to `{ field, operator: "equals", value: equals }`).
+   */
   condition?: {
     field: string;
-    equals: string;
+    operator?: string;
+    value?:
+      | string
+      | number
+      | boolean
+      | { min: number | string; max: number | string };
+    /** @deprecated Legacy shape; use `operator: "equals"` + `value` instead. */
+    equals?: string;
   };
   /** Hide the gutter for group fields */
   hideGutter?: boolean;
