@@ -44,7 +44,6 @@ import type {
   DesiredSchema,
 } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
-import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -56,7 +55,6 @@ import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
   getMigrationJournalFromDI,
-  getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -522,19 +520,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       // Post-apply: refresh in-memory runtime schema so CRUD paths reflect
       // the new column layout without requiring a server restart.
-      try {
-        const { table: freshTable } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
-          dialect
-        );
-        getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[applyComponentSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
-        );
-      }
+      // Must use registerComponentRuntimeSchema (not generateRuntimeSchema)
+      // so the registered table includes component system columns
+      // (_parent_id, _parent_table, _parent_field, _order, _component_type)
+      // instead of collection columns (title, slug).
+      registerComponentRuntimeSchema(adapter, dialect, tableName, fields as FieldConfig[]);
 
       // Pipeline (PipelineResult) does not carry per-slug schema versions;
       // those live on createApplyDesiredSchema's ApplyResult wrapper. Bump by

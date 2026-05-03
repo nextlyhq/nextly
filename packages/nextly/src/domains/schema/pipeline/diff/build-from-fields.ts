@@ -161,13 +161,18 @@ export function buildDesiredTableFromComponentFields(
     });
   }
 
-  // Timestamp columns — same as collections.
-  if (dialect === "sqlite") {
+  // Timestamp columns — type tokens must match PostgreSQL udt_name / MySQL
+  // COLUMN_TYPE as returned by introspection. Component DDL uses
+  // TIMESTAMP WITH TIME ZONE (pg → "timestamptz"), DATETIME (mysql), INTEGER (sqlite).
+  if (dialect === "postgresql") {
+    columns.push({ name: "created_at", type: "timestamptz", nullable: false, default: undefined });
+    columns.push({ name: "updated_at", type: "timestamptz", nullable: false, default: undefined });
+  } else if (dialect === "mysql") {
+    columns.push({ name: "created_at", type: "datetime", nullable: false, default: undefined });
+    columns.push({ name: "updated_at", type: "datetime", nullable: false, default: undefined });
+  } else {
     columns.push({ name: "created_at", type: "integer", nullable: false, default: undefined });
     columns.push({ name: "updated_at", type: "integer", nullable: false, default: undefined });
-  } else {
-    columns.push({ name: "created_at", type: "timestamp", nullable: true, default: undefined });
-    columns.push({ name: "updated_at", type: "timestamp", nullable: true, default: undefined });
   }
 
   return { name: tableName, columns };
