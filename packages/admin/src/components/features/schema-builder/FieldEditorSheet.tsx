@@ -42,6 +42,14 @@ type Props = {
   onCancel: () => void;
   onApply: (next: BuilderField) => void;
   onDelete: () => void;
+  /**
+   * PR D: when editing a `repeater` / `group` field, the legacy
+   * ArrayFieldEditor / GroupFieldEditor renders a "+ Add field" button.
+   * Clicking it asks the parent page to open the FieldPickerModal scoped
+   * to this parent (parentFieldId is the field's id). The parent then
+   * commits the new child via builder.handleNestedFieldAdd.
+   */
+  onAddNestedField?: (parentFieldId: string) => void;
 };
 
 type TabKey = "general" | "validation" | "admin" | "advanced";
@@ -55,6 +63,7 @@ export function FieldEditorSheet({
   onCancel,
   onApply,
   onDelete,
+  onAddNestedField,
 }: Props) {
   const [draft, setDraft] = useState<BuilderField>(field);
   const [tab, setTab] = useState<TabKey>("general");
@@ -102,6 +111,7 @@ export function FieldEditorSheet({
                 siblingNames={siblingNames}
                 readOnly={readOnly}
                 onChange={setDraft}
+                onAddNestedField={onAddNestedField}
               />
             </TabsContent>
             <TabsContent value="validation">

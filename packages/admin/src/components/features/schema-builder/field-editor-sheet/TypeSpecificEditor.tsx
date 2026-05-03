@@ -26,6 +26,12 @@ type Props = {
   field: BuilderField;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
+  /**
+   * PR D: page-level callback that opens the FieldPickerModal scoped to
+   * the parent (this field). Used by the legacy ArrayFieldEditor /
+   * GroupFieldEditor below to render an "+ Add field" button.
+   */
+  onAddNestedField?: (parentFieldId: string) => void;
 };
 
 /**
@@ -42,6 +48,7 @@ export function TypeSpecificEditor({
   field,
   readOnly = false,
   onChange,
+  onAddNestedField,
 }: Props) {
   // Patch helper — every adapter mutates `field` immutably through here.
   const patch = (changes: Partial<BuilderField>) => {
@@ -187,6 +194,11 @@ export function TypeSpecificEditor({
           readOnly ? noop : (v: boolean) => patchAdmin({ hideGutter: v })
         }
         nestedFields={field.fields}
+        onAddField={
+          readOnly || !onAddNestedField
+            ? undefined
+            : () => onAddNestedField(field.id)
+        }
       />
     );
   }
@@ -215,6 +227,11 @@ export function TypeSpecificEditor({
             : (n: string | undefined) => patch({ rowLabelField: n })
         }
         nestedFields={field.fields}
+        onAddField={
+          readOnly || !onAddNestedField
+            ? undefined
+            : () => onAddNestedField(field.id)
+        }
       />
     );
   }

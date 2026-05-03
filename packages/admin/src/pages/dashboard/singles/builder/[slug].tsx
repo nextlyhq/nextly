@@ -59,10 +59,13 @@ type FormData = z.infer<typeof singleFormSchema>;
 type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
-  | { kind: "picker"; insertAt: number }
+  // PR D: parentFieldId? scopes the picker to a group/repeater.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
   // Why: NEW in PR C. Sheet renders in create mode against this draft;
   // on Apply we append, on Cancel we discard.
-  | { kind: "create"; draft: BuilderField }
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
   | { kind: "edit"; fieldId: string };
 // Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
 // removed from the toolbar (feedback Section 2).
@@ -340,13 +343,24 @@ export default function SingleBuilderEditPage({
       {active.kind === "picker" && (
         <FieldPickerModal
           open
+          // PR D: title scopes the picker to the parent for nested adds.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
           excludedTypes={SINGLE_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
           // Why: PR C flow change -- pick opens sheet in create mode.
           // Field commits on Apply, discards on Cancel.
+          // PR D: thread parentFieldId through.
           onSelect={type =>
             setActive({
               kind: "create",
+              parentFieldId: active.parentFieldId,
               draft: {
                 id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 name: "",
@@ -364,11 +378,22 @@ export default function SingleBuilderEditPage({
           open
           mode="create"
           field={active.draft}
-          siblingNames={builder.fields.map(f => f.name)}
+          siblingNames={
+            active.parentFieldId
+              ? (
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.fields ?? []
+                ).map(f => f.name)
+              : builder.fields.map(f => f.name)
+          }
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
-            builder.setFields([...builder.fields, next]);
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
             setActive({ kind: "none" });
           }}
           onDelete={() => setActive({ kind: "none" })}
@@ -393,6 +418,14 @@ export default function SingleBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
+          // PR D: parent-aware "+ Add field" inside group/repeater editors.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
         />
       )}
 

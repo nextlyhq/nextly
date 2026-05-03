@@ -89,12 +89,16 @@ type FormData = z.infer<typeof collectionFormSchema>;
 type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
-  | { kind: "picker"; insertAt: number }
+  // PR D: picker carries an optional parentFieldId so the same overlay
+  // can be opened scoped to a group/repeater for nested adds.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
   // Why: NEW in PR C. The user has chosen a type but hasn't committed
   // the field yet. Sheet renders in create mode against this draft; on
   // Apply we append to builder.fields, on Cancel we discard. Avoids the
   // legacy bug where canceling left an empty placeholder in the list.
-  | { kind: "create"; draft: BuilderField }
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
   | { kind: "edit"; fieldId: string };
 // Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
 // removed from the toolbar (feedback Section 2). HooksEditor component
@@ -509,14 +513,27 @@ export default function CollectionBuilderEditPage({
       {active.kind === "picker" && (
         <FieldPickerModal
           open
+          // PR D: title scopes the picker to the parent when adding into
+          // a group/repeater.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
           excludedTypes={COLLECTION_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
           // Why: PR C flow change. Don't append a placeholder field;
           // build a draft and open the sheet in create mode. The field
           // is only committed on Apply -- Cancel discards cleanly.
+          // PR D: thread parentFieldId through so the create overlay
+          // knows whether to append to top-level or nested.
           onSelect={type =>
             setActive({
               kind: "create",
+              parentFieldId: active.parentFieldId,
               draft: {
                 id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 name: "",
@@ -530,17 +547,29 @@ export default function CollectionBuilderEditPage({
       )}
 
       {/* Field editor sheet -- create mode for a brand-new field that
-          hasn't been committed yet. Apply appends to builder.fields. */}
+          hasn't been committed yet. Apply appends to builder.fields
+          (or to the parent's nested fields when parentFieldId is set). */}
       {active.kind === "create" && (
         <FieldEditorSheet
           open
           mode="create"
           field={active.draft}
-          siblingNames={builder.fields.map(f => f.name)}
+          siblingNames={
+            active.parentFieldId
+              ? (
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.fields ?? []
+                ).map(f => f.name)
+              : builder.fields.map(f => f.name)
+          }
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
-            builder.setFields([...builder.fields, next]);
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
             setActive({ kind: "none" });
           }}
           // Why: Delete is hidden in create mode (sheet checks mode), so
@@ -569,6 +598,15 @@ export default function CollectionBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
+          // PR D: parent-aware "+ Add field" inside group/repeater
+          // editors. Switches the overlay to picker with parentFieldId.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
         />
       )}
 
