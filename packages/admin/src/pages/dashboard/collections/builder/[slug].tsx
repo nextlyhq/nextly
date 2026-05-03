@@ -53,6 +53,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
@@ -354,6 +355,25 @@ export default function CollectionBuilderEditPage({
 
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and
+  // Why: PR D feedback -- duplicate icon on each field card. We clone the
+  // field's full shape, mint a new id, and pick the next free numeric-
+  // suffix name. The duplicate is appended at the end of the user-fields
+  // list (insert-at-position is a follow-up).
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
+
   // flatten back to a fields array for handleFieldsReorder. The legacy
   // builder.handleDragEnd is built for the old palette+field-list model
   // and ignores row IDs.
@@ -461,6 +481,7 @@ export default function CollectionBuilderEditPage({
           onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+          onDuplicateField={handleDuplicateField}
           onReorder={() => {
             // Reorder is driven by handleRowDragEnd above. This callback
             // exists for parents that need notification but our state

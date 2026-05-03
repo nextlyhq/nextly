@@ -73,6 +73,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -99,6 +100,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -117,6 +119,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -134,6 +137,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -154,6 +158,7 @@ describe("BuilderFieldList", () => {
           onAddAt={onAddAt}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -171,6 +176,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )

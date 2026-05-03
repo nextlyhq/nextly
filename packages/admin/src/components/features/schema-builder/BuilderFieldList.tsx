@@ -35,6 +35,7 @@ type Props = {
   onAddAt: (index: number) => void;
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
+  onDuplicateField: (id: string) => void;
   /** Reorder callback — wired by the parent's DndContext.onDragEnd. */
   onReorder: (orderedIds: readonly string[]) => void;
   /** Lock all editing affordances for code-first / locked collections. */
@@ -48,6 +49,7 @@ export function BuilderFieldList({
   onAddAt,
   onEditField,
   onDeleteField,
+  onDuplicateField,
   readOnly = false,
 }: Props) {
   const systemFields = fields.filter(f => f.isSystem);
@@ -101,6 +103,7 @@ export function BuilderFieldList({
                   readOnly={readOnly}
                   onEditField={onEditField}
                   onDeleteField={onDeleteField}
+                  onDuplicateField={onDuplicateField}
                 />
               ))}
             </div>

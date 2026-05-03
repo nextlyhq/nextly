@@ -46,6 +46,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
@@ -187,6 +188,23 @@ export default function ComponentBuilderEditPage({
     );
   }, [builder, settings, slug, updateComponent]);
 
+  // Why: PR D feedback -- duplicate icon on each field card. Same shape
+  // as the collections / singles page handlers.
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
+
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and
   // flatten back to a fields array for handleFieldsReorder. The legacy
@@ -292,6 +310,7 @@ export default function ComponentBuilderEditPage({
           onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+          onDuplicateField={handleDuplicateField}
           onReorder={() => {
             // Reorder is driven by handleDragEnd above.
           }}
