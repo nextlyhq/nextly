@@ -1,10 +1,11 @@
-// Why: slug auto-derives from the singular name via toSnakeName. The AUTO
-// badge tells the user the value is computed; clicking Edit lets them
-// override. Once edited the badge disappears (the slug no longer auto-tracks
-// the singular name — the parent form is responsible for resuming auto-derive
-// if the user clears the override). Used inside BuilderSettingsModal's Basics
-// tab for collections / singles / components.
+// Why: slug auto-derives from the singular name via toSnakeName. PR B
+// dropped the loud "AUTO" badge + "Edit" text button in favor of a dim
+// "Slug:" label, bold value, and a Lucide Pencil icon button -- matches
+// feedback Section 1's request for a quieter, more dev-focused
+// presentation. Once the user clicks the pencil, the value becomes an
+// inline editable input with a "Done" button.
 import { Button, Input } from "@revnixhq/ui";
+import { Pencil } from "lucide-react";
 import { useState } from "react";
 
 type Props = {
@@ -39,19 +40,19 @@ export function SlugInput({ value, onChange }: Props) {
   }
 
   return (
-    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-      <span className="font-mono">{value}</span>
-      <span className="text-[10px] border border-border rounded-sm px-1 py-0.5">
-        AUTO
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">Slug:</span>
+      <span className="font-mono text-sm font-medium text-foreground flex-1 truncate">
+        {value || <span className="text-muted-foreground italic">none</span>}
       </span>
-      <Button
+      <button
         type="button"
-        variant="ghost"
-        size="sm"
+        aria-label="Edit slug"
+        className="text-muted-foreground hover:text-foreground p-1 rounded-sm"
         onClick={() => setEditing(true)}
       >
-        Edit
-      </Button>
+        <Pencil className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
