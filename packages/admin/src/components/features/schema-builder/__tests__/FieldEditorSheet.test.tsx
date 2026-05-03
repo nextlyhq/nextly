@@ -43,7 +43,10 @@ describe("FieldEditorSheet — shell", () => {
         onDelete={vi.fn()}
       />
     );
-    for (const name of ["General", "Validation", "Admin", "Advanced"]) {
+    // PR E1 (2026-05-03): renamed "Admin" -> "Display" per feedback
+    // Section 4. The tab `value` stays "admin" so this assertion uses
+    // the visible label, not the value.
+    for (const name of ["General", "Validation", "Display", "Advanced"]) {
       expect(screen.getByRole("tab", { name })).toBeInTheDocument();
     }
   });
