@@ -231,7 +231,7 @@ function ComponentCard({ component, onSelect }: ComponentCardProps) {
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex flex-col items-start gap-2 p-3 rounded-none border border-border",
+        "flex flex-col items-start gap-2 p-3 rounded-none  border border-primary/5",
         "bg-background hover:bg-accent hover:border-accent-foreground/20",
         "transition-colors text-left w-full",
         "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
@@ -334,7 +334,7 @@ export function ComponentSelector({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent size="lg" className="max-h-[85vh] flex flex-col">
+      <DialogContent size="md" className="max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Puzzle className="h-5 w-5" />

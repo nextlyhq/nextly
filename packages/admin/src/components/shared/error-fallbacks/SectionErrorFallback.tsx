@@ -136,7 +136,7 @@ export function SectionErrorFallback({
             <Button
               onClick={reset}
               variant="outline"
-              size="sm"
+              size="md"
               className="flex items-center gap-2"
             >
               <RefreshCw className="h-3 w-3" />

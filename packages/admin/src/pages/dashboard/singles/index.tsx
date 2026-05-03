@@ -58,8 +58,7 @@ const SinglesPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <Link href={ROUTES.SINGLES_BUILDER} className="w-full sm:w-auto">
               <Button
-                size="sm"
-                className="w-full sm:w-auto flex items-center gap-1.5 h-9 sm:h-8"
+                size="md"                
               >
                 <Plus className="h-4 w-4" />
                 <span>New Single</span>

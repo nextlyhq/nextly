@@ -171,7 +171,7 @@ export function EntryCompare({
   });
 
   // Get entries for dropdowns
-  const entries = entriesList?.docs || [];
+  const entries = entriesList?.items || [];
 
   // Get fields for comparison from schema
   const allFields = useMemo(() => {
@@ -384,10 +384,10 @@ export function EntryCompare({
       {leftEntry && rightEntry && !isLoadingLeft && !isLoadingRight && (
         <div className="grid grid-cols-2 gap-4">
           {/* Column headers */}
-          <div className="font-medium text-sm text-muted-foreground px-1 pb-2 border-b">
+          <div className="font-medium text-sm text-muted-foreground px-1 pb-2  border-b border-primary/5">
             {getEntryLabel(leftEntry)}
           </div>
-          <div className="font-medium text-sm text-muted-foreground px-1 pb-2 border-b">
+          <div className="font-medium text-sm text-muted-foreground px-1 pb-2  border-b border-primary/5">
             {getEntryLabel(rightEntry)}
           </div>
 

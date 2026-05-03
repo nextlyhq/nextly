@@ -21,7 +21,7 @@ import type {
  * Built on Radix UI primitives with WAI-ARIA compliance.
  *
  * Design Specs:
- * - AccordionItem border: 1px bottom border (border-b)
+ * - AccordionItem border: 1px bottom  border border-primary/5 (border-b)
  * - AccordionTrigger padding: 16px vertical (py-4)
  * - AccordionTrigger font: font-medium (500 weight)
  * - AccordionContent padding: 16px bottom, 0 top (pb-4 pt-0)
@@ -113,7 +113,7 @@ const Accordion = AccordionPrimitive.Root;
  * AccordionItem - Container for trigger and content
  *
  * Design Specs:
- * - Border: 1px bottom border (border-b) for visual separation
+ * - Border: 1px bottom  border border-primary/5 (border-b) for visual separation
  * - Each item represents a collapsible section
  *
  * Accessibility:

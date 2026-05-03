@@ -236,12 +236,14 @@ export async function reloadNextlyConfig(opts?: {
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
 
-  // Normalize collections to (slug, tableName, fields) tuples. Drop
-  // entries without a slug — they can't be addressed.
+  // Normalize collections to (slug, tableName, fields, status) tuples. Drop
+  // entries without a slug — they can't be addressed. `status` propagates so
+  // the diff knows whether to expect/inject the status system column.
   const targets: Array<{
     slug: string;
     tableName: string;
     fields: MinimalField[];
+    status?: boolean;
   }> = [];
   for (const c of newConfig.collections ?? []) {
     if (!c.slug) continue;
@@ -249,6 +251,7 @@ export async function reloadNextlyConfig(opts?: {
       slug: c.slug,
       tableName: c.tableName ?? `dc_${c.slug}`,
       fields: (c.fields ?? []) as MinimalField[],
+      status: (c as { status?: boolean }).status === true,
     });
   }
 
@@ -257,6 +260,7 @@ export async function reloadNextlyConfig(opts?: {
     slug: string;
     tableName: string;
     fields: MinimalField[];
+    status?: boolean;
   }> = [];
   for (const s of newConfig.singles ?? []) {
     if (!s.slug) continue;
@@ -267,6 +271,7 @@ export async function reloadNextlyConfig(opts?: {
       slug: s.slug,
       tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
       fields: (s.fields ?? []) as MinimalField[],
+      status: (s as { status?: boolean }).status === true,
     });
   }
 
@@ -328,7 +333,8 @@ export async function reloadNextlyConfig(opts?: {
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
         target.fields,
-        dialect
+        dialect,
+        { hasStatus: target.status === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -349,6 +355,7 @@ export async function reloadNextlyConfig(opts?: {
         slug: target.slug,
         tableName: target.tableName,
         fields: target.fields as DesiredCollection["fields"],
+        status: target.status === true,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -368,7 +375,8 @@ export async function reloadNextlyConfig(opts?: {
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
         target.fields,
-        dialect
+        dialect,
+        { hasStatus: target.status === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -388,6 +396,7 @@ export async function reloadNextlyConfig(opts?: {
         slug: target.slug,
         tableName: target.tableName,
         fields: target.fields as DesiredSingle["fields"],
+        status: target.status === true,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -608,7 +617,8 @@ export async function reloadNextlyConfig(opts?: {
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect
+          dialect,
+          { status: c.status === true }
         );
         collectionFreshTables.set(c.tableName, table);
       }
@@ -616,7 +626,8 @@ export async function reloadNextlyConfig(opts?: {
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect
+          dialect,
+          { status: s.status === true }
         );
         singleFreshTables.set(s.tableName, table);
       }

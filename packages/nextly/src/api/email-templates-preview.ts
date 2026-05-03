@@ -25,8 +25,8 @@ import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -85,6 +85,8 @@ export const POST = withErrorHandler(
 
     const preview = await service.previewTemplate(id, validated.data);
 
-    return createSuccessResponse(preview);
+    // Preview is a structured value (subject + html); ship it bare via
+    // respondData for the non-CRUD read shape.
+    return respondData(preview);
   }
 );

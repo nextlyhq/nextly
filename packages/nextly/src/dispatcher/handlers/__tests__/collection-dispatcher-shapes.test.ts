@@ -87,7 +87,7 @@ describe("dispatchCollections, paginated lists (respondList)", () => {
       statusCode: 200,
       message: "Collections fetched successfully",
       data: fakeCollections,
-      meta: { total: 2, page: 1, pageSize: 10, totalPages: 1 },
+      meta: { total: 2, page: 1, limit: 10, totalPages: 1 },
     };
     const container = makeContainer({
       listCollections: vi.fn().mockResolvedValue(fakeServiceResult),
@@ -96,7 +96,7 @@ describe("dispatchCollections, paginated lists (respondList)", () => {
     const result = await dispatchCollections(
       container,
       "listCollections",
-      { page: "1", pageSize: "10" },
+      { page: "1", limit: "10" },
       undefined
     );
 
@@ -149,7 +149,7 @@ describe("dispatchCollections, paginated lists (respondList)", () => {
     const result = await dispatchCollections(
       container,
       "listEntries",
-      { collectionName: "posts", page: "1", pageSize: "10" },
+      { collectionName: "posts", page: "1", limit: "10" },
       undefined
     );
 

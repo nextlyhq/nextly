@@ -83,9 +83,9 @@ export function RelationshipEditor({
     });
 
     // 2. Add Collections
-    if (collectionsData?.data) {
+    if (collectionsData?.items) {
       items.push(
-        ...collectionsData.data.map(col => ({
+        ...collectionsData.items.map(col => ({
           slug: col.name,
           label: col.label || col.name,
         }))
@@ -93,9 +93,9 @@ export function RelationshipEditor({
     }
 
     // 3. Add Singles
-    if (singlesData?.data) {
+    if (singlesData?.items) {
       items.push(
-        ...singlesData.data.map(single => ({
+        ...singlesData.items.map(single => ({
           slug: single.slug,
           label: single.label || single.slug,
         }))
@@ -229,7 +229,7 @@ export function RelationshipEditor({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                size="md"
                 className="w-full justify-start text-xs h-8"
               >
                 <Icons.Plus className="h-3 w-3 mr-1.5" />
@@ -239,7 +239,7 @@ export function RelationshipEditor({
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-64 p-0" align="start">
-              <div className="p-2 border-b border-border">
+              <div className="p-2  border-b border-primary/5">
                 <div className="relative">
                   <Icons.Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
@@ -308,7 +308,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Relationship Options */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         {/* Has Many Toggle */}
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
@@ -350,7 +350,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Admin Options */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>
@@ -404,7 +404,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Filter Options (Simplified) */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         <div className="flex items-center justify-between">
           <FormLabelWithTooltip
             className="text-xs font-medium"
@@ -415,7 +415,7 @@ export function RelationshipEditor({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-6 text-xs text-muted-foreground"
               onClick={() => handleFilterUpdate(null)}
             >
@@ -425,7 +425,7 @@ export function RelationshipEditor({
         </div>
 
         {filterOptions ? (
-          <div className="space-y-2 p-3 rounded-none border border-border bg-background">
+          <div className="space-y-2 p-3 rounded-none  border border-primary/5 bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Only show documents where:
             </p>
@@ -451,7 +451,7 @@ export function RelationshipEditor({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             className="w-full h-8 text-xs"
             onClick={() => handleFilterUpdate({ field: "", equals: "" })}
           >
@@ -463,7 +463,7 @@ export function RelationshipEditor({
 
       {/* Info Box */}
       {selectedCollections.length === 0 && (
-        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
+        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10  border border-primary/5 border-amber-500/20">
           <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-amber-600 dark:text-amber-400">
             <p className="font-medium">No target collection selected</p>

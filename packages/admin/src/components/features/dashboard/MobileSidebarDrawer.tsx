@@ -116,7 +116,7 @@ export function MobileSidebarDrawer({
         style={{ width: `${MOBILE_DRAWER_WIDTH}px` }}
       >
         {/* Header */}
-        <SheetHeader className="flex flex-row h-16 items-center justify-between gap-3 px-6 border-b border-sidebar-border space-y-0 text-left">
+        <SheetHeader className="flex flex-row h-16 items-center justify-between gap-3 px-6  border-b border-primary/5 border-sidebar-border space-y-0 text-left">
           <SheetTitle className="sr-only">Navigation Menu</SheetTitle>
           <Link href="/admin" className="flex items-center gap-3">
             {branding.logoUrl ||

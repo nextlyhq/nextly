@@ -139,9 +139,9 @@ export function EmailProviderForm({
       {/* Form */}
       <Form {...form}>
         <form onSubmit={(e) => { void form.handleSubmit(onSubmit)(e); }} className="space-y-6">
-          <div className="bg-card border border-border rounded-none overflow-hidden">
+          <div className="bg-card  border border-primary/5 rounded-none overflow-hidden">
             {/* Page Header */}
-            <div className="border-b border-border bg-primary/5 px-6 py-5">
+            <div className="border-b border-primary/5 bg-primary/5 px-6 py-5">
               <div className="flex items-center gap-3">
                 <div
                   className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/15 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"
@@ -217,7 +217,7 @@ export function EmailProviderForm({
                                     "relative h-24 flex items-center justify-center overflow-hidden cursor-pointer",
                                     isSelected
                                       ? "border-primary bg-primary/[0.04] ring-1 ring-primary shadow-sm"
-                                      : "border-border hover:border-muted-foreground/30 hover:bg-primary/5 opacity-80 hover:opacity-100"
+                                      : "border-primary/5 hover:border-primary/5-foreground/30 hover:bg-primary/5 opacity-80 hover:opacity-100"
                                   )}
                                   onClick={() => {
                                     if (!isSelected) {
@@ -360,10 +360,10 @@ export function EmailProviderForm({
               </div>
 
               {/* Right Column - Settings & Actions */}
-              <div className="border-l border-border bg-primary/5 p-6 space-y-6">
+              <div className="border-l border-primary/5 bg-primary/5 p-6 space-y-6">
                 {/* GLOBAL ACTIONS & SETTINGS */}
                 <div className="space-y-3">
-                  <h3 className="text-xs font-semibold text-primary uppercase tracking-wider bg-primary/10 border border-primary rounded-none px-3 py-2 transition-colors cursor-default">
+                  <h3 className="text-xs font-semibold text-primary uppercase tracking-wider bg-primary/5  border border-primary/5 border-primary rounded-none px-3 py-2 transition-colors cursor-default">
                     GLOBAL ACTIONS & SETTINGS
                   </h3>
                 </div>

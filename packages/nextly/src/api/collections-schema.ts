@@ -8,10 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` (or `{ data: [...], meta: {...} }` for
- * paginated lists) per spec §10.2. Errors serialize as
- * `application/problem+json`.
+ * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
+ * and return canonical `respondX` envelopes per spec §5.1
+ * (`{ items, meta }` for the paginated list, `{ message, item }` for the
+ * create). Errors serialize as `application/problem+json`.
  *
  * @example
  * ```typescript
@@ -34,10 +34,7 @@ import type { CollectionRegistryService } from "../services/collections/collecti
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { simplePluralize } from "../shared/lib/pluralization";
 
-import {
-  createPaginatedResponse,
-  createSuccessResponse,
-} from "./create-success-response";
+import { respondList, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -79,7 +76,7 @@ const createCollectionSchema = z.object({
 async function requireUser(request: Request): Promise<{ id: string }> {
   // getSession returns GetSessionResult; extract user or throw the unified
   // auth-required error so the boundary returns canonical 401.
-  const result = await getSession(request, env.NEXTLY_SECRET_RESOLVED || "");
+  const result = await getSession(request, env.NEXTLY_SECRET || "");
   const user = result.authenticated ? result.user : null;
   if (!user) {
     throw NextlyError.authRequired();
@@ -107,7 +104,7 @@ async function requireUser(request: Request): Promise<{ id: string }> {
  * @example
  * ```bash
  * curl "http://localhost:3000/api/collections/schema?source=ui&limit=10"
- * # => {"data":[...],"meta":{"total":5,"page":1,"perPage":10}}
+ * # => {"items":[...],"meta":{"total":5,"page":1,"limit":10,"totalPages":1,"hasNext":false,"hasPrev":false}}
  * ```
  */
 export const GET = withErrorHandler(async (request: Request) => {
@@ -156,15 +153,20 @@ export const GET = withErrorHandler(async (request: Request) => {
     filteredCollections = permittedCollections;
   }
 
-  // Translate offset-based pagination to canonical page/perPage meta. The
+  // Translate offset-based pagination to the canonical page/limit meta. The
   // total reflects the post-permission-filter count so non-admins see a
   // total consistent with what they can paginate through.
-  const perPage = Math.max(1, limit);
-  const page = Math.floor(offset / perPage) + 1;
-  return createPaginatedResponse(filteredCollections, {
-    total: filteredCollections.length,
+  const safeLimit = Math.max(1, limit);
+  const page = Math.floor(offset / safeLimit) + 1;
+  const total = filteredCollections.length;
+  const totalPages = Math.ceil(total / safeLimit);
+  return respondList(filteredCollections, {
+    total,
     page,
-    perPage,
+    limit: safeLimit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
   });
 });
 
@@ -243,7 +245,9 @@ export const POST = withErrorHandler(async (request: Request) => {
     hooks: validated.hooks,
   });
 
-  return createSuccessResponse(collection, { status: 201 });
+  // POST is a create; canonical mutation envelope ships a toast message
+  // alongside the new collection so the admin can confirm success.
+  return respondMutation("Collection created.", collection, { status: 201 });
 });
 
 // NOTE: previewSchemaChanges and applySchemaChanges live in the

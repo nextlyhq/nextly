@@ -53,7 +53,7 @@ export class CollapsibleContainerNode extends ElementNode {
     dom.classList.add(
       "my-4",
       "border",
-      "border-border",
+      "border-primary/5",
       "rounded-none",
       "overflow-hidden"
     );
@@ -211,7 +211,7 @@ export class CollapsibleContentNode extends ElementNode {
 
   createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("div");
-    dom.classList.add("px-4", "py-3", "border-t", "border-border");
+    dom.classList.add("px-4", "py-3", "border-t", "border-primary/5");
     return dom;
   }
 

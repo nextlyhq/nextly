@@ -67,7 +67,7 @@ export function DynamicPluginSectionItems({
   );
 
   const pluginGroups = React.useMemo(() => {
-    if (!pluginMetadata || !data?.data) return [];
+    if (!pluginMetadata || !data?.items) return [];
 
     // Find plugins whose effective placement matches the target
     const matchingPlugins = pluginMetadata.filter(meta => {
@@ -78,7 +78,7 @@ export function DynamicPluginSectionItems({
     if (matchingPlugins.length === 0) return [];
 
     // Get all plugin collections, filtered by visibility and permissions
-    const allCollections = data.data;
+    const allCollections = data.items;
     const visiblePluginCollections = allCollections.filter(
       c => c.admin?.isPlugin && !c.admin?.hidden
     );
@@ -117,7 +117,7 @@ export function DynamicPluginSectionItems({
     });
 
     return groups;
-  }, [pluginMetadata, data?.data, placement, capabilities]);
+  }, [pluginMetadata, data?.items, placement, capabilities]);
 
   if (pluginGroups.length === 0) return null;
 

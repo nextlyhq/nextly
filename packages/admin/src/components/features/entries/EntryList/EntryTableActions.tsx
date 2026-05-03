@@ -73,7 +73,7 @@ export function EntryTableActions({
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-8 w-8 p-0"
             aria-label="Open actions menu"
           >

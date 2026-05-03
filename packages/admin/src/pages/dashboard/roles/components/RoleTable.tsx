@@ -119,9 +119,9 @@ export default function RoleTable() {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(role => {
+    return data.items.filter(role => {
       // Filter by type
       if (typeFilter !== "all" && role.type !== typeFilter) {
         return false;
@@ -132,7 +132,7 @@ export default function RoleTable() {
       }
       return true;
     });
-  }, [data?.data, typeFilter, statusFilter]);
+  }, [data?.items, typeFilter, statusFilter]);
 
   // TanStack Query: Delete role mutation
   const { mutate: deleteRole, isPending: isDeleting } = useDeleteRole();
@@ -180,7 +180,7 @@ export default function RoleTable() {
 
     // Filter out system roles from selection
     const selectedRoles =
-      data?.data.filter(r => selectedIds.includes(r.id)) || [];
+      data?.items.filter(r => selectedIds.includes(r.id)) || [];
     const systemRolesSelected = selectedRoles.filter(r => r.type === "System");
 
     if (systemRolesSelected.length > 0) {
@@ -203,7 +203,7 @@ export default function RoleTable() {
   const handleConfirmBulkDelete = () => {
     // Filter out system roles before deletion
     const selectedRoles =
-      data?.data.filter(r => selectedIds.includes(r.id)) || [];
+      data?.items.filter(r => selectedIds.includes(r.id)) || [];
     const deletableRoleIds = selectedRoles
       .filter(r => r.type !== "System")
       .map(r => r.id);
@@ -448,7 +448,7 @@ export default function RoleTable() {
             onChange={setSearch}
             placeholder="Search roles by name"
             isLoading={isLoading}
-            className="flex-1 max-w-sm"
+            className="flex-1 max-w-sm bg-white text-black border-primary/5"
           />
         </div>
 
@@ -457,7 +457,7 @@ export default function RoleTable() {
           {/* Columns Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9">
+              <Button variant="secondary" size="md">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -480,7 +480,7 @@ export default function RoleTable() {
       </div>
 
       {/* Responsive table */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         <ResponsiveTable
           data={filteredData}
           columns={columns}
@@ -493,18 +493,16 @@ export default function RoleTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-border p-4">
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={data.meta.total}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={data.meta.totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+            totalItems={data.meta.total}
+          />
         )}
       </div>
 

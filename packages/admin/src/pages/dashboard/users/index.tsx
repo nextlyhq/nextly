@@ -54,7 +54,7 @@ const UsersPage: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <Link href={ROUTES.USERS_CREATE}>
-                <Button size="sm" className="flex items-center gap-1">
+                <Button size="md" className="flex items-center gap-1">
                   <Plus className="h-4 w-4" />
                   <span>Create User</span>
                 </Button>

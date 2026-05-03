@@ -1,10 +1,11 @@
 /**
  * Base Storage Adapter
  *
- * Provides the IStorageAdapter interface re-export and BaseStorageAdapter
- * abstract class with common functionality for storage adapters.
+ * BaseStorageAdapter abstract class with common functionality for storage
+ * adapters. Concrete adapters extend this class to inherit auto-detected
+ * capabilities, sanitizeFilename(), generateKey(), etc.
  *
- * @see ../types.ts for the full IStorageAdapter interface definition
+ * For the IStorageAdapter interface itself, import from ../types directly.
  */
 
 import type {
@@ -14,9 +15,6 @@ import type {
   UploadOptions,
   UploadResult,
 } from "../types";
-
-// Re-export types for backward compatibility
-export type { IStorageAdapter, StorageAdapterInfo } from "../types";
 
 // ============================================================
 // Base Storage Adapter Abstract Class

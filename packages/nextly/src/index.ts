@@ -308,7 +308,7 @@ export type {
 } from "./services/media/media-service";
 
 // Re-export StorageProvider as type alias for IStorageAdapter
-export type { IStorageAdapter as StorageProvider } from "./storage/adapters/base-adapter";
+export type { IStorageAdapter as StorageProvider } from "./storage/types";
 
 // Shared Types - Common types used across services
 export type {

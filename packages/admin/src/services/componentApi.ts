@@ -7,17 +7,15 @@
  * @see collectionApi.ts - Reference pattern
  */
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { ListResponse, TableParams } from "@revnixhq/ui";
 
 import type { ApiComponent } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   ActionResponse,
-  ListResponse,
   MutationResponse,
 } from "../lib/api/response-types";
 
@@ -77,22 +75,15 @@ const buildQuery = (params: TableParams): string => {
 /**
  * Fetch paginated list of Component definitions.
  *
- * Phase 4 (Task 19): server returns `ListResponse<ApiComponent>`
- * (`{ items, meta }`); we map to the table-component shape locally.
+ * Phase 4.7: pass canonical ListResponse straight through. The legacy
+ * normalizePagination adapter is gone.
  */
 export const fetchComponents = async (
   params: TableParams
-): Promise<TableResponse<ApiComponent>> => {
+): Promise<ListResponse<ApiComponent>> => {
   const query = buildQuery(params);
   const url = `/components${query ? `?${query}` : ""}`;
-
-  const result = await fetcher<ListResponse<ApiComponent>>(url, {}, true);
-
-  const components = result.items;
-  const { pageSize = 10 } = params.pagination;
-  const meta = normalizePagination(result.meta, pageSize, components.length);
-
-  return { data: components, meta };
+  return fetcher<ListResponse<ApiComponent>>(url, {}, true);
 };
 
 /**
@@ -115,10 +106,11 @@ export const deleteComponent = async (componentSlug: string): Promise<void> => {
 /**
  * Component API service object.
  *
- * Phase 4 (Task 19): list returns `ListResponse<T>`; bare reads return the
- * doc directly; create/update return `MutationResponse<T>`. We preserve
- * the legacy `{ data: ApiComponent }` projection for create/update because
- * the existing callers destructure `data`.
+ * Phase 4.6c: server emits canonical `respondX` shapes (spec §5.1). list ->
+ * `ListResponse<T>`; bare reads -> `T`; create/update -> `MutationResponse<T>`
+ * (`{ message, item }`). We surface the bare `ApiComponent` to callers so
+ * mutations match the read shape; toast text comes from `message` when
+ * needed.
  */
 export const componentApi = {
   fetchComponents,
@@ -143,15 +135,12 @@ export const componentApi = {
   /**
    * Create a new Component definition.
    */
-  create: async (
-    payload: CreateComponentPayload
-  ): Promise<{ data: ApiComponent }> => {
+  create: async (payload: CreateComponentPayload): Promise<ApiComponent> => {
     const result = await protectedApi.post<MutationResponse<ApiComponent>>(
       "/components",
       payload
     );
-    // Map canonical `item` to legacy `data` projection.
-    return { data: result.item };
+    return result.item;
   },
 
   /**
@@ -160,12 +149,12 @@ export const componentApi = {
   update: async (
     componentSlug: string,
     payload: UpdateComponentPayload
-  ): Promise<{ data: ApiComponent }> => {
+  ): Promise<ApiComponent> => {
     const result = await protectedApi.patch<MutationResponse<ApiComponent>>(
       `/components/${componentSlug}`,
       payload
     );
-    return { data: result.item };
+    return result.item;
   },
 
   /**

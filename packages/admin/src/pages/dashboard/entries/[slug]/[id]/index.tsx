@@ -98,11 +98,11 @@ function EditEntryPageSkeleton() {
 
           {/* Header skeleton */}
           <div className="mb-8">
-            <Skeleton className="h-9 w-48 mb-2" />
+            <Skeleton className="w-48 mb-2" />
             <Skeleton className="h-5 w-96" />
           </div>
 
-          <div className="bg-card border border-border rounded-none p-6">
+          <div className="bg-card  border border-primary/5 rounded-none p-6">
             <div className="space-y-6">
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
@@ -113,10 +113,10 @@ function EditEntryPageSkeleton() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-card flex flex-col relative z-10">
+        <div className="w-full lg:w-[360px] shrink-0  border-t border-primary/5 lg:border-t-0 lg :border-l border-primary/5 lg:border-primary/5 bg-card flex flex-col relative z-10">
           <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
             {/* Sidebar Header/Actions Skeleton */}
-            <div className="p-6 border-b border-border space-y-3">
+            <div className="p-6  border-b border-primary/5 space-y-3">
               <div className="flex gap-3">
                 <Skeleton className="h-10 flex-1" />
                 <Skeleton className="h-10 flex-1" />
@@ -135,7 +135,7 @@ function EditEntryPageSkeleton() {
               </div>
 
               {/* Document Info Skeleton */}
-              <div className="pt-6 border-t border-border">
+              <div className="pt-6  border-t border-primary/5">
                 <div className="bg-primary/5 px-6 py-3 mb-4">
                   <Skeleton className="h-4 w-32" />
                 </div>

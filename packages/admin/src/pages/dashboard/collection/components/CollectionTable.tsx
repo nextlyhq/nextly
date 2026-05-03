@@ -24,8 +24,7 @@ import {
   Trash2,
   List,
   FileCode,
-  Table as 
-  Filter,
+  Table as Filter,
 } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 
@@ -37,13 +36,8 @@ import { BulkSelectCheckbox } from "@admin/components/shared/bulk-select-checkbo
 import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import type {
-  RouteValue} from "@admin/constants/routes";
-import {
-  ROUTES,
-  withQuery,
-  buildRoute,
-} from "@admin/constants/routes";
+import type { RouteValue } from "@admin/constants/routes";
+import { ROUTES, withQuery, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
   useCollections,
@@ -202,7 +196,11 @@ export default function CollectionTable() {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
       return next;
     });
   };
@@ -236,9 +234,9 @@ export default function CollectionTable() {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(collection => {
+    return data.items.filter(collection => {
       // Exclude plugin collections - they are managed separately in the Plugins section
       if (collection.admin?.isPlugin) {
         return false;
@@ -256,7 +254,7 @@ export default function CollectionTable() {
       }
       return true;
     });
-  }, [data?.data, sourceFilter, migrationFilter]);
+  }, [data?.items, sourceFilter, migrationFilter]);
 
   // Action handlers
   const handleEdit = useCallback((collection: ApiCollection) => {
@@ -380,7 +378,12 @@ export default function CollectionTable() {
     } else {
       selectAllOnPage(pageCollectionIds);
     }
-  }, [getSelectedCountOnPage, pageCollectionIds, deselectAllOnPage, selectAllOnPage]);
+  }, [
+    getSelectedCountOnPage,
+    pageCollectionIds,
+    deselectAllOnPage,
+    selectAllOnPage,
+  ]);
 
   // Format date helper (using centralized utility)
   const formatDate = (dateValue?: string) => formatDateTime(dateValue);
@@ -400,208 +403,213 @@ export default function CollectionTable() {
   // ResponsiveTable columns
   const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
 
-  const columnDefs: Column<ApiCollection>[] = useMemo(() => [
-    // Checkbox column for bulk selection
-    {
-      key: "select" as keyof ApiCollection,
-      label: (
-        <BulkSelectCheckbox
-          checked={selectAllCheckboxState}
-          onCheckedChange={handleToggleSelectAllOnPage}
-          rowId="select-all"
-          rowLabel="Select all collections on page"
-        />
-      ),
-      hideLabelOnMobile: true,
-      render: (_value, collection) => (
-        <BulkSelectCheckbox
-          checked={isSelected(collection.id)}
-          onCheckedChange={() => toggleSelection(collection.id)}
-          rowId={collection.id}
-          rowLabel={collection.label}
-        />
-      ),
-    },
-    {
-      key: "label",
-      label: "COLLECTION",
-      hideLabelOnMobile: true,
-      render: (_value, collection) => {
-        const iconName = collection.admin?.icon || "Database";
-        const IconComponent =
-          (Icons as Record<string, React.ElementType>)[iconName] ||
-          Icons.Database;
+  const columnDefs: Column<ApiCollection>[] = useMemo(
+    () => [
+      // Checkbox column for bulk selection
+      {
+        key: "select" as keyof ApiCollection,
+        label: (
+          <BulkSelectCheckbox
+            checked={selectAllCheckboxState}
+            onCheckedChange={handleToggleSelectAllOnPage}
+            rowId="select-all"
+            rowLabel="Select all collections on page"
+          />
+        ),
+        hideLabelOnMobile: true,
+        render: (_value, collection) => (
+          <BulkSelectCheckbox
+            checked={isSelected(collection.id)}
+            onCheckedChange={() => toggleSelection(collection.id)}
+            rowId={collection.id}
+            rowLabel={collection.label}
+          />
+        ),
+      },
+      {
+        key: "label",
+        label: "COLLECTION",
+        hideLabelOnMobile: true,
+        render: (_value, collection) => {
+          const iconName = collection.admin?.icon || "Database";
+          const IconComponent =
+            (Icons as Record<string, React.ElementType>)[iconName] ||
+            Icons.Database;
 
-        return (
-          <div className="flex items-center gap-3">
-            <div className="table-row-icon-cover">
-              <IconComponent className="h-4 w-4" />
+          return (
+            <div className="flex items-center gap-3">
+              <div className="table-row-icon-cover">
+                <IconComponent className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1 flex flex-col">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      handleEdit(collection);
+                    }}
+                    disabled={collection.locked}
+                    className="font-medium text-sm text-foreground truncate text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {collection.label}
+                  </button>
+                  {collection.locked && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Locked: Cannot be edited or deleted from UI</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground truncate">
+                  {collection.name}
+                </div>
+              </div>
             </div>
-            <div className="min-w-0 flex-1 flex flex-col">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
+          );
+        },
+      },
+      {
+        key: "source",
+        label: "SOURCE",
+        render: (_value, collection) => {
+          const sourceBadge = getSourceBadge(collection.source);
+          return (
+            <Badge
+              variant={sourceBadge.variant}
+              className="whitespace-nowrap text-muted-foreground font-normal"
+            >
+              {sourceBadge.icon}
+              {sourceBadge.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: "migrationStatus",
+        label: "STATUS",
+        render: (_value, collection) => {
+          const migrationBadge = getMigrationBadge(collection.migrationStatus);
+          return (
+            <Badge variant={migrationBadge.variant}>
+              {migrationBadge.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: "description",
+        label: "DESCRIPTION",
+        hideOnMobile: true,
+        render: (_value, collection) => (
+          <span className="text-sm text-muted-foreground">
+            {collection.description
+              ? truncateWords(collection.description, 10)
+              : "__"}
+          </span>
+        ),
+      },
+      {
+        key: "schemaDefinition",
+        label: "FIELDS",
+        render: (_value, collection) => (
+          <span className="text-sm tabular-nums">
+            {getFieldCount(collection)}
+          </span>
+        ),
+      },
+      {
+        key: "createdAt",
+        label: "CREATED",
+        hideOnMobile: true,
+        render: createdAt => (
+          <span className="text-sm text-muted-foreground">
+            {formatDate(createdAt as string | undefined)}
+          </span>
+        ),
+      },
+      {
+        key: "actions" as keyof ApiCollection,
+        label: "ACTIONS",
+        render: (_, collection) => {
+          const isLocked = collection.locked;
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm">
+                  <MoreHorizontal className="h-4 w-4" />
+                  <span className="sr-only">Open menu</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
                   onClick={e => {
                     e.stopPropagation();
                     handleEdit(collection);
                   }}
-                  disabled={collection.locked}
-                  className="font-medium text-sm text-foreground truncate text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={isLocked}
+                  className={isLocked ? "opacity-50" : ""}
                 >
-                  {collection.label}
-                </button>
-                {collection.locked && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Locked: Cannot be edited or deleted from UI</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-              <div className="text-xs text-muted-foreground truncate">
-                {collection.name}
-              </div>
-            </div>
-          </div>
-        );
+                  <Pencil className="h-4 w-4 mr-2" />
+                  Edit
+                  {isLocked && (
+                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleViewEntries(collection);
+                  }}
+                >
+                  <List className="h-4 w-4 mr-2" />
+                  View Entries
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleGenerateTypes(collection);
+                  }}
+                >
+                  <FileCode className="h-4 w-4 mr-2" />
+                  Generate Types
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleDelete(collection);
+                  }}
+                  disabled={isLocked}
+                  className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                  {isLocked && (
+                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
+                  )}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
       },
-    },
-    {
-      key: "source",
-      label: "SOURCE",
-      render: (_value, collection) => {
-        const sourceBadge = getSourceBadge(collection.source);
-        return (
-          <Badge
-            variant={sourceBadge.variant}
-            className="whitespace-nowrap text-muted-foreground font-normal"
-          >
-            {sourceBadge.icon}
-            {sourceBadge.label}
-          </Badge>
-        );
-      },
-    },
-    {
-      key: "migrationStatus",
-      label: "STATUS",
-      render: (_value, collection) => {
-        const migrationBadge = getMigrationBadge(collection.migrationStatus);
-        return (
-          <Badge variant={migrationBadge.variant}>{migrationBadge.label}</Badge>
-        );
-      },
-    },
-    {
-      key: "description",
-      label: "DESCRIPTION",
-      hideOnMobile: true,
-      render: (_value, collection) => (
-        <span className="text-sm text-muted-foreground">
-          {collection.description
-            ? truncateWords(collection.description, 10)
-            : "__"}
-        </span>
-      ),
-    },
-    {
-      key: "schemaDefinition",
-      label: "FIELDS",
-      render: (_value, collection) => (
-        <span className="text-sm tabular-nums">
-          {getFieldCount(collection)}
-        </span>
-      ),
-    },
-    {
-      key: "createdAt",
-      label: "CREATED",
-      hideOnMobile: true,
-      render: createdAt => (
-        <span className="text-sm text-muted-foreground">
-          {formatDate(createdAt as string | undefined)}
-        </span>
-      ),
-    },
-    {
-      key: "actions" as keyof ApiCollection,
-      label: "ACTIONS",
-      render: (_, collection) => {
-        const isLocked = collection.locked;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreHorizontal className="h-4 w-4" />
-                <span className="sr-only">Open menu</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleEdit(collection);
-                }}
-                disabled={isLocked}
-                className={isLocked ? "opacity-50" : ""}
-              >
-                <Pencil className="h-4 w-4 mr-2" />
-                Edit
-                {isLocked && (
-                  <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleViewEntries(collection);
-                }}
-              >
-                <List className="h-4 w-4 mr-2" />
-                View Entries
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleGenerateTypes(collection);
-                }}
-              >
-                <FileCode className="h-4 w-4 mr-2" />
-                Generate Types
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleDelete(collection);
-                }}
-                disabled={isLocked}
-                className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-                {isLocked && (
-                  <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                )}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
-      },
-    },
-  ], [
-    selectAllCheckboxState,
-    handleToggleSelectAllOnPage,
-    isSelected,
-    toggleSelection,
-    handleEdit,
-    handleDelete,
-    handleViewEntries,
-    handleGenerateTypes,
-  ]);
+    ],
+    [
+      selectAllCheckboxState,
+      handleToggleSelectAllOnPage,
+      isSelected,
+      toggleSelection,
+      handleEdit,
+      handleDelete,
+      handleViewEntries,
+      handleGenerateTypes,
+    ]
+  );
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
@@ -631,7 +639,7 @@ export default function CollectionTable() {
 
   // Error and loading states within the unified layout
   const showLoadingSkeleton =
-    (isLoading || isFetching) && (!data || data.data.length === 0);
+    (isLoading || isFetching) && (!data || data.items.length === 0);
 
   // Render table with data
   const isEmpty = filteredData.length === 0;
@@ -659,7 +667,7 @@ export default function CollectionTable() {
             onChange={setSearch}
             placeholder="Search collections..."
             isLoading={isFetching}
-            className="w-full md:max-w-sm"
+            className="w-full md:max-w-sm bg-white text-black border-primary/5"
           />
         </div>
 
@@ -668,8 +676,8 @@ export default function CollectionTable() {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {showLoadingSkeleton ? (
               <>
-                <Skeleton className="h-9 w-20" />
-                <Skeleton className="h-9 w-24" />
+                <Skeleton className="w-20" />
+                <Skeleton className="w-24" />
               </>
             ) : (
               <>
@@ -677,8 +685,8 @@ export default function CollectionTable() {
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="outline"
-                      size="sm"
-                      className="h-9 relative"
+                      size="md"
+                      className="relative bg-white text-black border-primary/5 hover:bg-white/90"
                     >
                       <Filter className="mr-2 h-4 w-4" />
                       Filter
@@ -768,7 +776,7 @@ export default function CollectionTable() {
                 </DropdownMenu>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-9">
+                    <Button variant="secondary" size="md">
                       <Icons.Columns className="mr-2 h-4 w-4" />
                       Columns
                     </Button>
@@ -807,7 +815,7 @@ export default function CollectionTable() {
       ) : isEmpty ? (
         <CollectionsEmptyState isSearching={isSearching || isFiltering} />
       ) : (
-        <div className="table-wrapper md:rounded-none md:border md:border-border md:bg-card overflow-hidden">
+        <div className="table-wrapper md:rounded-none md :border border-primary/5 md:border-primary/5 md:bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}
@@ -816,18 +824,16 @@ export default function CollectionTable() {
             tableWrapperClassName="border-0 rounded-none shadow-none"
           />
           {data && data.meta.totalPages > 0 && (
-            <div className="table-footer md:border-t border-border p-4">
-              <Pagination
-                currentPage={page}
-                totalPages={data.meta.totalPages}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isFetching}
-                totalItems={data.meta.total}
-              />
-            </div>
+            <Pagination
+              currentPage={page}
+              totalPages={data.meta.totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              isLoading={isFetching}
+              totalItems={data.meta.total}
+            />
           )}
         </div>
       )}

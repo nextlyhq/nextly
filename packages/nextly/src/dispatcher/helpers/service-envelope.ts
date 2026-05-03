@@ -31,7 +31,7 @@
  * Helpers exported:
  *
  * - `toPaginationMeta`: services returning
- *   `{total, page, pageSize, totalPages}` (most metadata-style services).
+ *   `{total, page, limit, totalPages}` (most metadata-style services).
  * - `paginatedResponseToMeta`: entry-query service's Payload-style shape
  *   (`totalDocs`, `hasNextPage`, etc.).
  * - `offsetPaginationToMeta`: Singles + Components registries that use
@@ -53,22 +53,22 @@ import type { PaginationMeta } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 
 /**
- * Translate the legacy `{ total, page, pageSize, totalPages }` shape
- * (used by user/auth/collection metadata services) into the canonical
- * PaginationMeta. Service-internal field name `pageSize` maps to wire
- * field `limit` per Phase 4 spec section 5.1; the server-side rename
- * itself is deferred to Phase 4.8.
+ * Translate the service-result `{ total, page, limit, totalPages }`
+ * shape (used by user/auth/collection metadata services) into the
+ * canonical PaginationMeta. Phase 4.8 unified the service-internal
+ * field name with the wire field name (`limit`), so this helper now
+ * just derives `hasNext`/`hasPrev` from page math.
  */
 export function toPaginationMeta(meta: {
   total: number;
   page: number;
-  pageSize: number;
+  limit: number;
   totalPages: number;
 }): PaginationMeta {
   return {
     total: meta.total,
     page: meta.page,
-    limit: meta.pageSize,
+    limit: meta.limit,
     totalPages: meta.totalPages,
     hasNext: meta.page < meta.totalPages,
     hasPrev: meta.page > 1,

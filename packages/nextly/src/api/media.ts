@@ -19,13 +19,14 @@
  * }
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
- * return the canonical `{ data: <result> }` (or `{ data: [...], meta:
- * { total, page, perPage } }` for paginated lists) per spec §10.2. Errors
- * flow through the wrapper as `application/problem+json`. The legacy
- * double-wrap `{ success, statusCode, data }` is dropped; delete/move
- * success becomes `{ data: { success: true } }`. Validation failures
- * surface field-level detail in `data.errors[]`.
+ * Wire shape (Phase 4.6 migration): handlers wrap `withErrorHandler` and
+ * return canonical respondX bodies (spec section 5.1):
+ *   - list: `respondList(items, { total, page, limit, totalPages, ... })`
+ *   - findByID: `respondDoc(item)`
+ *   - create/update: `respondMutation(message, item)`
+ *   - delete/move (no doc): `respondAction(message, { id, ... })`
+ * Errors flow through the wrapper as `application/problem+json`.
+ * Validation failures surface field-level detail in `error.errors[]`.
  *
  * @example
  * ```typescript
@@ -52,11 +53,13 @@ import type {
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
-import {
-  createPaginatedResponse,
-  createSuccessResponse,
-} from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -85,14 +88,15 @@ function createAuthenticatedContext(userId: string): RequestContext {
  *
  * Query Parameters:
  * - page: Page number (default: 1)
- * - pageSize: Items per page (default: 24, becomes `perPage` in response meta)
+ * - limit: Items per page (default: 24)
  * - search: Search query for filename, altText
  * - type: Filter by media type (image, video, audio, document, other)
  * - folderId: Filter by folder ("root" for root-level media)
  * - sortBy: Sort field (uploadedAt, filename, size)
  * - sortOrder: Sort direction (asc, desc)
  *
- * Response: `{ "data": Media[], "meta": { total, page, perPage } }`.
+ * Response: `{ items: Media[], meta: { total, page, limit, totalPages,
+ * hasNext, hasPrev } }` per the canonical respondList shape.
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -103,8 +107,8 @@ export const GET = withErrorHandler(
     const folderIdParam = searchParams.get("folderId");
     const options: ListMediaOptions = {
       page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-      pageSize: searchParams.get("pageSize")
-        ? Number(searchParams.get("pageSize"))
+      limit: searchParams.get("limit")
+        ? Number(searchParams.get("limit"))
         : 24,
       search: searchParams.get("search") || undefined,
       type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
@@ -119,14 +123,18 @@ export const GET = withErrorHandler(
 
     const result = await mediaService.listMedia(options, context);
 
-    // Canonical pagination meta per spec §10.2: `{ total, page, perPage }`.
-    // The legacy `totalPages` field is dropped — callers compute it as
-    // `Math.ceil(total / perPage)`.
+    const page = options.page ?? 1;
+    const limit = Math.max(1, options.limit ?? 24);
+    const total = result.pagination.total;
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
     return withTimezoneFormatting(
-      createPaginatedResponse(result.data, {
-        total: result.pagination.total,
-        page: options.page ?? 1,
-        perPage: Math.max(1, options.pageSize ?? 24),
+      respondList(result.data, {
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
       })
     );
   }
@@ -143,7 +151,7 @@ export const GET = withErrorHandler(
  * - uploadedBy: User ID (required)
  * - folderId: Optional folder to upload into.
  *
- * Response: `{ "data": Media }` (status 201).
+ * Response: `{ message, item: Media }` (status 201).
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -208,7 +216,7 @@ export const POST = withErrorHandler(
     );
 
     return withTimezoneFormatting(
-      createSuccessResponse(mediaFile, { status: 201 })
+      respondMutation("Media uploaded.", mediaFile, { status: 201 })
     );
   }
 );
@@ -216,7 +224,7 @@ export const POST = withErrorHandler(
 /**
  * GET handler for fetching a single media item by ID.
  *
- * Response: `{ "data": Media }`. 404 surface emits canonical
+ * Response: bare `Media` (respondDoc). 404 surface emits canonical
  * `application/problem+json` with `code: "NOT_FOUND"`.
  */
 export function getMediaById(
@@ -234,7 +242,7 @@ export function getMediaById(
 
       const mediaFile = await mediaService.findById(id, context);
 
-      return withTimezoneFormatting(createSuccessResponse(mediaFile));
+      return withTimezoneFormatting(respondDoc(mediaFile));
     }
   )(request, ctx);
 }
@@ -249,7 +257,7 @@ export function getMediaById(
  * - caption: Optional caption
  * - tags: Optional tags array
  *
- * Response: `{ "data": Media }`.
+ * Response: `{ message, item: Media }`.
  */
 export function updateMedia(
   request: Request,
@@ -276,7 +284,7 @@ export function updateMedia(
 
       const mediaFile = await mediaService.update(id, validated, context);
 
-      return withTimezoneFormatting(createSuccessResponse(mediaFile));
+      return withTimezoneFormatting(respondMutation("Media updated.", mediaFile));
     }
   )(request, ctx);
 }
@@ -286,7 +294,7 @@ export function updateMedia(
  *
  * Removes media from both storage and database.
  *
- * Response: `{ "data": { "success": true } }`.
+ * Response: `{ message, id }` (respondAction; service returns void).
  */
 export function deleteMedia(
   request: Request,
@@ -303,7 +311,9 @@ export function deleteMedia(
 
       await mediaService.delete(id, context);
 
-      return createSuccessResponse({ success: true });
+      // Service returns void; surface the deleted id alongside the toast so
+      // the admin can prune its local cache without a follow-up fetch.
+      return respondAction("Media deleted.", { id });
     }
   )(request, ctx);
 }
@@ -314,7 +324,7 @@ export function deleteMedia(
  * Path: /api/media/[id]/move
  * Body: { folderId: string | null }
  *
- * Response: `{ "data": { "success": true } }`.
+ * Response: `{ message, id, folderId }` (respondAction; service returns void).
  */
 export function moveMediaToFolder(
   request: Request,
@@ -333,7 +343,9 @@ export function moveMediaToFolder(
 
       await mediaService.moveToFolder(id, folderId ?? null, context);
 
-      return createSuccessResponse({ success: true });
+      // Service returns void; echo the target ids so the admin can update
+      // the moved record locally without re-fetching the affected folders.
+      return respondAction("Media moved.", { id, folderId: folderId ?? null });
     }
   )(request, ctx);
 }

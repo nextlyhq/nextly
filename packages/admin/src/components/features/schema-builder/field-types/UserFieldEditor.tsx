@@ -431,7 +431,7 @@ export function UserFieldEditor({
         </Tabs>
 
         <div className="flex justify-end space-x-2 pt-4">
-          <Button type="submit" className="flex items-center gap-2">
+          <Button type="submit">
             <User className="h-4 w-4" />
             Save User Field
           </Button>

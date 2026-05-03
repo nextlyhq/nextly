@@ -331,7 +331,7 @@ export function EntryForm({
             </div>
 
             {/* Sidebar */}
-            <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-background flex flex-col relative z-10">
+            <div className="w-full lg:w-[360px] shrink-0  border-t border-primary/5 lg:border-t-0 lg :border-l border-primary/5 lg:border-primary/5 bg-background flex flex-col relative z-10">
               <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
                 <EntryFormSidebar
                   mode={mode}

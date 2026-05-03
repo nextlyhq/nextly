@@ -66,7 +66,7 @@ export function GeneralPanel({
     <>
       {/* System field notice */}
       {isSystemField && (
-        <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5 border border-border">
+        <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5  border border-primary/5">
           <Icons.Lock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground">
             This is a system field. Its name and type cannot be changed.
@@ -113,7 +113,7 @@ export function GeneralPanel({
       {/* Type (read-only) */}
       <div className="space-y-2">
         <Label className="text-xs font-medium">Type</Label>
-        <div className="flex items-center gap-2 h-8 px-3 rounded-none border border-border bg-primary/5">
+        <div className="flex items-center gap-2 h-8 px-3 rounded-none  border border-primary/5 bg-primary/5">
           <IconComponent className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
             {formatFieldType(localField.type)}
@@ -276,7 +276,7 @@ export function GeneralPanel({
 
       {/* Options Editor (for select and radio fields) */}
       {hasOptions(localField.type) && (
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2  border-t border-primary/5">
           <SelectOptionsEditor
             options={
               // Convert FieldOption[] to SelectOption[] by preserving existing ids or adding new ones
@@ -308,7 +308,7 @@ export function GeneralPanel({
 
       {/* Relationship Editor (for relationship fields) */}
       {isRelationshipField(localField.type) && (
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2  border-t border-primary/5">
           <RelationshipEditor
             relationTo={localField.relationTo}
             onRelationToChange={relationTo => onUpdate({ relationTo })}
@@ -332,7 +332,7 @@ export function GeneralPanel({
 
       {/* Upload Editor (for upload fields) */}
       {isUploadField(localField.type) && (
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2  border-t border-primary/5">
           <UploadEditor
             relationTo={localField.relationTo}
             onRelationToChange={relationTo => onUpdate({ relationTo })}
@@ -358,7 +358,7 @@ export function GeneralPanel({
 
       {/* Array Editor (for array fields) */}
       {isArrayField(localField.type) && (
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2  border-t border-primary/5">
           <ArrayFieldEditor
             labels={localField.labels}
             onLabelsChange={(labels: ArrayFieldLabels | undefined) =>
@@ -377,7 +377,7 @@ export function GeneralPanel({
 
       {/* Group Editor (for group fields) */}
       {isGroupField(localField.type) && (
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2  border-t border-primary/5">
           <GroupFieldEditor
             hideGutter={localField.admin?.hideGutter}
             onHideGutterChange={hideGutter => onAdminUpdate({ hideGutter })}
@@ -388,7 +388,7 @@ export function GeneralPanel({
 
       {/* Component Editor (for component fields) */}
       {isComponentField(localField.type) && (
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2  border-t border-primary/5">
           <ComponentFieldEditor
             component={localField.component}
             onComponentChange={component => onUpdate({ component })}

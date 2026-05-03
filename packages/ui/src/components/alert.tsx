@@ -72,11 +72,11 @@ import { cn } from "../lib/utils";
  * - Destructive: <XCircle className="h-4 w-4" />
  */
 const alertVariants = cva(
-  "relative flex items-start gap-3 rounded-none border p-4 text-sm   transition-colors duration-150",
+  "relative flex items-start gap-3 rounded-none  border border-primary/5 p-4 text-sm   transition-colors duration-150",
   {
     variants: {
       variant: {
-        info: "border-primary/20 bg-primary/5 text-primary dark:border-primary/30 dark:bg-primary/10 dark:text-primary-foreground/90",
+        info: "border-primary/5 bg-primary/5 text-primary dark:border-primary/30 dark:bg-primary/5 dark:text-primary-foreground/90",
         success:
           "border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-100",
         warning:

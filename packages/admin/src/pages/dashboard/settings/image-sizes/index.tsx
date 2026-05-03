@@ -8,8 +8,7 @@
  * Shows regeneration status when sizes change.
  */
 
-import type {
-  Column} from "@revnixhq/ui";
+import type { Column } from "@revnixhq/ui";
 import {
   Badge,
   Button,
@@ -19,6 +18,12 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
   Label,
   ResponsiveTable,
@@ -32,7 +37,7 @@ import {
 import * as React from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
-import { Info, Plus } from "@admin/components/icons";
+import { Columns, Info, Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { Pagination } from "@admin/components/shared/pagination";
@@ -66,17 +71,10 @@ async function fetchImageSizes(): Promise<ImageSize[]> {
     credentials: "include",
   });
   if (!res.ok) return [];
-  const data = await res.json();
-  // Phase 4 (post-merge follow-up): /admin/api/image-sizes emits
-  // `respondList({ items, meta })` (spec section 5.1). Pre-Phase-4 the
-  // legacy fallback `data.data ?? data` accommodated either `{data}` or
-  // bare arrays. After Phase 4 we read `.items` first; legacy fallbacks
-  // kept for one release as a transitional shim (parallels csrf and
-  // pageSize -> limit transition shims).
-  if (Array.isArray(data?.items)) return data.items as ImageSize[];
-  if (Array.isArray(data?.data)) return data.data as ImageSize[];
-  if (Array.isArray(data)) return data as ImageSize[];
-  return [];
+  // /admin/api/image-sizes emits the canonical respondList envelope
+  // (spec section 5.1): `{ items, meta }`.
+  const data = (await res.json()) as { items?: ImageSize[] };
+  return data.items ?? [];
 }
 
 async function createImageSize(input: Partial<ImageSize>): Promise<void> {
@@ -214,7 +212,12 @@ function SizeFormDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4">
+        <form
+          onSubmit={e => {
+            void handleSubmit(e);
+          }}
+          className="space-y-4"
+        >
           {/* Name */}
           <div className="space-y-1.5">
             <Label htmlFor="size-name">Name</Label>
@@ -364,6 +367,21 @@ function ImageSizesContent({
   const [isLoading, setIsLoading] = React.useState(true);
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(10);
+  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(
+    new Set()
+  );
+
+  const toggleColumn = (key: string) => {
+    setHiddenColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   // Fetch sizes on mount
   const loadSizes = React.useCallback(async () => {
@@ -448,7 +466,9 @@ function ImageSizesContent({
   );
 
   // Columns definition for ResponsiveTable
-  const columns: Column<ImageSize>[] = React.useMemo(
+  const ALWAYS_VISIBLE = new Set(["id", "name"]);
+
+  const columnDefs: Column<ImageSize>[] = React.useMemo(
     () => [
       {
         key: "name",
@@ -510,7 +530,11 @@ function ImageSizesContent({
               item={size}
               callbacks={{
                 onEdit: handleEdit,
-                onDelete: size.isDefault ? undefined : (item) => { void handleDelete(item); },
+                onDelete: size.isDefault
+                  ? undefined
+                  : item => {
+                      void handleDelete(item);
+                    },
               }}
             />
           </div>
@@ -520,20 +544,56 @@ function ImageSizesContent({
     [handleEdit, handleDelete]
   );
 
+  const columns = React.useMemo(
+    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
+    [columnDefs, hiddenColumns]
+  );
+
+  const toggleableColumns = columnDefs.filter(
+    col => !ALWAYS_VISIBLE.has(String(col.key))
+  );
+
   return (
     <div className="space-y-4">
-      {/* Search Bar */}
-      <div className="flex items-center justify-between gap-4">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search image sizes..."
-          className="max-w-sm"
-        />
+      {/* Search Bar & Columns Filter */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search image sizes..."
+            className="flex-1 max-w-sm bg-white text-black border-primary/5"
+            isLoading={isLoading}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="md">
+                <Columns className="mr-2 h-4 w-4" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {toggleableColumns.map(col => (
+                <DropdownMenuCheckboxItem
+                  key={String(col.key)}
+                  checked={!hiddenColumns.has(String(col.key))}
+                  onCheckedChange={() => toggleColumn(String(col.key))}
+                >
+                  {typeof col.label === "string" ? col.label : String(col.key)}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* Table Wrapper */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         {isLoading ? (
           <TableSkeleton columns={7} rowCount={pageSize} />
         ) : (
@@ -549,20 +609,18 @@ function ImageSizesContent({
             tableWrapperClassName="border-0 rounded-none shadow-none"
             footer={
               (filteredSizes.length > 0 || isLoading) && (
-                <div className="table-footer border-t border-border p-4">
-                  <Pagination
-                    currentPage={page}
-                    totalPages={Math.max(
-                      1,
-                      Math.ceil(filteredSizes.length / pageSize)
-                    )}
-                    totalItems={filteredSizes.length}
-                    pageSize={pageSize}
-                    onPageChange={setPage}
-                    onPageSizeChange={setPageSize}
-                    isLoading={isLoading}
-                  />
-                </div>
+                <Pagination
+                  currentPage={page}
+                  totalPages={Math.max(
+                    1,
+                    Math.ceil(filteredSizes.length / pageSize)
+                  )}
+                  totalItems={filteredSizes.length}
+                  pageSize={pageSize}
+                  onPageChange={setPage}
+                  onPageSizeChange={setPageSize}
+                  isLoading={isLoading}
+                />
               )
             }
           />
@@ -610,7 +668,7 @@ export default function ImageSizesSettingsPage() {
                 setEditingSize(null);
                 setIsFormOpen(true);
               }}
-              size="sm"
+              size="md"
               className="flex items-center gap-1.5"
             >
               <Plus className="h-4 w-4" />

@@ -8,9 +8,9 @@
 
 import type {
   DataFetcher,
+  ListResponse,
   PaginationMeta,
   TableParams,
-  TableResponse,
 } from "@revnixhq/ui";
 
 /**
@@ -51,16 +51,18 @@ export function createMockTableParams(
 export function createMockPaginationMeta(
   overrides?: Partial<PaginationMeta>
 ): PaginationMeta {
-  const page = overrides?.page ?? 0;
-  const pageSize = overrides?.pageSize ?? 10;
+  const page = overrides?.page ?? 1;
+  const limit = overrides?.limit ?? 10;
   const total = overrides?.total ?? 0;
-  const totalPages = overrides?.totalPages ?? Math.ceil(total / pageSize);
+  const totalPages = overrides?.totalPages ?? Math.ceil(total / limit);
 
   return {
     page,
-    pageSize,
+    limit,
     total,
     totalPages,
+    hasNext: overrides?.hasNext ?? page < totalPages,
+    hasPrev: overrides?.hasPrev ?? page > 1,
   };
 }
 
@@ -86,7 +88,7 @@ export function createMockDataFetcher<TData extends Record<string, unknown>>(
     errorMessage?: string;
   }
 ): DataFetcher<TData> {
-  return async (params: TableParams): Promise<TableResponse<TData>> => {
+  return async (params: TableParams): Promise<ListResponse<TData>> => {
     // Simulate network delay
     if (options?.delay) {
       await new Promise(resolve => setTimeout(resolve, options.delay));
@@ -136,20 +138,25 @@ export function createMockDataFetcher<TData extends Record<string, unknown>>(
       });
     }
 
-    // Apply pagination
+    // Apply pagination. TableParams uses 0-based admin-internal page index;
+    // the canonical wire meta is 1-based per spec section 5.1, so the meta
+    // we return shifts by 1.
     const total = filteredData.length;
     const totalPages = Math.ceil(total / pagination.pageSize);
     const start = pagination.page * pagination.pageSize;
     const end = start + pagination.pageSize;
     const paginatedData = filteredData.slice(start, end);
+    const wirePage = pagination.page + 1;
 
     return {
-      data: paginatedData,
+      items: paginatedData,
       meta: {
-        page: pagination.page,
-        pageSize: pagination.pageSize,
+        page: wirePage,
+        limit: pagination.pageSize,
         total,
         totalPages,
+        hasNext: wirePage < totalPages,
+        hasPrev: wirePage > 1,
       },
     };
   };

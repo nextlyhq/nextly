@@ -202,41 +202,4 @@ export class GeneralSettingsService extends BaseService {
     return groups;
   }
 
-  /**
-   * Parse the stored JSON string into a plugin placement map.
-   * Returns an empty object if no placements are stored or JSON is invalid.
-   *
-   * @deprecated Plugin placement is now author-defined via `definePlugin({ admin: { placement } })`
-   * and host-overridable via `defineConfig({ admin: { pluginOverrides } })`.
-   * This method will be removed in a future version.
-   */
-  getPluginPlacements(settings: GeneralSettingsRecord): Record<string, string> {
-    if (!settings.pluginPlacements) return {};
-    try {
-      const parsed = JSON.parse(settings.pluginPlacements);
-      return typeof parsed === "object" &&
-        parsed !== null &&
-        !Array.isArray(parsed)
-        ? parsed
-        : {};
-    } catch {
-      return {};
-    }
-  }
-
-  /**
-   * Replace all plugin placement overrides with the provided map.
-   * Persists as a JSON string in the `plugin_placements` column.
-   *
-   * @deprecated Plugin placement is now author-defined via `definePlugin({ admin: { placement } })`
-   * and host-overridable via `defineConfig({ admin: { pluginOverrides } })`.
-   * This method will be removed in a future version.
-   */
-  async updatePluginPlacements(
-    placements: Record<string, string>
-  ): Promise<Record<string, string>> {
-    const json = JSON.stringify(placements);
-    await this.updateSettings({ pluginPlacements: json });
-    return placements;
-  }
 }

@@ -1,10 +1,9 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { ListResponse, TableParams } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
-import type { ListResponse, MutationResponse } from "../lib/api/response-types";
+import type { MutationResponse } from "../lib/api/response-types";
 import type {
   Collection,
   CreateCollectionPayload,
@@ -29,20 +28,19 @@ const buildQuery = (params: TableParams): string => {
 /**
  * Fetch collections with pagination.
  *
- * Phase 4 (Task 19): server returns `ListResponse<ApiCollection>`
- * (`{ items, meta }`); we map to the table-component shape locally.
+ * Phase 4.7: pass canonical ListResponse straight through. The legacy
+ * normalizePagination adapter is gone.
  */
 export const fetchCollections = async (
   params: TableParams
-): Promise<TableResponse<ApiCollection>> => {
+): Promise<ListResponse<ApiCollection>> => {
   const query = buildQuery(params);
   const url = `/collections${query ? `?${query}` : ""}`;
 
   const result = await fetcher<ListResponse<ApiCollection>>(url, {}, true);
 
-  const collections = result.items;
   if (process.env.NODE_ENV === "development") {
-    const withSG = collections.filter(
+    const withSG = result.items.filter(
       (c: ApiCollection) => c.admin?.sidebarGroup
     );
     if (withSG.length > 0) {
@@ -57,16 +55,14 @@ export const fetchCollections = async (
     } else {
       console.log(
         "[fetchCollections] No collections have admin.sidebarGroup. Sample admin fields:",
-        collections
+        result.items
           .slice(0, 3)
           .map((c: ApiCollection) => ({ name: c.name, admin: c.admin }))
       );
     }
   }
-  const { pageSize = 10 } = params.pagination;
-  const meta = normalizePagination(result.meta, pageSize, collections.length);
 
-  return { data: collections, meta };
+  return result;
 };
 
 /**

@@ -114,7 +114,7 @@ export type UpdateMediaInput = z.infer<typeof UpdateMediaInputSchema>;
 
 export const MediaParamsSchema = z.object({
   page: z.number().int().positive().default(1),
-  pageSize: z.number().int().positive().max(100).default(24),
+  limit: z.number().int().positive().max(100).default(24),
   search: z.string().optional(),
   type: MediaTypeSchema.optional(),
   folderId: z.string().optional(), // Filter by folder (null = root, string = folder ID)
@@ -136,7 +136,7 @@ export interface MediaListResponse {
   meta?: {
     total: number;
     page: number;
-    pageSize: number;
+    limit: number;
     totalPages: number;
   };
 }

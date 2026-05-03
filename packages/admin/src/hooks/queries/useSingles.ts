@@ -26,7 +26,7 @@
  * @module hooks/queries/useSingles
  */
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { TableParams, ListResponse } from "@revnixhq/ui";
 import {
   useMutation,
   useQuery,
@@ -135,7 +135,7 @@ export const singleKeys = {
  *
  *   return (
  *     <div>
- *       {data.data.map(single => (
+ *       {data.items.map(single => (
  *         <SingleCard key={single.id} single={single} />
  *       ))}
  *       <Pagination meta={data.meta} />
@@ -149,12 +149,12 @@ export const singleKeys = {
 export function useSingles(
   params?: TableParams,
   options?: Omit<
-    UseQueryOptions<TableResponse<ApiSingle>, Error>,
+    UseQueryOptions<ListResponse<ApiSingle>, Error>,
     "queryKey" | "queryFn"
   >
 ) {
   const effectiveParams = params || defaultParams;
-  return useQuery<TableResponse<ApiSingle>, Error>({
+  return useQuery<ListResponse<ApiSingle>, Error>({
     queryKey: singleKeys.list(effectiveParams),
     queryFn: async () => {
       return await singleApi.fetchSingles(effectiveParams);

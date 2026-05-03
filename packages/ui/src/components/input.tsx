@@ -39,7 +39,7 @@ import { cn } from "../lib/utils";
  * - search: Search input with clear button
  */
 const inputVariants = cva(
-  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground border-input w-full min-w-0 rounded-none border bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-primary aria-invalid:border-destructive aria-invalid:focus-visible:border-destructive data-[invalid=true]:border-destructive data-[invalid=true]:focus-visible:border-destructive",
+  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground border-primary/5 w-full min-w-0 rounded-none  border border-primary/5 bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-primary aria-invalid:border-destructive aria-invalid:focus-visible:border-destructive data-[invalid=true]:border-destructive data-[invalid=true]:focus-visible:border-destructive",
   {
     variants: {
       size: {

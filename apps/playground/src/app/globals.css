@@ -1,13 +1,24 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: 210 20% 98%;
+  --foreground: 222.2 47.4% 11.2%;
+  --primary: 0 0% 0%;
+  --border: 0 0% 0% / 0.05;
+  --input: 0 0% 0% / 0.05;
+  --muted: 0 0% 0% / 0.05;
+  --card: 0 0% 100%;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-muted: hsl(var(--muted));
+  --color-card: hsl(var(--card));
+  --radius-none: 0px;
 }
 
 @media (prefers-color-scheme: dark) {

@@ -48,6 +48,17 @@ export interface GetSingleOptions {
    */
   overrideAccess?: boolean;
 
+  /**
+   * Draft/Published filter override. Only effective when single.status === true.
+   * - 'published' (default for public/untrusted callers): only return the
+   *   document when its status is 'published'; otherwise return 404 (so a
+   *   draft Single is invisible until published).
+   * - 'draft': only return when status is 'draft'.
+   * - 'all': return regardless of status.
+   * Trusted callers (overrideAccess: true) default to 'all' if unset.
+   */
+  status?: import("../../lib/status-filter").StatusOption;
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
 }

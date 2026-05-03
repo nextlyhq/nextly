@@ -103,8 +103,8 @@ export function DynamicPluginNav({
     }
   );
 
-  // All plugin collections (including hidden) — used to build plugin structure
-  const allPluginCollections = (data?.data ?? []).filter(
+  // All plugin collections (including hidden), used to build plugin structure.
+  const allPluginCollections = (data?.items ?? []).filter(
     collection => collection.admin?.isPlugin
   );
 
@@ -389,7 +389,7 @@ function CollapsedPluginDropdown({
         <DropdownMenuContent
           side="right"
           align="start"
-          className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-border/50"
+          className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-primary/5"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >

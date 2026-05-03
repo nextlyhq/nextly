@@ -178,8 +178,8 @@ export const DashboardPageSkeleton: React.FC = () => {
           <Skeleton className="h-4 w-48" />
         </div>
         <div className="flex gap-2">
-          <Skeleton className="h-9 w-28" />
-          <Skeleton className="h-9 w-32" />
+          <Skeleton className="w-28" />
+          <Skeleton className="w-32" />
         </div>
       </div>
 

@@ -139,7 +139,7 @@ function ImageComponent({
           <Button
             type="button"
             variant="secondary"
-            size="sm"
+            size="md"
             className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={handleEdit}
           >
@@ -228,7 +228,7 @@ function ImageComponent({
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleSave}>
+            <Button size="md" type="button" onClick={handleSave}>
               Save Changes
             </Button>
           </DialogFooter>

@@ -140,8 +140,8 @@ function shouldUsePreFormat(value: unknown): boolean {
  *
  * Renders two cards (left and right) showing the field values from
  * each entry. Differences are highlighted with color coding:
- * - Left (original): Red border and background when different
- * - Right (comparison): Green border and background when different
+ * - Left (original): Red  border border-primary/5 and background when different
+ * - Right (comparison): Green  border border-primary/5 and background when different
  *
  * @param props - Component props
  * @returns Two Card components for the grid layout

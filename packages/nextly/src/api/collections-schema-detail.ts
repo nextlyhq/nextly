@@ -8,9 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. Errors serialize
- * as `application/problem+json`. The legacy route-layer `FORBIDDEN → LOCKED`
+ * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
+ * and return canonical `respondX` envelopes per spec §5.1 (bare doc on GET,
+ * `{ message, item }` on PATCH, 204 on DELETE). Errors serialize as
+ * `application/problem+json`. The legacy route-layer `FORBIDDEN to LOCKED`
  * remap is dropped; the registry now throws `NextlyError.forbidden` with the
  * `collection-locked` reason in `logContext`, and the wire surface stays
  * canonical FORBIDDEN.
@@ -38,7 +39,7 @@ import type { ComponentRegistryService } from "../services/components/component-
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { simplePluralize } from "../shared/lib/pluralization";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondDoc, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -62,7 +63,7 @@ async function getComponentRegistry(): Promise<ComponentRegistryService> {
 async function requireUser(request: Request): Promise<{ id: string }> {
   // getSession returns GetSessionResult; throw the unified auth-required
   // error so the boundary returns canonical 401.
-  const result = await getSession(request, env.NEXTLY_SECRET_RESOLVED || "");
+  const result = await getSession(request, env.NEXTLY_SECRET || "");
   const user = result.authenticated ? result.user : null;
   if (!user) {
     throw NextlyError.authRequired();
@@ -139,7 +140,7 @@ export const GET = withErrorHandler(
       });
     }
 
-    return createSuccessResponse({
+    return respondDoc({
       ...collection,
       fields: enrichedFields,
     } as unknown as typeof collection);
@@ -263,7 +264,9 @@ export const PATCH = withErrorHandler(
       source: "ui",
     });
 
-    return createSuccessResponse(updated);
+    // Update endpoint: canonical mutation envelope so consumers receive a
+    // server-authored toast message alongside the refreshed collection.
+    return respondMutation("Collection updated.", updated);
   }
 );
 

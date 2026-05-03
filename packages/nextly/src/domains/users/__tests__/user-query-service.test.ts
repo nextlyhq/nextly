@@ -6,7 +6,7 @@
  *
  * Covers:
  * - listUsers with default pagination
- * - listUsers with custom page/pageSize
+ * - listUsers with custom page/limit
  * - listUsers with search by name/email
  * - listUsers with emailVerified filter
  * - listUsers with hasPassword filter
@@ -240,7 +240,7 @@ describe("UserQueryService", () => {
       expect(result.meta).toEqual({
         total: 0,
         page: 1,
-        pageSize: 10,
+        limit: 10,
         totalPages: 0,
       });
     });
@@ -287,7 +287,7 @@ describe("UserQueryService", () => {
       ];
       mockDb._resetCallCount();
 
-      const result = await service.listUsers({ page: 1, pageSize: 10 });
+      const result = await service.listUsers({ page: 1, limit: 10 });
 
       expect(result.data).toHaveLength(2);
 
@@ -306,16 +306,16 @@ describe("UserQueryService", () => {
       expect((bob as Record<string, unknown>).roles).toEqual([]);
     });
 
-    it("should use custom page and pageSize", async () => {
+    it("should use custom page and limit", async () => {
       countResolveData = [{ value: 25 }];
       selectResolveData = [];
       mockDb._resetCallCount();
 
-      const options: ListUsersOptions = { page: 3, pageSize: 5 };
+      const options: ListUsersOptions = { page: 3, limit: 5 };
       const result = await service.listUsers(options);
 
       expect(result.meta?.page).toBe(3);
-      expect(result.meta?.pageSize).toBe(5);
+      expect(result.meta?.limit).toBe(5);
       expect(result.meta?.total).toBe(25);
       expect(result.meta?.totalPages).toBe(5);
     });
@@ -325,7 +325,7 @@ describe("UserQueryService", () => {
       selectResolveData = [];
       mockDb._resetCallCount();
 
-      const result = await service.listUsers({ page: 100, pageSize: 10 });
+      const result = await service.listUsers({ page: 100, limit: 10 });
 
       expect(result.data).toEqual([]);
       expect(result.meta?.total).toBe(5);
@@ -452,7 +452,7 @@ describe("UserQueryService", () => {
       const result = await service.listUsers({});
 
       expect(result.meta.page).toBe(1);
-      expect(result.meta.pageSize).toBe(10);
+      expect(result.meta.limit).toBe(10);
     });
 
     it("should sort by createdAt", async () => {
@@ -486,7 +486,7 @@ describe("UserQueryService", () => {
       selectResolveData = [];
       mockDb._resetCallCount();
 
-      const result = await service.listUsers({ page: 1, pageSize: 5 });
+      const result = await service.listUsers({ page: 1, limit: 5 });
 
       // ceil(23/5) = 5
       expect(result.meta?.totalPages).toBe(5);

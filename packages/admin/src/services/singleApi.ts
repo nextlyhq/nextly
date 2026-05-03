@@ -10,17 +10,15 @@
  * @module services/singleApi
  */
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { ListResponse, TableParams } from "@revnixhq/ui";
 
 import type { ApiSingle } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   ActionResponse,
-  ListResponse,
   MutationResponse,
 } from "../lib/api/response-types";
 
@@ -49,22 +47,15 @@ const buildQuery = (params: TableParams): string => {
 /**
  * Fetch Singles with pagination and filters.
  *
- * Phase 4 (Task 19): server returns `ListResponse<ApiSingle>`
- * (`{ items, meta }`); we map to the table-component shape locally.
+ * Phase 4.7: pass canonical ListResponse straight through. The legacy
+ * normalizePagination adapter is gone.
  */
 export const fetchSingles = async (
   params: TableParams
-): Promise<TableResponse<ApiSingle>> => {
+): Promise<ListResponse<ApiSingle>> => {
   const query = buildQuery(params);
   const url = `/singles${query ? `?${query}` : ""}`;
-
-  const result = await fetcher<ListResponse<ApiSingle>>(url, {}, true);
-
-  const singles = result.items;
-  const { pageSize = 10 } = params.pagination;
-  const meta = normalizePagination(result.meta, pageSize, singles.length);
-
-  return { data: singles, meta };
+  return fetcher<ListResponse<ApiSingle>>(url, {}, true);
 };
 
 /**

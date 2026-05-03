@@ -98,14 +98,14 @@ export function expectPaginationMeta(
     meta?: {
       total: number;
       page: number;
-      pageSize: number;
+      limit: number;
       totalPages: number;
     };
   },
   expected: {
     total?: number;
     page?: number;
-    pageSize?: number;
+    limit?: number;
     totalPages?: number;
   }
 ) {
@@ -117,8 +117,8 @@ export function expectPaginationMeta(
   if (expected.page !== undefined) {
     expect(response.meta!.page).toBe(expected.page);
   }
-  if (expected.pageSize !== undefined) {
-    expect(response.meta!.pageSize).toBe(expected.pageSize);
+  if (expected.limit !== undefined) {
+    expect(response.meta!.limit).toBe(expected.limit);
   }
   if (expected.totalPages !== undefined) {
     expect(response.meta!.totalPages).toBe(expected.totalPages);

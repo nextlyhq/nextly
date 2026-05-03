@@ -268,24 +268,15 @@ export interface PluginAdminConfig {
    * Immutable sidebar placement for this plugin's items.
    *
    * Use `AdminPlacement` constants for TypeScript autocomplete:
-   * - `AdminPlacement.COLLECTIONS` — Collections section
-   * - `AdminPlacement.SINGLES` — Singles section
-   * - `AdminPlacement.USERS` — Users inner sidebar
-   * - `AdminPlacement.SETTINGS` — Settings inner sidebar
-   * - `AdminPlacement.PLUGINS` — Plugins section (default)
+   * - `AdminPlacement.COLLECTIONS` (Collections section)
+   * - `AdminPlacement.SINGLES` (Singles section)
+   * - `AdminPlacement.USERS` (Users inner sidebar)
+   * - `AdminPlacement.SETTINGS` (Settings inner sidebar)
+   * - `AdminPlacement.PLUGINS` (Plugins section, default)
    *
-   * If not set, falls back to `group` (deprecated) then `"plugins"`.
+   * If not set, falls back to `"plugins"`.
    */
   placement?: AdminPlacement;
-
-  /**
-   * Default sidebar group for this plugin's items.
-   *
-   * @deprecated Use `placement` with `AdminPlacement` constants instead.
-   * This field is kept for backward compatibility. Resolution order:
-   * `host override > placement > group > "plugins"`.
-   */
-  group?: string;
 
   /** Sort order when placed in a group (lower = higher position, default: 100) */
   order?: number;

@@ -43,7 +43,7 @@ export async function login(
     args.password
   );
 
-  const secret = env.NEXTLY_SECRET_RESOLVED;
+  const secret = env.NEXTLY_SECRET;
   if (!secret) {
     throw new NextlyError({
       code: "INTERNAL_ERROR",

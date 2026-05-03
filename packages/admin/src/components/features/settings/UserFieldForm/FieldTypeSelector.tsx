@@ -93,11 +93,11 @@ export function FieldTypePicker({
             disabled={disabled}
             onClick={() => onChange(opt.value)}
             className={`
-              relative flex flex-row items-center gap-4 rounded-none border p-4 text-left transition-all duration-200
+              relative flex flex-row items-center gap-4 rounded-none  border border-primary/5 p-4 text-left transition-all duration-200
               ${
                 isSelected
                   ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/20 hover-unified"
+                  : "border-primary/5 hover:border-primary/5 hover-unified"
               }
               ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}
             `}
@@ -113,7 +113,7 @@ export function FieldTypePicker({
             <div
               className={`
                 shrink-0 flex items-center justify-center w-9 h-9 transition-all duration-200
-                bg-primary/5 text-primary border border-primary/20 rounded-none]
+                bg-primary/5 text-primary  border border-primary/5 border-primary/5 rounded-none]
                 ${isSelected ? "border border-primary/25" : ""}
               `}
             >

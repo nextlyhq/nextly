@@ -8,9 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. Errors are
- * serialized as `application/problem+json`.
+ * Wire shape (Phase 4.6c): handlers wrap `withErrorHandler` and emit canonical
+ * `respondX` shapes per spec §5.1 (`respondDoc` for findByID, `respondMutation`
+ * for create/update). Errors flow through the canonical singular
+ * `{ error: NextlyErrorJSON }` envelope (spec §6).
  *
  * @example
  * ```typescript
@@ -30,7 +31,7 @@ import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
+import { respondDoc, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -59,7 +60,7 @@ export const GET = withErrorHandler(
     const registry = await getComponentRegistry();
     const component = await registry.getComponent(slug);
 
-    return createSuccessResponse(component);
+    return respondDoc(component);
   }
 );
 
@@ -122,7 +123,7 @@ export const PATCH = withErrorHandler(
       source: "ui",
     });
 
-    return createSuccessResponse(updated);
+    return respondMutation("Component updated.", updated);
   }
 );
 

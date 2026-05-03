@@ -167,7 +167,7 @@ function SortableOption({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 p-2 rounded-none border border-border bg-background group"
+      className="flex items-center gap-2 p-2 rounded-none  border border-primary/5 bg-background group"
     >
       {/* Drag Handle */}
       <button
@@ -336,7 +336,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-6 text-xs"
             onClick={() => setIsImportModalOpen(true)}
           >
@@ -346,7 +346,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-6 text-xs"
             onClick={handleAddOption}
           >
@@ -381,7 +381,7 @@ export function SelectOptionsEditor({
           </SortableContext>
         </DndContext>
       ) : (
-        <div className="flex flex-col items-center justify-center p-4 rounded-none border border-dashed border-border">
+        <div className="flex flex-col items-center justify-center p-4 rounded-none  border border-primary/5 border-dashed border-primary/5">
           <Icons.List className="h-6 w-6 text-muted-foreground mb-2" />
           <p className="text-xs text-muted-foreground text-center">
             No options defined
@@ -389,7 +389,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="mt-2 h-7 text-xs"
             onClick={handleAddOption}
           >
@@ -411,7 +411,7 @@ export function SelectOptionsEditor({
 
       {/* hasMany Toggle (only for select, not radio) */}
       {fieldType === "select" && onHasManyChange && (
-        <div className="flex items-center justify-between py-2 border-t border-border mt-3 pt-3">
+        <div className="flex items-center justify-between py-2  border-t border-primary/5 mt-3 pt-3">
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
@@ -443,7 +443,7 @@ export function SelectOptionsEditor({
               <Button
                 type="button"
                 variant={importFormat === "csv" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 onClick={() => setImportFormat("csv")}
               >
                 CSV
@@ -451,7 +451,7 @@ export function SelectOptionsEditor({
               <Button
                 type="button"
                 variant={importFormat === "json" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 onClick={() => setImportFormat("json")}
               >
                 JSON

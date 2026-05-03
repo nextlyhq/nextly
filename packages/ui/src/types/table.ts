@@ -1,9 +1,14 @@
-// Server-side pagination metadata
+// Canonical pagination metadata (matches spec section 5.1 wire shape and
+// nextly's response-shapes.ts PaginationMeta). Phase 4.7 unified the admin
+// internal type with the wire contract; the legacy {page, pageSize, total,
+// totalPages} shape was dropped.
 export interface PaginationMeta {
-  page: number;
-  pageSize: number;
   total: number;
+  page: number;
+  limit: number;
   totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
 }
 
 // Sorting information for server
@@ -18,20 +23,29 @@ export interface FilterInfo {
   filters?: Record<string, unknown>;
 }
 
-// Combined parameters for API calls
+// Combined parameters for API calls. The `pageSize` field here is admin
+// internal React state (the user's selected page-size dropdown value) and
+// is mapped to the wire `limit` query param by the fetcher. Renaming this
+// admin-internal field is intentionally out of Phase 4.7 scope; it stays as
+// `pageSize` to avoid churn across every table component's local state.
 export interface TableParams {
-  pagination: Pick<PaginationMeta, "page" | "pageSize">;
+  pagination: {
+    page: number;
+    pageSize: number;
+  };
   sorting?: SortInfo[];
   filters?: FilterInfo;
 }
 
-// Server response structure
-export interface TableResponse<TData> {
-  data: TData[];
+// Server response structure (canonical wire shape). Renamed from
+// TableResponse in Phase 4.7. Field is `items` (not `data`) per spec
+// section 5.1.
+export interface ListResponse<TData> {
+  items: TData[];
   meta: PaginationMeta;
 }
 
-// Pagination configuration
+// Pagination configuration for the client-side selector
 export interface PaginationConfig {
   pageSize?: number;
   pageSizeOptions?: number[];
@@ -49,4 +63,4 @@ export interface ActionCallbacks<TData = unknown> {
 // API callback for data fetching
 export type DataFetcher<TData> = (
   params: TableParams
-) => Promise<TableResponse<TData>>;
+) => Promise<ListResponse<TData>>;

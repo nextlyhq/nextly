@@ -25,7 +25,7 @@
  * @see hooks/queries/useCollections.ts - Reference pattern for query hooks
  */
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { TableParams, ListResponse } from "@revnixhq/ui";
 import {
   useMutation,
   useQuery,
@@ -132,7 +132,7 @@ export const componentKeys = {
  *
  *   return (
  *     <div>
- *       {data.data.map(component => (
+ *       {data.items.map(component => (
  *         <ComponentCard key={component.id} component={component} />
  *       ))}
  *       <Pagination meta={data.meta} />
@@ -144,12 +144,12 @@ export const componentKeys = {
 export function useComponents(
   params?: TableParams,
   options?: Omit<
-    UseQueryOptions<TableResponse<ApiComponent>, Error>,
+    UseQueryOptions<ListResponse<ApiComponent>, Error>,
     "queryKey" | "queryFn"
   >
 ) {
   const effectiveParams = params || defaultParams;
-  return useQuery<TableResponse<ApiComponent>, Error>({
+  return useQuery<ListResponse<ApiComponent>, Error>({
     queryKey: componentKeys.list(effectiveParams),
     queryFn: async () => {
       return await componentApi.fetchComponents(effectiveParams);
@@ -243,7 +243,7 @@ export function useComponent(
 export function useCreateComponent() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ data: ApiComponent }, Error, CreateComponentPayload>({
+  return useMutation<ApiComponent, Error, CreateComponentPayload>({
     mutationFn: async (componentData: CreateComponentPayload) => {
       return await componentApi.create(componentData);
     },
@@ -294,7 +294,7 @@ export function useUpdateComponent() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    { data: ApiComponent },
+    ApiComponent,
     Error,
     { componentSlug: string; updates: UpdateComponentPayload }
   >({

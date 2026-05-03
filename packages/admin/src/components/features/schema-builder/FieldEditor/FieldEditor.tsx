@@ -134,10 +134,10 @@ export function FieldEditor({
   return (
     <div className="h-full flex flex-col bg-primary/5">
       {/* Header */}
-      <div className="p-4 border-b border-border">
+      <div className="p-4  border-b border-primary/5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-none bg-background border border-border flex items-center justify-center">
+            <div className="w-8 h-8 rounded-none bg-background  border border-primary/5 flex items-center justify-center">
               <IconComponent className="h-4 w-4 text-muted-foreground" />
             </div>
             <div>
