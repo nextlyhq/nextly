@@ -510,38 +510,10 @@ export interface EnabledHook {
   enabled: boolean;
 }
 
-/**
- * Collection-level settings data
- * Used by the CollectionSettings component
- */
-export interface CollectionSettingsData {
-  /** Display labels */
-  labels?: CollectionLabels;
-  /** Collection description */
-  description?: string;
-  /** Whether to auto-generate timestamps (default: true) */
-  timestamps?: boolean;
-  /** Admin UI configuration */
-  admin?: CollectionAdminConfig;
-  /** Configured hooks for this collection */
-  hooks?: EnabledHook[];
-}
-
-/**
- * Props for the CollectionSettings component
- */
-export interface CollectionSettingsProps {
-  /** Current settings data */
-  settings: CollectionSettingsData;
-  /** Callback when settings change */
-  onSettingsChange: (settings: CollectionSettingsData) => void;
-  /** List of fields for useAsTitle selector */
-  fields: BuilderField[];
-  /** Whether the panel is expanded */
-  isExpanded?: boolean;
-  /** Callback when expanded state changes */
-  onExpandedChange?: (expanded: boolean) => void;
-}
+// CollectionSettingsData / CollectionSettingsProps were retired alongside
+// CollectionSettings.tsx in PR 2 of the Builder redesign. Settings now flow
+// through BuilderSettingsValues + BuilderSettingsModal — see
+// schema-builder/BuilderSettingsModal.tsx.
 
 // ============================================================
 // Select/Radio Options Types

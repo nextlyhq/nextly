@@ -633,6 +633,9 @@ export class CollectionRegistryService extends BaseRegistryService<
         : undefined,
       source: r.source as "code" | "ui" | "built-in",
       locked: r.locked as boolean,
+      // Why: read the new status meta-column, defaulting to false for rows
+      // written before this column existed (legacy data without status set).
+      status: (r.status as boolean | undefined) === true,
       configPath,
       schemaHash,
       schemaVersion,

@@ -981,6 +981,9 @@ export {};
         description: config.description,
         fields: config.fields as FieldConfig[],
         timestamps: config.timestamps ?? true,
+        // Why: status from defineCollection() input if present, otherwise false.
+        // Code-first authors opt in by setting `status: true` on the config.
+        status: (config as { status?: boolean }).status === true,
         admin: config.admin
           ? {
               group: config.admin.group,

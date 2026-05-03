@@ -278,6 +278,13 @@ export interface ApiSingle {
   /** Whether the Single is locked from UI edits (code-first Singles) */
   locked?: boolean;
 
+  /**
+   * Whether the Single carries a Draft/Published status column. Default
+   * false; users opt in via the Schema Builder modal. See PR 1's backend
+   * for the column-synthesis + query auto-filter end-to-end.
+   */
+  status?: boolean;
+
   /** Current migration status */
   migrationStatus?: SingleMigrationStatus;
 

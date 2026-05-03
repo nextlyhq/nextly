@@ -130,9 +130,18 @@ export const fieldNameSchema = z
     }
   );
 
+// Why: the new modal-driven create flow (Builder redesign PR 2) creates a
+// collection with empty user fields and lets the user add fields on the
+// next page. The server already auto-injects system columns (id, title,
+// slug, plus createdAt/updatedAt/status when those toggles are on), so a
+// "fieldless" collection has 4-7 real DB columns. The legacy "at least
+// one user field" rule was a UI assumption baked into the API; relaxing
+// to min(0) lets create-then-add-fields work without breaking
+// update flows (removing all user fields is also valid — the system
+// columns remain).
 export const fieldsArraySchema = z
   .array(z.any())
-  .min(1, "Collection must have at least one field")
+  .min(0)
   .max(100, "Collection cannot have more than 100 fields");
 
 export class DynamicCollectionValidationService {

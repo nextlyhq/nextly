@@ -236,4 +236,47 @@ describe("generateRuntimeSchema", () => {
       ).toThrow(/unsupported dialect/i);
     });
   });
+
+  // Why: Draft/Published is opt-in. The runtime Drizzle table must include a
+  // status column when status is true (so INSERT/UPDATE see it) and must omit
+  // it otherwise (so toggling off doesn't leave a phantom column reference).
+  describe("status column (Draft / Published)", () => {
+    it("includes a status column on PG when options.status is true", () => {
+      const result = generateRuntimeSchema(
+        "dc_posts",
+        baseFields,
+        "postgresql",
+        { status: true }
+      );
+      expect(getTableColumns(result.table)).toHaveProperty("status");
+    });
+
+    it("includes a status column on MySQL when options.status is true", () => {
+      const result = generateRuntimeSchema("dc_posts", baseFields, "mysql", {
+        status: true,
+      });
+      expect(getTableColumns(result.table)).toHaveProperty("status");
+    });
+
+    it("includes a status column on SQLite when options.status is true", () => {
+      const result = generateRuntimeSchema("dc_posts", baseFields, "sqlite", {
+        status: true,
+      });
+      expect(getTableColumns(result.table)).toHaveProperty("status");
+    });
+
+    it("omits the status column when options.status is false or unset", () => {
+      const unset = generateRuntimeSchema(
+        "dc_posts",
+        baseFields,
+        "postgresql"
+      );
+      expect(getTableColumns(unset.table)).not.toHaveProperty("status");
+
+      const off = generateRuntimeSchema("dc_posts", baseFields, "postgresql", {
+        status: false,
+      });
+      expect(getTableColumns(off.table)).not.toHaveProperty("status");
+    });
+  });
 });

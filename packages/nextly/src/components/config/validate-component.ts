@@ -276,15 +276,11 @@ function validateFields(
     return;
   }
 
-  if (fields.length === 0) {
-    errors.push({
-      path,
-      message: "Component must have at least one field",
-      code: "FIELDS_EMPTY",
-    });
-    return;
-  }
-
+  // Why: empty fields list is now valid for both code-first defines and
+  // the new modal-driven create flow (Builder redesign PR 2/3). System
+  // columns are auto-injected at runtime so a "fieldless" Component
+  // still has id, title, slug. Devs can scaffold first and add fields
+  // incrementally.
   validateFieldsArray(fields, path, errors);
 }
 

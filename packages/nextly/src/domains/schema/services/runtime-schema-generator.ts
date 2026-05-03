@@ -29,6 +29,7 @@ import {
   timestamp as pgTimestamp,
   jsonb as pgJsonb,
   doublePrecision as pgDoublePrecision,
+  varchar as pgVarchar,
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
@@ -57,28 +58,40 @@ export interface RuntimeSchemaResult {
 }
 
 /**
+ * Toggles that affect which system columns are injected into the runtime
+ * Drizzle table — must stay in lockstep with `buildDesiredTableFromFields`'s
+ * options so the runtime schema matches the diff descriptor's view.
+ */
+export interface RuntimeSchemaOptions {
+  /** When true, inject a `status` column ('draft' | 'published', default 'draft'). */
+  status?: boolean;
+}
+
+/**
  * Generate a Drizzle table schema at runtime from field definitions.
  *
  * @param tableName - The database table name (should include dc_ prefix)
  * @param fields - Array of field definitions from the collection
  * @param dialect - Database dialect (postgresql, mysql, sqlite)
+ * @param options - Optional system-column toggles (status etc.)
  * @returns RuntimeSchemaResult with table object and schemaRecord for pushSchema()
  */
 export function generateRuntimeSchema(
   tableName: string,
   fields: FieldDefinition[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: RuntimeSchemaOptions = {}
 ): RuntimeSchemaResult {
   let table: unknown;
   switch (dialect) {
     case "postgresql":
-      table = generatePostgresSchema(tableName, fields);
+      table = generatePostgresSchema(tableName, fields, options);
       break;
     case "mysql":
-      table = generateMySQLSchema(tableName, fields);
+      table = generateMySQLSchema(tableName, fields, options);
       break;
     case "sqlite":
-      table = generateSQLiteSchema(tableName, fields);
+      table = generateSQLiteSchema(tableName, fields, options);
       break;
     default:
       throw new Error(`Unsupported dialect: ${String(dialect)}`);
@@ -91,25 +104,28 @@ export function generateRuntimeSchema(
 
 function generatePostgresSchema(
   tableName: string,
-  fields: FieldDefinition[]
+  fields: FieldDefinition[],
+  options: RuntimeSchemaOptions
 ): unknown {
-  const columns = buildDrizzleColumnRecord(fields, "postgresql");
+  const columns = buildDrizzleColumnRecord(fields, "postgresql", options);
   return pgTable(tableName, columns);
 }
 
 function generateMySQLSchema(
   tableName: string,
-  fields: FieldDefinition[]
+  fields: FieldDefinition[],
+  options: RuntimeSchemaOptions
 ): unknown {
-  const columns = buildDrizzleColumnRecord(fields, "mysql");
+  const columns = buildDrizzleColumnRecord(fields, "mysql", options);
   return mysqlTable(tableName, columns);
 }
 
 function generateSQLiteSchema(
   tableName: string,
-  fields: FieldDefinition[]
+  fields: FieldDefinition[],
+  options: RuntimeSchemaOptions
 ): unknown {
-  const columns = buildDrizzleColumnRecord(fields, "sqlite");
+  const columns = buildDrizzleColumnRecord(fields, "sqlite", options);
   return sqliteTable(tableName, columns);
 }
 
@@ -121,7 +137,8 @@ function generateSQLiteSchema(
  */
 function buildDrizzleColumnRecord(
   fields: FieldDefinition[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: RuntimeSchemaOptions = {}
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle requires dialect-specific column builder unions
 ): Record<string, any> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
@@ -130,12 +147,13 @@ function buildDrizzleColumnRecord(
   const hasTitleField = fields.some(f => f.name === "title");
   const hasSlugField = fields.some(f => f.name === "slug");
 
-  // System columns first (id, created_at, updated_at; conditionally
-  // title/slug). Source-of-truth descriptor list lives in
-  // field-column-descriptor.ts.
+  // System columns first (id, created_at, updated_at; conditionally title,
+  // slug, and status). Source-of-truth descriptor list lives in
+  // field-column-descriptor.ts and stays in lockstep with the diff input.
   for (const sys of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,
+    hasStatus: options.status === true,
   })) {
     out[sys.name] = buildSystemDrizzleColumn(sys, dialect);
   }
@@ -166,6 +184,11 @@ function buildSystemDrizzleColumn(
     if (sys.name === "id") return pgText("id").primaryKey();
     if (sys.name === "created_at") return pgTimestamp("created_at").defaultNow();
     if (sys.name === "updated_at") return pgTimestamp("updated_at").defaultNow();
+    if (sys.name === "status") {
+      // Why: 'draft' default ensures backfill on enable doesn't accidentally
+      // publish anything. Length 20 leaves headroom over "published" (9 chars).
+      return pgVarchar("status", { length: 20 }).notNull().default("draft");
+    }
     // title / slug — text NOT NULL.
     return pgText(sys.name).notNull();
   }
@@ -179,6 +202,9 @@ function buildSystemDrizzleColumn(
     if (sys.name === "updated_at") {
       return mysqlTimestamp("updated_at").defaultNow();
     }
+    if (sys.name === "status") {
+      return mysqlVarchar("status", { length: 20 }).notNull().default("draft");
+    }
     return mysqlVarchar(sys.name, { length: 255 }).notNull();
   }
   // sqlite
@@ -188,6 +214,10 @@ function buildSystemDrizzleColumn(
   }
   if (sys.name === "updated_at") {
     return sqliteInteger("updated_at", { mode: "timestamp" });
+  }
+  if (sys.name === "status") {
+    // SQLite has no varchar — text with default 'draft' is the equivalent.
+    return sqliteText("status").notNull().default("draft");
   }
   return sqliteText(sys.name).notNull();
 }

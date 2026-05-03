@@ -316,6 +316,8 @@ function convertToRecords(
     tableName: collection.slug.replace(/-/g, "_"), // Convert slug to table name
     fields: collection.fields,
     timestamps: collection.timestamps ?? true,
+    // Why: status from defineCollection() input if present, otherwise false.
+    status: (collection as { status?: boolean }).status === true,
     description: collection.admin?.description,
     source: "code" as const,
     locked: true, // Code-first collections are locked
@@ -346,6 +348,8 @@ function convertToSingleRecords(
     admin: single.admin,
     source: "code" as const,
     locked: true, // Code-first singles are locked
+    // Why: same as collections — opt-in via defineSingle({ status: true }).
+    status: (single as { status?: boolean }).status === true,
     schemaHash: "", // Not needed for type generation
     schemaVersion: 1,
     migrationStatus: "synced" as const,

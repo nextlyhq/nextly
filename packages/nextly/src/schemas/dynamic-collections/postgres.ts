@@ -132,6 +132,15 @@ export const dynamicCollectionsPg = pgTable(
     timestamps: boolean("timestamps").default(true).notNull(),
 
     /**
+     * Whether the collection's records carry a Draft/Published status column.
+     * Default false: existing collections are unaffected; users opt in via the
+     * Schema Builder modal. When true, a `status` enum-like column is
+     * synthesized into the data table and the query layer auto-filters
+     * unpublished rows from public callers.
+     */
+    status: boolean("status").default(false).notNull(),
+
+    /**
      * Admin UI configuration options.
      * Controls sidebar grouping, icon, columns, pagination, etc.
      */

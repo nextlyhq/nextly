@@ -175,6 +175,12 @@ export const dynamicSinglesMysql = mysqlTable(
     locked: boolean("locked").default(false).notNull(),
 
     /**
+     * Whether the Single carries a Draft/Published status column.
+     * Default false; users opt in via the Schema Builder modal.
+     */
+    status: boolean("status").default(false).notNull(),
+
+    /**
      * Path to the config file (code-first Singles only).
      * Used for syncing and displaying source location.
      * @example "src/singles/site-settings.ts"
