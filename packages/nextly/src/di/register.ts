@@ -75,7 +75,7 @@ import type { UserExtSchemaService } from "../services/users/user-ext-schema-ser
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
 import type { SingleConfig } from "../singles/config/types";
-import type { IStorageAdapter } from "../storage/adapters/base-adapter";
+import type { IStorageAdapter } from "../storage/types";
 import type { ImageProcessor } from "../storage/image-processor";
 import type { MediaStorage } from "../storage/storage";
 import { initializeMediaStorage } from "../storage/storage";

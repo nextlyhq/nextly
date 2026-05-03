@@ -11,7 +11,7 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import type { HookRegistry } from "../../hooks/hook-registry";
 import type { Logger } from "../../services/shared";
-import type { IStorageAdapter } from "../../storage/adapters/base-adapter";
+import type { IStorageAdapter } from "../../storage/types";
 import type { ImageProcessor } from "../../storage/image-processor";
 import { MediaStorage } from "../../storage/storage";
 import type { DatabaseInstance } from "../../types/database-operations";

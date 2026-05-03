@@ -22,6 +22,11 @@ Field-type aliases removed (rename mapping):
 
 Runtime checks that handled both legacy and canonical names now treat legacy names as unknown field types (loud "unknown field type" load errors, not silent corruption). The 6 mutation-service many-to-many checks now read both `options.relationType === "manyToMany"` and `hasMany === true` to cover code-first relationship fields per Lesson 3 in the deferred-tasks doc.
 
+### Internal cleanup (Phase 4.10 / Category C)
+
+- Deleted 11 deprecated re-export shim files under `src/services/schema/*` and `src/services/dynamic-collections/*`. None were in the `package.json` exports map, so external consumers cannot have been depending on them through supported imports. Internal consumers updated to canonical locations under `src/domains/*/services/*`.
+- Dropped the `IStorageAdapter` and `StorageAdapterInfo` type re-exports from `storage/adapters/base-adapter.ts`. Import these types from `@revnixhq/nextly/storage` (or `storage/types` internally) directly. The `BaseStorageAdapter` abstract class stays in `storage/adapters/base-adapter.ts`; it has real consumers via `LocalStorageAdapter` and external storage plugins.
+
 ## 0.0.140
 
 ### Minor Changes — BREAKING

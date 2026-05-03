@@ -543,7 +543,7 @@ describe("ComponentRegistryService", () => {
       ctx.adapter.selectOne.mockImplementation(async () => {
         // Late import so we can call the same hash function the service uses
         const { calculateSchemaHash } = await import(
-          "../../../services/schema/schema-hash"
+          "../../schema/services/schema-hash"
         );
         return dbRow({
           schema_hash: calculateSchemaHash(fields),
