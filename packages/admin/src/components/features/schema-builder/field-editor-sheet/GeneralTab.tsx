@@ -14,6 +14,7 @@ import { Input, Label, Switch, Textarea } from "@revnixhq/ui";
 
 import type { BuilderField } from "../types";
 
+import { DefaultValueField } from "./DefaultValueField";
 import { TypeSpecificEditor } from "./TypeSpecificEditor";
 
 type Props = {
@@ -127,6 +128,12 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
         />
         <Label>Required</Label>
       </div>
+
+      <DefaultValueField
+        field={field}
+        readOnly={readOnly}
+        onChange={v => set("defaultValue", v)}
+      />
 
       {TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(field.type) && (
         <div className="border-t border-border pt-3 space-y-2">
