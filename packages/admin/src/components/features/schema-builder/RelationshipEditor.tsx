@@ -181,15 +181,18 @@ export function RelationshipEditor({
         </Label>
       </div>
 
-      {/* Target Collections */}
+      {/* Link to (PR E1: renamed from "Target Collection(s)"). The
+          polymorphic case is detected by selectedCollections.length > 1
+          and surfaces the same way; only the user-facing label is
+          reworded. */}
       <div className="space-y-2">
         <FormLabelWithTooltip
           className="text-xs font-medium"
-          label="Target Collection(s)"
+          label="Link to"
           description={
             selectedCollections.length > 1
-              ? "Polymorphic relationship - can reference multiple collection types"
-              : "Select the collection this field will reference"
+              ? "This field can link to records from any of the selected collections (polymorphic)."
+              : "Records from this collection will be the link target."
           }
         />
         <div className="space-y-2">
