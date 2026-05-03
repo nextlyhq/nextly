@@ -21,19 +21,20 @@
 export type FieldPrimitiveType =
   // Text types
   | "text"
-  | "string" // Legacy alias for text
+  | "string" // Alias for text
   | "textarea"
   | "richText"
-  | "richtext" // Legacy alias
+  | "richtext" // Alias
   | "email"
   | "password"
   | "code"
   // Number types
   | "number"
-  | "decimal" // Legacy alias
+  | "decimal" // Alias
   // Selection types
   | "checkbox"
-  | "boolean" // Legacy alias for checkbox
+  | "boolean" // Alias for checkbox
+  | "toggle" // Boolean rendered as a switch (legacy palette had this)
   | "date"
   | "select"
   | "radio"
@@ -42,7 +43,7 @@ export type FieldPrimitiveType =
   | "upload"
   // Relational types
   | "relationship"
-  | "relation" // Legacy alias
+  | "relation" // Alias
   // Structured types
   | "repeater"
   | "group"
