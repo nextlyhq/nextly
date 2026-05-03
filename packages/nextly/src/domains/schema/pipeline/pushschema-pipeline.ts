@@ -460,7 +460,10 @@ export class PushSchemaPipeline {
               c.fields as unknown as Parameters<
                 typeof buildDesiredTableFromFields
               >[1],
-              dialect
+              dialect,
+              // Thread the status flag so the diff includes the status system
+              // column when Draft/Published is enabled.
+              { hasStatus: c.status === true }
             )
           ),
           ...Object.values(desired.singles).map(s =>
@@ -469,7 +472,8 @@ export class PushSchemaPipeline {
               s.fields as unknown as Parameters<
                 typeof buildDesiredTableFromFields
               >[1],
-              dialect
+              dialect,
+              { hasStatus: s.status === true }
             )
           ),
         ],

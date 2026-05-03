@@ -193,6 +193,15 @@ export interface DynamicSingleInsert {
   locked?: boolean;
 
   /**
+   * Whether the Single carries a Draft/Published status column.
+   * When true, a `status` column ('draft' | 'published', default 'draft') is
+   * synthesized into the Single's table. Public callers see the published
+   * version by default; admin callers see drafts. See the query-layer
+   * `resolveStatusFilter` for enforcement. Default: false.
+   */
+  status?: boolean;
+
+  /**
    * Path to the config file (code-first Singles only).
    * Used for syncing and displaying source location.
    *
@@ -296,6 +305,11 @@ export interface DynamicSingleRecord extends DynamicSingleInsert {
    * Code-first Singles are always locked.
    */
   locked: boolean;
+
+  /**
+   * Whether Draft/Published status is enabled (required, defaults to false).
+   */
+  status: boolean;
 
   /**
    * When the Single was created.

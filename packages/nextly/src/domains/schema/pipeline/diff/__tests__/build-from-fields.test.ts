@@ -349,3 +349,64 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     expect(findColumn(table.columns, "meta")?.type).toBe("text");
   });
 });
+
+// Why: status (Draft/Published) is opt-in per collection/single. The diff
+// must include a status system column when hasStatus is true so the pipeline
+// adds it on first enable and drops it on disable. These tests lock the
+// dialect-specific introspection-aligned types.
+describe("buildDesiredTableFromFields with status enabled", () => {
+  it("adds a status column with PG dialect type 'text'", () => {
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      [] as never,
+      "postgresql",
+      { hasStatus: true }
+    );
+    const status = findColumn(table.columns, "status");
+    expect(status).toBeDefined();
+    expect(status?.type).toBe("text");
+    expect(status?.nullable).toBe(false);
+  });
+
+  it("adds a status column with MySQL dialect type 'varchar(20)'", () => {
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      [] as never,
+      "mysql",
+      { hasStatus: true }
+    );
+    const status = findColumn(table.columns, "status");
+    expect(status?.type).toBe("varchar(20)");
+    expect(status?.nullable).toBe(false);
+  });
+
+  it("adds a status column with SQLite dialect type 'text'", () => {
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      [] as never,
+      "sqlite",
+      { hasStatus: true }
+    );
+    const status = findColumn(table.columns, "status");
+    expect(status?.type).toBe("text");
+    expect(status?.nullable).toBe(false);
+  });
+
+  it("omits the status column when hasStatus is false or unset", () => {
+    const tableUnset = buildDesiredTableFromFields(
+      "dc_posts",
+      [] as never,
+      "postgresql"
+    );
+    expect(findColumn(tableUnset.columns, "status")).toBeUndefined();
+
+    const tableFalse = buildDesiredTableFromFields(
+      "dc_posts",
+      [] as never,
+      "postgresql",
+      { hasStatus: false }
+    );
+    expect(findColumn(tableFalse.columns, "status")).toBeUndefined();
+  });
+});
+

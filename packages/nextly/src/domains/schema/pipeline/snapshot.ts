@@ -20,6 +20,8 @@ interface RegistryRecord {
   slug: string;
   tableName: string;
   fields: unknown[];
+  /** Optional — only collections and singles carry this; components ignore it. */
+  status?: boolean;
 }
 
 interface RegistryReader {
@@ -93,7 +95,12 @@ export async function buildDesiredSchemaFromRegistryAsync(
 }
 
 function projectRecords<
-  T extends { slug: string; tableName: string; fields: unknown[] },
+  T extends {
+    slug: string;
+    tableName: string;
+    fields: unknown[];
+    status?: boolean;
+  },
 >(records: RegistryRecord[]): Record<string, T> {
   const out: Record<string, T> = {};
   for (const r of records) {
@@ -101,6 +108,10 @@ function projectRecords<
       slug: r.slug,
       tableName: r.tableName,
       fields: r.fields,
+      // Carry status through so the diff pipeline knows whether to inject
+      // the status system column. Components don't have status — undefined
+      // there is the right value.
+      ...(r.status !== undefined ? { status: r.status } : {}),
     } as T;
   }
   return out;

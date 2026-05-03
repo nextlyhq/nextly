@@ -474,6 +474,14 @@ export class SchemaGenerator {
       columnTypes.add(this.dialect === "sqlite" ? "integer" : "timestamp");
     }
 
+    // Add the resolved column type for the status column when Draft/Published
+    // is on. Mirrors select/radio: stored as a constrained string
+    // ('draft' | 'published') instead of a DB-level enum to avoid Postgres
+    // enum migration headaches and stay consistent across dialects.
+    if (collection.status) {
+      columnTypes.add(COLUMN_TYPES[this.dialect].varchar(20).fn);
+    }
+
     // Collect types from fields
     this.collectFieldTypes(collection.fields, columnTypes);
 
@@ -641,6 +649,11 @@ export class SchemaGenerator {
       lines.push(this.generateTimestampColumns());
     }
 
+    // Status column (Draft / Published)
+    if (collection.status) {
+      lines.push(this.generateStatusColumn());
+    }
+
     // Check if we need indexes callback
     const indexedFields = collection.fields.filter(
       f =>
@@ -689,6 +702,20 @@ export class SchemaGenerator {
 
     // SQLite
     return `  id: ${types.text.fn}("id").primaryKey().$defaultFn(() => crypto.randomUUID()),`;
+  }
+
+  /**
+   * Generates the status column definition for Draft / Published.
+   * Length 20 leaves headroom over the longest current value ("published" = 9).
+   * Default 'draft' ensures existing rows backfill safely (no unintended
+   * publishing) when the column is added. Uses the COLUMN_TYPES.varchar
+   * helper so SQLite resolves to `text` while PG/MySQL get a length-bounded
+   * varchar — matches the project's approach for select/radio columns.
+   */
+  private generateStatusColumn(): string {
+    const colType = COLUMN_TYPES[this.dialect].varchar(20);
+    const optionsStr = colType.options ? `, ${colType.options}` : "";
+    return `  status: ${colType.fn}("status"${optionsStr}).notNull().default("draft"),`;
   }
 
   /**
@@ -1003,6 +1030,12 @@ export class SchemaGenerator {
     // Singles always have updatedAt
     columnTypes.add(this.dialect === "sqlite" ? "integer" : "timestamp");
 
+    // Status column type (Draft / Published) — opt-in per Single, mirrors
+    // the collections path so SQLite resolves to text and PG/MySQL get varchar.
+    if (single.status) {
+      columnTypes.add(COLUMN_TYPES[this.dialect].varchar(20).fn);
+    }
+
     // Collect types from fields
     this.collectFieldTypes(single.fields, columnTypes);
 
@@ -1095,6 +1128,12 @@ export class SchemaGenerator {
 
     // Singles always have updatedAt (but not createdAt)
     lines.push(this.generateSingleUpdatedAtColumn());
+
+    // Status column (Draft / Published) — opt-in per Single, same shape and
+    // default semantics as Collections.
+    if (single.status) {
+      lines.push(this.generateStatusColumn());
+    }
 
     // Close the table (Singles don't have indexes callback for simplicity)
     lines.push(`});`);
