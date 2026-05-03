@@ -14,7 +14,17 @@ import type { ApiComponent } from "@admin/types/entities";
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
-import type { MutationResponse } from "../lib/api/response-types";
+import type {
+  ActionResponse,
+  MutationResponse,
+} from "../lib/api/response-types";
+
+import type {
+  FieldResolution,
+  SchemaApplyResponse,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "./schemaApi";
 
 /**
  * Payload for creating a new Component via API
@@ -155,5 +165,47 @@ export const componentApi = {
       `/components/${componentSlug}`
     );
     return { message: result.message };
+  },
+
+  /**
+   * Preview component schema changes — dry-run diff with rename candidates.
+   * Mirrors schemaApi.preview() for collections.
+   */
+  previewSchemaChanges: async (
+    componentSlug: string,
+    fields: unknown[]
+  ): Promise<SchemaPreviewResponse> => {
+    return protectedApi.post<SchemaPreviewResponse>(
+      `/components/schema/${componentSlug}/preview`,
+      { fields }
+    );
+  },
+
+  /**
+   * Apply confirmed component schema changes via PushSchemaPipeline.
+   * Mirrors schemaApi.apply() for collections.
+   */
+  applySchemaChanges: async (
+    componentSlug: string,
+    fields: unknown[],
+    schemaVersion: number,
+    resolutions?: Record<string, FieldResolution>,
+    renameResolutions?: SchemaRenameResolution[]
+  ): Promise<SchemaApplyResponse> => {
+    const result = await protectedApi.post<
+      ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
+    >(`/components/schema/${componentSlug}/apply`, {
+      fields,
+      confirmed: true,
+      schemaVersion,
+      resolutions,
+      renameResolutions,
+    });
+    return {
+      success: true,
+      message: result.message,
+      newSchemaVersion: result.newSchemaVersion,
+      toastSummary: result.toastSummary,
+    };
   },
 } as const;
