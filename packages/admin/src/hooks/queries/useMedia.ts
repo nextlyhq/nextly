@@ -99,7 +99,7 @@ const defaultParams: MediaParams = {
  * function MediaLibrary() {
  *   const { data, isLoading, error } = useMedia({
  *     page: 1,
- *     pageSize: 24,
+ *     limit: 24,
  *     search: 'logo',
  *     type: 'image',
  *     sortBy: 'uploadedAt',
@@ -141,7 +141,7 @@ export function useMedia(
  * useInfiniteMedia - Infinite query hook for fetching media with infinite scroll
  *
  * Fetches media items with infinite scroll pagination. Automatically loads more
- * pages as user scrolls. Each page contains pageSize items.
+ * pages as user scrolls. Each page contains `limit` items.
  *
  * ## Query Key Structure
  * `["media-infinite", params]` - Separate key from useMedia to avoid conflicts
@@ -154,7 +154,7 @@ export function useMedia(
  * - Deduplication of items across pages
  * - TypeScript type safety
  *
- * @param params - Media filter parameters (search, type, sort, pageSize)
+ * @param params - Media filter parameters (search, type, sort, limit)
  * @returns TanStack InfiniteQuery result with pages of media data
  *
  * @example
@@ -168,7 +168,7 @@ export function useMedia(
  *     hasNextPage,
  *     isFetchingNextPage,
  *   } = useInfiniteMedia({
- *     pageSize: 20,
+ *     limit: 20,
  *     search: 'logo',
  *     type: 'image',
  *     sortBy: 'uploadedAt',
