@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { resetSetupStatusCache } from "@admin/components/guards/PrivateRoute";
 import { toast } from "@admin/components/ui";
+import { getCsrfToken } from "@admin/lib/api/csrf";
 import { invalidateSessionCache } from "@admin/lib/auth/session";
 import { navigateTo } from "@admin/lib/navigation";
 
@@ -17,22 +18,12 @@ export function useLogout() {
 
   const logout = async () => {
     try {
-      // Get CSRF token, for now we fetch it directly
-      const csrfRes = await fetch("/admin/api/auth/csrf", {
-        method: "GET",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!csrfRes.ok) {
-        throw new Error("Failed to fetch CSRF token");
-      }
-
-      const csrfData = await csrfRes.json();
-      // Custom auth returns { data: { csrfToken: "..." } }
-      const csrfToken = csrfData.data?.csrfToken || csrfData.csrfToken;
+      // Use the shared CSRF helper so the wire-shape contract lives in
+      // one place (lib/api/csrf.ts). Pre-Phase-4 this hook duplicated the
+      // fetch and read the legacy `{ data: { csrfToken } }` shape, which
+      // silently broke after the dispatcher was migrated to canonical
+      // `{ token }` per spec section 7.6.
+      const csrfToken = await getCsrfToken();
 
       // Call logout endpoint (protected)
       await api.protected.post("/auth/logout", { csrfToken });
