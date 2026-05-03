@@ -226,7 +226,7 @@ export class CollectionsHandler {
    */
   async listCollections(options?: {
     page?: number;
-    pageSize?: number;
+    limit?: number;
     search?: string;
     sortBy?: "slug" | "createdAt" | "updatedAt";
     sortOrder?: "asc" | "desc";

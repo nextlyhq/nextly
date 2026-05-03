@@ -26,17 +26,12 @@
  * - GET /admin/api/collections/[slug]/uploads/[id] - Get upload metadata
  * - DELETE /admin/api/collections/[slug]/uploads/[id] - Delete upload
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and
- * return the canonical envelope per spec §10.2:
- *   - Single resource: `{ data: <result> }`
- *   - Paginated list: `{ data: [...], meta: { total, page, perPage } }`
- *
- * The legacy double-wrap `{ success, statusCode, data, meta? }` is dropped
- * across all five operations — admin code reading `response.success`
- * breaks until Task 10 migrates the admin fetcher (F12 admin-gap ledger).
- * The legacy pagination meta `{ page, limit, total, totalPages }` collapses
- * to canonical `{ total, page, perPage }` (`limit → perPage`; `totalPages`
- * dropped — caller computes).
+ * Wire shape (Phase 4.6 migration): handlers wrap `withErrorHandler` and
+ * return canonical respondX bodies (spec section 5.1):
+ *   - upload (POST):    `respondMutation("Upload created.", item, 201)`
+ *   - getMetadata (GET single): `respondDoc(item)`
+ *   - list (GET):       `respondList(items, pagination)`
+ *   - delete (DELETE):  `respondAction("Upload deleted.", { id, ... })`
  *
  * `UploadServiceResult` (a result-shape, not a throw) is unwrapped via
  * `throwFromUploadResult`: 404 → `NextlyError.notFound`, 400 →
@@ -65,9 +60,11 @@ import {
 } from "../utils/parse-byte-size";
 
 import {
-  createPaginatedResponse,
-  createSuccessResponse,
-} from "./create-success-response";
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -236,8 +233,8 @@ function throwFromUploadResult(
  * - 401 Unauthorized: Not authenticated
  * - 500 Internal Server Error: Upload failed
  *
- * Response: `{ "data": UploadResult }` with status 201, post-processed
- * through `withTimezoneFormatting`.
+ * Response: `{ message, item: UploadResult }` (respondMutation, status 201)
+ * post-processed through `withTimezoneFormatting`.
  */
 export const POST = withErrorHandler(
   async (
@@ -324,7 +321,7 @@ export const POST = withErrorHandler(
     };
 
     return withTimezoneFormatting(
-      createSuccessResponse(uploadData, { status: 201 })
+      respondMutation("Upload created.", uploadData, { status: 201 })
     );
   }
 );
@@ -341,8 +338,8 @@ export const POST = withErrorHandler(
  * - 404 Not Found: Upload not found
  * - 500 Internal Server Error: Failed to get metadata
  *
- * Response: `{ "data": UploadMetadata }` for single; for list see
- * `handleList` (paginated `meta` shape).
+ * Response: bare `UploadMetadata` (respondDoc) for single; for list see
+ * `handleList` (paginated `respondList` shape).
  */
 export const GET = withErrorHandler(
   async (
@@ -379,16 +376,15 @@ export const GET = withErrorHandler(
       updatedAt: result.data?.updatedAt,
     };
 
-    return withTimezoneFormatting(createSuccessResponse(uploadData));
+    return withTimezoneFormatting(respondDoc(uploadData));
   }
 );
 
 /**
  * Handle list request for uploads in a collection. Currently returns an
  * empty list — a real implementation would query a database or enumerate
- * the storage adapter; that work is out of scope for the Task 21
- * mechanical migration. Pagination meta moves to canonical
- * `{ total, page, perPage }` (`limit → perPage`; `totalPages` dropped).
+ * the storage adapter; that work is out of scope for this mechanical
+ * migration. Wire shape is the canonical respondList envelope.
  */
 async function handleList(request: Request, _slug: string): Promise<Response> {
   const { searchParams } = new URL(request.url);
@@ -396,10 +392,19 @@ async function handleList(request: Request, _slug: string): Promise<Response> {
   const page = parseInt(searchParams.get("page") || "1", 10);
   // Audit M21 / T-026: clamp `limit` to MAX_QUERY_LIMIT so a client
   // can't yank an entire upload list in one round-trip.
-  const perPage = clampLimit(searchParams.get("limit"), { defaultLimit: 10 });
+  const limit = clampLimit(searchParams.get("limit"), { defaultLimit: 10 });
 
+  const total = 0;
+  const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
   return withTimezoneFormatting(
-    createPaginatedResponse([], { total: 0, page, perPage })
+    respondList([], {
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    })
   );
 }
 
@@ -414,8 +419,7 @@ async function handleList(request: Request, _slug: string): Promise<Response> {
  * - 404 Not Found: Upload not found
  * - 500 Internal Server Error: Deletion failed
  *
- * Response: `{ "data": { "success": true, "message": "Upload deleted
- * successfully." } }`
+ * Response: `{ message, id }` (respondAction; storage delete returns void).
  */
 export const DELETE = withErrorHandler(
   async (
@@ -444,10 +448,9 @@ export const DELETE = withErrorHandler(
       throwFromUploadResult(result, "delete");
     }
 
-    return createSuccessResponse({
-      success: true,
-      message: "Upload deleted successfully.",
-    });
+    // Storage delete returns void; surface the deleted upload id so the
+    // admin can prune its local cache without a follow-up fetch.
+    return respondAction("Upload deleted.", { id });
   }
 );
 

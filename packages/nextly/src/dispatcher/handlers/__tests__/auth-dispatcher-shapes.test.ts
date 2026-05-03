@@ -115,7 +115,7 @@ describe("dispatchRbac — paginated lists (respondList)", () => {
     ];
     const fakeServiceResult = {
       data: fakePerms,
-      meta: { total: 2, page: 1, pageSize: 10, totalPages: 1 },
+      meta: { total: 2, page: 1, limit: 10, totalPages: 1 },
     };
     const container = {
       permissions: {
@@ -127,7 +127,7 @@ describe("dispatchRbac — paginated lists (respondList)", () => {
     const result = await dispatchRbac(
       container,
       "listPermissions",
-      { page: "1", pageSize: "10" },
+      { page: "1", limit: "10" },
       undefined
     );
 

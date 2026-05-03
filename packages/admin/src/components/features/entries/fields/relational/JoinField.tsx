@@ -171,8 +171,8 @@ export function JoinField({ field, className }: JoinFieldProps) {
     );
   }
 
-  const entries = data?.docs || [];
-  const totalDocs = data?.totalDocs ?? entries.length;
+  const entries = data?.items || [];
+  const totalDocs = data?.meta.total ?? entries.length;
 
   /**
    * Navigate to an entry's edit page.

@@ -7,14 +7,14 @@
  * user's account state (locked, unverified, disabled, password-reset
  * required) — none of which are surfaced through pre-auth endpoints.
  *
- * Wire shape on success:
- *   { "data": {
- *       "authenticated": true,
- *       "user": { id, email, name },
- *       "account": { verified, locked, disabled, passwordResetRequired,
- *                    mustChangePasswordReason },
- *       "session": { issuedAt, expiresAt }
- *   } }
+ * Wire shape on success (Phase 4 envelope, spec §5.1 respondData):
+ *   {
+ *     "authenticated": true,
+ *     "user": { id, email, name },
+ *     "account": { verified, locked, disabled, passwordResetRequired,
+ *                  mustChangePasswordReason },
+ *     "session": { issuedAt, expiresAt }
+ *   }
  *
  * Wire shape on miss (no session, expired, invalid):
  *   401 AUTH_REQUIRED / "Authentication required." (canonical via
@@ -40,7 +40,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 
-import { createSuccessResponse } from "./create-success-response";
+import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 type AuthStateAccount = {
@@ -166,5 +166,7 @@ export const GET = withErrorHandler(async (request: NextRequest) => {
     },
   };
 
-  return createSuccessResponse(payload);
+  // Non-CRUD read of the bearer's account state; ship the structured
+  // payload bare via respondData per spec §5.1.
+  return respondData(payload);
 });

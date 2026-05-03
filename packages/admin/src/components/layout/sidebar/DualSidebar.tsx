@@ -162,14 +162,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const pluginMetadata = branding?.plugins;
 
   const permittedCollections = useMemo(() => {
-    const allCollections = collectionsData?.data ?? [];
+    const allCollections = collectionsData?.items ?? [];
     return filterCollectionItems(allCollections, capabilities);
-  }, [collectionsData?.data, capabilities]);
+  }, [collectionsData?.items, capabilities]);
 
   const permittedSingles = useMemo(() => {
-    const allSingles = singlesData?.data ?? [];
+    const allSingles = singlesData?.items ?? [];
     return filterSingleItems(allSingles, capabilities);
-  }, [singlesData?.data, capabilities]);
+  }, [singlesData?.items, capabilities]);
 
   const getCollectionPlacement = useMemo(() => {
     return (collection: ApiCollection): string | undefined => {
@@ -286,8 +286,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     }
 
     // 1. Check if current path is a plugin collection placed in users/settings
-    if (collectionsData?.data && pathname.includes("/admin/collection/")) {
-      const pluginCollections = collectionsData.data.filter(
+    if (collectionsData?.items && pathname.includes("/admin/collection/")) {
+      const pluginCollections = collectionsData.items.filter(
         c => c.admin?.isPlugin
       );
       for (const c of pluginCollections) {
@@ -302,8 +302,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
     // 2. Check for plugins — skip plugin collections placed in other sections
     const isPluginPath = (data: typeof collectionsData) => {
-      if (!data?.data) return false;
-      const pluginCollections = data.data.filter(c => c.admin?.isPlugin);
+      if (!data?.items) return false;
+      const pluginCollections = data.items.filter(c => c.admin?.isPlugin);
       return pluginCollections.some(c => {
         if (!pathname.includes(`/admin/collection/${c.name}`)) return false;
         const placement = getCollectionPlacement(c);
@@ -379,7 +379,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   // Filtering logic for standard collections
   const authorizedCollections = useMemo(() => {
-    const visible = (collectionsData?.data ?? []).filter(
+    const visible = (collectionsData?.items ?? []).filter(
       c => !c.admin?.hidden && !c.admin?.isPlugin
     );
     return filterCollectionItems(visible, capabilities);
@@ -387,7 +387,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   // Filtering logic for plugins
   const authorizedPlugins = useMemo(() => {
-    const visible = (collectionsData?.data ?? []).filter(
+    const visible = (collectionsData?.items ?? []).filter(
       c => !c.admin?.hidden && c.admin?.isPlugin
     );
     return filterCollectionItems(visible, capabilities);

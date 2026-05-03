@@ -23,7 +23,7 @@ import { toDialectBool } from "./utils";
  * @example
  * ```typescript
  * const queryService = new RoleQueryService(adapter, logger);
- * const result = await queryService.listRoles({ page: 1, pageSize: 10 });
+ * const result = await queryService.listRoles({ page: 1, limit: 10 });
  * ```
  */
 export class RoleQueryService extends BaseService {
@@ -46,7 +46,7 @@ export class RoleQueryService extends BaseService {
   async listRoles(options?: {
     // Pagination
     page?: number;
-    pageSize?: number;
+    limit?: number;
     // Search
     search?: string;
     // Filters
@@ -69,14 +69,14 @@ export class RoleQueryService extends BaseService {
     meta: {
       total: number;
       page: number;
-      pageSize: number;
+      limit: number;
       totalPages: number;
     };
   }> {
     try {
       const {
         page = 1,
-        pageSize = 10,
+        limit = 10,
         search,
         isSystem,
         levelMin,
@@ -131,7 +131,7 @@ export class RoleQueryService extends BaseService {
       }
 
       // Calculate pagination
-      const offset = (page - 1) * pageSize;
+      const offset = (page - 1) * limit;
 
       // Get total count of all roles (including those without permissions)
 
@@ -156,10 +156,10 @@ export class RoleQueryService extends BaseService {
         .from(roles)
         .where(whereClause)
         .orderBy(orderByClause)
-        .limit(pageSize)
+        .limit(limit)
         .offset(offset);
 
-      const totalPages = Math.ceil(total / pageSize);
+      const totalPages = Math.ceil(total / limit);
 
       // Fetch child roles for all roles using a single join query
       const roleIds = rows.map((row: RoleListSelectResult) => String(row.id));
@@ -229,7 +229,7 @@ export class RoleQueryService extends BaseService {
         meta: {
           total,
           page,
-          pageSize,
+          limit,
           totalPages,
         },
       };

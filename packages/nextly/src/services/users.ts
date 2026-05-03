@@ -102,7 +102,7 @@ export class UsersService extends BaseService {
    */
   async listUsers(options?: {
     page?: number;
-    pageSize?: number;
+    limit?: number;
     search?: string;
     emailVerified?: boolean;
     hasPassword?: boolean;

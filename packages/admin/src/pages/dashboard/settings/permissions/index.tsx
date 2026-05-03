@@ -228,7 +228,7 @@ function PermissionsContent() {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["permissions-overview"],
-    queryFn: () => fetchPermissionsFromApi({ pageSize: 200 }),
+    queryFn: () => fetchPermissionsFromApi({ limit: 200 }),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 

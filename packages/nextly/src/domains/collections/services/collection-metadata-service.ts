@@ -372,7 +372,7 @@ export class CollectionMetadataService extends BaseService {
    */
   async listCollections(options?: {
     page?: number;
-    pageSize?: number;
+    limit?: number;
     search?: string;
     sortBy?: "slug" | "createdAt" | "updatedAt";
     sortOrder?: "asc" | "desc";
@@ -459,7 +459,7 @@ export class CollectionMetadataService extends BaseService {
         meta: {
           total: result.total,
           page: result.page,
-          pageSize: result.pageSize,
+          limit: result.limit,
           totalPages: result.totalPages,
         },
       };

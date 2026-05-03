@@ -1,6 +1,6 @@
 "use client";
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { TableParams, ListResponse } from "@revnixhq/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -70,7 +70,7 @@ const defaultParams: TableParams = {
  *
  *   return (
  *     <div>
- *       {data.data.map(role => (
+ *       {data.items.map(role => (
  *         <RoleCard key={role.id} role={role} />
  *       ))}
  *       <Pagination meta={data.meta} />
@@ -82,7 +82,7 @@ const defaultParams: TableParams = {
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
 export function useRoles(params?: TableParams) {
-  return useQuery<TableResponse<Role>, Error>({
+  return useQuery<ListResponse<Role>, Error>({
     queryKey: ["roles", params],
     queryFn: async () => {
       return await fetchRoles(params || defaultParams);

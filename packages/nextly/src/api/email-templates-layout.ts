@@ -24,8 +24,8 @@ import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import { respondAction, respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getEmailTemplateService(): Promise<EmailTemplateService> {
@@ -54,7 +54,9 @@ export const GET = withErrorHandler(
     const service = await getEmailTemplateService();
     const layout = await service.getLayout();
 
-    return createSuccessResponse(layout);
+    // Layout is a singleton structured value (header + footer); ship it
+    // bare via respondData for the non-CRUD read shape.
+    return respondData(layout);
   }
 );
 
@@ -98,6 +100,10 @@ export const PATCH = withErrorHandler(
     // upserted rows the legacy contract returned.
     const layout = await service.getLayout();
 
-    return createSuccessResponse(layout);
+    // Layout update is a non-CRUD mutation (no resource identity, just
+    // an upsert of the singleton). Match the dispatcher's `respondAction`
+    // shape but include the post-update layout so the admin doesn't need
+    // a follow-up GET.
+    return respondAction("Email layout updated.", { layout });
   }
 );

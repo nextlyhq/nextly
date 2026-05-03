@@ -8,8 +8,7 @@
  * Shows regeneration status when sizes change.
  */
 
-import type {
-  Column} from "@revnixhq/ui";
+import type { Column } from "@revnixhq/ui";
 import {
   Badge,
   Button,
@@ -72,17 +71,10 @@ async function fetchImageSizes(): Promise<ImageSize[]> {
     credentials: "include",
   });
   if (!res.ok) return [];
-  const data = await res.json();
-  // Phase 4 (post-merge follow-up): /admin/api/image-sizes emits
-  // `respondList({ items, meta })` (spec section 5.1). Pre-Phase-4 the
-  // legacy fallback `data.data ?? data` accommodated either `{data}` or
-  // bare arrays. After Phase 4 we read `.items` first; legacy fallbacks
-  // kept for one release as a transitional shim (parallels csrf and
-  // pageSize -> limit transition shims).
-  if (Array.isArray(data?.items)) return data.items as ImageSize[];
-  if (Array.isArray(data?.data)) return data.data as ImageSize[];
-  if (Array.isArray(data)) return data as ImageSize[];
-  return [];
+  // /admin/api/image-sizes emits the canonical respondList envelope
+  // (spec section 5.1): `{ items, meta }`.
+  const data = (await res.json()) as { items?: ImageSize[] };
+  return data.items ?? [];
 }
 
 async function createImageSize(input: Partial<ImageSize>): Promise<void> {
@@ -220,7 +212,12 @@ function SizeFormDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4">
+        <form
+          onSubmit={e => {
+            void handleSubmit(e);
+          }}
+          className="space-y-4"
+        >
           {/* Name */}
           <div className="space-y-1.5">
             <Label htmlFor="size-name">Name</Label>
@@ -531,7 +528,11 @@ function ImageSizesContent({
               item={size}
               callbacks={{
                 onEdit: handleEdit,
-                onDelete: size.isDefault ? undefined : (item) => { void handleDelete(item); },
+                onDelete: size.isDefault
+                  ? undefined
+                  : item => {
+                      void handleDelete(item);
+                    },
               }}
             />
           </div>

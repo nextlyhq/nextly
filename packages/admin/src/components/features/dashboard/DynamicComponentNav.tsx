@@ -152,7 +152,7 @@ export function DynamicComponentNav({ isActive }: DynamicComponentNavProps) {
     }
   );
 
-  const components = data?.data ?? [];
+  const components = data?.items ?? [];
 
   // Filter out hidden Components
   const visibleComponents = components.filter(

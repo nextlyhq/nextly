@@ -20,7 +20,7 @@ export function WelcomeHeader() {
       { staleTime: 5 * 60 * 1000 }
     );
 
-  const collections = collectionsData?.data ?? [];
+  const collections = collectionsData?.items ?? [];
   const hasCollections = collections.length > 0;
 
   if (userLoading || collectionsLoading) {

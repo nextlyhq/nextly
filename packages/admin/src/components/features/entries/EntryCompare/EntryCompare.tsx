@@ -171,7 +171,7 @@ export function EntryCompare({
   });
 
   // Get entries for dropdowns
-  const entries = entriesList?.docs || [];
+  const entries = entriesList?.items || [];
 
   // Get fields for comparison from schema
   const allFields = useMemo(() => {

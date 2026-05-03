@@ -125,7 +125,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       const result = await ctx.mediaService.listMedia(
         {
           page,
-          pageSize: limit,
+          limit,
           search: args.search,
           type: args.mimeType as MediaMimeType | undefined,
           folderId: args.folder,

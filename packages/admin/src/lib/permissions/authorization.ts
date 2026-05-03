@@ -21,12 +21,17 @@ import type { AdminCapabilities } from "../../types/permissions";
 interface FilterableCollection {
   name: string;
   slug?: string;
+  id?: string;
+  label?: string;
+  labels?: { singular?: string; plural?: string };
+  migrationStatus?: string;
   admin?: {
     hidden?: boolean;
     isPlugin?: boolean;
     group?: string;
     order?: number;
     sidebarGroup?: string;
+    icon?: string;
   };
 }
 
@@ -36,10 +41,12 @@ interface FilterableCollection {
  */
 interface FilterableSingle {
   slug: string;
+  label?: string;
   admin?: {
     hidden?: boolean;
     order?: number;
     sidebarGroup?: string;
+    icon?: string;
   };
 }
 

@@ -102,7 +102,7 @@ export async function seedSuperAdmin(
     // `{ data, meta }` directly and throws on failure.
     log("\n Fetching all permissions...");
     const allPermissionsResult = await permissionService.listPermissions({
-      pageSize: 1000,
+      limit: 1000,
     });
 
     const allPermissions = allPermissionsResult.data;

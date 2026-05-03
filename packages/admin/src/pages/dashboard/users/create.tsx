@@ -183,7 +183,7 @@ export default function CreateUserPage(): ReactElement {
     );
   }
 
-  const roles = rolesData?.data || [];
+  const roles = rolesData?.items || [];
 
   // Loading state: Fetching roles
   if (isLoadingRoles) {

@@ -8,10 +8,10 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape — Task 21 migration: handlers are wrapped in `withErrorHandler`
- * and return canonical `{ data: <result> }` (or
- * `{ data: [...], meta: {...} }` for paginated lists) per spec §10.2. Errors
- * serialize as `application/problem+json`.
+ * Wire shape (Phase 4.6c): handlers wrap `withErrorHandler` and emit canonical
+ * `respondX` shapes per spec §5.1 (`respondList` for paginated reads,
+ * `respondMutation` for create). Errors flow through the canonical singular
+ * `{ error: NextlyErrorJSON }` envelope (spec §6).
  *
  * @example
  * ```typescript
@@ -31,10 +31,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 
-import {
-  createPaginatedResponse,
-  createSuccessResponse,
-} from "./create-success-response";
+import { respondList, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -88,7 +85,7 @@ const createComponentSchema = z.object({
  * @example
  * ```bash
  * curl "http://localhost:3000/api/components?source=ui&limit=10"
- * # => {"data":[...],"meta":{"total":5,"page":1,"perPage":10}}
+ * # => {"items":[...],"meta":{"total":5,"page":1,"limit":10,"totalPages":1,"hasNext":false,"hasPrev":false}}
  * ```
  */
 export const GET = withErrorHandler(async (request: Request) => {
@@ -110,16 +107,20 @@ export const GET = withErrorHandler(async (request: Request) => {
     offset,
   });
 
-  // Translate offset-based pagination to the canonical page/perPage meta so
-  // every paginated route ships the same shape (spec §10.2). `perPage` is
-  // clamped to a minimum of 1 to keep the page-derivation safe when the
-  // caller asks for `limit=0`.
-  const perPage = Math.max(1, limit);
-  const page = Math.floor(offset / perPage) + 1;
-  return createPaginatedResponse(result.data, {
+  // Translate offset-based pagination to the canonical page/limit meta
+  // (spec §5.1). `safeLimit` is clamped to a minimum of 1 to keep the
+  // page-derivation safe when the caller asks for `limit=0`.
+  const safeLimit = Math.max(1, limit);
+  const page = Math.floor(offset / safeLimit) + 1;
+  const totalPages =
+    result.total > 0 ? Math.ceil(result.total / safeLimit) : 0;
+  return respondList(result.data, {
     total: result.total,
     page,
-    perPage,
+    limit: safeLimit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
   });
 });
 
@@ -184,5 +185,5 @@ export const POST = withErrorHandler(async (request: Request) => {
     schemaHash,
   });
 
-  return createSuccessResponse(component, { status: 201 });
+  return respondMutation("Component created.", component, { status: 201 });
 });

@@ -25,7 +25,7 @@ import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
+import { respondAction } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -107,6 +107,9 @@ export const POST = withErrorHandler(
     // `email` is optional; the service falls back to provider.fromEmail.
     const result = await service.testProvider(id, validated.email);
 
-    return createSuccessResponse(result);
+    // testProvider always returns 200 at the request layer (per-attempt
+    // delivery success rides in `result.success`). Match the dispatcher
+    // wire shape so REST + dispatcher surfaces stay aligned.
+    return respondAction("Test email dispatched.", { result });
   }
 );

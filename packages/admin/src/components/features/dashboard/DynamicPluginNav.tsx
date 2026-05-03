@@ -103,8 +103,8 @@ export function DynamicPluginNav({
     }
   );
 
-  // All plugin collections (including hidden) — used to build plugin structure
-  const allPluginCollections = (data?.data ?? []).filter(
+  // All plugin collections (including hidden), used to build plugin structure.
+  const allPluginCollections = (data?.items ?? []).filter(
     collection => collection.admin?.isPlugin
   );
 

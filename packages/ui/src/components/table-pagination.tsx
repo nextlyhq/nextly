@@ -150,11 +150,13 @@ export function TablePagination({
 
   return (
     <div className="flex flex-col sm:flex-row w-full items-center justify-between gap-4 text-xs sm:text-sm text-muted-foreground">
-      {/* Left: Info */}
+      {/* Left: Info. `meta.page` is 1-based per spec section 5.1; the
+          0-based UI page index lives in this component's local state via
+          the React Table `pageIndex` prop. We render the displayed range
+          using `meta.limit` (canonical wire field). */}
       <div className="whitespace-nowrap order-2 sm:order-1">
-        Showing {meta.page * meta.pageSize + 1}-
-        {Math.min((meta.page + 1) * meta.pageSize, meta.total)} of {meta.total}{" "}
-        entries
+        Showing {(meta.page - 1) * meta.limit + 1}-
+        {Math.min(meta.page * meta.limit, meta.total)} of {meta.total} entries
       </div>
 
       {/* Right: Controls */}
@@ -168,7 +170,7 @@ export function TablePagination({
             <div className="relative">
               <select
                 id="pageSize"
-                value={meta.pageSize}
+                value={meta.limit}
                 onChange={e => {
                   const newPageSize = Number(e.target.value);
                   onPageSizeChange(newPageSize);

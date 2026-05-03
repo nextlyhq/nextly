@@ -552,7 +552,7 @@ export class PermissionSeedService extends BaseService {
       // and throws on DB errors instead of wrapping in `{success, data}`.
       const allPerms = await this.permissionService.listPermissions({
         page: 1,
-        pageSize: 10000,
+        limit: 10000,
       });
 
       const { rolePermissions, permissions } = this.tables;
@@ -629,7 +629,7 @@ export class PermissionSeedService extends BaseService {
       // graceful-degradation behavior.
       const allPerms = await this.permissionService.listPermissions({
         page: 1,
-        pageSize: 10000,
+        limit: 10000,
       });
 
       const { rolePermissions, permissions } = this.tables;

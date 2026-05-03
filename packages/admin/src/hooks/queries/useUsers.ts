@@ -1,6 +1,6 @@
 "use client";
 
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { TableParams, ListResponse } from "@revnixhq/ui";
 import {
   useMutation,
   useQuery,
@@ -81,7 +81,7 @@ const defaultParams: TableParams = {
  *
  *   return (
  *     <div>
- *       {data.data.map(user => (
+ *       {data.items.map(user => (
  *         <UserCard key={user.id} user={user} />
  *       ))}
  *       <Pagination meta={data.meta} />
@@ -108,11 +108,11 @@ const defaultParams: TableParams = {
 export function useUsers(
   params?: TableParams,
   options?: Omit<
-    UseQueryOptions<TableResponse<UserApiResponse>, Error>,
+    UseQueryOptions<ListResponse<UserApiResponse>, Error>,
     "queryKey" | "queryFn"
   >
 ) {
-  return useQuery<TableResponse<UserApiResponse>, Error>({
+  return useQuery<ListResponse<UserApiResponse>, Error>({
     queryKey: ["users", params],
     queryFn: async () => {
       return await fetchUsers(params || defaultParams);

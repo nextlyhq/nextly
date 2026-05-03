@@ -163,7 +163,7 @@ const COLLECTIONS_METHODS: Record<
     execute: async (svc, p) => {
       const result = await svc.listCollections({
         page: toNumber(p.page),
-        pageSize: toNumber(p.pageSize),
+        limit: toNumber(p.limit),
         search: p.search,
         sortBy: p.sortBy as "slug" | "createdAt" | "updatedAt" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
@@ -173,25 +173,25 @@ const COLLECTIONS_METHODS: Record<
       const data = unwrapServiceResult<unknown>(result);
       const items = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
 
-      // Legacy meta uses pageSize/total/totalPages, translate to the
-      // canonical PaginationMeta shape via toPaginationMeta below.
-      const legacyMeta = result.meta as
+      // Service meta now uses limit/total/totalPages (Phase 4.8 rename);
+      // toPaginationMeta below adds the canonical hasNext/hasPrev fields.
+      const serviceMeta = result.meta as
         | {
             total?: number;
             page?: number;
-            pageSize?: number;
+            limit?: number;
             totalPages?: number;
           }
         | undefined;
       const baseMeta = {
-        total: typeof legacyMeta?.total === "number" ? legacyMeta.total : items.length,
-        page: typeof legacyMeta?.page === "number" ? legacyMeta.page : 1,
-        pageSize:
-          typeof legacyMeta?.pageSize === "number"
-            ? legacyMeta.pageSize
+        total: typeof serviceMeta?.total === "number" ? serviceMeta.total : items.length,
+        page: typeof serviceMeta?.page === "number" ? serviceMeta.page : 1,
+        limit:
+          typeof serviceMeta?.limit === "number"
+            ? serviceMeta.limit
             : items.length,
         totalPages:
-          typeof legacyMeta?.totalPages === "number" ? legacyMeta.totalPages : 1,
+          typeof serviceMeta?.totalPages === "number" ? serviceMeta.totalPages : 1,
       };
 
       const userId = p._authenticatedUserId
@@ -226,10 +226,10 @@ const COLLECTIONS_METHODS: Record<
       const filteredMeta = {
         total: filtered.length,
         page: baseMeta.page,
-        pageSize: baseMeta.pageSize,
+        limit: baseMeta.limit,
         totalPages:
-          baseMeta.pageSize > 0
-            ? Math.max(1, Math.ceil(filtered.length / baseMeta.pageSize))
+          baseMeta.limit > 0
+            ? Math.max(1, Math.ceil(filtered.length / baseMeta.limit))
             : 1,
       };
 
@@ -733,8 +733,7 @@ const COLLECTIONS_METHODS: Record<
         sort = sortOrder === "desc" ? `-${p.sortBy}` : String(p.sortBy);
       }
 
-      // Accept both `limit` (standard API param) and `pageSize` (legacy/admin).
-      const rawLimit = p.limit ?? p.pageSize;
+      const rawLimit = p.limit;
 
       const result = await svc.listEntries({
         collectionName: p.collectionName,

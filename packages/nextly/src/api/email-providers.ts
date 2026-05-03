@@ -32,8 +32,8 @@ import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import { respondData, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -82,7 +82,9 @@ export const GET = withErrorHandler(
     const service = await getEmailProviderService();
     const providers = await service.listProviders();
 
-    return createSuccessResponse(providers);
+    // Non-paginated list; wrap in a named field for the canonical
+    // respondData shape (spec §5.1 rule 3).
+    return respondData({ providers });
   }
 );
 
@@ -127,6 +129,6 @@ export const POST = withErrorHandler(
     const service = await getEmailProviderService();
     const provider = await service.createProvider(validated);
 
-    return createSuccessResponse(provider, { status: 201 });
+    return respondMutation("Email provider created.", provider, { status: 201 });
   }
 );

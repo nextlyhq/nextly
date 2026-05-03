@@ -25,7 +25,7 @@ import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
+import { respondAction } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -97,6 +97,8 @@ export const PATCH = withErrorHandler(
     const service = await getUserFieldDefinitionService();
     const fields = await service.reorderFields(validated.fieldIds);
 
-    return createSuccessResponse(fields);
+    // Reorder is a non-CRUD action. Echo the resulting field list so the
+    // admin can refresh its sort order without a follow-up fetch.
+    return respondAction("User fields reordered.", { fields });
   }
 );

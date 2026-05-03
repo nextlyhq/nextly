@@ -83,9 +83,9 @@ export function RelationshipEditor({
     });
 
     // 2. Add Collections
-    if (collectionsData?.data) {
+    if (collectionsData?.items) {
       items.push(
-        ...collectionsData.data.map(col => ({
+        ...collectionsData.items.map(col => ({
           slug: col.name,
           label: col.label || col.name,
         }))
@@ -93,9 +93,9 @@ export function RelationshipEditor({
     }
 
     // 3. Add Singles
-    if (singlesData?.data) {
+    if (singlesData?.items) {
       items.push(
-        ...singlesData.data.map(single => ({
+        ...singlesData.items.map(single => ({
           slug: single.slug,
           label: single.label || single.slug,
         }))

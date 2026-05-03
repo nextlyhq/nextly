@@ -46,7 +46,7 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 1, pageSize: 10 });
+        const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -54,7 +54,7 @@ describe("RoleService", () => {
         expectPaginationMeta(result, {
           total: 25,
           page: 1,
-          pageSize: 10,
+          limit: 10,
           totalPages: 3,
         });
       });
@@ -65,14 +65,14 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 2, pageSize: 10 });
+        const result = await service.listRoles({ page: 2, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           page: 2,
-          pageSize: 10,
+          limit: 10,
           totalPages: 3,
         });
       });
@@ -83,7 +83,7 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 3, pageSize: 10 });
+        const result = await service.listRoles({ page: 3, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -100,7 +100,7 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 10, pageSize: 10 });
+        const result = await service.listRoles({ page: 10, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -118,14 +118,14 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 1, pageSize: 25 });
+        const result = await service.listRoles({ page: 1, limit: 25 });
 
         // Assert
         expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 25);
         expectPaginationMeta(result, {
           total: 50,
-          pageSize: 25,
+          limit: 25,
           totalPages: 2,
         });
       });
@@ -140,16 +140,16 @@ describe("RoleService", () => {
 
         // Assert
         expectSuccessResponse(result, 200);
-        expectArrayLength(result.data!, 10); // Default pageSize
+        expectArrayLength(result.data!, 10); // Default limit
         expectPaginationMeta(result, {
           page: 1, // Default page
-          pageSize: 10,
+          limit: 10,
         });
       });
 
       it("should handle empty database", async () => {
         // Act
-        const result = await service.listRoles({ page: 1, pageSize: 10 });
+        const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
         expectSuccessResponse(result, 200);
@@ -167,14 +167,14 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 1, pageSize: 1 });
+        const result = await service.listRoles({ page: 1, limit: 1 });
 
         // Assert
         expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expectPaginationMeta(result, {
           total: 5,
-          pageSize: 1,
+          limit: 1,
           totalPages: 5,
         });
       });
@@ -185,14 +185,14 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 1, pageSize: 100 });
+        const result = await service.listRoles({ page: 1, limit: 100 });
 
         // Assert
         expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5);
         expectPaginationMeta(result, {
           total: 5,
-          pageSize: 100,
+          limit: 100,
           totalPages: 1,
         });
       });
@@ -203,7 +203,7 @@ describe("RoleService", () => {
         await testDb.db.insert(testDb.schema.roles).values(roles);
 
         // Act
-        const result = await service.listRoles({ page: 1, pageSize: 10 });
+        const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
         expectPaginationMeta(result, {
@@ -291,7 +291,7 @@ describe("RoleService", () => {
         const result = await service.listRoles({
           search: "editor",
           page: 1,
-          pageSize: 10,
+          limit: 10,
         });
 
         // Assert
@@ -1329,7 +1329,7 @@ describe("RoleService", () => {
         sortBy: "level",
         sortOrder: "asc",
         page: 1,
-        pageSize: 3,
+        limit: 3,
       });
 
       // Assert
@@ -1337,7 +1337,7 @@ describe("RoleService", () => {
       expectArrayLength(result.data!, 3);
       expectPaginationMeta(result, {
         page: 1,
-        pageSize: 3,
+        limit: 3,
         total: 6, // Roles with level 30, 40, 50, 60, 70, 80
       });
     });

@@ -98,8 +98,8 @@ export function UploadEditor({
 
   // Get available collections for the picker
   const availableCollections = useMemo(() => {
-    if (!collectionsData?.data) return [];
-    return collectionsData.data.map(col => ({
+    if (!collectionsData?.items) return [];
+    return collectionsData.items.map(col => ({
       slug: col.name,
       label: col.label || col.name,
     }));

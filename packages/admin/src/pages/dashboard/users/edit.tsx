@@ -258,7 +258,7 @@ export default function EditUserPage(): ReactElement {
     );
   }
 
-  const roles = rolesData?.data || [];
+  const roles = rolesData?.items || [];
 
   // Error state: Invalid user ID
   if (!userId) {

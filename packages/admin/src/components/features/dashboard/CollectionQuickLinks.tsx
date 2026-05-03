@@ -149,19 +149,19 @@ export const CollectionQuickLinks: React.FC = () => {
 
   const counts = useMemo(() => {
     const raw = statsData?.collectionCounts ?? [];
-    const allowed = new Set((collectionsData?.data ?? []).map(col => col.name));
+    const allowed = new Set((collectionsData?.items ?? []).map(col => col.name));
     if (allowed.size === 0) return raw;
     return raw.filter(item => allowed.has(item.slug));
-  }, [statsData?.collectionCounts, collectionsData?.data]);
+  }, [statsData?.collectionCounts, collectionsData?.items]);
   const groups = useMemo(() => groupCollections(counts), [counts]);
 
   const collectionsMap = useMemo(() => {
     const map = new Map<string, ApiCollection>();
-    collectionsData?.data?.forEach(col => {
+    collectionsData?.items?.forEach(col => {
       map.set(col.name, col);
     });
     return map;
-  }, [collectionsData?.data]);
+  }, [collectionsData?.items]);
 
   const isLoading = statsLoading || collectionsLoading;
 

@@ -34,8 +34,8 @@ import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
 import { requireAuthHeader } from "./auth-header-only";
-import { createSuccessResponse } from "./create-success-response";
 import { readJsonBody } from "./read-json-body";
+import { respondData, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -121,7 +121,7 @@ export const GET = withErrorHandler(
     const config = container.get<NextlyServiceConfig>("config");
     const adminConfig = config?.users?.admin ?? undefined;
 
-    return createSuccessResponse({
+    return respondData({
       fields,
       ...(adminConfig && { adminConfig }),
     });
@@ -167,6 +167,6 @@ export const POST = withErrorHandler(
       source: "ui",
     });
 
-    return createSuccessResponse(field, { status: 201 });
+    return respondMutation("User field created.", field, { status: 201 });
   }
 );
