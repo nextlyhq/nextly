@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createElement, type ReactNode } from "react";
+import { createElement, type ReactElement, type ReactNode } from "react";
 
 import type { JournalRow } from "@admin/services/journalApi";
 
@@ -24,7 +24,7 @@ function rowAt(id: string, startedAt: string): JournalRow {
   };
 }
 
-function makeWrapper(): (props: { children: ReactNode }) => JSX.Element {
+function makeWrapper(): (props: { children: ReactNode }) => ReactElement {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });

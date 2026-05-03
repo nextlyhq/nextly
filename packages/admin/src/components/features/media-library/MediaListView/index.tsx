@@ -50,6 +50,8 @@ interface MediaListViewProps {
   onDownload?: (media: Media) => void;
   onRetry?: () => void;
   hiddenColumns?: Set<string>;
+  className?: string;
+  emptyStateMessage?: string;
 }
 
 // Get the right icon for a media type
@@ -321,7 +323,7 @@ export function MediaListView({
       data={media}
       columns={columnDefs}
       onRowClick={onEdit}
-      emptyMessage={emptyStateMessage as string}
+      emptyMessage={emptyStateMessage}
       tableWrapperClassName="border-0 rounded-none shadow-none"
       className={className}
     />

@@ -136,7 +136,7 @@ export interface GroupInputProps {
  * @returns Rendered group with nested fields
  */
 export function GroupInput({
-  _name,
+  name: _name,
   field,
   basePath = "",
   disabled,

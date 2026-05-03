@@ -7,10 +7,11 @@ import { useForm, type Resolver } from "react-hook-form";
 
 import type {
   PermissionFormProps,
-  PermissionFormValues} from "@admin/types/permissionform";
+  PermissionFormValues,
+} from "@admin/types/permissionform";
 import {
   createPermissionFormSchema,
-  editPermissionFormSchema
+  editPermissionFormSchema,
 } from "@admin/types/permissionform";
 
 export function PermissionForm({
@@ -21,7 +22,6 @@ export function PermissionForm({
 
   const {
     register,
-    _control,
     handleSubmit,
     reset,
     watch,
@@ -60,7 +60,9 @@ export function PermissionForm({
         {/* Form */}
         <form
           id="permission-form"
-          onSubmit={(e) => { void handleSubmit(onValid)(e); }}
+          onSubmit={e => {
+            void handleSubmit(onValid)(e);
+          }}
           className="grid gap-2 flex-1"
         >
           <div className="form-field-wrapper">

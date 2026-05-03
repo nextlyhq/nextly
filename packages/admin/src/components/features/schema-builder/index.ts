@@ -11,10 +11,8 @@
 export { ArrayFieldEditor } from "./ArrayFieldEditor";
 export { BuilderHeader } from "./BuilderHeader";
 export { BuilderPageTemplate } from "./BuilderPageTemplate";
-export type {
-  BuilderPageTemplateProps,
-  BreadcrumbItem,
-} from "./BuilderPageTemplate";
+export type { BuilderPageTemplateProps } from "./BuilderPageTemplate";
+export type { BreadcrumbItem } from "@admin/components/shared";
 export { FieldPalette } from "./FieldPalette";
 export { FieldList } from "./FieldList";
 export { FieldEditor } from "./FieldEditor";

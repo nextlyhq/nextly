@@ -27,6 +27,7 @@ import type {
   DateFieldConfig,
   UploadFieldConfig,
   RelationshipFieldConfig,
+  RepeaterFieldConfig,
   GroupFieldConfig,
   JSONFieldConfig,
   RichTextFieldConfig,
@@ -460,7 +461,7 @@ export function FieldRenderer({
           <ArrayInput
             {...commonProps}
             name={fieldPath}
-            field={field}
+            field={field as RepeaterFieldConfig}
             // Pass FieldRenderer recursively for nested fields
             renderField={(subField, subBasePath, subControl, options) => (
               <FieldRenderer

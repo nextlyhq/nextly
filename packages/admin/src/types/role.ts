@@ -4,6 +4,9 @@ export interface RoleFilterParams {
   id?: {
     $in?: string[];
   };
+  // Index signature required for assignability to FilterInfo.filters,
+  // which is typed as Record<string, unknown> in @revnixhq/ui.
+  [key: string]: unknown;
 }
 
 export interface RoleFilters extends FilterInfo {
