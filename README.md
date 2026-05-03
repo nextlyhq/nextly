@@ -1,19 +1,26 @@
 <!--
   TODO before launch:
-  - Replace BANNER_URL with a hosted banner image (1280x640 recommended).
-    Easiest: drop the file in .github/assets/banner.png and use the raw URL,
-    or upload to a Vercel Blob / Cloudflare CDN.
-  - Replace OG image URL in social preview (Settings → Social preview).
+  1. Drop your logo at one of:
+     - https://nextlyhq.com/logo.svg  (recommended — separates README from repo asset weight)
+     - .github/assets/logo.svg        (works if you'd rather keep the asset in the repo)
+     Then update the <img src="..."> below to point at it.
+  2. Add a social preview image: GitHub repo Settings → Social preview.
 -->
 
 <p align="center">
   <a href="https://nextlyhq.com">
-    <img src="https://raw.githubusercontent.com/nextlyhq/nextly/main/.github/assets/banner.png" width="100%" alt="Nextly — open-source CMS and app framework for Next.js" />
+    <img src="https://nextlyhq.com/logo.svg" width="280" alt="Nextly" onerror="this.style.display='none'" />
   </a>
 </p>
 
+<h1 align="center">Nextly</h1>
+
 <h3 align="center">The open-source CMS and app framework for Next.js</h3>
-<p align="center">Code-first or visual schema builder. Type-safe APIs. Self-hosted, MIT-licensed, no vendor lock-in.</p>
+
+<p align="center">
+  Code-first or visual schema builder. Type-safe APIs.<br/>
+  Self-hosted, MIT-licensed, no vendor lock-in.
+</p>
 
 <p align="center">
   <a href="https://nextlyhq.com/docs"><strong>Docs</strong></a> ·
@@ -23,36 +30,28 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@revnixhq/nextly"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/nextly?style=flat-square&color=0070f3" /></a>
-  &nbsp;
-  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=0070f3" /></a>
-  &nbsp;
-  <a href="https://github.com/nextlyhq/nextly/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/nextlyhq/nextly/ci.yml?branch=main&style=flat-square" /></a>
-  &nbsp;
-  <a href="https://github.com/nextlyhq/nextly/graphs/contributors"><img alt="Contributors" src="https://img.shields.io/github/contributors-anon/nextlyhq/nextly?style=flat-square&color=yellow" /></a>
-  &nbsp;
-  <a href="https://github.com/nextlyhq/nextly/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/nextlyhq/nextly?style=flat-square&color=yellow" /></a>
-  &nbsp;
-  <a href="https://www.npmjs.com/package/@revnixhq/nextly"><img alt="Downloads" src="https://img.shields.io/npm/dm/@revnixhq/nextly?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@revnixhq/nextly"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/nextly?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/nextlyhq/nextly/ci.yml?branch=main&style=flat-square&label=CI" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://github.com/nextlyhq/nextly/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/nextlyhq/nextly?style=flat-square&color=yellow" /></a>
 </p>
 
-<hr/>
+<br/>
+
+Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST + GraphQL API and a customizable admin dashboard out of the box. No SaaS, no proprietary cloud — your data, your stack.
+
+- Define collections in TypeScript with the [**code-first config**](https://nextlyhq.com/docs/concepts), or build them visually in the [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/schema-builder)
+- Auto-generated [**REST**](https://nextlyhq.com/docs/api/rest) & [**GraphQL**](https://nextlyhq.com/docs/api/graphql) APIs with full TypeScript types
+- Granular [**Roles & Permissions**](https://nextlyhq.com/docs/access-control) and field-level access control out of the box
+- First-class [**PostgreSQL**, **MySQL**, and **SQLite**](https://nextlyhq.com/docs/database/support) support via pluggable adapters
+- Built-in [**Media Library**](https://nextlyhq.com/docs/media) with **S3**, **Vercel Blob**, and **UploadThing** storage adapters
+- Extensible [**plugin system**](https://nextlyhq.com/docs/plugins) and customizable admin dashboard
+- 100% [**TypeScript**](https://nextlyhq.com/docs/typescript), MIT-licensed, self-hosted
+
+> Explore all features at **[nextlyhq.com](https://nextlyhq.com)**
 
 > [!IMPORTANT]
-> Nextly is in active development. Star this repo to follow along — releases land every few weeks.
-
-Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code or with the visual builder, choose your database, and get a fully-typed REST + GraphQL API and a customizable admin dashboard out of the box. No SaaS, no proprietary cloud — your data, your stack.
-
-## Why Nextly
-
-- **Next.js native** — runs inside your existing `/app` folder, no separate backend service to deploy.
-- **Code-first or UI-first schema** — define collections with TypeScript config, _or_ build them visually in the admin. Both produce the same on-disk source of truth.
-- **Type-safe by default** — TypeScript types are generated from your schema, so client SDKs, API responses, and form inputs are all checked at compile time.
-- **Bring your own database** — first-class support for PostgreSQL, MySQL, and SQLite. Pluggable adapter system for Drizzle and beyond.
-- **Pluggable storage** — S3, Vercel Blob, UploadThing supported out of the box. Swap providers without touching application code.
-- **Granular RBAC** — roles, permissions, and field-level access control built in.
-- **Extensible plugin system** — drop-in plugins for forms, SEO, search, and more. Build your own with full access to the admin UI and server runtime.
-- **MIT licensed, self-hosted** — no vendor lock-in, no metered API calls, no surprise pricing.
+> Nextly is in active development heading toward v1.0. Star this repo to follow along — releases land every few weeks.
 
 ## Quickstart
 
@@ -60,9 +59,9 @@ Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your 
 pnpm create nextly-app@latest
 ```
 
-Follow the prompts, and you'll have a running CMS with admin panel and database in under a minute.
+That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.
 
-> Prefer a manual setup? See the [installation guide](https://nextlyhq.com/docs/installation) for clone-and-configure instructions, Docker setup, and database options.
+> Prefer a manual setup? See the [installation guide](https://nextlyhq.com/docs/installation) for clone-and-configure instructions, Docker, and database options.
 
 ## Packages
 
@@ -127,9 +126,9 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 
 ## Community
 
-- [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) — questions, ideas, and show-and-tell
+- [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) — questions, ideas, show-and-tell
 - [**Issues**](https://github.com/nextlyhq/nextly/issues) — bug reports and feature requests
-- [**Contributing guide**](./CONTRIBUTING.md) — local setup, development workflow, code conventions
+- [**Contributing guide**](./CONTRIBUTING.md) — local setup, development workflow, conventions
 - [**Code of Conduct**](./CODE_OF_CONDUCT.md) — how we behave as a community
 
 ## Contributing
@@ -144,4 +143,4 @@ See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the f
 
 ## License
 
-[MIT](./LICENSE) — free to use, modify, and distribute. We hope you build something amazing.
+[MIT](./LICENSE) — free to use, modify, and distribute.
