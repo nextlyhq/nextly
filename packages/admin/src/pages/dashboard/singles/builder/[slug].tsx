@@ -14,6 +14,7 @@
  */
 
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
 import type React from "react";
@@ -42,6 +43,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
 
@@ -194,6 +196,41 @@ export default function SingleBuilderEditPage({
     );
   }, [builder, hooks, settings, slug, updateSingle]);
 
+  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
+  // by width). We compute the OLD row layout, apply the row swap, and
+  // flatten back to a fields array for handleFieldsReorder. The legacy
+  // builder.handleDragEnd is built for the old palette+field-list model
+  // and ignores row IDs.
+  const handleRowDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
+        return;
+      }
+      const userFields = builder.fields.filter(f => !f.isSystem);
+      const systemFields = builder.fields.filter(f => f.isSystem);
+      const rows = packIntoRows(
+        userFields.map(f => ({
+          id: f.id,
+          width: parseWidth(f.admin?.width),
+          _field: f,
+        }))
+      );
+      const oldIdx = Number(activeIdStr.slice("row-".length));
+      const newIdx = Number(overIdStr.slice("row-".length));
+      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
+      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
+      const reorderedUserFields = reorderedRows.flatMap(row =>
+        row.map(r => (r as { _field: BuilderField })._field)
+      );
+      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
+    },
+    [builder]
+  );
+
   // ---------------------------- Loading / error guards ----------------------
 
   if (!slug) {
@@ -257,7 +294,7 @@ export default function SingleBuilderEditPage({
       <DndContext
         sensors={builder.sensors}
         onDragStart={builder.handleDragStart}
-        onDragEnd={(event: DragEndEvent) => builder.handleDragEnd(event)}
+        onDragEnd={handleRowDragEnd}
       >
         <BuilderFieldList
           fields={builder.fields}
