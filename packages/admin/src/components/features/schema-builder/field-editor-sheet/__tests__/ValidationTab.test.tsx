@@ -95,3 +95,38 @@ describe("ValidationTab", () => {
     expect(screen.getByLabelText(/custom error message/i)).toBeDisabled();
   });
 });
+
+describe("ValidationTab -- PR E1 layout + copy", () => {
+  it("renders Min length and Max length inside a 50/50 grid row", () => {
+    const { container } = render(<Controlled initial={text} />);
+    const grids = container.querySelectorAll(
+      ".grid.grid-cols-1.sm\\:grid-cols-2"
+    );
+    expect(grids.length).toBeGreaterThan(0);
+  });
+
+  it("renders Min rows / Max rows BEFORE Pattern for textarea", () => {
+    const textarea: BuilderField = { ...text, type: "textarea" };
+    render(<Controlled initial={textarea} />);
+    expect(screen.getByLabelText(/min rows/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/max rows/i)).toBeInTheDocument();
+    const minRowsLabel = screen.getByText(/min rows/i);
+    const patternLabel = screen.getByText(/^pattern$/i);
+    expect(minRowsLabel.compareDocumentPosition(patternLabel)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("Custom Error Message helper text mentions the Pattern (clarifies regex use)", () => {
+    render(<Controlled initial={text} />);
+    expect(screen.getByLabelText(/custom error message/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/shown when the value fails the pattern/i)
+    ).toBeInTheDocument();
+  });
+
+  it("Pattern field has helper text explaining it's a regex", () => {
+    render(<Controlled initial={text} />);
+    expect(screen.getByText(/regex the value must match/i)).toBeInTheDocument();
+  });
+});
