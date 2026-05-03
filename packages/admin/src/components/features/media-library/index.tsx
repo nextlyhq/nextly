@@ -476,7 +476,7 @@ export function MediaLibrary({
           </div>
           <div className="flex items-center gap-4">
             {/* Sidebar Toggle Group */}
-            <div className="flex items-center bg-white  border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-background border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -507,7 +507,7 @@ export function MediaLibrary({
               </Button>
             </div>
             {/* View Toggle Group (Gallery) */}
-            <div className="flex items-center bg-white  border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
+            <div className="flex items-center bg-background border border-primary/5 rounded-none p-1 shrink-0 transition-all duration-200">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -580,7 +580,7 @@ export function MediaLibrary({
 
           {/* Type Filter */}
           <Select value={typeFilter} onValueChange={handleTypeFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-white text-black border-primary/5 hover:bg-white/90">
+            <SelectTrigger className="w-full sm:w-[180px] hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10">
               <SelectValue placeholder="Type: All" />
             </SelectTrigger>
             <SelectContent>
@@ -610,7 +610,7 @@ export function MediaLibrary({
                 <Button
                   variant="outline"
                   size="md"
-                  className="hover-unified bg-white text-black border-primary/5 hover:bg-white/90 px-4 shrink-0"
+                  className="hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10 px-4 shrink-0"
                 >
                   <Columns className="mr-2 h-4 w-4 text-muted-foreground" />
                   Columns

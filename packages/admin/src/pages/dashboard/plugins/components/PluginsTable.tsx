@@ -253,12 +253,16 @@ export default function PluginsTable() {
           value={search}
           onChange={setSearch}
           placeholder="Search plugins..."
-          className="w-full md:max-w-sm bg-white text-black border-primary/5"
+          className="w-full md:max-w-sm bg-background text-foreground border-primary/5"
         />
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="md">
+              <Button
+                variant="outline"
+                size="md"
+                className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+              >
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>

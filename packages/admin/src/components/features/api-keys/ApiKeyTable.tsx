@@ -372,7 +372,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               onChange={setSearch}
               placeholder="Search API keys by name, description, or role..."
               isLoading={isLoading}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -385,7 +385,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-9 hover-unified bg-white text-black border-primary/5 hover:bg-white/90"
+                className="h-9 hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
               >
                 <Columns className="mr-2 h-4 w-4" />
                 Columns

@@ -600,7 +600,7 @@ export default function UserTable() {
             onChange={setSearch}
             placeholder="Search users by name or email"
             isLoading={isFetching}
-            className="flex-1 max-w-sm bg-white text-black border-primary/5"
+            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
           />
         </div>
 
@@ -615,7 +615,11 @@ export default function UserTable() {
             /* Columns Dropdown */
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="md">
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                >
                   <Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>

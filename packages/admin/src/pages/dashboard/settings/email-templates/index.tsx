@@ -673,7 +673,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={false}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -700,7 +700,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={true}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -726,7 +726,7 @@ function EmailTemplateTable() {
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="md">
+              <Button variant="outline" size="md" className="bg-background">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>

@@ -658,7 +658,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             onChange={setSearch}
             placeholder="Search Singles..."
             isLoading={isLoading}
-            className="w-full md:max-w-sm bg-white text-black border-primary/5"
+            className="w-full md:max-w-sm bg-background text-foreground border-primary/5"
           />
         </div>
 
@@ -667,7 +667,11 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="md" className="relative">
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="relative bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                >
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
                   {(sourceFilter !== "all" || migrationFilter !== "all") && (
@@ -739,7 +743,11 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="md">
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                >
                   <Icons.Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>

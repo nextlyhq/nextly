@@ -233,7 +233,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="text-sm bg-white  border border-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+          <code className="text-sm bg-primary/5 border border-primary/5 px-1.5 py-0.5 rounded-none font-mono">
             {field.name}
           </code>
         </div>
@@ -617,7 +617,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={false}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -645,7 +645,7 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={true}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
@@ -689,13 +689,13 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={isLoading}
-              className="bg-white text-black border-primary/5"
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="md">
+          <Button variant="outline" size="md" className="bg-background">
             <Columns className="mr-2 h-4 w-4" />
             Columns
           </Button>
