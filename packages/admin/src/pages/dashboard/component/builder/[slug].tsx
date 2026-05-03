@@ -49,6 +49,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import { componentApi } from "@admin/services/componentApi";
 import type {
@@ -73,10 +74,13 @@ type FormData = z.infer<typeof componentFormSchema>;
 type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
-  | { kind: "picker"; insertAt: number }
+  // PR D: parentFieldId? scopes the picker to a group/repeater.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
   // Why: NEW in PR C. Sheet renders in create mode against this draft;
   // on Apply we append, on Cancel we discard.
-  | { kind: "create"; draft: BuilderField }
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
   | { kind: "edit"; fieldId: string };
 
 interface ComponentBuilderEditPageProps {
@@ -285,6 +289,28 @@ export default function ComponentBuilderEditPage({
     }
   }, [slug, getValidatedFields, saveSettingsOnly]);
 
+  // Why: PR D feedback -- duplicate icon on each field card. Same shape
+  // as the collections / singles page handlers.
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
+
+  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
+  // by width). We compute the OLD row layout, apply the row swap, and
+  // flatten back to a fields array for handleFieldsReorder. The legacy
+  // builder.handleDragEnd is built for the old palette+field-list model
+  // and ignores row IDs.
   const handleRowDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
@@ -368,8 +394,6 @@ export default function ComponentBuilderEditPage({
       <BuilderToolbar
         config={COMPONENT_BUILDER_CONFIG}
         name={settings.singularName || slug}
-        icon={settings.icon}
-        source={component.source}
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
@@ -387,6 +411,7 @@ export default function ComponentBuilderEditPage({
           onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+          onDuplicateField={handleDuplicateField}
           onReorder={() => {
             // Reorder is driven by handleRowDragEnd above.
           }}
@@ -410,12 +435,23 @@ export default function ComponentBuilderEditPage({
       {active.kind === "picker" && (
         <FieldPickerModal
           open
+          // PR D: title scopes the picker to the parent for nested adds.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
           excludedTypes={COMPONENT_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
           // Why: PR C flow change -- pick opens sheet in create mode.
+          // PR D: thread parentFieldId through.
           onSelect={type =>
             setActive({
               kind: "create",
+              parentFieldId: active.parentFieldId,
               draft: {
                 id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 name: "",
@@ -433,11 +469,22 @@ export default function ComponentBuilderEditPage({
           open
           mode="create"
           field={active.draft}
-          siblingNames={builder.fields.map(f => f.name)}
+          siblingNames={
+            active.parentFieldId
+              ? (
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.fields ?? []
+                ).map(f => f.name)
+              : builder.fields.map(f => f.name)
+          }
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
-            builder.setFields([...builder.fields, next]);
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
             setActive({ kind: "none" });
           }}
           onDelete={() => setActive({ kind: "none" })}
@@ -462,6 +509,14 @@ export default function ComponentBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
+          // PR D: parent-aware "+ Add field" inside group/repeater editors.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
         />
       )}
 

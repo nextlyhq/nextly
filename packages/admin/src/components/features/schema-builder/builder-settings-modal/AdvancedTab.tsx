@@ -3,7 +3,7 @@
 // removed Use as Title (system title is always the display) and Timestamps
 // (always emitted) from the UI. The i18n row stays as a disabled placeholder
 // with a neutral "Coming Soon" chip. New "Show system fields" switch
-// mirrors localStorage so BuiltInGroup stays in sync.
+// mirrors localStorage so SystemFieldsRow stays in sync.
 import { Input, Label, Switch } from "@revnixhq/ui";
 import { useEffect, useState } from "react";
 
@@ -140,7 +140,7 @@ function SwitchRow({
 /**
  * Show / hide system internals (id, createdAt, updatedAt) in the field
  * list. Stored as a global localStorage pref so both this switch and the
- * inline dismiss in BuiltInGroup share state. A window event keeps the
+ * inline dismiss in SystemFieldsRow share state. A window event keeps the
  * two surfaces in sync without a refresh.
  */
 function ShowSystemFieldsSwitch() {
@@ -153,7 +153,7 @@ function ShowSystemFieldsSwitch() {
     return v === null ? true : v === "true";
   });
 
-  // Listen for the inline BuiltInGroup dismiss button so this switch
+  // Listen for the inline SystemFieldsRow dismiss button so this switch
   // updates without remounting.
   useEffect(() => {
     const onUpdate = (e: Event) => {

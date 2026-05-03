@@ -65,7 +65,7 @@ const u3: BuilderField = {
 };
 
 describe("BuilderFieldList", () => {
-  it("renders the Built-in group with title + slug plus the system fields toggle", () => {
+  it("renders the System Fields row with title + slug as inert chips + the dismiss toggle", () => {
     render(
       withDndContext(
         <BuilderFieldList
@@ -73,17 +73,20 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
     );
-    expect(screen.getByText(/built in/i)).toBeInTheDocument();
-    // System field rows render as buttons with their name visible.
+    // PR D renamed the group from "Built in" to "System Fields" and made
+    // every system row an inert chip (no role="button", no onClick).
+    expect(screen.getByText(/system fields/i)).toBeInTheDocument();
     expect(screen.getByText("title")).toBeInTheDocument();
     expect(screen.getByText("slug")).toBeInTheDocument();
-    // PR B (2026-05-03) flipped the default to ON, so the visible toggle
-    // is the inline X dismiss ("Hide system fields"), not the legacy
-    // "Show system fields" button.
+    // System chips are not buttons.
+    expect(screen.queryByRole("button", { name: /^title$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^slug$/i })).toBeNull();
+    // Default ON since PR B; visible toggle is the inline X dismiss.
     expect(
       screen.getByRole("button", { name: /hide system fields/i })
     ).toBeInTheDocument();
@@ -97,6 +100,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -115,6 +119,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -132,6 +137,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -152,6 +158,7 @@ describe("BuilderFieldList", () => {
           onAddAt={onAddAt}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -169,6 +176,7 @@ describe("BuilderFieldList", () => {
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
           onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
         />
       )
@@ -179,5 +187,49 @@ describe("BuilderFieldList", () => {
     expect(
       screen.queryByRole("button", { name: /delete first_name/i })
     ).not.toBeInTheDocument();
+  });
+
+  it("renders TWO '+ Add field' buttons (top + bottom) when fields exist", () => {
+    // Why: PR D feedback Section 5 -- mirror the top button after the
+    // last row so users can add without scrolling back to the top.
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, u1]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+        />
+      )
+    );
+    const addButtons = screen.getAllByRole("button", {
+      name: /\+ add field/i,
+    });
+    expect(addButtons).toHaveLength(2);
+  });
+
+  it("does not render the bottom '+ Add field' on the empty state", () => {
+    // Empty state already has its own "Add your first field" CTA -- a
+    // bottom duplicate would be redundant and visually noisy.
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+        />
+      )
+    );
+    // The single "+ Add field" button at the top of the user-fields
+    // section is fine; the bottom one is suppressed.
+    const addButtons = screen.getAllByRole("button", {
+      name: /\+ add field/i,
+    });
+    expect(addButtons).toHaveLength(1);
   });
 });

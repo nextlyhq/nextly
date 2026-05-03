@@ -18,6 +18,7 @@
 
 import {
   Badge,
+  Button,
   Input,
   Label,
   Select,
@@ -48,6 +49,7 @@ export function ArrayFieldEditor({
   rowLabelField,
   onRowLabelFieldChange,
   nestedFields = [],
+  onAddField,
 }: ArrayFieldEditorProps) {
   // Get fields that can be used as row labels (text-like fields with names)
   const labelableFields = useMemo(() => {
@@ -242,10 +244,24 @@ export function ArrayFieldEditor({
           <Label className="text-xs font-medium text-muted-foreground">
             Nested Fields
           </Label>
-          <Badge variant="outline" className="text-xs">
-            {nestedFields.length}{" "}
-            {nestedFields.length === 1 ? "field" : "fields"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-xs">
+              {nestedFields.length}{" "}
+              {nestedFields.length === 1 ? "field" : "fields"}
+            </Badge>
+            {onAddField && (
+              // PR D: parent-aware "+ Add field" button. Asks the host
+              // page to open the FieldPickerModal scoped to this repeater.
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onAddField}
+              >
+                + Add field
+              </Button>
+            )}
+          </div>
         </div>
 
         {nestedFields.length === 0 ? (

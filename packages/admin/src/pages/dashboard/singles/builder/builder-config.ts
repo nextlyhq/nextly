@@ -17,6 +17,6 @@ export const SINGLE_BUILDER_CONFIG: BuilderConfig = {
   basicsFields: ["singularName", "slug", "description", "icon"],
   // showSystemFields added in PR B so singles can also surface the toggle.
   advancedFields: ["adminGroup", "order", "status", "i18n", "showSystemFields"],
-  toolbar: { showHooks: true, previewSchemaChange: false },
+  toolbar: { previewSchemaChange: false },
   picker: {},
 };

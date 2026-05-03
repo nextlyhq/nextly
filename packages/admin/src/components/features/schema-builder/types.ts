@@ -792,6 +792,12 @@ export interface ArrayFieldEditorProps {
   onRowLabelFieldChange: (field: string | undefined) => void;
   /** Nested fields (for populating row label field selector) */
   nestedFields?: BuilderField[];
+  /**
+   * PR D: parent-aware "+ Add field" button. When provided, the editor
+   * renders a button that asks the host page to open the
+   * FieldPickerModal scoped to the parent (this repeater).
+   */
+  onAddField?: () => void;
 }
 
 // ============================================================
@@ -808,6 +814,12 @@ export interface GroupFieldEditorProps {
   onHideGutterChange: (hideGutter: boolean) => void;
   /** Nested fields within the group */
   nestedFields?: BuilderField[];
+  /**
+   * PR D: parent-aware "+ Add field" button. When provided, the editor
+   * renders a button that asks the host page to open the
+   * FieldPickerModal scoped to the parent (this group).
+   */
+  onAddField?: () => void;
 }
 
 // ============================================================

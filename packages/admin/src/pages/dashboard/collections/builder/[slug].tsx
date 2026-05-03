@@ -8,8 +8,8 @@
  * Settings/Add/Edit tabs) with:
  *   BuilderToolbar at top (sticky)
  *   BuilderFieldList in body (WYSIWYG row pack)
- *   Overlays: BuilderSettingsModal / FieldPickerModal / FieldEditorSheet /
- *             HooksEditorSheet (only one open at a time)
+ *   Overlays: BuilderSettingsModal / FieldPickerModal / FieldEditorSheet
+ *   (only one open at a time)
  *
  * Schema-change preview + apply pipeline is preserved verbatim from the
  * legacy page — same SafeChangeConfirmDialog / SchemaChangeDialog, same
@@ -35,7 +35,6 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
-  HooksEditorSheet,
   SafeChangeConfirmDialog,
   SchemaChangeDialog,
   type BuilderSettingsValues,
@@ -54,6 +53,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
@@ -89,14 +89,20 @@ type FormData = z.infer<typeof collectionFormSchema>;
 type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
-  | { kind: "picker"; insertAt: number }
+  // PR D: picker carries an optional parentFieldId so the same overlay
+  // can be opened scoped to a group/repeater for nested adds.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
   // Why: NEW in PR C. The user has chosen a type but hasn't committed
   // the field yet. Sheet renders in create mode against this draft; on
   // Apply we append to builder.fields, on Cancel we discard. Avoids the
   // legacy bug where canceling left an empty placeholder in the list.
-  | { kind: "create"; draft: BuilderField }
-  | { kind: "edit"; fieldId: string }
-  | { kind: "hooks" };
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
+  | { kind: "edit"; fieldId: string };
+// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
+// removed from the toolbar (feedback Section 2). HooksEditor component
+// stays in the codebase; backend hooks support unchanged.
 
 interface CollectionBuilderEditPageProps {
   params?: { slug?: string };
@@ -194,10 +200,6 @@ export default function CollectionBuilderEditPage({
   }, [collection, builder, isInitialized, slug]);
 
   const isLocked = collection?.locked === true;
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
-  );
 
   // Dirty count: number of user fields that were added, removed, or had
   // any of their editable shape change (label / width / validation /
@@ -357,6 +359,25 @@ export default function CollectionBuilderEditPage({
 
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and
+  // Why: PR D feedback -- duplicate icon on each field card. We clone the
+  // field's full shape, mint a new id, and pick the next free numeric-
+  // suffix name. The duplicate is appended at the end of the user-fields
+  // list (insert-at-position is a follow-up).
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
+
   // flatten back to a fields array for handleFieldsReorder. The legacy
   // builder.handleDragEnd is built for the old palette+field-list model
   // and ignores row IDs.
@@ -447,12 +468,9 @@ export default function CollectionBuilderEditPage({
       <BuilderToolbar
         config={COLLECTION_BUILDER_CONFIG}
         name={settings.singularName || slug}
-        icon={settings.icon}
-        source={collection.source as "code" | "ui" | undefined}
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        onOpenHooks={() => setActive({ kind: "hooks" })}
         onSave={() => void handleSave()}
       />
 
@@ -467,6 +485,7 @@ export default function CollectionBuilderEditPage({
           onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+          onDuplicateField={handleDuplicateField}
           onReorder={() => {
             // Reorder is driven by handleRowDragEnd above. This callback
             // exists for parents that need notification but our state
@@ -494,14 +513,27 @@ export default function CollectionBuilderEditPage({
       {active.kind === "picker" && (
         <FieldPickerModal
           open
+          // PR D: title scopes the picker to the parent when adding into
+          // a group/repeater.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
           excludedTypes={COLLECTION_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
           // Why: PR C flow change. Don't append a placeholder field;
           // build a draft and open the sheet in create mode. The field
           // is only committed on Apply -- Cancel discards cleanly.
+          // PR D: thread parentFieldId through so the create overlay
+          // knows whether to append to top-level or nested.
           onSelect={type =>
             setActive({
               kind: "create",
+              parentFieldId: active.parentFieldId,
               draft: {
                 id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 name: "",
@@ -515,17 +547,29 @@ export default function CollectionBuilderEditPage({
       )}
 
       {/* Field editor sheet -- create mode for a brand-new field that
-          hasn't been committed yet. Apply appends to builder.fields. */}
+          hasn't been committed yet. Apply appends to builder.fields
+          (or to the parent's nested fields when parentFieldId is set). */}
       {active.kind === "create" && (
         <FieldEditorSheet
           open
           mode="create"
           field={active.draft}
-          siblingNames={builder.fields.map(f => f.name)}
+          siblingNames={
+            active.parentFieldId
+              ? (
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.fields ?? []
+                ).map(f => f.name)
+              : builder.fields.map(f => f.name)
+          }
           readOnly={isLocked}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
-            builder.setFields([...builder.fields, next]);
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
             setActive({ kind: "none" });
           }}
           // Why: Delete is hidden in create mode (sheet checks mode), so
@@ -554,19 +598,22 @@ export default function CollectionBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
+          // PR D: parent-aware "+ Add field" inside group/repeater
+          // editors. Switches the overlay to picker with parentFieldId.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
         />
       )}
 
-      {/* Hooks editor sheet — wraps the existing HooksEditor. */}
-      {active.kind === "hooks" && (
-        <HooksEditorSheet
-          open
-          hooks={hooks}
-          fieldNames={fieldNames}
-          onClose={() => setActive({ kind: "none" })}
-          onChange={setHooks}
-        />
-      )}
+      {/* Hooks UI removed in PR D (feedback Section 2). The HooksEditor
+          component still exists in the codebase and code-first hooks in
+          nextly.config.ts continue to work; only the toolbar button +
+          sheet are gone. */}
 
       {/* Safe-change confirmation (additive). */}
       {previewData && previewData.classification === "safe" && (

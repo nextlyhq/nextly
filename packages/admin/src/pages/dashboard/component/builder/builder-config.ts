@@ -18,6 +18,6 @@ export const COMPONENT_BUILDER_CONFIG: BuilderConfig = {
   basicsFields: ["singularName", "slug", "description", "icon"],
   // showSystemFields added in PR B so components also surface the toggle.
   advancedFields: ["category", "i18n", "showSystemFields"],
-  toolbar: { showHooks: false, previewSchemaChange: false },
+  toolbar: { previewSchemaChange: false },
   picker: {},
 };
