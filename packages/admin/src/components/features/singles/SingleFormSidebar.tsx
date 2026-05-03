@@ -37,7 +37,6 @@ export interface SingleFormSidebarProps {
  */
 export function SingleFormSidebar({
   document,
-  _schema,
   seoField,
   actions,
   fields = [],

@@ -115,7 +115,7 @@ export default function RoleTable() {
     filters: { search: debouncedSearch }, // Use debounced search
   };
 
-  const { data, isLoading, _isError, _error } = useRoles(params);
+  const { data, isLoading } = useRoles(params);
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {

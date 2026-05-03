@@ -269,7 +269,10 @@ export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
                   return (
                     <div key={(subField as { name: string }).name}>
                       {renderField(
-                        subField,
+                        // RepeaterFieldConfig.fields uses a structurally-loose
+                        // FieldConfig from array.ts; widen back to the canonical
+                        // FieldConfig union here.
+                        subField as unknown as FieldConfig,
                         basePath,
                         control,
                         {

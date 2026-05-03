@@ -48,8 +48,8 @@ interface SidebarUserFooterProps {
 export function SidebarUserFooter({
   user,
   collapsed,
-  _isUserPanelOpen,
-  _onTogglePanel,
+  isUserPanelOpen: _isUserPanelOpen,
+  onTogglePanel: _onTogglePanel,
 }: SidebarUserFooterProps) {
   const logout = useLogout();
 

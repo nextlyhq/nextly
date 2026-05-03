@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: vi.fn(),
@@ -32,7 +32,7 @@ const mockedPermissions = useCurrentUserPermissions as unknown as ReturnType<
 >;
 const mockedList = journalApi.list as unknown as ReturnType<typeof vi.fn>;
 
-function makeWrapper(): (props: { children: ReactNode }) => JSX.Element {
+function makeWrapper(): (props: { children: ReactNode }) => ReactElement {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
