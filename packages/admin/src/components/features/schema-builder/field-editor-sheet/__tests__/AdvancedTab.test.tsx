@@ -1,6 +1,8 @@
-// Why: AdvancedTab handles three flags — unique, index, localized
-// (placeholder until i18n ships). Tests lock toggle propagation and the
-// disabled+badge state for localized.
+// Why: AdvancedTab handles two flags after PR E1 -- unique and
+// localized (placeholder until i18n ships). Index toggle was dropped
+// in PR E1 (auto-indexing is a future backend concern). Localized
+// badge styling switched from amber "Soon" to neutral "Coming Soon"
+// chip per feedback Section 4.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -48,25 +50,22 @@ describe("FieldEditorSheet — AdvancedTab", () => {
     expect(last.advanced?.unique).toBe(true);
   });
 
-  it("toggles index through onChange.advanced.index", async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<Controlled initial={f} onChange={onChange} />);
-    await user.click(screen.getByRole("switch", { name: /^index$/i }));
-    const last = onChange.mock.lastCall?.[0] as BuilderField;
-    expect(last.advanced?.index).toBe(true);
+  it("does NOT render the Index switch (removed in PR E1)", () => {
+    render(<Controlled initial={f} />);
+    expect(
+      screen.queryByRole("switch", { name: /^index$/i })
+    ).not.toBeInTheDocument();
   });
 
-  it("renders Localized as a disabled switch with a Soon badge", () => {
+  it("renders Localized as a disabled switch with a 'Coming Soon' chip", () => {
     render(<Controlled initial={f} />);
     const sw = screen.getByRole("switch", { name: /^localized$/i });
     expect(sw).toBeDisabled();
-    expect(screen.getByText(/soon/i)).toBeInTheDocument();
+    expect(screen.getByText("Coming Soon")).toBeInTheDocument();
   });
 
   it("disables every editable switch in readOnly mode", () => {
     render(<Controlled initial={f} readOnly />);
     expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: /^index$/i })).toBeDisabled();
   });
 });

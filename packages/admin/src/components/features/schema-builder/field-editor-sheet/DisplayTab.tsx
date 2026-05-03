@@ -1,17 +1,17 @@
-// Why: Admin controls how the field renders in the record-editor form —
-// width (segmented control with the six existing FIELD_WIDTH_OPTIONS so
-// stored values like "33%" / "66%" remain valid), position (main vs
-// sidebar), readOnly + hidden toggles, and a JSON textarea for the simple
-// conditional-visibility rule. A richer condition builder UI is out of
-// scope for PR 1; the JSON editor is consistent with the existing
-// FieldCondition shape ({ field, equals }).
+// Why: Display controls how the field renders in the record-editor form.
+// PR E1 changes (feedback Section 4):
+// - Renamed from AdminTab.tsx: "Admin" was jargon; "Display" is clearer.
+// - Removed the Position field (no Sidebar support anywhere; the
+//   single-column main layout is the only option).
+// - Read-only + Hidden share a 50/50 row with helper taglines.
+// - Width segmented control gains visible dividers between options.
+// - Conditional visibility stays as the JSON textarea here; PR E2 will
+//   rebuild it into a visual rule builder.
 import { Button, Label, Switch, Textarea } from "@revnixhq/ui";
 
 import {
-  FIELD_POSITION_OPTIONS,
   FIELD_WIDTH_OPTIONS,
   type BuilderField,
-  type FieldPosition,
   type FieldWidth,
 } from "../types";
 
@@ -21,7 +21,7 @@ type Props = {
   onChange: (next: BuilderField) => void;
 };
 
-export function AdminTab({ field, readOnly = false, onChange }: Props) {
+export function DisplayTab({ field, readOnly = false, onChange }: Props) {
   const a = field.admin ?? {};
   const setA = (next: Partial<NonNullable<BuilderField["admin"]>>) =>
     onChange({ ...field, admin: { ...a, ...next } });
@@ -38,49 +38,40 @@ export function AdminTab({ field, readOnly = false, onChange }: Props) {
         />
       </div>
 
-      <div className="space-y-1">
-        <Label>Position</Label>
-        <Segmented
-          options={FIELD_POSITION_OPTIONS}
-          value={a.position ?? "main"}
-          disabled={readOnly}
-          onChange={v => setA({ position: v as FieldPosition })}
-        />
-      </div>
-
-      <div className="flex items-center gap-3">
-        <Switch
-          aria-label="Read only"
+      {/* PR E1: Read-only + Hidden side-by-side in a 50/50 row with
+          helper taglines explaining what each does. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <SwitchRow
+          ariaLabel="Read only"
+          label="Read only"
+          help="Displayed but cannot be edited."
           checked={a.readOnly === true}
           disabled={readOnly}
-          onCheckedChange={v => setA({ readOnly: v })}
+          onChange={v => setA({ readOnly: v })}
         />
-        <Label>Read only</Label>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <Switch
-          aria-label="Hidden"
+        <SwitchRow
+          ariaLabel="Hidden"
+          label="Hidden"
+          help="Not shown in the record editor."
           checked={a.hidden === true}
           disabled={readOnly}
-          onCheckedChange={v => setA({ hidden: v })}
+          onChange={v => setA({ hidden: v })}
         />
-        <Label>Hidden</Label>
       </div>
 
       <details className="space-y-1">
         <summary className="cursor-pointer text-sm">
           Conditional visibility
         </summary>
+        {/* PR E2 (next) replaces this JSON textarea with a visual rule
+            builder. For now we keep the existing behavior so the field
+            stays editable end-to-end. */}
         <Textarea
           rows={3}
           placeholder='e.g. { "field": "status", "equals": "published" }'
           value={a.condition ? JSON.stringify(a.condition) : ""}
           disabled={readOnly}
           onChange={e => {
-            // Why: parse on the fly so the user sees the effect immediately,
-            // but swallow parse errors mid-typing — a half-written object
-            // shouldn't blow away the previous good value.
             try {
               const parsed = e.target.value
                 ? JSON.parse(e.target.value)
@@ -111,7 +102,10 @@ function Segmented({
   onChange: (next: string) => void;
 }) {
   return (
-    <div className="flex border border-border rounded-md overflow-hidden w-fit">
+    // PR E1: visible dividers between options. The bordered wrapper +
+    // `divide-x` Tailwind utility on the inner row gives a subtle
+    // separator between every segmented option.
+    <div className="flex border border-border rounded-md overflow-hidden divide-x divide-border w-fit">
       {options.map(opt => (
         <Button
           key={opt.value}
@@ -125,6 +119,37 @@ function Segmented({
           {opt.label}
         </Button>
       ))}
+    </div>
+  );
+}
+
+function SwitchRow({
+  ariaLabel,
+  label,
+  help,
+  checked,
+  onChange,
+  disabled,
+}: {
+  ariaLabel: string;
+  label: string;
+  help: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <Switch
+        aria-label={ariaLabel}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
+      <div className="flex-1 min-w-0">
+        <Label className="text-sm font-medium">{label}</Label>
+        <div className="text-xs text-muted-foreground">{help}</div>
+      </div>
     </div>
   );
 }
