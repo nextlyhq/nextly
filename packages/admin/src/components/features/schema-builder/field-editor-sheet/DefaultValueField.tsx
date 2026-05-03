@@ -163,7 +163,11 @@ function renderEditor({
   }
 
   if (PICKER_TYPES.has(field.type)) {
-    const opts = field.options ?? [];
+    // Why: Radix Select disallows empty-string values (reserved for "clear
+    // selection"). Brand-new options in SelectOptionsEditor start with
+    // value === "" until the user types a value. Filter them out so the
+    // default picker doesn't crash when a fresh option exists.
+    const opts = (field.options ?? []).filter(o => o.value !== "");
     return (
       <Select
         value={typeof value === "string" ? value : undefined}
@@ -196,9 +200,10 @@ function renderEditor({
   }
 
   if (field.type === "chips") {
-    // Why: BuilderField.defaultValue is string|number|boolean|null per its
-    // declared type; chips defaults are stored as a comma-joined string and
-    // parsed back at runtime.
+    // Why: store the user's raw input verbatim. Earlier versions normalized
+    // on every keystroke (split/trim/dedupe/join), which ate trailing
+    // commas and made the input feel stuck. Runtime code that consumes the
+    // default is responsible for splitting + trimming + deduping on read.
     const display = value == null ? "" : String(value);
     return (
       <Input
@@ -206,22 +211,7 @@ function renderEditor({
         placeholder="value1, value2, value3"
         value={display}
         disabled={readOnly}
-        onChange={e => {
-          const raw = e.target.value;
-          if (raw.trim() === "") {
-            onChange(null);
-            return;
-          }
-          const parts = Array.from(
-            new Set(
-              raw
-                .split(",")
-                .map(s => s.trim())
-                .filter(Boolean)
-            )
-          );
-          onChange(parts.join(","));
-        }}
+        onChange={e => onChange(e.target.value === "" ? null : e.target.value)}
       />
     );
   }

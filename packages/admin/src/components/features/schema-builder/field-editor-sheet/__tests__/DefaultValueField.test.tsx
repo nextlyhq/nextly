@@ -2,6 +2,7 @@
 // select/radio. These were the regression behaviors we restored from the
 // legacy GeneralPanel.
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
@@ -17,6 +18,28 @@ const baseField = (overrides: Partial<BuilderField> = {}): BuilderField => ({
   validation: {},
   ...overrides,
 });
+
+// Why: DefaultValueField is fully controlled — value comes from
+// field.defaultValue. Uncontrolled tests where the parent never echoes
+// the new value back leave the input visually empty between keystrokes
+// (React reverts to the unchanged prop), so `userEvent.type("red,")`
+// only ever calls onChange with single chars. This wrapper keeps the
+// field in local state so type-then-assert works as expected.
+function Controlled(props: {
+  initial: BuilderField;
+  onChange?: (value: BuilderField["defaultValue"]) => void;
+}) {
+  const [field, setField] = useState<BuilderField>(props.initial);
+  return (
+    <DefaultValueField
+      field={field}
+      onChange={v => {
+        setField(prev => ({ ...prev, defaultValue: v }));
+        props.onChange?.(v);
+      }}
+    />
+  );
+}
 
 describe("DefaultValueField", () => {
   it("renders nothing for relationship type", () => {
@@ -128,5 +151,40 @@ describe("DefaultValueField", () => {
       />
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it("does not crash when select has an option with empty value (fresh option)", () => {
+    // Why: Radix Select disallows empty-string SelectItem values. New
+    // options in SelectOptionsEditor start with value === "" until the
+    // user types. Default picker must filter those out, not crash.
+    expect(() =>
+      render(
+        <DefaultValueField
+          field={baseField({
+            type: "select",
+            options: [
+              { label: "Apple", value: "a" },
+              { label: "", value: "" },
+            ],
+          })}
+          onChange={vi.fn()}
+        />
+      )
+    ).not.toThrow();
+  });
+
+  it("preserves trailing commas while typing in chips default", async () => {
+    // Why: regression for "comma key stuck" bug -- prior impl split+joined
+    // on every keystroke, eating the trailing empty piece so the comma
+    // never landed in the input. Now we store the raw text as-is and
+    // normalize at runtime on read.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled initial={baseField({ type: "chips" })} onChange={onChange} />
+    );
+    const input = screen.getByLabelText(/default value/i) as HTMLInputElement;
+    await user.type(input, "red,");
+    expect(onChange).toHaveBeenLastCalledWith("red,");
   });
 });
