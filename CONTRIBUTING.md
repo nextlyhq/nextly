@@ -1,27 +1,60 @@
-# Contributing Guidelines
+# Contributing to Nextly
 
-## Development Setup
+Thanks for your interest in contributing to Nextly. This guide walks you through reporting issues, proposing features, and submitting pull requests. Whether it's a typo fix or a new database adapter, every contribution helps.
+
+This project and everyone participating in it are governed by our [Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you're expected to uphold it.
+
+## Where to get help
+
+- **Have a question?** → [GitHub Discussions](https://github.com/nextlyhq/nextly/discussions)
+- **Found a bug?** → [Open an issue](https://github.com/nextlyhq/nextly/issues/new/choose) (use the bug template)
+- **Want to propose a feature?** → [Start a discussion](https://github.com/nextlyhq/nextly/discussions) or [open a feature request](https://github.com/nextlyhq/nextly/issues/new/choose)
+- **Found a security issue?** → See [Reporting security issues](#reporting-security-issues) below — do not open a public issue
+
+## Reporting bugs
+
+Before opening a bug, please:
+
+1. Search [existing issues](https://github.com/nextlyhq/nextly/issues?q=is%3Aissue) to avoid duplicates.
+2. Confirm you're on the latest version of the affected package.
+3. Use the [Bug Report template](https://github.com/nextlyhq/nextly/issues/new?template=bug_report.yml) — it asks the questions we need to triage quickly.
+
+The single biggest factor in how fast a bug gets fixed is **a minimal reproduction**. Issues without one are likely to be closed. The fastest way to start one: `pnpm create nextly-app@latest`, push the failing scenario to a public repo, and link it in the bug report.
+
+## Reporting security issues
+
+**Do not open public issues for security vulnerabilities.** Please use GitHub's [private security advisory form](https://github.com/nextlyhq/nextly/security/advisories/new) instead. We'll respond as quickly as we can and coordinate disclosure with you.
+
+If you find a vulnerability of significant impact, we'd love to acknowledge your help in the eventual security advisory.
+
+## Feature requests and large changes
+
+Small features and bug fixes can go straight to a PR. For anything larger — new APIs, new packages, breaking changes, schema redesigns — please **start a [Discussion](https://github.com/nextlyhq/nextly/discussions) first**. New functionality often has implications across the monorepo, and it's much faster to align on the approach before writing code than after.
+
+We don't yet have a formal RFC process; significant proposals are discussed in GitHub Discussions until they're ready to become PRs.
+
+---
+
+## Development setup
 
 ### Prerequisites
 
-- Node.js >= 18
+- Node.js >= 18 (Node 22 LTS recommended)
 - pnpm >= 9
+- Docker Desktop (for the local database during development and integration tests)
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/nextlyhq/nextly.git
 cd nextly
-
-# Install dependencies
 pnpm install
 
-# Start the development loop (no `pnpm build` first — see "Development Workflow" below)
+# Start the development loop (no `pnpm build` first — see "Development workflow" below)
 pnpm dev
 ```
 
-### Development Workflow
+### Development workflow
 
 Run `pnpm dev` from the **monorepo root** (not from `apps/playground/`). Turborepo orchestrates every workspace package's `dev` script in parallel, so a single command starts everything. Edits to any package's source flow into the playground without a manual rebuild.
 
@@ -50,9 +83,9 @@ Not for routine development — `pnpm dev` covers the dev loop. Use `pnpm build`
 
 - Verify the production build path before opening a PR (`pnpm build` → 14 turbo tasks)
 - Reproduce a `next start` issue against built artifacts
-- Prepare a release (changesets workflow runs build internally)
+- Prepare a release (the changesets workflow runs build internally)
 
-### Other Common Commands
+### Common commands
 
 ```bash
 # Type check all packages
@@ -61,28 +94,37 @@ pnpm check-types
 # Run linter
 pnpm lint
 
-# Run tests
+# Run tests (unit suite by default)
 pnpm test
 ```
 
+For per-package commands, use `pnpm --filter <package-name> <script>`. For example: `pnpm --filter @revnixhq/admin test`.
+
 ---
 
-## Monorepo Structure
+## Monorepo structure
 
 Nextly uses a pnpm + Turborepo monorepo. Key directories:
 
 ```
-nextly-dev/
+nextly/
 ├── apps/
 │   └── playground/          # Development/testing app
 ├── packages/
-│   ├── nextly/              # Core CMS (nextly)
+│   ├── nextly/              # Core CMS (@revnixhq/nextly)
 │   ├── admin/               # Admin UI (@revnixhq/admin)
 │   ├── client/              # Client SDK (@revnixhq/client)
 │   ├── ui/                  # Headless components (@revnixhq/ui)
 │   ├── adapter-postgres/    # PostgreSQL adapter
 │   ├── adapter-mysql/       # MySQL adapter
 │   ├── adapter-sqlite/      # SQLite adapter
+│   ├── adapter-drizzle/     # Drizzle ORM adapter
+│   ├── storage-s3/          # S3-compatible storage
+│   ├── storage-vercel-blob/ # Vercel Blob storage
+│   ├── storage-uploadthing/ # UploadThing storage
+│   ├── plugin-form-builder/ # Form builder plugin
+│   ├── create-nextly-app/   # CLI scaffold
+│   ├── telemetry/           # Telemetry helper
 │   ├── eslint-config/       # Shared ESLint config
 │   ├── tsconfig/            # Shared TypeScript config
 │   └── prettier-config/     # Shared Prettier config
@@ -92,184 +134,13 @@ nextly-dev/
 
 ---
 
-## Working on Packages
-
-### Core Package (nextly)
-
-```bash
-# Watch mode
-pnpm dev:core
-
-# Run tests
-pnpm --filter nextly test
-
-# Type check
-pnpm --filter nextly check-types
-```
-
-### Admin Package (@revnixhq/admin)
-
-```bash
-# Watch mode
-pnpm dev:admin
-
-# Run tests
-pnpm --filter @revnixhq/admin test
-
-# Type check
-pnpm --filter @revnixhq/admin check-types
-```
-
-### All Packages
-
-```bash
-# Build all packages
-pnpm build
-
-# Test all packages
-pnpm test
-
-# Type check all packages
-pnpm check-types
-```
-
----
-
-## Import Guidelines
-
-### In Core Package (nextly)
-
-Use path aliases instead of deep relative imports:
-
-```typescript
-// ✅ Good - Use path aliases
-import { UserService } from "@nextly/services/users";
-import { hashPassword } from "@nextly/auth/password";
-import { PostgresAdapter } from "@nextly/database/adapters/postgres";
-
-// ❌ Bad - Avoid deep relative imports
-import { UserService } from "../../../services/users";
-import { hashPassword } from "../../lib/auth/password";
-```
-
-**Available aliases in nextly:**
-
-- `@nextly/*` → `packages/nextly/src/*`
-- `@nextly/services` → `packages/nextly/src/services`
-- `@nextly/database` → `packages/nextly/src/database`
-- `@nextly/auth` → `packages/nextly/src/auth`
-- `@nextly/hooks` → `packages/nextly/src/hooks`
-- `@nextly/storage` → `packages/nextly/src/storage`
-- `@nextly/types` → `packages/nextly/src/types`
-
-### In Admin Package (@revnixhq/admin)
-
-```typescript
-// ✅ Good - Use path aliases
-import { Button } from "@admin/components/ui/button";
-import { useAuth } from "@admin/hooks/useAuth";
-import { cn } from "@admin/lib/utils";
-
-// ❌ Bad - Avoid deep relative imports
-import { Button } from "../../../components/Button";
-import { useAuth } from "../../hooks/useAuth";
-```
-
-**Available aliases in @revnixhq/admin:**
-
-- `@admin/*` → `packages/admin/src/*`
-- `@admin/components` → `packages/admin/src/components`
-- `@admin/hooks` → `packages/admin/src/hooks`
-- `@admin/lib` → `packages/admin/src/lib`
-- `@admin/types` → `packages/admin/src/types`
-
----
-
-## Component Organization
-
-Components in `@revnixhq/admin` follow a 4-tier structure:
-
-```
-packages/admin/src/components/
-├── ui/           # Primitives (Button, Input, Dialog, Table)
-├── features/     # Domain features (Dashboard, MediaLibrary, RoleManagement)
-├── forms/        # Form components (field-types, FieldEditorDialog)
-├── layout/       # Layout components (Sidebar, PageContainer)
-├── shared/       # Cross-cutting (SearchBar, Pagination, ErrorFallbacks)
-├── guards/       # Route guards
-└── icons/        # Icon re-exports
-```
-
-### Component Naming
-
-- **Directories:** kebab-case (`user-dialog/`, `media-library/`)
-- **Files:** PascalCase for components (`UserDialog.tsx`), kebab-case for index (`index.ts`)
-- **Exports:** Named exports preferred
-
-### Creating New Components
-
-1. Determine the appropriate tier (ui, features, forms, layout, shared)
-2. Create a kebab-case directory
-3. Add component file and index.ts barrel export
-4. Use path aliases for internal imports
-
----
-
-## Service Guidelines
-
-Services in the core package (`nextly`) should follow these guidelines:
-
-### File Size
-
-- Keep service files under **500 lines**
-- Split large services into focused sub-services
-- Use composition for complex operations
-
-### Single Responsibility
-
-Each service should have a single, well-defined responsibility:
-
-```typescript
-// ✅ Good - Focused services
-services/users/
-├── user-query-service.ts      # Read operations
-├── user-mutation-service.ts   # Write operations
-└── user-account-service.ts    # Account management
-
-// ❌ Bad - Monolithic service
-services/users.ts              # 1000+ lines doing everything
-```
-
-### Database Access
-
-- Services access Drizzle ORM directly (no repository layer)
-- Use `ServiceError` for error handling (exception-based)
-- Transactions managed at service level
-
-```typescript
-// Error handling pattern
-import { ServiceError, ServiceErrorCode } from '@nextly/services/lib/errors';
-
-async findById(id: string): Promise<User> {
-  const user = await this.db.select().from(users).where(eq(users.id, id));
-  if (!user) {
-    throw new ServiceError(ServiceErrorCode.NOT_FOUND, 'User not found');
-  }
-  return user;
-}
-```
-
----
-
 ## Testing
-
-### Test Suites (F18+)
 
 Nextly has two test suites split by filename convention:
 
 | Suite       | What it covers                                                                                | Run with                |
 | ----------- | --------------------------------------------------------------------------------------------- | ----------------------- |
-| Unit        | Logic that does not need a database. Pure functions, mocked services, type guards.            | `pnpm test:unit`        |
+| Unit        | Logic that doesn't need a database. Pure functions, mocked services, type guards.             | `pnpm test:unit`        |
 | Integration | Anything that hits a real database — adapters, the schema pipeline, query builder edge cases. | `pnpm test:integration` |
 
 Test files declare their suite by filename:
@@ -289,7 +160,7 @@ This skips all `*.integration.test.ts` files. Should pass quickly.
 
 ### Running the integration suite
 
-Step 1: Boot the test stack
+**Step 1:** Boot the test stack
 
 ```bash
 docker compose -f docker-compose.test.yml up -d
@@ -297,14 +168,14 @@ docker compose -f docker-compose.test.yml up -d
 
 This starts:
 
-- PostgreSQL 15 on port 5434 (Nextly's minimum supported version, F17)
+- PostgreSQL 15 on port 5434 (Nextly's minimum supported version)
 - PostgreSQL 17 on port 5435 (current latest)
 - PostgreSQL 16 on port 5433 (legacy default; will be removed in v2)
 - MySQL 8.0 on port 3307
 
 SQLite is in-memory and needs no service.
 
-Step 2: Run integration tests against the dialect of your choice
+**Step 2:** Run integration tests against the dialect of your choice
 
 ```bash
 # All dialects (matches CI)
@@ -319,7 +190,7 @@ pnpm test:integration:sqlite
 
 Each script sets the appropriate `TEST_<DIALECT>_URL` env var. Tests skip themselves if their dialect's env var is unset.
 
-Step 3: Tear down
+**Step 3:** Tear down
 
 ```bash
 docker compose -f docker-compose.test.yml down
@@ -364,95 +235,65 @@ CI will catch any MySQL or SQLite failures on your PR.
 3. Stamp `ctx.prefix` on every schema, database, or table name your test creates.
 4. Drop everything you created in `afterAll`.
 
-### Other test-related commands
-
-```bash
-# Watch mode (unit suite)
-pnpm --filter nextly test:watch
-
-# Coverage (unit suite)
-pnpm --filter nextly test -- --coverage
-```
-
-### Test Location
+### Test conventions
 
 - Tests are co-located with source files in `__tests__/` directories
 - Test files use `.test.ts` (unit) or `.integration.test.ts` (integration)
 - Per-scenario integration tests live under `packages/nextly/src/database/__tests__/integration/`
 - pushSchema fixtures live under `packages/nextly/src/database/__tests__/integration/__fixtures__/pushSchema/`
-
-### Test Frameworks
-
-- **Vitest** for unit and integration tests
-- Two configs per package: `vitest.config.ts` (unit) and `vitest.integration.config.ts` (integration with 30s timeouts + singleFork pool)
+- Test framework: **Vitest**. Each package has `vitest.config.ts` (unit) and `vitest.integration.config.ts` (integration with 30s timeouts + singleFork pool)
 
 ### CI test workflows
 
 Two GitHub Actions workflows run on every PR:
 
-- `ci.yml` — lint, typecheck, build, and unit test suite. Lint + unit test currently `continue-on-error: true` due to legacy test debt (677 baseline failures pending separate triage task).
-- `test-integration.yml` — the 3-dialect matrix (PG 15, PG 17, MySQL 8, SQLite). No `continue-on-error`; any failure blocks merge.
+- [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and unit test suite
+- [`test-integration.yml`](.github/workflows/test-integration.yml) — the 4-dialect matrix (PG 15, PG 17, MySQL 8, SQLite). Any failure blocks merge.
 
-A PR is mergeable when all integration matrix jobs are green AND the build/lint/unit jobs pass (or are explicitly waived).
+A PR is mergeable when all jobs are green.
 
 ---
 
-## Branch Naming Convention
+## Pre-commit hooks
 
-### Format
+The following hooks run automatically:
+
+| Hook         | What runs                                                                             |
+| ------------ | ------------------------------------------------------------------------------------- |
+| `pre-commit` | Prettier formatting + ESLint on staged files (via lint-staged) + gitleaks secret scan |
+| `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))        |
+| `pre-push`   | Runs the production build to ensure all packages still compile                        |
+
+If a hook fails, fix the issue and re-stage. **Never bypass with `--no-verify`** — the hooks exist to catch problems before CI does.
+
+---
+
+## Branch naming
+
+Use a short, descriptive branch name. The standard format:
 
 ```
 <type>/<scope>/<short-description>
 ```
 
-### Types
+- **type**: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `ci` (matches commit types below)
+- **scope**: the package directory name (e.g., `admin`, `adapter-postgres`, `plugin-form-builder`) or `root` for repo-wide changes
+- **description**: lowercase, hyphens only, ≤40 characters
 
-- `feature/` - New features
-- `fix/` - Bug fixes
-- `hotfix/` - Critical production fixes
-- `chore/` - Maintenance tasks
-- `docs/` - Documentation updates
-- `refactor/` - Code refactoring
-- `test/` - Test additions/updates
-- `ci/` - CI/CD changes
-
-### Scopes
-
-- `nextly` - Core package (database, services, APIs)
-- `admin` - Admin dashboard package
-- `eslint-config` - ESLint configuration package
-- `tsconfig` - TypeScript configuration package
-- `prettier-config` - Prettier configuration package
-- `playground` - Development playground app
-- `root` - Root level changes
-
-### Examples
+Examples:
 
 ```
-feature/admin/user-authentication
-fix/nextly/connection-pool-leak
-hotfix/root/security-vulnerability
-chore/eslint-config/update-dependencies
-docs/admin/api-documentation
-refactor/nextly/query-optimization
-test/admin/user-service-tests
-ci/root/github-actions-workflow
+feat/admin/role-manager-dialog
+fix/adapter-postgres/connection-pool-leak
+chore/root/upgrade-typescript
+docs/storage-s3/readme-update
 ```
 
-### Rules
+Branch names aren't strictly enforced by CI — but consistent names make the merge log readable.
 
-- Use lowercase letters and hyphens only
-- Keep descriptions concise but descriptive
-- Maximum 50 characters total
-- No spaces or special characters except hyphens
+## Commit messages
 
----
-
-## Commit Message Convention
-
-We follow [Conventional Commits](https://www.conventionalcommits.org/) specification.
-
-### Format
+We follow [Conventional Commits](https://www.conventionalcommits.org/). The `pr-title.yml` workflow enforces this on PR titles, and commitlint validates each commit locally via the `commit-msg` hook.
 
 ```
 <type>(<scope>): <description>
@@ -462,179 +303,78 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/) specifica
 [optional footer(s)]
 ```
 
-### Types
+**Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
 
-- `feat` - New features
-- `fix` - Bug fixes
-- `docs` - Documentation changes
-- `style` - Code style changes (formatting, semicolons, etc.)
-- `refactor` - Code refactoring without changing functionality
-- `perf` - Performance improvements
-- `test` - Adding or updating tests
-- `build` - Build system or dependency changes
-- `ci` - CI/CD configuration changes
-- `chore` - Maintenance tasks
-- `revert` - Revert previous commits
+**Scopes**: see the canonical list in [`.github/workflows/pr-title.yml`](.github/workflows/pr-title.yml). Match a package directory name (`admin`, `nextly`, `adapter-postgres`, etc.) or use `root`, `deps`, `release`, `ci`, or `docs` for repo-wide changes.
 
-### Scopes
+**Description rules**: imperative mood ("add" not "added"), lowercase, no trailing period, ≤72 characters.
 
-- `nextly` - Core package (database, services, APIs)
-- `admin` - Admin dashboard package
-- `eslint-config` - ESLint configuration package
-- `tsconfig` - TypeScript configuration package
-- `prettier-config` - Prettier configuration package
-- `playground` - Development playground app
-- `root` - Root level changes
+Examples:
 
-### Description Rules
-
-- Use imperative mood ("add" not "added" or "adds")
-- Start with lowercase letter
-- No period at the end
-- Maximum 72 characters
-- Be descriptive but concise
-
-### Examples
-
-```bash
+```
 feat(admin): add user authentication with JWT
-fix(nextly): resolve connection pool memory leak
-docs(root): update README with setup instructions
-style(admin): format user service according to prettier rules
-refactor(nextly): extract query builder into separate module
-perf(admin): optimize user data fetching with caching
-test(nextly): add integration tests for user repository
-build(root): update dependencies to latest versions
-ci(root): add automated security scanning workflow
-chore(eslint-config): update ESLint rules for TypeScript 5.0
-revert(admin): revert "add experimental feature"
+fix(adapter-postgres): resolve connection pool memory leak
+docs(root): update README with launch checklist
+chore(deps): bump zod to 4.2.0
 ```
 
-### Body Guidelines
+For breaking changes, add a `BREAKING CHANGE:` footer:
 
-- Separate from description with a blank line
-- Wrap at 72 characters
-- Explain the "what" and "why", not the "how"
-- Reference issues and pull requests when applicable
+```
+feat(nextly): require Postgres 15+ for new install path
 
-### Footer Guidelines
+BREAKING CHANGE: Postgres 14 is no longer supported. See migration guide for
+upgrade steps.
+```
 
-- Use for breaking changes: `BREAKING CHANGE: <description>`
-- Reference issues: `Fixes #123`, `Closes #456`
-- Co-authored commits: `Co-authored-by: Name <email>`
+To reference issues in the body or footer:
+
+```
+Fixes #123
+Closes #456
+```
+
+These keywords auto-close the linked issue when the PR merges.
 
 ---
 
-## Pull Request Guidelines
+## Submitting a pull request
 
-### Title Format
+1. **Fork** the repo and create a branch off `dev` (not `main` — see [Branch protection](#branch-protection)).
+2. **Make your change.** Add or update tests when relevant.
+3. **Run locally**: `pnpm lint && pnpm check-types && pnpm test`.
+4. **Add a changeset** if your PR touches any publishable package (see [Release process](#release-process) below).
+5. **Open the PR against `dev`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
+6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix all need to be green before merge.
 
-Same as commit message format:
+### Reviewer expectations
 
-```
-<type>(<scope>): <description>
-```
+- At least one maintainer approval is required before merge.
+- All conversations resolved.
+- All CI checks passing (no `continue-on-error` workarounds).
+- Branch up to date with `dev`.
 
-### Description Template
+### Merge strategy
 
-```markdown
-## Summary
+- **Squash and merge** — the default for feature branches and bug fixes. PR title becomes the squashed commit message, so make sure it follows Conventional Commits.
+- **Rebase and merge** — only for hotfixes that need to preserve individual commits.
+- **Merge commit** — used by the release workflow when merging Version Packages PRs.
 
-Brief description of changes made.
+### Branch protection
 
-## Type of Change
-
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-- [ ] Code refactoring
-- [ ] Performance improvement
-- [ ] Test addition/update
-
-## Affected Packages
-
-- [ ] nextly
-- [ ] admin
-- [ ] eslint-config
-- [ ] tsconfig
-- [ ] prettier-config
-- [ ] playground
-- [ ] root
-
-## Testing
-
-- [ ] Unit tests pass
-- [ ] Integration tests pass
-- [ ] Manual testing completed
-- [ ] No regression in existing functionality
-
-## Screenshots (if applicable)
-
-Add screenshots to help explain your changes.
-
-## Related Issues
-
-- Fixes #(issue number)
-- Closes #(issue number)
-- Related to #(issue number)
-
-## Additional Notes
-
-Any additional information that reviewers should know.
-```
-
-### Review Requirements
-
-- [ ] At least 1 reviewer approval required
-- [ ] All CI checks must pass
-- [ ] No merge conflicts
-- [ ] Branch is up to date with target branch
-- [ ] All conversations resolved
-
-### Merge Strategy
-
-- Use **Squash and Merge** for feature branches
-- Use **Merge Commit** for release branches
-- Use **Rebase and Merge** for hotfixes
-
-### Branch Protection Rules
-
-- Require pull request reviews before merging
-- Require status checks to pass before merging
-- Require branches to be up to date before merging
-- Restrict pushes to matching branches (main/develop)
+`main` and `dev` are protected. Direct pushes are blocked; all changes go through PRs. CI must pass before merge.
 
 ---
 
-## Pre-commit Hooks
+## Release process
 
-The following hooks are automatically executed:
+> **Status:** Nextly's release pipeline uses [Changesets](https://github.com/changesets/changesets) for versioning and [`changesets/action`](https://github.com/changesets/action) for the version-PR + publish flow. This is being initialized as part of the v1.0 launch — once `.changeset/config.json` lands in the repo, the steps below describe the steady-state flow.
 
-### Pre-commit
-
-- Code formatting with Prettier
-- Linting with ESLint (if applicable)
-
-### Commit-msg
-
-- Validates conventional commit format
-- Ensures proper scope usage
-
-### Pre-push
-
-- Runs build process
-- Ensures all packages compile successfully
-
----
-
-## Release Process
-
-Nextly uses [Changesets](https://github.com/changesets/changesets) for versioning and publishing. All 13 publishable `@revnixhq/*` packages are kept in lockstep (same version at all times) via the `fixed` array in [.changeset/config.json](.changeset/config.json) — this matches Payload CMS's unified-versioning style.
+All publishable `@revnixhq/*` packages are kept in lockstep (same version at all times) via the `fixed` array in `.changeset/config.json` — this matches Payload CMS's unified-versioning style.
 
 ### When your PR needs a changeset
 
-You **must** add a changeset if your PR touches any publishable package under `packages/*` (excluding the `@nextly/eslint-config`, `@nextly/prettier-config`, `@nextly/tsconfig` configs and the `playground` app, which are in the `ignore` list).
+You **must** add a changeset if your PR touches any publishable package under `packages/*` (excluding `@nextly/eslint-config`, `@nextly/prettier-config`, `@nextly/tsconfig`, and the `playground` app, which are in the changeset `ignore` list).
 
 The `changeset-check` CI job fails PRs that modify a publishable package without a changeset.
 
@@ -648,26 +388,43 @@ The `changeset-check` CI job fails PRs that modify a publishable package without
 pnpm changeset
 ```
 
-The CLI will ask which packages changed. Because of `fixed[]`, whichever package you pick will pull the other 12 along at publish time — just pick the primary one. Then choose the semver bump (`patch` / `minor` / `major`) and write a short user-facing summary.
+The CLI will ask which packages changed. Because of `fixed[]`, whichever package you pick will pull the others along at publish time — just pick the primary one. Then choose the semver bump (`patch` / `minor` / `major`) and write a short user-facing summary.
 
 Commit the generated `.changeset/*.md` file with your PR.
 
-### How a release actually happens
+### How a release happens
 
 1. You merge your PR (with its changeset) into `dev`.
-2. [.github/workflows/release.yml](.github/workflows/release.yml) runs on `push` to `dev` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
-3. A maintainer reviews and merges the Version Packages PR.
-4. The release workflow runs again, this time publishing to npm:
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `dev` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
+3. The Version Packages PR accumulates as more PRs land — so all pending changes ship together when it's merged.
+4. A maintainer reviews and merges the Version Packages PR.
+5. The release workflow runs again, this time publishing to npm:
    - `pnpm build`
-   - `changeset publish` — publishes each package to `@revnixhq` with `--provenance` attestation
+   - `changeset publish` — publishes each package to `@revnixhq/*` with `--provenance` attestation
    - Creates one git tag `vX.Y.Z`
-   - Creates one GitHub Release
+   - Creates one consolidated GitHub Release containing all package CHANGELOGs
 
-### What I can't do
+### Pre-releases (alpha / beta / rc)
 
-- **Push directly to `dev`** — branch protection blocks it.
-- **Bypass CI** — the `changeset-check`, `pr-title`, lint, typecheck, build, test, `publint`, and `arethetypeswrong` jobs are all required.
-- **Publish manually from my laptop** — only the release workflow has the `NPM_AUTH_TOKEN`.
+For pre-release versions, enter Changesets pre mode before merging changesets:
+
+```bash
+pnpm changeset pre enter alpha   # or beta, rc
+git commit -am "chore: enter alpha pre mode"
+git push
+```
+
+From this point, every release publishes alpha versions (`v1.0.0-alpha.0`, `v1.0.0-alpha.1`, …) tagged on npm with `--tag alpha`. Stable installs of `@revnixhq/nextly` are unaffected.
+
+When ready for stable:
+
+```bash
+pnpm changeset pre exit
+git commit -am "chore: exit alpha pre mode"
+git push
+```
+
+The next release publishes `v1.0.0` stable.
 
 ### Rollback
 
@@ -681,32 +438,81 @@ Then open a revert PR with a fresh changeset to cut the next patch.
 
 ---
 
-## Additional Guidelines
+## Internal architecture reference
 
-### Code Quality
+The sections below document conventions inside specific packages. They're not required reading for casual contributions, but useful when working in `@revnixhq/nextly` (core) or `@revnixhq/admin`.
 
-- Write self-documenting code
-- Add comments for complex logic
-- Follow existing code style
-- Ensure test coverage for new features
+### Path alias conventions
 
-### Documentation
+Use path aliases instead of deep relative imports.
 
-- Update README files when adding new features
-- Document API changes
-- Update configuration examples
-- Keep changelog updated
+**In `@revnixhq/nextly`:**
 
-### Security
+```ts
+// ✅ Good
+import { UserService } from "@nextly/services/users";
+import { hashPassword } from "@nextly/auth/password";
+import { PostgresAdapter } from "@nextly/database/adapters/postgres";
 
-- Never commit secrets or API keys
-- Use environment variables for sensitive data
-- Follow security best practices
-- Report security vulnerabilities responsibly
+// ❌ Bad
+import { UserService } from "../../../services/users";
+```
 
-### Performance
+Available aliases: `@nextly/*` → `packages/nextly/src/*`, plus subpath aliases (`@nextly/services`, `@nextly/database`, `@nextly/auth`, `@nextly/hooks`, `@nextly/storage`, `@nextly/types`).
 
-- Consider performance impact of changes
-- Profile critical code paths
-- Optimize database queries
-- Minimize bundle size for frontend packages
+**In `@revnixhq/admin`:**
+
+```ts
+// ✅ Good
+import { Button } from "@admin/components/ui/button";
+import { useAuth } from "@admin/hooks/useAuth";
+import { cn } from "@admin/lib/utils";
+```
+
+Available aliases: `@admin/*` → `packages/admin/src/*` (`@admin/components`, `@admin/hooks`, `@admin/lib`, `@admin/types`).
+
+### Component organization (`@revnixhq/admin`)
+
+Admin components follow a 4-tier structure:
+
+```
+packages/admin/src/components/
+├── ui/           # Primitives (Button, Input, Dialog, Table)
+├── features/     # Domain features (Dashboard, MediaLibrary, RoleManagement)
+├── forms/        # Form components (field-types, FieldEditorDialog)
+├── layout/       # Layout components (Sidebar, PageContainer)
+├── shared/       # Cross-cutting (SearchBar, Pagination, ErrorFallbacks)
+├── guards/       # Route guards
+└── icons/        # Icon re-exports
+```
+
+- **Directories**: kebab-case (`user-dialog/`, `media-library/`)
+- **Files**: PascalCase for components (`UserDialog.tsx`), `index.ts` for barrel exports
+- **Exports**: named exports preferred
+
+When creating a new component, pick the appropriate tier, create a kebab-case directory with an `index.ts` barrel, and use path aliases for internal imports.
+
+### Service guidelines (`@revnixhq/nextly`)
+
+Services in the core package follow these conventions:
+
+- **File size**: keep service files under ~500 lines. Split large services into focused sub-services and compose.
+- **Single responsibility**: e.g. `services/users/` splits into `user-query-service.ts`, `user-mutation-service.ts`, `user-account-service.ts` rather than one monolithic file.
+- **Database access**: services access Drizzle ORM directly (no repository layer). Transactions are managed at the service level.
+- **Error handling**: throw `ServiceError` from `@nextly/services/lib/errors`:
+
+  ```ts
+  import { ServiceError, ServiceErrorCode } from "@nextly/services/lib/errors";
+
+  async findById(id: string): Promise<User> {
+    const user = await this.db.select().from(users).where(eq(users.id, id));
+    if (!user) {
+      throw new ServiceError(ServiceErrorCode.NOT_FOUND, "User not found");
+    }
+    return user;
+  }
+  ```
+
+---
+
+Thank you for contributing! If anything in this guide is unclear or out of date, please open a PR or start a [Discussion](https://github.com/nextlyhq/nextly/discussions).
