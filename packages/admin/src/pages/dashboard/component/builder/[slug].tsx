@@ -6,14 +6,14 @@
  * Mirrors the Collection / Single edit pages: BuilderToolbar at top,
  * BuilderFieldList in body inside DndContext, overlays mounted lazily.
  *
- * Components-specific deltas:
+ * Schema-change preview + apply pipeline wired the same way as the
+ * collection builder — SafeChangeConfirmDialog / SchemaChangeDialog /
+ * RestartContext. Components-specific deltas:
  * - No HooksEditorSheet (showHooks: false in COMPONENT_BUILDER_CONFIG).
- * - No schema-change preview (previewSchemaChange: false).
- * - Settings modal omits Status, Order, useAsTitle, Plural; uses Category
- *   instead of adminGroup.
+ * - Uses componentApi.previewSchemaChanges / applySchemaChanges.
+ * - Settings modal uses Category instead of adminGroup; no Status/Order/Plural.
  *
- * Locked code-first Components render in readOnly mode (cross-cutting
- * code-first preservation requirement).
+ * Locked code-first Components render in readOnly mode.
  */
 
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
@@ -30,11 +30,14 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
+  SafeChangeConfirmDialog,
+  SchemaChangeDialog,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
+import { useRestart } from "@admin/context/RestartContext";
 import {
   useComponent,
   useUpdateComponent,
@@ -47,6 +50,12 @@ import {
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { componentApi } from "@admin/services/componentApi";
+import type {
+  FieldResolution,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
@@ -88,12 +97,18 @@ export default function ComponentBuilderEditPage({
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
-  // Why: was a JSON string of just field IDs, which silently masked
-  // label / width / validation / options edits. Now a frozen array we
-  // diff via countDirtyFields so every meaningful edit bumps the badge.
   const [originalFields, setOriginalFields] = useState<
     readonly BuilderField[] | null
   >(null);
+
+  // Schema change confirmation state.
+  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
+    null
+  );
+  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
+  const [showSafeDialog, setShowSafeDialog] = useState(false);
+  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
+  const { startRestart, stopRestart } = useRestart();
 
   const { mutate: updateComponent, isPending: isSaving } = useUpdateComponent();
 
@@ -131,8 +146,6 @@ export default function ComponentBuilderEditPage({
 
   const isLocked = component?.locked === true;
 
-  // Dirty count: number of user fields that were added, removed, or had
-  // any of their editable shape change since load.
   const unsavedCount = useMemo(() => {
     if (!originalFields) return 0;
     return countDirtyFields(
@@ -141,57 +154,137 @@ export default function ComponentBuilderEditPage({
     );
   }, [builder.fields, originalFields]);
 
-  const handleSave = useCallback(() => {
-    if (!slug || !settings) {
-      toast.error("Component slug is missing");
-      return;
-    }
-
+  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
     const userFields = builder.fields.filter(
       f => !f.isSystem && f.name !== "title" && f.name !== "slug"
     );
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
       toast.error(validation.errorMessage);
+      return null;
+    }
+    return userFields.map(convertToFieldDefinition);
+  }, [builder]);
+
+  const applyComponentSchemaChanges = useCallback(
+    async (
+      fieldDefinitions: FieldDefinition[],
+      schemaVersion: number,
+      resolutions: Record<string, FieldResolution>,
+      renameResolutions: SchemaRenameResolution[]
+    ) => {
+      if (!slug) return;
+      setIsApplyingSchema(true);
+      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
+      startRestart();
+      try {
+        const result = await componentApi.applySchemaChanges(
+          slug,
+          fieldDefinitions,
+          schemaVersion,
+          resolutions,
+          renameResolutions
+        );
+        if (result.success) {
+          const componentLabel = settings?.singularName?.trim() || slug;
+          const summarySuffix =
+            result.toastSummary && result.toastSummary !== "no changes"
+              ? `. ${result.toastSummary}`
+              : "";
+          stopRestart(true, `${componentLabel} schema updated${summarySuffix}`);
+          setShowSchemaDialog(false);
+          setShowSafeDialog(false);
+          setPreviewData(null);
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
+        } else {
+          stopRestart(
+            false,
+            result.message || "Failed to apply schema changes"
+          );
+        }
+      } catch (err) {
+        const errorObj = err as { message?: string };
+        stopRestart(
+          false,
+          errorObj?.message || "An error occurred while applying changes"
+        );
+      } finally {
+        setIsApplyingSchema(false);
+        if (typeof window !== "undefined")
+          window.__nextlySchemaApplying = false;
+      }
+    },
+    [slug, startRestart, stopRestart, settings?.singularName, builder.fields]
+  );
+
+  const saveSettingsOnly = useCallback(
+    (fieldDefinitions: FieldDefinition[]) => {
+      if (!slug || !settings) return;
+      updateComponent(
+        {
+          componentSlug: slug,
+          updates: {
+            label: settings.singularName,
+            description: settings.description,
+            fields: fieldDefinitions as unknown as Record<string, unknown>[],
+            admin: {
+              category: settings.category,
+              icon: settings.icon,
+            },
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success("Component updated");
+            setOriginalFields(builder.fields.filter(f => !f.isSystem));
+          },
+          onError: err => {
+            const errorObj = err as { message?: string };
+            toast.error(
+              errorObj?.message ||
+                "An unexpected error occurred while updating the component."
+            );
+          },
+        }
+      );
+    },
+    [slug, settings, updateComponent, builder.fields]
+  );
+
+  const handleSave = useCallback(async () => {
+    if (!slug) {
+      toast.error("Component slug is missing");
       return;
     }
 
-    const fieldDefinitions = userFields.map(convertToFieldDefinition);
+    const fieldDefinitions = getValidatedFields();
+    if (!fieldDefinitions) return;
 
-    updateComponent(
-      {
-        componentSlug: slug,
-        updates: {
-          label: settings.singularName,
-          description: settings.description,
-          fields: fieldDefinitions as unknown as Record<string, unknown>[],
-          admin: {
-            category: settings.category,
-            icon: settings.icon,
-          },
-        },
-      },
-      {
-        onSuccess: () => {
-          toast.success("Component updated");
-          setOriginalFields(builder.fields.filter(f => !f.isSystem));
-        },
-        onError: err => {
-          const errorObj = err as { message?: string };
-          toast.error(
-            errorObj?.message ||
-              "An unexpected error occurred while updating the component."
-          );
-        },
+    try {
+      const preview = await componentApi.previewSchemaChanges(
+        slug,
+        fieldDefinitions
+      );
+
+      if (!preview.hasChanges) {
+        saveSettingsOnly(fieldDefinitions);
+        return;
       }
-    );
-  }, [builder, settings, slug, updateComponent]);
 
-  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
-  // by width). We compute the OLD row layout, apply the row swap, and
-  // flatten back to a fields array for handleFieldsReorder. The legacy
-  // builder.handleDragEnd is built for the old palette+field-list model
-  // and ignores row IDs.
+      if (preview.classification === "safe") {
+        setPreviewData(preview);
+        setShowSafeDialog(true);
+        return;
+      }
+
+      setPreviewData(preview);
+      setShowSchemaDialog(true);
+    } catch (err) {
+      const errorObj = err as { message?: string };
+      toast.error(errorObj?.message || "Failed to preview schema changes");
+    }
+  }, [slug, getValidatedFields, saveSettingsOnly]);
+
   const handleRowDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
@@ -280,8 +373,7 @@ export default function ComponentBuilderEditPage({
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        // No onOpenHooks — Components don't support hooks
-        onSave={() => handleSave()}
+        onSave={() => void handleSave()}
       />
 
       <DndContext
@@ -296,7 +388,7 @@ export default function ComponentBuilderEditPage({
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
           onReorder={() => {
-            // Reorder is driven by handleDragEnd above.
+            // Reorder is driven by handleRowDragEnd above.
           }}
         />
       </DndContext>
@@ -373,7 +465,56 @@ export default function ComponentBuilderEditPage({
         />
       )}
 
-      {isSaving && (
+      {/* Safe-change confirmation (additive only). */}
+      {previewData && previewData.classification === "safe" && (
+        <SafeChangeConfirmDialog
+          open={showSafeDialog}
+          onOpenChange={setShowSafeDialog}
+          collectionName={slug}
+          changes={previewData.changes}
+          onConfirm={() => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applyComponentSchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                {},
+                []
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {/* Destructive / interactive change dialog. */}
+      {previewData && previewData.classification !== "safe" && (
+        <SchemaChangeDialog
+          open={showSchemaDialog}
+          onOpenChange={setShowSchemaDialog}
+          collectionName={slug}
+          hasDestructiveChanges={previewData.hasDestructiveChanges}
+          classification={previewData.classification}
+          changes={previewData.changes}
+          renamed={previewData.renamed}
+          warnings={previewData.warnings}
+          interactiveFields={previewData.interactiveFields}
+          onConfirm={(resolutions, renameResolutions) => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applyComponentSchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                resolutions,
+                renameResolutions
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {(isSaving || isApplyingSchema) && (
         <div aria-live="polite" className="sr-only">
           Saving component changes…
         </div>

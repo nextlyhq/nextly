@@ -17,7 +17,17 @@ import type { ApiSingle } from "@admin/types/entities";
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
-import type { MutationResponse } from "../lib/api/response-types";
+import type {
+  ActionResponse,
+  MutationResponse,
+} from "../lib/api/response-types";
+
+import type {
+  FieldResolution,
+  SchemaApplyResponse,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "./schemaApi";
 
 /**
  * Build query string for pagination and search using shared utility
@@ -133,6 +143,48 @@ export const singleApi = {
       payload
     );
     return { message: result.message };
+  },
+
+  /**
+   * Preview single schema changes — dry-run diff with rename candidates.
+   * Mirrors schemaApi.preview() for collections.
+   */
+  previewSchemaChanges: async (
+    slug: string,
+    fields: unknown[]
+  ): Promise<SchemaPreviewResponse> => {
+    return protectedApi.post<SchemaPreviewResponse>(
+      `/singles/schema/${slug}/preview`,
+      { fields }
+    );
+  },
+
+  /**
+   * Apply confirmed single schema changes via PushSchemaPipeline.
+   * Mirrors schemaApi.apply() for collections.
+   */
+  applySchemaChanges: async (
+    slug: string,
+    fields: unknown[],
+    schemaVersion: number,
+    resolutions?: Record<string, FieldResolution>,
+    renameResolutions?: SchemaRenameResolution[]
+  ): Promise<SchemaApplyResponse> => {
+    const result = await protectedApi.post<
+      ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
+    >(`/singles/schema/${slug}/apply`, {
+      fields,
+      confirmed: true,
+      schemaVersion,
+      resolutions,
+      renameResolutions,
+    });
+    return {
+      success: true,
+      message: result.message,
+      newSchemaVersion: result.newSchemaVersion,
+      toastSummary: result.toastSummary,
+    };
   },
 
   /**

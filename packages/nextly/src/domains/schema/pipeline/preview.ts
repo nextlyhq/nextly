@@ -27,7 +27,10 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { buildDesiredTableFromFields } from "./diff/build-from-fields";
+import {
+  buildDesiredTableFromComponentFields,
+  buildDesiredTableFromFields,
+} from "./diff/build-from-fields";
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
@@ -105,28 +108,41 @@ export async function previewDesiredSchema(
   const introspect = deps.introspect ?? introspectLiveSnapshot;
 
   // Phase A: introspect live + build desired snapshot + diff.
-  // Iterates only desired.collections (matching the apply path's
-  // managedTableNames scope). Singles + components aren't yet wired
-  // through the diff/apply pipeline today; the legacy preview path
-  // for collections is the primary admin-UI consumer.
-  const managedTableNames = Object.values(desired.collections).map(
-    c => c.tableName
-  );
+  // Iterates all three buckets: collections, singles, and components.
+  // Singles use the same system columns as collections (id, title, slug,
+  // created_at, updated_at). Components use a separate builder that injects
+  // component system columns (_parent_id, _parent_table, etc.) instead.
+  const managedTableNames = [
+    ...Object.values(desired.collections).map(c => c.tableName),
+    ...Object.values(desired.singles).map(s => s.tableName),
+    ...Object.values(desired.components).map(c => c.tableName),
+  ];
 
   const liveSnapshot = await introspect(db, dialect, managedTableNames);
 
+  const collectionTables = Object.values(desired.collections).map(c =>
+    buildDesiredTableFromFields(
+      c.tableName,
+      c.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
+      dialect
+    )
+  );
+  const singleTables = Object.values(desired.singles).map(s =>
+    buildDesiredTableFromFields(
+      s.tableName,
+      s.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
+      dialect
+    )
+  );
+  const componentTables = Object.values(desired.components).map(c =>
+    buildDesiredTableFromComponentFields(
+      c.tableName,
+      c.fields as unknown as Parameters<typeof buildDesiredTableFromComponentFields>[1],
+      dialect
+    )
+  );
   const desiredSnapshot: NextlySchemaSnapshot = {
-    tables: Object.values(desired.collections).map(c =>
-      buildDesiredTableFromFields(
-        c.tableName,
-        // FieldConfig has the shape buildDesiredTableFromFields expects;
-        // cast through unknown for the structural-vs-nominal type gap.
-        c.fields as unknown as Parameters<
-          typeof buildDesiredTableFromFields
-        >[1],
-        dialect
-      )
-    ),
+    tables: [...collectionTables, ...singleTables, ...componentTables],
   };
 
   const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
