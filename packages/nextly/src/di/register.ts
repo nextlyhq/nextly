@@ -103,37 +103,16 @@ import {
 /**
  * Configuration for service registration.
  *
- * **Database Configuration:**
- * - If `adapter` is provided, it will be used directly
- * - Otherwise, one is created from environment variables using
- *   `DB_DIALECT` and `DATABASE_URL`
- * - Legacy `db` and `tables` properties are deprecated but still
- *   supported for backward compatibility.
+ * **Database Configuration:** if `adapter` is provided, it is used
+ * directly. Otherwise, one is created from environment variables using
+ * `DB_DIALECT` and `DATABASE_URL`.
  */
 export interface NextlyServiceConfig {
-  /**
-   * Database instance (Drizzle).
-   * @deprecated Use adapter pattern instead. This will be removed in a future version.
-   */
-  db?: DatabaseInstance;
-
   /**
    * Database adapter for multi-database support.
    * If not provided, created automatically from environment variables.
    */
   adapter?: DrizzleAdapter;
-
-  /**
-   * Dialect-specific table schemas.
-   * @deprecated Use adapter pattern instead.
-   */
-  tables?: unknown;
-
-  /**
-   * Storage adapter for media files.
-   * @deprecated Consider using `storagePlugins` for cloud storage support.
-   */
-  storage?: IStorageAdapter;
 
   /** Storage plugins for cloud storage providers (S3, Vercel Blob, etc.). */
   storagePlugins?: StoragePlugin[];
@@ -196,8 +175,6 @@ export interface NextlyServiceConfig {
  */
 export interface ServiceMap {
   adapter: DrizzleAdapter;
-  /** @deprecated Use adapter instead. */
-  db?: DatabaseInstance;
   logger: Logger;
   config: NextlyServiceConfig;
   mediaStorage: MediaStorage;
@@ -264,9 +241,7 @@ export async function registerServices(
   const transformedConfig = await applyPluginConfigTransformers(config);
 
   const {
-    db,
     adapter: providedAdapter,
-    storage,
     storagePlugins,
     imageProcessor,
     logger,
@@ -366,10 +341,6 @@ export async function registerServices(
     () => transformedConfig
   );
 
-  if (db) {
-    container.registerSingleton<DatabaseInstance>("db", () => db);
-  }
-
   // ----------------------------------------
   // Layer 2.5: Initialize Media Storage
   // ----------------------------------------
@@ -377,17 +348,15 @@ export async function registerServices(
   logStorageConfiguration(mediaStorage, storagePlugins, resolvedLogger);
   container.registerSingleton<MediaStorage>("mediaStorage", () => mediaStorage);
 
-  // Priority: provided storage > MediaStorage default adapter (if available).
-  // Storage is optional — app can run without it for non-media operations.
-  let resolvedStorageAdapter: IStorageAdapter | null = storage ?? null;
-  if (!resolvedStorageAdapter) {
-    try {
-      resolvedStorageAdapter = mediaStorage.getDefaultAdapter();
-    } catch {
-      resolvedLogger.warn?.(
-        "No storage plugin configured. Media operations will not be available."
-      );
-    }
+  // Storage adapter resolves from MediaStorage's default adapter.
+  // Storage is optional; app can run without it for non-media operations.
+  let resolvedStorageAdapter: IStorageAdapter | null = null;
+  try {
+    resolvedStorageAdapter = mediaStorage.getDefaultAdapter();
+  } catch {
+    resolvedLogger.warn?.(
+      "No storage plugin configured. Media operations will not be available."
+    );
   }
 
   // ----------------------------------------
@@ -396,7 +365,6 @@ export async function registerServices(
   const ctx: RegistrationContext = {
     adapter,
     adapterDrizzleDb,
-    db,
     logger: resolvedLogger,
     config: transformedConfig,
     basePath: resolvedBasePath,
@@ -1453,7 +1421,7 @@ async function initializePlugins(
       case "emailService":
         return container.get<EmailService>("emailService");
       case "db":
-        return transformedConfig.db ?? adapterDrizzleDb;
+        return adapterDrizzleDb;
       case "logger":
         return logger;
       case "config":

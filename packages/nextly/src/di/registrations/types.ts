@@ -28,13 +28,6 @@ export interface RegistrationContext {
    */
   adapterDrizzleDb: DatabaseInstance;
 
-  /**
-   * Optional legacy database instance provided by the caller via
-   * `config.db`. When present it takes precedence over `adapterDrizzleDb`
-   * for backward compatibility.
-   */
-  db?: DatabaseInstance;
-
   /** Resolved logger (caller-provided or `consoleLogger`). */
   logger: Logger;
 

@@ -27,6 +27,13 @@ Runtime checks that handled both legacy and canonical names now treat legacy nam
 - Deleted 11 deprecated re-export shim files under `src/services/schema/*` and `src/services/dynamic-collections/*`. None were in the `package.json` exports map, so external consumers cannot have been depending on them through supported imports. Internal consumers updated to canonical locations under `src/domains/*/services/*`.
 - Dropped the `IStorageAdapter` and `StorageAdapterInfo` type re-exports from `storage/adapters/base-adapter.ts`. Import these types from `@revnixhq/nextly/storage` (or `storage/types` internally) directly. The `BaseStorageAdapter` abstract class stays in `storage/adapters/base-adapter.ts`; it has real consumers via `LocalStorageAdapter` and external storage plugins.
 
+### Breaking changes (Phase 4.10 / Category D)
+
+- `defineConfig({ db, tables, storage: <adapter> })` is no longer accepted. Use `defineConfig({ adapter, storage: [<storagePlugin>(...)] })` exclusively. The legacy ad-hoc adapter creation path is gone, along with the `db?` / `tables?` / `storage?` interface fields on `NextlyServiceConfig` and the `db?` field on `ServiceMap`.
+- Deleted the `StorageConfig` legacy interface from `@revnixhq/nextly/storage`. Configure storage via the storage-plugins array.
+- Plugin admin `group` field is gone. Use `placement: AdminPlacement.X` exclusively. The deprecated `getPluginPlacements` / `updatePluginPlacements` methods on `GeneralSettingsService` are removed.
+- `routeHandler` no longer reads `plugin.admin.group` (the admin-meta payload's `group` field is gone) and no longer serves the dead `PATCH /api/admin-meta/plugin-placements` endpoint (returned 410 Gone; now 404 from the catch-all).
+
 ## 0.0.140
 
 ### Minor Changes — BREAKING
