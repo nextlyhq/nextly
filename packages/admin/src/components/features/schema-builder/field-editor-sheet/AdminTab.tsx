@@ -7,10 +7,10 @@
 // FieldCondition shape ({ field, equals }).
 import { Button, Label, Switch, Textarea } from "@revnixhq/ui";
 
-import type {
-  BuilderField,
+import {
   FIELD_POSITION_OPTIONS,
   FIELD_WIDTH_OPTIONS,
+  type BuilderField,
   type FieldPosition,
   type FieldWidth,
 } from "../types";
