@@ -233,7 +233,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="text-sm bg-primary/5 border border-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+          <code className="text-sm px-1.5 py-0.5 rounded-none font-mono">
             {field.name}
           </code>
         </div>

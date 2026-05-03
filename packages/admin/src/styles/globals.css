@@ -1979,7 +1979,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 /* Table icon covers: flat shape with unified neutral background */
 .table-row-icon-cover {
-  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-black/20 text-black;
+  @apply shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary/5 text-black;
 }
 
 @media (prefers-color-scheme: dark) {

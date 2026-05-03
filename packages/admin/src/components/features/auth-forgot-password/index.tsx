@@ -93,7 +93,7 @@ export function ForgotPassword() {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Sign In
@@ -187,7 +187,7 @@ export function ForgotPassword() {
               Remember your password?{" "}
               <Link
                 href={ROUTES.LOGIN}
-                className="text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="text-primary cursor-pointer font-medium transition-colors"
               >
                 Sign in
               </Link>

@@ -165,8 +165,8 @@ export function MediaCard({
       className={cn(
         "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-primary/5 flex flex-col",
         isSelected
-          ? "ring-2 ring-primary/30 ring-offset-2 border-primary/30 cursor-pointer"
-          : "hover:border-primary/40 cursor-pointer",
+          ? "border-primary/30 cursor-pointer"
+          : "hover:border-primary/30 cursor-pointer",
         className
       )}
     >

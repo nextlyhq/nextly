@@ -200,12 +200,7 @@ export function DynamicPluginNav({
     return Array.from(pluginMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-  }, [
-    allPluginCollections,
-    visibleCollectionIds,
-    isPluginPlaced,
-    search,
-  ]);
+  }, [allPluginCollections, visibleCollectionIds, isPluginPlaced, search]);
 
   if (isLoading) {
     if (isCollapsed) return null;
@@ -265,7 +260,7 @@ export function DynamicPluginNav({
             <Package
               className={cn(
                 "shrink-0",
-                !isOverviewActive && "text-muted-foreground group-hover-unified"
+                !isOverviewActive && "text-muted-foreground"
               )}
             />
             <span>Installed Plugins</span>
@@ -291,8 +286,7 @@ export function DynamicPluginNav({
                   <Package
                     className={cn(
                       "shrink-0",
-                      !isAnyChildActive &&
-                        "text-muted-foreground group-hover-unified"
+                      !isAnyChildActive && "text-muted-foreground"
                     )}
                   />
                   <span className="flex-1 truncate">{plugin.name}</span>
@@ -380,7 +374,7 @@ function CollapsedPluginDropdown({
             <Package
               className={cn(
                 "shrink-0",
-                !isAnyActive && "text-muted-foreground group-hover-unified"
+                !isAnyActive && "text-muted-foreground"
               )}
             />
             <span className="sr-only">Plugins</span>
