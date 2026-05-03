@@ -162,7 +162,7 @@ export function DataTable<
       )}
 
       {/* Table Card */}
-      <div className="table-wrapper rounded-none border border-border bg-card text-card-foreground overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card text-card-foreground overflow-hidden">
         <div className="overflow-x-auto">
           <Table className="w-full">
             <TableHeaderComponent table={table} enableSorting={enableSorting} />
@@ -213,7 +213,7 @@ export function DataTable<
         </div>
 
         {/* Pagination Footer */}
-        <div className="table-footer border-t border-border p-4 bg-[hsl(var(--table-header-bg))]">
+        <div className="table-footer  border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
           <TablePagination
             meta={paginationMeta}
             onPageChange={handlePageChange}

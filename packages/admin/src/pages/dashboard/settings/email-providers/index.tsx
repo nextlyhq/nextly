@@ -292,7 +292,11 @@ function EmailProviderTable() {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
       return next;
     });
   };
@@ -443,146 +447,143 @@ function EmailProviderTable() {
   // Table columns
   const ALWAYS_VISIBLE = new Set(["id"]);
 
-  const columnDefs = useMemo<Column<EmailProviderRecord>[]>(() => [
-    {
-      key: "name",
-      label: "Name",
-      render: (_value, provider) => (
-        <div className="flex items-center gap-2">
-          <span
-            className="font-medium cursor-pointer hover-unified"
-            onClick={() => handleEdit(provider)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={e => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleEdit(provider);
-              }
-            }}
-          >
-            {provider.name}
-          </span>
-          {!provider.isActive && (
-            <Badge variant="warning" className="text-xs">
-              Inactive
-            </Badge>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "type",
-      label: "Type",
-      render: (_value, provider) => {
-        const config = PROVIDER_TYPE_CONFIG[provider.type];
-        return <Badge variant={config.variant}>{config.label}</Badge>;
-      },
-    },
-    {
-      key: "fromEmail",
-      label: "From",
-      render: (_value, provider) => (
-        <div>
-          {provider.fromName && (
-            <div className="text-sm font-medium">{provider.fromName}</div>
-          )}
-          <div className="text-sm text-muted-foreground">
-            {provider.fromEmail}
-          </div>
-        </div>
-      ),
-    },
-    {
-      key: "configuration",
-      label: "Configuration",
-      hideOnMobile: true,
-      render: (_value, provider) => (
-        <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
-          {maskConfiguration(provider.type, provider.configuration)}
-        </code>
-      ),
-    },
-    {
-      key: "isDefault",
-      label: "Default",
-      render: (_value, provider) =>
-        provider.isDefault ? (
-          <div className="flex items-center gap-1.5">
-            <Star className="h-4 w-4 text-amber-500 fill-amber-500 shrink-0" />
-            <Badge variant="success">Default</Badge>
-          </div>
-        ) : (
-          <span className="text-muted-foreground text-sm">—</span>
-        ),
-    },
-    {
-      key: "createdAt",
-      label: "Created",
-      hideOnMobile: true,
-      render: createdAt => (
-        <span className="text-sm">{formatDate(createdAt as string)}</span>
-      ),
-    },
-    {
-      key: "id",
-      label: "Actions",
-      render: (_value, provider) => (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              className="h-8 w-8 p-0 border border-border"
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="cursor-pointer"
+  const columnDefs = useMemo<Column<EmailProviderRecord>[]>(
+    () => [
+      {
+        key: "name",
+        label: "Name",
+        render: (_value, provider) => (
+          <div className="flex items-center gap-2">
+            <span
+              className="font-medium cursor-pointer hover-unified"
               onClick={() => handleEdit(provider)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleEdit(provider);
+                }
+              }}
             >
-              <Edit className="h-4 w-4" />
-              Edit
-            </DropdownMenuItem>
-            {!provider.isDefault && (
+              {provider.name}
+            </span>
+            {!provider.isActive && (
+              <Badge variant="warning" className="text-xs">
+                Inactive
+              </Badge>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: "type",
+        label: "Type",
+        render: (_value, provider) => {
+          const config = PROVIDER_TYPE_CONFIG[provider.type];
+          return <Badge variant={config.variant}>{config.label}</Badge>;
+        },
+      },
+      {
+        key: "fromEmail",
+        label: "From",
+        render: (_value, provider) => (
+          <div>
+            {provider.fromName && (
+              <div className="text-sm font-medium">{provider.fromName}</div>
+            )}
+            <div className="text-sm text-muted-foreground">
+              {provider.fromEmail}
+            </div>
+          </div>
+        ),
+      },
+      {
+        key: "configuration",
+        label: "Configuration",
+        hideOnMobile: true,
+        render: (_value, provider) => (
+          <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+            {maskConfiguration(provider.type, provider.configuration)}
+          </code>
+        ),
+      },
+      {
+        key: "isDefault",
+        label: "Default",
+        render: (_value, provider) =>
+          provider.isDefault ? (
+            <div className="flex items-center gap-1.5">
+              <Star className="h-4 w-4 text-amber-500 fill-amber-500 shrink-0" />
+              <Badge variant="success">Default</Badge>
+            </div>
+          ) : (
+            <span className="text-muted-foreground text-sm">—</span>
+          ),
+      },
+      {
+        key: "createdAt",
+        label: "Created",
+        hideOnMobile: true,
+        render: createdAt => (
+          <span className="text-sm">{formatDate(createdAt as string)}</span>
+        ),
+      },
+      {
+        key: "id",
+        label: "Actions",
+        render: (_value, provider) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                className="h-8 w-8 p-0  border border-primary/5"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="cursor-pointer"
-                onClick={() => handleSetDefault(provider)}
+                onClick={() => handleEdit(provider)}
               >
-                <Star className="h-4 w-4" />
-                Set Default
+                <Edit className="h-4 w-4" />
+                Edit
               </DropdownMenuItem>
-            )}
-            <DropdownMenuItem
-              className="cursor-pointer"
-              onClick={() => handleTest(provider)}
-              disabled={isTesting}
-            >
-              <Send className="h-4 w-4" />
-              Send Test
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="cursor-pointer text-destructive focus:text-destructive"
-              onClick={() => handleDelete(provider)}
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ),
-    },
-  ], [
-    handleEdit,
-    handleSetDefault,
-    handleTest,
-    handleDelete,
-    isTesting,
-  ]);
+              {!provider.isDefault && (
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => handleSetDefault(provider)}
+                >
+                  <Star className="h-4 w-4" />
+                  Set Default
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                className="cursor-pointer"
+                onClick={() => handleTest(provider)}
+                disabled={isTesting}
+              >
+                <Send className="h-4 w-4" />
+                Send Test
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="cursor-pointer text-destructive focus:text-destructive"
+                onClick={() => handleDelete(provider)}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      },
+    ],
+    [handleEdit, handleSetDefault, handleTest, handleDelete, isTesting]
+  );
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
@@ -604,7 +605,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={false}
-              className="flex-1 max-w-sm"
+              className="flex-1 max-w-sm bg-white text-black border-primary/5"
             />
           </div>
         </div>
@@ -632,7 +633,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={true}
-              className="flex-1 max-w-sm"
+              className="flex-1 max-w-sm bg-white text-black border-primary/5"
             />
           </div>
         </div>
@@ -652,28 +653,27 @@ function EmailProviderTable() {
             onChange={setSearch}
             placeholder="Search providers by name..."
             isLoading={isLoading}
-            className="flex-1 max-w-sm"
+            className="flex-1 max-w-sm bg-white text-black border-primary/5"
           />
-          <div className="flex items-center gap-2">
-            <Select value={type} onValueChange={handleTypeChange}>
-              <SelectTrigger className="h-9 w-[130px] border border-border">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="smtp">SMTP</SelectItem>
-                <SelectItem value="resend">Resend</SelectItem>
-                <SelectItem value="sendlayer">SendLayer</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
         </div>
 
-        {/* Right: Column visibility */}
+        {/* Right: Filters & Column visibility */}
         <div className="flex items-center gap-2">
+          <Select value={type} onValueChange={handleTypeChange}>
+            <SelectTrigger className="w-[130px] bg-white text-black border-primary/5 hover:bg-white/90">
+              <SelectValue placeholder="All Types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              <SelectItem value="smtp">SMTP</SelectItem>
+              <SelectItem value="resend">Resend</SelectItem>
+              <SelectItem value="sendlayer">SendLayer</SelectItem>
+            </SelectContent>
+          </Select>
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
+              <Button variant="secondary" size="md">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -696,7 +696,7 @@ function EmailProviderTable() {
       </div>
 
       {/* Table */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         <ResponsiveTable
           data={data?.data || []}
           columns={columns}
@@ -705,18 +705,16 @@ function EmailProviderTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-border p-4">
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={totalItems}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={data.meta.totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+            totalItems={totalItems}
+          />
         )}
       </div>
 
@@ -753,7 +751,7 @@ const EmailProvidersPage: React.FC = () => {
           actions={
             <div className="flex items-center gap-3">
               <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE}>
-                <Button size="sm" className="flex items-center gap-1">
+                <Button size="md" className="flex items-center gap-1">
                   <Plus className="h-4 w-4" />
                   <span>Add Provider</span>
                 </Button>

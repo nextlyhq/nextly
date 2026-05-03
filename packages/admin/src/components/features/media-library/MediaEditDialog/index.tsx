@@ -127,7 +127,7 @@ function CropPointPicker({
       <div
         ref={containerRef}
         className={cn(
-          "relative rounded-none overflow-hidden border border-border cursor-crosshair",
+          "relative rounded-none overflow-hidden  border border-primary/5 cursor-crosshair",
           disabled && "cursor-not-allowed opacity-60"
         )}
         onClick={handleClick}
@@ -225,7 +225,7 @@ function ImageSizesDisplay({
       <Label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
         Image Sizes
       </Label>
-      <div className="rounded-none border border-border divide-y divide-border">
+      <div className="rounded-none  border border-primary/5 divide-y divide-border">
         {entries.map(([name, variant]) => (
           <div key={name} className="flex items-center gap-3 px-3 py-2 text-sm">
             <span className="font-medium min-w-[80px]">{name}</span>
@@ -416,7 +416,7 @@ export function MediaEditDialog({
               {/* Right Panel - Metadata Form + Sizes */}
               <div className="flex-1 space-y-4 min-w-0">
                 {/* Filename */}
-                <div className="pb-2 border-b border-border/50">
+                <div className="pb-2  border-b border-primary/5">
                   <div className="text-sm font-semibold truncate text-foreground/90">
                     {media.originalFilename}
                   </div>
@@ -479,7 +479,7 @@ export function MediaEditDialog({
                     <PopoverTrigger asChild>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded-none border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-none  border border-primary/5 bg-background px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
                       >
                         <FolderIcon className="h-4 w-4 text-muted-foreground" />
                         <span className="flex-1 text-left truncate">
@@ -567,16 +567,16 @@ export function MediaEditDialog({
           </div>
 
           {/* Footer - Full-Width Unified Background */}
-          <div className="mt-2 flex items-center justify-between gap-4 bg-primary/5 border-t border-primary/10 px-6 py-4">
+          <div className="mt-2 flex items-center justify-between gap-4 bg-primary/5  border-t border-primary/5 px-6 py-4">
             {/* Action Buttons Group (Left) */}
             <div className="flex items-center gap-2">
               {onDelete && (
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={() => media && onDelete(media)}
-                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                  className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
@@ -588,9 +588,9 @@ export function MediaEditDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={() => media && onCopyUrl(media.url)}
-                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                  className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
                   <Copy className="mr-2 h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
@@ -602,9 +602,9 @@ export function MediaEditDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   onClick={() => media && onDownload(media)}
-                  className="h-9 px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                  className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
                   <Download className="mr-2 h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
@@ -621,14 +621,15 @@ export function MediaEditDialog({
                 variant="outline"
                 onClick={() => onOpenChange(false)}
                 disabled={isPending}
-                className="h-9 px-4 text-xs font-semibold tracking-tight bg-card border-border/50"
+                className="px-4 text-xs font-semibold tracking-tight bg-card border-primary/5"
               >
                 Cancel
               </Button>
               <Button
+                size="md"
                 type="submit"
                 disabled={isPending}
-                className="h-9 px-6 bg-primary text-primary-foreground text-xs font-semibold tracking-tight hover:opacity-90 shadow-sm"
+                className="px-6 bg-primary text-primary-foreground text-xs font-semibold tracking-tight hover:opacity-90 shadow-sm"
               >
                 {isPending ? (
                   <>

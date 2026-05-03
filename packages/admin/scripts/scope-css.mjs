@@ -44,6 +44,12 @@ try {
   );
 
   // 3. Replace the Tailwind preflight reset that targets *, :before, :after
+  // AND remove the aggressive border-color: hsl(var(--border)) that overrides utilities
+  css = css.replace(
+    /(\*\s*,\s*:before\s*,\s*:after\s*,\s*::backdrop\s*\{[^}]*?)border-color:[^;}]*?;/g,
+    "$1"
+  );
+
   css = css.replace(
     /\*\s*,\s*:before\s*,\s*:after\s*,\s*::backdrop\s*\{/g,
     ".adminapp *,.adminapp *:before,.adminapp *:after,.adminapp *::backdrop{"

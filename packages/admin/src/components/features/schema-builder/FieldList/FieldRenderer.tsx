@@ -186,7 +186,7 @@ export function FieldRenderer({
         showGroupDropZone) &&
         atMaxDepth && (
           <div
-            className="ml-6 p-2 text-xs text-yellow-600 bg-yellow-50 rounded-none border border-yellow-200"
+            className="ml-6 p-2 text-xs text-yellow-600 bg-yellow-50 rounded-none  border border-primary/5 border-yellow-200"
             style={{ marginLeft: `${(depth + 1) * 24}px` }}
           >
             <Icons.AlertTriangle className="h-3 w-3 inline mr-1" />

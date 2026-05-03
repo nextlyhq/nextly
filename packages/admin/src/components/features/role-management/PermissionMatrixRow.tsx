@@ -38,7 +38,7 @@ export function PermissionMatrixRow({
       )}
     >
       {/* Content Type Name with Row Checkbox */}
-      <td className="p-4 align-middle border-b border-border min-w-[200px]">
+      <td className="p-4 align-middle  border-b border-primary/5 min-w-[200px]">
         <div className="flex items-center space-x-4">
           <Checkbox
             checked={isAllSelected}
@@ -46,7 +46,7 @@ export function PermissionMatrixRow({
             onCheckedChange={checked => onToggleAll(contentType, !!checked)}
             disabled={disabled || hasLockedPermissions}
             aria-label={`Toggle all permissions for ${contentType.name}`}
-            className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+            className="border-primary/5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
           />
           <span className="font-medium text-sm text-foreground capitalize">
             {contentType.name}
@@ -128,7 +128,7 @@ export function PermissionMatrixRow({
         contentTypeName={contentType.name}
         action="Delete"
         onToggle={onToggle}
-        className="p-4 text-center border-b border-border align-middle w-[120px]"
+        className="p-4 text-center  border-b border-primary/5 align-middle w-[120px]"
       />
     </tr>
   );

@@ -245,7 +245,7 @@ export function UserFormFields({
           <div className="space-y-3">
             {/* Active Account Checkbox */}
             {showActiveAccount && (
-              <div className="rounded-none border border-primary/20 dark:border-primary/30 bg-primary/5 p-3 shadow-none">
+              <div className="rounded-none  border border-primary/5 border-primary/5 dark:border-primary/30 bg-primary/5 p-3 shadow-none">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <Controller
                     control={control}
@@ -273,7 +273,7 @@ export function UserFormFields({
 
             {/* Send Welcome Email Checkbox (create mode only) */}
             {isCreateMode && (
-              <div className="rounded-none border border-border p-3">
+              <div className="rounded-none  border border-primary/5 p-3">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <Controller
                     control={control}

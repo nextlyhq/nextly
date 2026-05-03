@@ -124,8 +124,8 @@ TabsList.displayName = List.displayName;
  * - Padding: 6px 16px (px-4 py-2)
  * - Font: text-sm (14px), font-medium (500)
  * - Transition: 150ms (design system standard)
- * - Active state: blue text with blue bottom border (2px)
- * - Hover: blue text with blue bottom border
+ * - Active state: blue text with blue bottom  border border-primary/5 (2px)
+ * - Hover: blue text with blue bottom  border border-primary/5
  * - Gmail-inspired clean underline style
  *
  * Accessibility:

@@ -168,7 +168,7 @@ export function CreateFolderDialog({
           {hasFolders && (
             <div className="space-y-2">
               <Label>Parent Folder (Optional)</Label>
-              <div className="max-h-[200px] overflow-y-auto rounded-none border border-border p-2">
+              <div className="max-h-[200px] overflow-y-auto rounded-none  border border-primary/5 p-2">
                 <FolderTreePicker
                   selectedFolderId={selectedParentId}
                   onSelect={handleSelectParent}

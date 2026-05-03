@@ -205,8 +205,8 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none border transition-colors",
-        invalid ? "border-destructive" : "border-input",
+        "relative rounded-none  border border-primary/5 transition-colors",
+        invalid ? "border-destructive" : "border-primary/5",
         (disabled || readOnly) && "opacity-60",
         className
       )}

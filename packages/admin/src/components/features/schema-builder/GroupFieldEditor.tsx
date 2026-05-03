@@ -59,7 +59,7 @@ export function GroupFieldEditor({
       </div>
 
       {/* Nested Fields Info */}
-      <div className="pt-2 border-t border-border">
+      <div className="pt-2  border-t border-primary/5">
         <div className="flex items-center justify-between mb-2">
           <Label className="text-xs font-medium text-muted-foreground">
             Nested Fields
@@ -71,7 +71,7 @@ export function GroupFieldEditor({
         </div>
 
         {nestedFields.length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10  border border-primary/5 border-amber-500/20">
             <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <div className="text-xs text-amber-600 dark:text-amber-400">
               <p className="font-medium">No nested fields</p>

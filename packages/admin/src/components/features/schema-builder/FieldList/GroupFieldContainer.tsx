@@ -91,7 +91,7 @@ export function GroupFieldContainer({
           {/* Nested field rows */}
           {fieldCount > 0 && (
             <div
-              className="border border-border/60 rounded-none overflow-hidden bg-background mb-2"
+              className="border border-primary/5 rounded-none overflow-hidden bg-background mb-2"
               style={{ borderRadius: "6px" }}
             >
               <SortableContext

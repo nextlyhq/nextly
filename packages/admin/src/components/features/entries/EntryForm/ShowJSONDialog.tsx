@@ -169,7 +169,7 @@ export function ShowJSONDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="ghost" size="sm" className="gap-2">
+          <Button variant="ghost" size="md">
             <Code className="h-4 w-4" />
             Show JSON
           </Button>
@@ -185,7 +185,7 @@ export function ShowJSONDialog({
         </DialogHeader>
 
         {/* Controls bar */}
-        <div className="flex items-center gap-4 py-2 border-b border-border">
+        <div className="flex items-center gap-4 py-2  border-b border-primary/5">
           {/* Depth selector */}
           <div className="flex items-center gap-2">
             <Label htmlFor="json-depth" className="text-sm font-medium">
@@ -214,7 +214,7 @@ export function ShowJSONDialog({
           <div className="flex gap-2">
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={handleOpenInNewTab}
               className="gap-2"
             >
@@ -223,7 +223,7 @@ export function ShowJSONDialog({
             </Button>
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => { void handleCopy(); }}
               disabled={!jsonString || isLoading}
               className="gap-2"
@@ -239,7 +239,7 @@ export function ShowJSONDialog({
         </div>
 
         {/* JSON content area */}
-        <div className="flex-1 overflow-auto min-h-[300px] rounded-none border border-border bg-primary/5">
+        <div className="flex-1 overflow-auto min-h-[300px] rounded-none  border border-primary/5 bg-primary/5">
           {isLoading ? (
             <div className="flex items-center justify-center h-full gap-2 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />

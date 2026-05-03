@@ -12,13 +12,13 @@
  * - **Checkbox Selection**: Top-left overlay for bulk operations (44×44px mobile, 20×20px desktop)
  * - **Actions Menu**: Top-right dropdown with Edit/Delete/Copy URL/Download (44×44px mobile, 32×32px desktop)
  * - **Bottom Overlay**: Gradient background with filename and file type badge
- * - **Visual States**: Default, hover (scale + shadow), selected (border + ring), focus (keyboard ring)
+ * - **Visual States**: Default, hover (scale + shadow), selected  (border border-primary/5 + ring), focus (keyboard ring)
  * - **Responsive**: Touch-friendly on mobile (44×44px touch targets), compact on desktop
  *
  * ## Design Specifications
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
- * - **Border**: Default `border border-border`, Selected `border border-primary`
+ * - **Border**: Default  `border border-primary/5`, Selected  `border border-primary/5 border-primary`
  * - **Border Radius**: 8px (`rounded-none`)
  * - **Hover State**: `border-primary-300 scale-105 shadow-md` (NOT when selected)
  * - **Selected State**: `border-2 border-primary-500 ring-2 ring-primary-500`, no scale
@@ -110,7 +110,7 @@ function getMediaTypeIcon(mimeType: string) {
  *
  * 1. **Default**: Border, no hover effects
  * 2. **Hover**: Border color change, scale-105, shadow-md (only if NOT selected)
- * 3. **Selected**: Blue border (2px), blue ring, no scale on hover
+ * 3. **Selected**: Blue  border border-primary/5 (2px), blue ring, no scale on hover
  * 4. **Focus**: Keyboard focus ring (2px offset)
  * 5. **Image Loading**: Shows skeleton/placeholder
  * 6. **Image Error**: Shows fallback icon
@@ -163,7 +163,7 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300 border border-border/50 flex flex-col",
+        "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-primary/5 flex flex-col",
         isSelected
           ? "ring-2 ring-primary/30 ring-offset-2 border-primary/30 cursor-pointer"
           : "hover:border-primary/40 cursor-pointer",
@@ -208,14 +208,14 @@ export function MediaCard({
             checked={isSelected}
             onCheckedChange={() => onSelectionChange?.(media.id)}
             aria-label={`Select ${media.filename}`}
-            className="h-5 w-5 bg-background/80 backdrop-blur-sm data-[state=checked]:bg-primary border-primary/20 transition-all"
+            className="h-5 w-5 bg-background/80 backdrop-blur-sm data-[state=checked]:bg-primary border-primary/5 transition-all"
             onClick={e => e.stopPropagation()}
           />
         </div>
       )}
 
       {/* Information Bar - Integrated at bottom of aspect-square */}
-      <div className="bg-primary/5 border-t border-border/40 p-3 shrink-0">
+      <div className="bg-primary/5  border-t border-primary/5 p-3 shrink-0">
         <div className="flex flex-col gap-1.5">
           <p className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}

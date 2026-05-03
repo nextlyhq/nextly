@@ -441,7 +441,7 @@ export function APIPlayground({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full min-h-[600px]">
       {/* Request Builder Panel - 5 columns */}
-      <Card className="lg:col-span-5 flex flex-col rounded-none border-border shadow-none bg-card overflow-hidden">
+      <Card className="lg:col-span-5 flex flex-col rounded-none border-primary/5 shadow-none bg-card overflow-hidden">
         <CardHeader className="p-8 pb-4" noBorder>
           <div className="flex items-center justify-between">
             <div className="space-y-1">
@@ -451,7 +451,7 @@ export function APIPlayground({
             </div>
             <Button
               variant="ghost"
-              size="sm"
+              size="md"
               onClick={handleReset}
               className="gap-2 h-8 px-4 rounded-none text-[10px] uppercase font-bold tracking-widest text-primary/60 hover:text-primary transition-colors"
             >
@@ -466,7 +466,7 @@ export function APIPlayground({
             <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1 group-hover:text-primary transition-colors">
               Base Endpoint
             </Label>
-            <div className="flex items-center gap-2 p-4 bg-primary/5 border border-border/20 rounded-none font-mono text-xs transition-colors">
+            <div className="flex items-center gap-2 p-4 bg-primary/5  border border-primary/5 rounded-none font-mono text-xs transition-colors">
               <span className="text-muted-foreground">
                 {isSingle ? "/admin/api/singles/" : "/admin/api/collections/"}
               </span>
@@ -489,10 +489,10 @@ export function APIPlayground({
               onValueChange={v => setAction(v as EndpointAction)}
               disabled={isSingle}
             >
-              <SelectTrigger className="rounded-none border-border/40 h-12 bg-primary/5 focus:ring-2 focus:ring-primary/10 transition-all">
+              <SelectTrigger className="rounded-none border-primary/5 h-12 bg-primary/5 focus:ring-2 focus:ring-primary/10 transition-all">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="rounded-none border-border/60 shadow-xl">
+              <SelectContent className="rounded-none border-primary/5 shadow-xl">
                 {ENDPOINT_ACTIONS.filter(a =>
                   isSingle ? ["get", "update"].includes(a.value) : true
                 ).map(a => (
@@ -503,7 +503,7 @@ export function APIPlayground({
                   >
                     <div className="flex items-center gap-2">
                       <span
-                        className={`text-[10px] font-bold font-mono px-1.5 py-0.5 bg-primary/5 border border-border/50 ${METHOD_COLORS[a.method]}`}
+                        className={`text-[10px] font-bold font-mono px-1.5 py-0.5 bg-primary/5  border border-primary/5 ${METHOD_COLORS[a.method]}`}
                       >
                         {a.method}
                       </span>
@@ -528,7 +528,7 @@ export function APIPlayground({
                 value={entryId}
                 onChange={e => setEntryId(e.target.value)}
                 placeholder="Enter entry ID (e.g., abc123)"
-                className="font-mono text-xs rounded-none border-border/40 h-12 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all"
+                className="font-mono text-xs rounded-none border-primary/5 h-12 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all"
               />
               {entryIdMissing && (
                 <p className="text-[10px] text-destructive font-medium ml-1">
@@ -575,7 +575,7 @@ export function APIPlayground({
                 <textarea
                   value={requestBody}
                   onChange={e => setRequestBody(e.target.value)}
-                  className="w-full flex-1 font-mono text-xs p-4 border border-border/40 rounded-none bg-primary/5 resize-none focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/5 transition-all"
+                  className="w-full flex-1 font-mono text-xs p-4  border border-primary/5 rounded-none bg-primary/5 resize-none focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/5 transition-all"
                   placeholder={getBodyPlaceholder()}
                   disabled={!actionRequiresBody}
                 />
@@ -584,12 +584,12 @@ export function APIPlayground({
           </Tabs>
 
           {/* Request URL Display */}
-          <div className="pt-8 border-t border-border/10">
+          <div className="pt-8  border-t border-primary/5">
             <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/50 ml-1">
               Full Request URL
             </Label>
             <div className="flex items-center gap-2 mt-4 group">
-              <code className="flex-1 text-[10px] bg-primary/5 p-4 border border-border/10 rounded-none break-all font-mono transition-colors">
+              <code className="flex-1 text-[10px] bg-primary/5 p-4  border border-primary/5 rounded-none break-all font-mono transition-colors">
                 <span className={METHOD_COLORS[method]}>{method}</span>{" "}
                 {fullUrl}
               </code>
@@ -600,7 +600,7 @@ export function APIPlayground({
                   onClick={() => {
                     void handleCopyUrl();
                   }}
-                  className="shrink-0 h-9 w-9 rounded-none border-border/40 hover:bg-primary/5 hover:text-primary transition-all"
+                  className="shrink-0 h-9 w-9 rounded-none border-primary/5 hover:bg-primary/5 hover:text-primary transition-all"
                 >
                   {copied ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -612,7 +612,7 @@ export function APIPlayground({
                   variant="outline"
                   size="icon"
                   onClick={handleOpenInNewTab}
-                  className="shrink-0 h-9 w-9 rounded-none border-border/40 hover:bg-primary/5 hover:text-primary transition-all"
+                  className="shrink-0 h-9 w-9 rounded-none border-primary/5 hover:bg-primary/5 hover:text-primary transition-all"
                 >
                   <ExternalLink className="h-4 w-4" />
                 </Button>
@@ -639,7 +639,7 @@ export function APIPlayground({
       </Card>
 
       {/* Response Panel - 7 columns */}
-      <Card className="lg:col-span-7 flex flex-col rounded-none border-border shadow-none bg-card overflow-hidden">
+      <Card className="lg:col-span-7 flex flex-col rounded-none border-primary/5 shadow-none bg-card overflow-hidden">
         <CardHeader className="p-8 pb-4" noBorder>
           <div className="flex items-center justify-between">
             <div className="space-y-1">

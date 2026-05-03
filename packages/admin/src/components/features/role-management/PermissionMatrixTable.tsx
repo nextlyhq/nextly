@@ -90,7 +90,7 @@ export function PermissionMatrixTable({
           {searchTerm && (
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={onClearSearch}
               className="mx-auto"
             >
@@ -105,7 +105,7 @@ export function PermissionMatrixTable({
   return (
     <>
       {/* Desktop Table View (≥ 1024px) */}
-      <div className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto border-t border-border relative">
+      <div className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto  border-t border-primary/5 relative">
         <table className="w-full border-collapse">
           <PermissionMatrixHeader
             contentTypes={contentTypes}

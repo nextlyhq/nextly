@@ -24,7 +24,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
 
   return (
     <div>
-      <div className="bg-card border-t border-border px-4 py-6 animate-in fade-in-0 slide-in-from-bottom-2">
+      <div className="bg-card  border-t border-primary/5 px-4 py-6 animate-in fade-in-0 slide-in-from-bottom-2">
         <div className="flex flex-col items-center mb-3">
           <Avatar size="xl" className="bg-primary/5 mb-3 text-primary">
             <AvatarFallback>

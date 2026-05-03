@@ -37,7 +37,7 @@ export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
       data-testid="notification-row"
       data-status={row.status}
       className={cn(
-        "border-b border-border last:border-b-0 px-4 py-3",
+        "border-b border-primary/5 last:border-b-0 px-4 py-3",
         expandable && "cursor-pointer hover:bg-primary/5"
       )}
       role={expandable ? "button" : undefined}

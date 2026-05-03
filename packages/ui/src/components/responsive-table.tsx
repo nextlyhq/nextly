@@ -306,12 +306,12 @@ function ResponsiveTableInner<T extends { id: string }>(
       {/* Desktop: Table view */}
       <div
         className={cn(
-          "table-wrapper hidden md:block overflow-hidden rounded-none border border-border",
+          "table-wrapper hidden md:block overflow-hidden rounded-none  border border-primary/5",
           tableWrapperClassName
         )}
       >
         <Table aria-label={ariaLabel || "Data table"}>
-          <TableHeader>
+          <TableHeader className="bg-[hsl(var(--table-header-bg))]">
             <TableRow>
               {columns.map(column => (
                 <TableHead
@@ -360,7 +360,11 @@ function ResponsiveTableInner<T extends { id: string }>(
           </TableBody>
         </Table>
       </div>
-      {footer && <div className="table-footer">{footer}</div>}
+      {footer && (
+        <div className="table-footer border-t border-primary/5 bg-[hsl(var(--table-header-bg))]">
+          {footer}
+        </div>
+      )}
     </div>
   );
 }

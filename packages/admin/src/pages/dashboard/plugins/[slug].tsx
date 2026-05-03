@@ -81,7 +81,7 @@ function PluginsContent({ activeSlug }: { activeSlug?: string }) {
       {/* Page header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-none bg-primary/10">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-none bg-primary/5">
             <Puzzle className="h-6 w-6 text-primary" />
           </div>
           <div className="space-y-1">
@@ -130,7 +130,7 @@ function PluginsTable({
 
   if (plugins.length === 0) {
     return (
-      <div className="rounded-none border border-dashed border-border bg-card p-12 text-center">
+      <div className="rounded-none  border border-primary/5 border-dashed border-primary/5 bg-card p-12 text-center">
         <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
         <h3 className="text-sm font-medium text-foreground mb-1">
           No plugins installed
@@ -164,7 +164,7 @@ function PluginsTable({
         </div>
       )}
 
-      <div className="rounded-none border border-border bg-card overflow-hidden">
+      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow className="bg-primary/5">
@@ -193,7 +193,7 @@ function PluginsTable({
                       href={buildRoute(ROUTES.PLUGIN_SETTINGS, { slug })}
                       className="flex items-center gap-3 hover-unified"
                     >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none bg-primary/10">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none bg-primary/5">
                         <IconComponent className="h-4 w-4 text-primary" />
                       </div>
                       <div>

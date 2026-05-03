@@ -138,7 +138,7 @@ export function EntryTableToolbar({
             value={globalFilter}
             onChange={onGlobalFilterChange}
             placeholder={`Search ${collection.label}...`}
-            className="w-full"
+            className="w-full bg-white text-black border-primary/5"
             data-entry-search-input
           />
         </div>
@@ -151,8 +151,8 @@ export function EntryTableToolbar({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="h-9 relative flex-1 sm:flex-none hover-unified"
+                  size="md"
+                  className="relative flex-1 sm:flex-none hover-unified bg-white text-black border-primary/5 hover:bg-white/90"
                 >
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
@@ -172,8 +172,8 @@ export function EntryTableToolbar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                size="sm"
-                className="h-9 flex-1 sm:flex-none hover-unified"
+                size="md"
+                className="flex-1 sm:flex-none hover-unified bg-white text-black border-primary/5 hover:bg-white/90"
               >
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
@@ -202,7 +202,7 @@ export function EntryTableToolbar({
                   <DropdownMenuSeparator />
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="md"
                     className="w-full justify-start px-2 font-normal"
                     onClick={onResetColumnVisibility}
                   >
