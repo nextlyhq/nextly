@@ -31,6 +31,7 @@ import {
   FieldPickerModal,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import {
@@ -43,6 +44,7 @@ import {
   convertToFieldDefinition,
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
+import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
@@ -81,8 +83,11 @@ export default function ComponentBuilderEditPage({
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
-  const [originalFieldsSnapshot, setOriginalFieldsSnapshot] = useState<
-    string | null
+  // Why: was a JSON string of just field IDs, which silently masked
+  // label / width / validation / options edits. Now a frozen array we
+  // diff via countDirtyFields so every meaningful edit bumps the badge.
+  const [originalFields, setOriginalFields] = useState<
+    readonly BuilderField[] | null
   >(null);
 
   const { mutate: updateComponent, isPending: isSaving } = useUpdateComponent();
@@ -105,9 +110,7 @@ export default function ComponentBuilderEditPage({
     const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
     builder.setFields(allFields);
 
-    setOriginalFieldsSnapshot(
-      JSON.stringify(allFields.filter(f => !f.isSystem).map(f => f.id))
-    );
+    setOriginalFields(allFields.filter(f => !f.isSystem));
 
     const adminBlock = (component.admin ?? {}) as Record<string, unknown>;
     setSettings({
@@ -123,13 +126,15 @@ export default function ComponentBuilderEditPage({
 
   const isLocked = component?.locked === true;
 
+  // Dirty count: number of user fields that were added, removed, or had
+  // any of their editable shape change since load.
   const unsavedCount = useMemo(() => {
-    if (!originalFieldsSnapshot) return 0;
-    const currentSnapshot = JSON.stringify(
-      builder.fields.filter(f => !f.isSystem).map(f => f.id)
+    if (!originalFields) return 0;
+    return countDirtyFields(
+      originalFields,
+      builder.fields.filter(f => !f.isSystem)
     );
-    return currentSnapshot !== originalFieldsSnapshot ? 1 : 0;
-  }, [builder.fields, originalFieldsSnapshot]);
+  }, [builder.fields, originalFields]);
 
   const handleSave = useCallback(() => {
     if (!slug || !settings) {
@@ -164,11 +169,7 @@ export default function ComponentBuilderEditPage({
       {
         onSuccess: () => {
           toast.success("Component updated");
-          setOriginalFieldsSnapshot(
-            JSON.stringify(
-              builder.fields.filter(f => !f.isSystem).map(f => f.id)
-            )
-          );
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
         },
         onError: err => {
           const errorObj = err as { message?: string };
