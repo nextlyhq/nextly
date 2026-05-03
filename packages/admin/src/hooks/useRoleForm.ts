@@ -458,7 +458,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           populate: ["permissions"],
         } as FetchRolesParams);
 
-        const rolesWithPermissions = (res?.data || []).map(r => ({
+        const rolesWithPermissions = (res?.items || []).map(r => ({
           id: r.id,
           name: r.roleName,
           permissions: normalizePermissions(r.permissions),

@@ -165,12 +165,9 @@ function ReadOnlyPreview({ permissions }: { permissions: string[] }) {
 }
 
 function RolePermissionsPreview({ roleId }: { roleId: string }) {
-  // Phase 4 (post-merge follow-up): the listRolePermissions dispatcher
-  // method emits `respondData({ permissions: [...] })` (spec section 5.1
-  // non-paginated list). Pre-Phase-4 the fetcher peeled `data` so this
-  // component read `data.data` for the array; after the fetcher rewrite
-  // (Task 18) the wire body comes through unchanged, so we type the
-  // response with the canonical `{ permissions }` shape and read
+  // The listRolePermissions dispatcher emits `respondData({ permissions: [...] })`
+  // (spec section 5.1 non-paginated list). The wire body comes through unchanged,
+  // so we type the response with the canonical `{ permissions }` shape and read
   // `data.permissions`.
   const { data, isLoading, isError } = useQuery({
     queryKey: ["rolePermissions", roleId],
@@ -480,7 +477,7 @@ export function CreateApiKeyForm({
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              {rolesData?.data.map(role => (
+                              {rolesData?.items.map(role => (
                                 <SelectItem key={role.id} value={role.id}>
                                   {role.roleName}
                                 </SelectItem>

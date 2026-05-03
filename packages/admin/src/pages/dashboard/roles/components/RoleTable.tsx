@@ -119,9 +119,9 @@ export default function RoleTable() {
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
-    if (!data?.data) return [];
+    if (!data?.items) return [];
 
-    return data.data.filter(role => {
+    return data.items.filter(role => {
       // Filter by type
       if (typeFilter !== "all" && role.type !== typeFilter) {
         return false;
@@ -132,7 +132,7 @@ export default function RoleTable() {
       }
       return true;
     });
-  }, [data?.data, typeFilter, statusFilter]);
+  }, [data?.items, typeFilter, statusFilter]);
 
   // TanStack Query: Delete role mutation
   const { mutate: deleteRole, isPending: isDeleting } = useDeleteRole();
@@ -180,7 +180,7 @@ export default function RoleTable() {
 
     // Filter out system roles from selection
     const selectedRoles =
-      data?.data.filter(r => selectedIds.includes(r.id)) || [];
+      data?.items.filter(r => selectedIds.includes(r.id)) || [];
     const systemRolesSelected = selectedRoles.filter(r => r.type === "System");
 
     if (systemRolesSelected.length > 0) {
@@ -203,7 +203,7 @@ export default function RoleTable() {
   const handleConfirmBulkDelete = () => {
     // Filter out system roles before deletion
     const selectedRoles =
-      data?.data.filter(r => selectedIds.includes(r.id)) || [];
+      data?.items.filter(r => selectedIds.includes(r.id)) || [];
     const deletableRoleIds = selectedRoles
       .filter(r => r.type !== "System")
       .map(r => r.id);

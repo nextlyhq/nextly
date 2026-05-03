@@ -134,7 +134,7 @@ export function EntryFormContextProvider({
  *     },
  *   });
  *
- *   return <ul>{data?.docs.map(...)}</ul>;
+ *   return <ul>{data?.items.map(...)}</ul>;
  * }
  * ```
  */

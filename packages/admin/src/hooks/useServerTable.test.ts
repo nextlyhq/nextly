@@ -1,4 +1,4 @@
-import type { DataFetcher, TableResponse } from "@revnixhq/ui";
+import type { DataFetcher, ListResponse } from "@revnixhq/ui";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -128,12 +128,19 @@ describe("useServerTable", () => {
     it("sets loading state during fetch", async () => {
       const fetcher = vi.fn(
         () =>
-          new Promise<TableResponse<unknown>>(resolve =>
+          new Promise<ListResponse<unknown>>(resolve =>
             setTimeout(
               () =>
                 resolve({
-                  data: [],
-                  meta: { page: 0, pageSize: 10, total: 0, totalPages: 0 },
+                  items: [],
+                  meta: {
+                    page: 1,
+                    limit: 10,
+                    total: 0,
+                    totalPages: 0,
+                    hasNext: false,
+                    hasPrev: false,
+                  },
                 }),
               50
             )
@@ -165,18 +172,27 @@ describe("useServerTable", () => {
 
     it("updates pagination metadata", async () => {
       const fetcher = vi.fn().mockResolvedValue({
-        data: mockUsers.slice(0, 10),
-        meta: { page: 0, pageSize: 10, total: 50, totalPages: 5 },
+        items: mockUsers.slice(0, 10),
+        meta: {
+          page: 1,
+          limit: 10,
+          total: 50,
+          totalPages: 5,
+          hasNext: true,
+          hasPrev: false,
+        },
       });
 
       const { result } = renderHook(() => useServerTable({ fetcher }));
 
       await waitFor(() => {
         expect(result.current.paginationMeta).toEqual({
-          page: 0,
-          pageSize: 10,
+          page: 1,
+          limit: 10,
           total: 50,
           totalPages: 5,
+          hasNext: true,
+          hasPrev: false,
         });
       });
     });
@@ -200,8 +216,15 @@ describe("useServerTable", () => {
           throw new Error("Network error");
         }
         return {
-          data: mockUsers.slice(0, 3),
-          meta: { page: 0, pageSize: 10, total: 3, totalPages: 1 },
+          items: mockUsers.slice(0, 3),
+          meta: {
+            page: 1,
+            limit: 10,
+            total: 3,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
         };
       });
 

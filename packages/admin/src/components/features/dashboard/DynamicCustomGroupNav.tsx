@@ -84,8 +84,8 @@ export function DynamicCustomGroupNav({
 
     if (!customGroups || customGroups.length === 0) return [];
 
-    const allCollections = collectionsData?.data ?? [];
-    const allSingles = singlesData?.data ?? [];
+    const allCollections = collectionsData?.items ?? [];
+    const allSingles = singlesData?.items ?? [];
 
     // Filter by permissions first
     const permittedCollections = filterCollectionItems(

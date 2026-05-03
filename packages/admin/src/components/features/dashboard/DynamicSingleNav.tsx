@@ -63,7 +63,7 @@ export function DynamicSingleNav({
   };
 
   // Filter to singles belonging to the "Singles" sidebar group
-  const visibleSingles = (singlesData?.data ?? []).filter(single => {
+  const visibleSingles = (singlesData?.items ?? []).filter(single => {
     if (single.admin?.hidden) return false;
 
     // Filter by search query if provided

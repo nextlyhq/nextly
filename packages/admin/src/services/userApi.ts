@@ -1,9 +1,8 @@
-import type { TableParams, TableResponse } from "@revnixhq/ui";
+import type { ListResponse, TableParams } from "@revnixhq/ui";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
-import { normalizePagination } from "../lib/api/normalizePagination";
-import type { ListResponse, MutationResponse } from "../lib/api/response-types";
+import type { MutationResponse } from "../lib/api/response-types";
 import { isUser } from "../types/guards";
 import type {
   User,
@@ -28,27 +27,16 @@ const buildQuery = (params: TableParams): string => {
 /**
  * Fetch users with pagination, search, and sorting.
  *
- * Phase 4 (Task 19): server now returns the canonical
- * `ListResponse<UserApiResponse>` shape (`{ items, meta }`); we map
- * `items` into the table component's `{ data, meta }` shape locally.
+ * Phase 4.7: pass the canonical ListResponse straight through; the
+ * normalizePagination adapter was deleted along with the legacy
+ * TableResponse shape.
  */
 export const fetchUsers = async (
   params: TableParams
-): Promise<TableResponse<UserApiResponse>> => {
+): Promise<ListResponse<UserApiResponse>> => {
   const query = buildQuery(params);
   const url = `/users${query ? `?${query}` : ""}`;
-
-  const result = await fetcher<ListResponse<UserApiResponse>>(url, {}, true);
-
-  const users = result.items;
-  const { pageSize = 10 } = params.pagination;
-  // normalizePagination accepts the canonical { total, page, limit,
-  // totalPages, ... } shape via its Record<string, unknown> input. Its
-  // internal page-based detector keys on `pageSize`, so we widen the
-  // canonical meta to a record before passing it through.
-  const meta = normalizePagination(result.meta, pageSize, users.length);
-
-  return { data: users, meta };
+  return fetcher<ListResponse<UserApiResponse>>(url, {}, true);
 };
 
 /**
