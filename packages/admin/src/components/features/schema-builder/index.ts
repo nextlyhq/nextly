@@ -19,6 +19,7 @@ export { CollectionSettings } from "./CollectionSettings";
 export { FieldPalette } from "./FieldPalette";
 export { FieldList } from "./FieldList";
 export { FieldEditor } from "./FieldEditor";
+export { ComponentFieldEditor } from "./ComponentFieldEditor";
 export { GroupFieldEditor } from "./GroupFieldEditor";
 export { HooksEditor, getPrebuiltHook } from "./HooksEditor";
 export { SelectOptionsEditor } from "./SelectOptionsEditor";

@@ -5,16 +5,16 @@
 // underlying column. readOnly mode disables every input so code-first
 // collections can be inspected but not changed.
 //
-// PR 1 scope note: the type-specific editor row (SelectOptionsEditor /
-// RelationshipEditor / UploadEditor / Array+Group+Component+Blocks) is
-// rendered as a placeholder. The legacy editors take per-property props
-// and need adapter wrappers to map onto the unified BuilderField onChange
-// contract — that wiring lands in PR 2 alongside the page-level mount of
-// FieldEditorSheet, so the adapters live next to the page code that needs
-// them.
+// Type-specific editor row (SelectOptionsEditor / RelationshipEditor /
+// UploadEditor / Array / Group / Component) is delegated to the
+// TypeSpecificEditor adapter, which translates the legacy per-property
+// editor props to the unified BuilderField onChange contract. Adapters
+// were added in PR 2 alongside the page-level mount of FieldEditorSheet.
 import { Input, Label, Switch, Textarea } from "@revnixhq/ui";
 
 import type { BuilderField } from "../types";
+
+import { TypeSpecificEditor } from "./TypeSpecificEditor";
 
 type Props = {
   field: BuilderField;
@@ -129,13 +129,15 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
       </div>
 
       {TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(field.type) && (
-        <div className="border-t border-border pt-3 space-y-1">
+        <div className="border-t border-border pt-3 space-y-2">
           <div className="text-xs uppercase tracking-wider text-muted-foreground">
             {field.type} options
           </div>
-          <p className="text-xs text-muted-foreground italic">
-            Type-specific editor wired in PR 2 (Collections page mount).
-          </p>
+          <TypeSpecificEditor
+            field={field}
+            readOnly={readOnly}
+            onChange={onChange}
+          />
         </div>
       )}
     </div>
