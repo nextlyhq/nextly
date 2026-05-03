@@ -119,10 +119,10 @@ function SortableFieldItem({
           onSelect();
         }
       }}
-      className={`flex items-center gap-3 py-3 px-4 border border-solid rounded-md cursor-pointer transition-all duration-150 group outline-none focus:outline-none focus:ring-0 ${
+      className={`flex items-center gap-3 py-3 px-4 border border-solid rounded-none cursor-pointer transition-all duration-150 group outline-none focus:outline-none focus:ring-0 ${
         isSelected
           ? "bg-transparent dark:bg-transparent shadow-none ring-0"
-          : "border-slate-200 dark:border-slate-800 dark:bg-transparent dark:hover:bg-transparent"
+          : "border-primary/5 dark:border-primary/5 dark:bg-transparent dark:hover:bg-transparent"
       } ${isDragging ? "opacity-50" : ""}`}
     >
       {/* Drag Handle — GripVertical */}
@@ -153,7 +153,7 @@ function SortableFieldItem({
 
       {/* Field type icon box — blue, matches FieldPalette */}
       <div
-        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/10 text-primary dark:bg-primary/20 dark:text-white mr-1"
+        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-white mr-1"
         style={{
           borderRadius: "6px",
           border: "1px solid hsl(var(--primary) / 0.25)",
@@ -178,7 +178,7 @@ function SortableFieldItem({
           {field.label || field.name || "Unnamed Field"}
         </span>
         <span className="text-muted-foreground/40 text-xs shrink-0">•</span>
-        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-full border border-border/60 bg-muted text-muted-foreground capitalize">
+        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-full border border-primary/5 bg-primary/5 text-muted-foreground capitalize">
           {typeLabel}
         </span>
         {field.required && (
@@ -197,7 +197,7 @@ function SortableFieldItem({
         }}
         title={`Delete ${field.label || field.name}`}
         aria-label={`Delete ${field.label || field.name}`}
-        className="shrink-0 flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-all duration-150 opacity-0 group-hover:opacity-100"
+        className="shrink-0 flex items-center justify-center w-7 h-7 rounded-none text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-all duration-150 opacity-0 group-hover:opacity-100"
       >
         <svg
           className="h-3.5 w-3.5"
@@ -234,17 +234,17 @@ export function FormCanvas({
       <div
         ref={setNodeRef}
         id="canvas-drop-zone"
-        className={`min-h-[320px] flex flex-col items-center justify-center border-2 border-dashed rounded-md transition-all duration-200 ${
-          isOver ? "border-primary bg-primary/5" : "border-border bg-muted/20"
+        className={`min-h-[320px] flex flex-col items-center justify-center border-2 border-dashed rounded-none transition-all duration-200 ${
+          isOver ? "border-primary bg-primary/5" : "border-primary/5 bg-primary/5/20"
         }`}
       >
         <div className="text-center px-6 py-12">
           {/* Arrow-down icon */}
           <div
-            className={`mx-auto mb-4 flex items-center justify-center w-12 h-12 rounded-md border transition-colors ${
+            className={`mx-auto mb-4 flex items-center justify-center w-12 h-12 rounded-none border transition-colors ${
               isOver
-                ? "border-primary/30 bg-primary/10 text-primary"
-                : "border-border bg-muted text-muted-foreground/40"
+                ? "border-primary/30 bg-primary/5 text-primary"
+                : "border-primary/5 bg-primary/5 text-muted-foreground/40"
             }`}
           >
             <svg
@@ -280,7 +280,7 @@ export function FormCanvas({
     <div
       ref={setNodeRef}
       className={`min-h-[120px] transition-all duration-200 ${
-        isOver ? "bg-primary/5 rounded-md" : ""
+        isOver ? "bg-primary/5 rounded-none" : ""
       }`}
     >
       {/* Field rows */}
@@ -298,7 +298,7 @@ export function FormCanvas({
 
       {/* Drop-here strip at bottom when dragging */}
       {isOver && (
-        <div className="mt-2 flex items-center justify-center py-3 rounded-md border-2 border-dashed border-primary bg-primary/5">
+        <div className="mt-2 flex items-center justify-center py-3 rounded-none border-2 border-dashed border-primary bg-primary/5">
           <p className="text-xs font-medium text-primary">
             Release to add field here
           </p>

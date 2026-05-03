@@ -190,7 +190,6 @@ export type DataFieldType =
   | "code"
   | "number"
   | "checkbox"
-  | "boolean" // Schema Builder alias for "checkbox"
   | "date"
   | "select"
   | "radio"
@@ -230,7 +229,6 @@ export const DATA_FIELD_TYPES: readonly DataFieldType[] = [
   "code",
   "number",
   "checkbox",
-  "boolean", // Schema Builder alias for "checkbox"
   "date",
   "select",
   "radio",

@@ -104,7 +104,7 @@ export function ChipsInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "flex min-h-10 flex-wrap gap-1.5 rounded-none border border-input bg-background px-3 py-2 text-sm",
+        "flex min-h-10 flex-wrap gap-1.5 rounded-none  border border-primary/5 bg-background px-3 py-2 text-sm",
         "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0",
         (disabled || readOnly) && "cursor-not-allowed bg-primary/5 opacity-70",
         className

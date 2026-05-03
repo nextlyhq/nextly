@@ -43,10 +43,9 @@ export interface RelationshipExpansionOptions {
 
 /**
  * Checks if a field is a relationship field.
- * Handles both dynamic collections ("relation") and code-defined collections ("relationship").
  */
 function isRelationshipField(field: FieldDefinition): boolean {
-  return field.type === "relation" || field.type === "relationship";
+  return field.type === "relationship";
 }
 
 /**
@@ -352,15 +351,9 @@ function expandMediaInData(
 
 /**
  * Gets the target collection name from a relationship field.
- * Handles both "relation" type (uses options.target) and "relationship" type (uses relationTo).
  * For polymorphic relationships (relationTo is array), returns the first collection.
  */
 function getTargetCollection(field: FieldDefinition): string | undefined {
-  // For "relation" type from dynamic collections
-  if (field.options?.target) {
-    return field.options.target;
-  }
-  // For "relationship" type from code-defined collections
   if (field.relationTo) {
     return Array.isArray(field.relationTo)
       ? field.relationTo[0]
@@ -371,15 +364,13 @@ function getTargetCollection(field: FieldDefinition): string | undefined {
 
 /**
  * Determines if a relationship field stores multiple values.
- * For "relation" type, checks relationType === "manyToMany".
- * For "relationship" type, checks hasMany === true.
+ * Code-first relationship fields use hasMany; UI-built collections use
+ * options.relationType === "manyToMany". Either signals many-to-many.
  */
 function isHasManyRelationship(field: FieldDefinition): boolean {
-  // For "relation" type with manyToMany
   if (field.options?.relationType === "manyToMany") {
     return true;
   }
-  // For "relationship" type with hasMany
   if (field.hasMany === true) {
     return true;
   }
@@ -558,7 +549,7 @@ export class CollectionRelationshipService extends BaseService {
       // If targetLabelField is provided, validate it exists in the collection
       if (targetLabelField) {
         const fieldExists = fields.some(
-          f => f.name === targetLabelField && f.type !== "relation"
+          f => f.name === targetLabelField && f.type !== "relationship"
         );
 
         if (fieldExists) {
@@ -585,7 +576,9 @@ export class CollectionRelationshipService extends BaseService {
 
       // First try priority fields
       for (const labelField of labelPriority) {
-        if (fields.some(f => f.name === labelField && f.type !== "relation")) {
+        if (
+          fields.some(f => f.name === labelField && f.type !== "relationship")
+        ) {
           console.log(
             `[LabelField] Using priority field "${labelField}" for collection "${collectionName}"`
           );
@@ -593,12 +586,12 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
 
-      // Fallback: Find first string/text field (not ID, not relation)
+      // Fallback: find first text-like field (not ID, not relationship).
       const textField = fields.find(
         f =>
           f.name !== "id" &&
-          f.type !== "relation" &&
-          (f.type === "string" || f.type === "text" || f.type === "email")
+          f.type !== "relationship" &&
+          (f.type === "text" || f.type === "email")
       );
 
       if (textField) {
@@ -714,7 +707,7 @@ export class CollectionRelationshipService extends BaseService {
 
     if (entries.length === 0) return [];
 
-    // Filter for both "relation" and "relationship" field types
+    // Filter for relationship fields.
     const relationFields = fields.filter(f => isRelationshipField(f));
 
     // Check if there are any fields that could contain media (upload, array, or group)
@@ -1167,7 +1160,7 @@ export class CollectionRelationshipService extends BaseService {
 
     const expandedEntry = { ...entry };
 
-    // Filter for both "relation" and "relationship" field types
+    // Filter for relationship fields.
     const relationFields = fields.filter(f => isRelationshipField(f));
 
     for (const field of relationFields) {

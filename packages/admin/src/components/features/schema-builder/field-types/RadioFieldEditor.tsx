@@ -250,7 +250,7 @@ export function RadioFieldEditor({
                   </Table>
                 </div>
               ) : (
-                <div className="text-center p-4 border rounded-none bg-primary/5">
+                <div className="text-center p-4  border border-primary/5 rounded-none bg-primary/5">
                   <p className="text-muted-foreground">No options defined</p>
                 </div>
               )}

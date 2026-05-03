@@ -16,12 +16,12 @@ import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
 // Mock both the barrel re-export and the actual module to cover all import paths
 vi.mock("../../lib/env", () => ({
   env: {
-    NEXTLY_SECRET_RESOLVED: "test-secret-must-be-at-least-32-characters-long!!",
+    NEXTLY_SECRET: "test-secret-must-be-at-least-32-characters-long!!",
   },
 }));
 vi.mock("../../shared/lib/env", () => ({
   env: {
-    NEXTLY_SECRET_RESOLVED: "test-secret-must-be-at-least-32-characters-long!!",
+    NEXTLY_SECRET: "test-secret-must-be-at-least-32-characters-long!!",
   },
 }));
 

@@ -39,7 +39,7 @@ import { UserSearchResults } from "./UserSearchResults";
  * - WCAG 2.2 AA compliant
  *
  * @design-spec
- * - Dialog: 512px (max-w-lg), 12px border radius
+ * - Dialog: 512px (max-w-lg), 12px  border border-primary/5 radius
  * - Input: 48px height (h-12)
  * - Items: 36px desktop (h-9), 44px mobile (h-11)
  * - Backdrop: bg-black/80 with backdrop blur

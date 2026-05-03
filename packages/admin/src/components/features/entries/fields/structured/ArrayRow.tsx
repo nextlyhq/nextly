@@ -189,13 +189,13 @@ export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "transition-all shadow-none border-slate-200 dark:border-slate-800 overflow-hidden",
+        "transition-all shadow-none border-primary/5 dark:border-primary/5 overflow-hidden",
         isDragging && "opacity-50 ring-1 ring-primary z-10"
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CardHeader
-          className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors"
+          className="p-2  border-b border-primary/5 dark:border-primary/5 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900 transition-colors"
           noBorder
         >
           <div className="flex items-center gap-2">
@@ -282,7 +282,7 @@ export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
                 })
               ) : (
                 // Default placeholder when no renderField provided
-                <div className="text-sm text-muted-foreground bg-primary/5 rounded-none p-4 border border-dashed">
+                <div className="text-sm text-muted-foreground bg-primary/5 rounded-none p-4  border border-primary/5 border-dashed">
                   <p className="font-medium mb-2">Sub-fields:</p>
                   <ul className="list-disc list-inside space-y-1">
                     {field.fields.map((subField, idx) => {

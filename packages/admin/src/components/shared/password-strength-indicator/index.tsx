@@ -32,7 +32,7 @@ export function PasswordStrengthIndicator({
 
       <div
         className={cn(
-          "p-3 rounded-none border transition-colors duration-100",
+          "p-3 rounded-none  border border-primary/5 transition-colors duration-100",
           {
             "bg-red-500/5 border-red-500/20 text-red-900 dark:text-red-200":
               strength.score <= 2,

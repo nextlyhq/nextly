@@ -130,11 +130,11 @@ export function DraftRecoveryDialog({
         </AlertDialogHeader>
 
         <AlertDialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={onDiscard} className="gap-2">
+          <Button variant="outline" onClick={onDiscard}>
             <Trash className="h-4 w-4" />
             Discard draft
           </Button>
-          <Button onClick={onRecover} className="gap-2">
+          <Button onClick={onRecover}>
             <RotateCcw className="h-4 w-4" />
             Recover changes
           </Button>

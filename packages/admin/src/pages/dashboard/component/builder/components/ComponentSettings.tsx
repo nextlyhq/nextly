@@ -212,7 +212,7 @@ function IconPicker({ value, onChange }: IconPickerProps) {
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-0" align="start">
-        <div className="p-2 border-b border-border">
+        <div className="p-2  border-b border-primary/5">
           <div className="relative">
             <Icons.Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -366,14 +366,14 @@ export function ComponentSettings({
       </div>
 
       {/* ==================== Advanced Section ==================== */}
-      <div className="mt-6 pt-6 border-t border-border space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
+      <div className="mt-6 pt-6  border-t border-primary/5 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
         <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Advanced
         </h3>
 
         <div className="grid grid-cols-1 gap-6">
           {/* Preview Image URL */}
-          <div className="space-y-1.5 border-border/50 py-2">
+          <div className="space-y-1.5 border-primary/5 py-2">
             <FormLabelWithTooltip
               htmlFor="component-image-url"
               className="text-xs font-medium"
@@ -390,7 +390,7 @@ export function ComponentSettings({
           </div>
 
           {/* Hidden */}
-          <div className="flex items-center justify-between py-2 border-border/50">
+          <div className="flex items-center justify-between py-2 border-primary/5">
             <div className="space-y-0.5">
               <FormLabelWithTooltip
                 htmlFor="toggle-hidden-component"
@@ -414,7 +414,7 @@ export function ComponentSettings({
 
   if (variant === "card") {
     return (
-      <div className="border border-border rounded-none bg-card shadow-none p-6">
+      <div className="border border-primary/5 rounded-none bg-card shadow-none p-6">
         <div className="flex items-center gap-2 mb-6">
           <Icons.Settings className="h-5 w-5 text-primary" />
           <h3 className="text-lg font-semibold tracking-tight">
@@ -434,7 +434,7 @@ export function ComponentSettings({
     <Collapsible
       open={localExpanded}
       onOpenChange={handleExpandedChange}
-      className="border-b border-border bg-primary/5"
+      className="border-b border-primary/5 bg-primary/5"
     >
       <CollapsibleTrigger asChild>
         <button

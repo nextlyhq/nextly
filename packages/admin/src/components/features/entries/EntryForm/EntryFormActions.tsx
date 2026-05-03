@@ -105,7 +105,6 @@ export function EntryFormActions({
                 variant="outline"
                 onClick={onPreview}
                 disabled={isSubmitting}
-                className="flex-1 shadow-none bg-background border-border hover-unified"
               >
                 <Eye className="mr-2 h-4 w-4" />
                 {previewLabel}
@@ -118,7 +117,7 @@ export function EntryFormActions({
                 variant="outline"
                 onClick={onCancel}
                 disabled={isSubmitting}
-                className="flex-1 shadow-none bg-background border-border hover-unified"
+                className="flex-1 shadow-none bg-background border-primary/5 hover-unified"
               >
                 Cancel
               </Button>
@@ -128,10 +127,11 @@ export function EntryFormActions({
 
         {/* Primary Action */}
         <Button
+          size="md"
           type="submit"
           form={formId}
           disabled={isSubmitting || isInvalid}
-          className="flex-1 shadow-none bg-primary hover:bg-primary/90 text-primary-foreground"
+          className="flex-1"
         >
           {isSubmitting ? (
             <>

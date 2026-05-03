@@ -114,7 +114,7 @@ function ButtonGroupComponent({
         {buttons.map((button, index) => {
           const variantClass =
             button.variant === "outline"
-              ? "border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+              ? "border border-primary/5 bg-background hover:bg-accent hover:text-accent-foreground"
               : "";
 
           return (

@@ -45,7 +45,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
         <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
           {/* Mobile Header */}
-          <div className="md:hidden flex h-14 shrink-0 items-center justify-between border-b border-border px-4 bg-background z-30">
+          <div className="md:hidden flex h-14 shrink-0 items-center justify-between  border-b border-primary/5 px-4 bg-background z-30">
             <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
               <Button
                 variant="ghost"
@@ -93,7 +93,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 <ErrorBoundary
                   fallback={
                     <div className="flex h-full items-center justify-center bg-background p-6 text-center">
-                      <div className="max-w-md rounded-none bg-card p-6 shadow-xl border border-border">
+                      <div className="max-w-md rounded-none bg-card p-6 shadow-xl  border border-primary/5">
                         <h2 className="text-xl font-bold text-foreground mb-2">
                           Something went wrong
                         </h2>

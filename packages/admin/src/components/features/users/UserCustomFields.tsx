@@ -254,8 +254,7 @@ function UserFieldInput({
   error,
   disabled,
 }: UserFieldInputProps) {
-  const isCheckbox =
-    fieldConfig.type === "checkbox" || fieldConfig.type === "boolean";
+  const isCheckbox = fieldConfig.type === "checkbox";
 
   return (
     <FieldWrapper
@@ -339,7 +338,7 @@ function UserFieldInput({
 
       default:
         return (
-          <div className="rounded-none border border-destructive/50 bg-destructive/10 p-3 text-center">
+          <div className="rounded-none  border border-primary/5 border-destructive/50 bg-destructive/10 p-3 text-center">
             <p className="text-sm text-destructive">
               Unsupported field type: {fieldType}
             </p>

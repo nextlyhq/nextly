@@ -32,7 +32,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Table,
+  TableBody,
   TableCell,
+  TableHead,
+  TableHeader,
   TableRow,
   TableSkeleton,
 } from "@revnixhq/ui";
@@ -60,6 +64,7 @@ import {
   Trash2,
   Type,
   Users,
+  Columns,
   type LucideIcon,
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -218,9 +223,9 @@ function StaticFieldRow({ field }: { field: StaticField }) {
   const TypeIcon = typeConfig.icon;
 
   return (
-    <tr className="border-b border-border bg-primary/5">
+    <TableRow className="bg-primary/5 hover:bg-primary/5">
       {/* Lock icon + Name */}
-      <td className="px-4 py-3 whitespace-nowrap text-base">
+      <TableCell className="whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
           <span
             className="text-muted-foreground shrink-0"
@@ -228,50 +233,54 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="text-sm px-1.5 py-0.5 rounded-none font-mono">
+          <code className="text-sm bg-white  border border-primary/5 px-1.5 py-0.5 rounded-none font-mono">
             {field.name}
           </code>
         </div>
-      </td>
+      </TableCell>
 
       {/* Label */}
-      <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">
+      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
         {field.label}
-      </td>
+      </TableCell>
 
       {/* Type */}
-      <td className="px-4 py-3 whitespace-nowrap text-base">
-        <Badge variant={typeConfig.variant} className="gap-1">
+      <TableCell className="whitespace-nowrap text-base">
+        <Badge variant={typeConfig.variant} className="gap-1 shadow-none">
           <TypeIcon className="h-3 w-3" />
           {typeConfig.label}
         </Badge>
-      </td>
+      </TableCell>
 
       {/* Required */}
-      <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">
+      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
         {field.required ? "Yes" : "No"}
-      </td>
+      </TableCell>
 
       {/* Source */}
-      <td className="px-4 py-3 whitespace-nowrap text-base">
-        <Badge variant="default">Built-in</Badge>
-      </td>
+      <TableCell className="whitespace-nowrap text-base">
+        <Badge variant="default" className="shadow-none">
+          Built-in
+        </Badge>
+      </TableCell>
 
       {/* Status */}
-      <td className="px-4 py-3 whitespace-nowrap text-base">
-        <Badge variant="success">Active</Badge>
-      </td>
+      <TableCell className="whitespace-nowrap text-base">
+        <Badge variant="success" className="shadow-none">
+          Active
+        </Badge>
+      </TableCell>
 
       {/* Created */}
-      <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground hidden lg:table-cell">
+      <TableCell className="whitespace-nowrap text-sm text-muted-foreground hidden lg:table-cell">
         —
-      </td>
+      </TableCell>
 
       {/* Actions */}
-      <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">
+      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
         —
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -312,7 +321,10 @@ function SortableFieldRow({
     <TableRow
       ref={setNodeRef}
       style={style}
-      className={isDragging ? "bg-primary/5 opacity-80" : ""}
+      className={cn(
+        "hover-unified-table-row",
+        isDragging && "bg-primary/5 opacity-80"
+      )}
     >
       {/* Drag handle + Name */}
       <TableCell className="whitespace-nowrap text-base">
@@ -353,7 +365,7 @@ function SortableFieldRow({
 
       {/* Type */}
       <TableCell className="whitespace-nowrap text-sm">
-        <Badge variant={typeConfig.variant} className="gap-1">
+        <Badge variant={typeConfig.variant} className="gap-1 shadow-none">
           <TypeIcon className="h-3 w-3" />
           {typeConfig.label}
         </Badge>
@@ -367,18 +379,26 @@ function SortableFieldRow({
       {/* Source */}
       <TableCell className="whitespace-nowrap text-sm">
         {isCode ? (
-          <Badge variant="default">Code</Badge>
+          <Badge variant="default" className="shadow-none">
+            Code
+          </Badge>
         ) : (
-          <Badge variant="primary">Custom</Badge>
+          <Badge variant="primary" className="shadow-none">
+            Custom
+          </Badge>
         )}
       </TableCell>
 
       {/* Status */}
       <TableCell className="whitespace-nowrap text-sm">
         {field.isActive ? (
-          <Badge variant="success">Active</Badge>
+          <Badge variant="success" className="shadow-none">
+            Active
+          </Badge>
         ) : (
-          <Badge variant="warning">Inactive</Badge>
+          <Badge variant="warning" className="shadow-none">
+            Inactive
+          </Badge>
         )}
       </TableCell>
 
@@ -391,7 +411,7 @@ function SortableFieldRow({
       <TableCell className="whitespace-nowrap text-sm">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Button variant="ghost" size="icon-sm">
               <MoreHorizontal className="h-4 w-4" />
               <span className="sr-only">Open menu</span>
             </Button>
@@ -590,19 +610,14 @@ function UserFieldsTable() {
   if (isError) {
     return (
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Link href={ROUTES.USERS_FIELDS_CREATE}>
-            <Button size="sm" className="flex items-center gap-1 shrink-0">
-              <Plus className="h-4 w-4" />
-              <span>Add Field</span>
-            </Button>
-          </Link>
-          <div className="flex-1">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
             <SearchBar
               value={search}
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={false}
+              className="bg-white text-black border-primary/5"
             />
           </div>
         </div>
@@ -623,19 +638,14 @@ function UserFieldsTable() {
   if (isLoading && !data) {
     return (
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Link href={ROUTES.USERS_FIELDS_CREATE}>
-            <Button size="sm" className="flex items-center gap-1 shrink-0">
-              <Plus className="h-4 w-4" />
-              <span>Add Field</span>
-            </Button>
-          </Link>
-          <div className="flex-1">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
             <SearchBar
               value={search}
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={true}
+              className="bg-white text-black border-primary/5"
             />
           </div>
         </div>
@@ -661,7 +671,7 @@ function UserFieldsTable() {
             </span>
             <Button
               variant="ghost"
-              size="sm"
+              size="md"
               onClick={() => setShowRestartBanner(false)}
             >
               Dismiss
@@ -671,21 +681,25 @@ function UserFieldsTable() {
       )}
 
       {/* Toolbar: Search + Action button */}
-      <div className="flex items-center gap-3">
-        <div className="flex-1">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search fields by name or label..."
-            isLoading={isLoading}
-          />
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder="Search fields by name or label..."
+              isLoading={isLoading}
+              className="bg-white text-black border-primary/5"
+            />
+          </div>
         </div>
-        <Link href={ROUTES.USERS_FIELDS_CREATE}>
-          <Button size="sm" className="flex items-center gap-1 shrink-0">
-            <Plus className="h-4 w-4" />
-            <span>Add Field</span>
+
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="md">
+            <Columns className="mr-2 h-4 w-4" />
+            Columns
           </Button>
-        </Link>
+        </div>
       </div>
 
       {/* Table with DnD */}
@@ -702,79 +716,41 @@ function UserFieldsTable() {
           </p>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
-            <SortableContext
-              items={paginatedFields.map(f => f.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <table className="w-full">
-                <thead className="bg-primary/5 border-b">
-                  <tr>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Name
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Label
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Type
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Required
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Source
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Status
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden lg:table-cell"
-                    >
-                      Created
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                    >
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                {/* Static fields (read-only, non-draggable) */}
-                {filteredStaticFields.length > 0 && (
-                  <tbody>
-                    {filteredStaticFields.map(field => (
-                      <StaticFieldRow key={field.name} field={field} />
-                    ))}
-                  </tbody>
-                )}
-                {/* Custom fields (draggable) */}
-                <tbody>
+            <Table aria-label="User fields table">
+              <TableHeader className="bg-[hsl(var(--table-header-bg))]">
+                <TableRow>
+                  <TableHead className="w-[200px]">Name</TableHead>
+                  <TableHead>Label</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Required</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="hidden lg:table-cell">
+                    Created
+                  </TableHead>
+                  <TableHead className="w-[100px]">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              {/* Static fields (read-only, non-draggable) */}
+              {filteredStaticFields.length > 0 && (
+                <TableBody>
+                  {filteredStaticFields.map(field => (
+                    <StaticFieldRow key={field.name} field={field} />
+                  ))}
+                </TableBody>
+              )}
+              {/* Custom fields (draggable) */}
+              <TableBody>
+                <SortableContext
+                  items={paginatedFields.map(f => f.id)}
+                  strategy={verticalListSortingStrategy}
+                >
                   {paginatedFields.map(field => (
                     <SortableFieldRow
                       key={field.id}
@@ -784,26 +760,23 @@ function UserFieldsTable() {
                       onDelete={handleDelete}
                     />
                   ))}
-                </tbody>
-              </table>
-            </SortableContext>
+                </SortableContext>
+              </TableBody>
+            </Table>
           </DndContext>
 
-          {/* Pagination inside table wrapper */}
-          {totalPages > 0 && (
-            <div className="table-footer border-t border-border p-4">
-              <Pagination
-                currentPage={page}
-                totalPages={totalPages}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isLoading}
-                totalItems={totalItems}
-              />
-            </div>
-          )}
+          {/* Pagination inside table wrapper - always show if table is shown */}
+          {/* <div className="table-footer  border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4"> */}
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, totalPages)}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            totalItems={totalItems + filteredStaticFields.length}
+          />
+          {/* </div> */}
         </div>
       )}
 
@@ -835,10 +808,20 @@ const UserFieldsPage: React.FC = () => {
           {/* Page Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">User Fields</h1>
+              <h1 className="text-xl font-semibold tracking-tight">
+                User Fields
+              </h1>
               <p className="text-sm font-normal text-primary/50 mt-1">
                 Manage custom attributes for user accounts
               </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link href={ROUTES.USERS_FIELDS_CREATE}>
+                <Button size="md" className="flex items-center gap-1 shrink-0">
+                  <Plus className="h-4 w-4" />
+                  <span>Add Field</span>
+                </Button>
+              </Link>
             </div>
           </div>
 

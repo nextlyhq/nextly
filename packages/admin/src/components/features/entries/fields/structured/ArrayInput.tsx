@@ -308,14 +308,14 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <Card
       className={cn(
-        "shadow-none border border-slate-200 dark:border-slate-800 overflow-hidden",
+        "shadow-none  border border-primary/5 dark:border-primary/5 overflow-hidden",
         className
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         {/* Collapsible Header */}
         <CardHeader
-          className="p-3 bg-slate-50/80 dark:bg-slate-900/80 border-b border-slate-100 dark:border-slate-800/60"
+          className="p-3 bg-primary/5/80 dark:bg-slate-900/80  border-b border-primary/5 dark:border-primary/5"
           noBorder
         >
           <div className="flex items-center justify-between">
@@ -381,7 +381,7 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
 
             {/* Empty State */}
             {items.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground border border-dashed rounded-none bg-primary/5">
+              <div className="text-center py-8 text-muted-foreground  border border-primary/5 border-dashed rounded-none bg-primary/5">
                 <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
                 {canAdd && (
                   <p className="text-sm">Click the button below to add one.</p>

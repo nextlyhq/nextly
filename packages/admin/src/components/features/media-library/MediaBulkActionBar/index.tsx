@@ -75,7 +75,7 @@ export function MediaBulkActionBar({
       aria-label="Bulk actions for selected media"
       aria-live="polite"
       className={cn(
-        "flex items-center justify-between gap-4 w-full p-3 rounded-none border border-primary/20 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
+        "flex items-center justify-between gap-4 w-full p-3 rounded-none  border border-primary/5 border-primary/5 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
         className
       )}
     >
@@ -94,7 +94,7 @@ export function MediaBulkActionBar({
         {/* Clear selection button */}
         <Button
           variant="ghost"
-          size="sm"
+          size="md"
           onClick={onClear}
           disabled={isDeleting}
           className="text-muted-foreground hover:text-foreground h-8 text-xs font-normal"
@@ -108,10 +108,10 @@ export function MediaBulkActionBar({
         {/* Move to folder button */}
         <Button
           variant="outline"
-          size="sm"
+          size="md"
           onClick={onMoveToFolder}
           disabled={isDeleting}
-          className="gap-1.5 h-8 text-xs font-normal bg-card border-primary/20 text-primary hover:bg-primary/5"
+          className="gap-1.5 h-8 text-xs font-normal bg-card border-primary/5 text-primary hover:bg-primary/5"
         >
           <FolderInput className="h-3.5 w-3.5" />
           Move
@@ -120,7 +120,7 @@ export function MediaBulkActionBar({
         {/* Delete button - Black and White scheme */}
         <Button
           variant="default"
-          size="sm"
+          size="md"
           onClick={onDelete}
           disabled={isDeleting}
           className="h-8 text-xs font-normal px-4 rounded-none"

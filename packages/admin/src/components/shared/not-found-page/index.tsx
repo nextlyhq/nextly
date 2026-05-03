@@ -11,7 +11,7 @@ export function NotFoundPage() {
   return (
     <PageContainer className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)]">
       {/* Container */}
-      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-white border border-border/40">
+      <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-none bg-white  border border-primary/5">
         {/* 404 Big number */}
         <div className="mb-2 select-none">
           <span className="text-[120px] font-black leading-none tracking-tight text-slate-800">
@@ -38,7 +38,7 @@ export function NotFoundPage() {
         <div className="flex items-center justify-center gap-4 w-full sm:w-auto">
           <Button
             variant="outline"
-            className="w-full sm:w-[140px] gap-2 rounded-none font-medium text-slate-700 border-slate-200 hover:bg-slate-50"
+            className="w-full sm:w-[140px] gap-2 rounded-none font-medium text-slate-700 border-primary/5 hover:bg-primary/5"
             onClick={() => window.history.back()}
           >
             <ArrowLeft className="h-4 w-4" />

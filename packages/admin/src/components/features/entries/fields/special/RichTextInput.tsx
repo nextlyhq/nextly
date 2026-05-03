@@ -137,7 +137,7 @@ const editorTheme = {
 
   // Blockquote
   quote:
-    "border-l-4 border-muted-foreground/30 pl-4 italic text-muted-foreground mb-2",
+    "border-l-4 border-primary/5-foreground/30 pl-4 italic text-muted-foreground mb-2",
 
   // Links
   link: "text-primary underline hover-unified cursor-pointer",
@@ -179,9 +179,9 @@ const editorTheme = {
 
   // Tables
   table: "border-collapse w-full my-4",
-  tableCell: "border border-border px-3 py-2 text-left align-top min-w-[75px]",
+  tableCell: "border border-primary/5 px-3 py-2 text-left align-top min-w-[75px]",
   tableCellHeader:
-    "border border-border px-3 py-2 text-left font-bold bg-primary/5 align-top",
+    "border border-primary/5 px-3 py-2 text-left font-bold bg-primary/5 align-top",
   tableRow: "",
   tableRowStriping: "even:bg-primary/5",
 };
@@ -261,7 +261,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "relative rounded-none border bg-background",
+        "relative rounded-none  border border-primary/5 bg-background",
         !isEditable && "bg-primary/5 cursor-not-allowed",
         className
       )}

@@ -100,7 +100,7 @@ export class EmailProviderService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
 
-    this.encryptionSecret = env.NEXTLY_SECRET_RESOLVED;
+    this.encryptionSecret = env.NEXTLY_SECRET;
 
     switch (this.dialect) {
       case "postgresql":

@@ -337,7 +337,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          size="md"
           onClick={handleFormat}
           disabled={!canFormat || !!parseError}
           className="flex-shrink-0"

@@ -256,7 +256,7 @@ function CategorySection({
 
       {/* Expanded items with subtle vertical line */}
       {isOpen && (
-        <div className="mb-1 space-y-0.5 ml-2.5 pl-2.5 border-l border-border/40">
+        <div className="mb-1 space-y-0.5 ml-2.5 pl-2.5  border-l border-primary/5">
           {types.map(field => (
             <DraggablePaletteItem
               key={field.type}
@@ -303,7 +303,7 @@ export function FieldPalette({
   return (
     <div className="h-full flex flex-col bg-background">
       {/* Search */}
-      <div className="px-3 py-3 border-b border-border">
+      <div className="px-3 py-3  border-b border-primary/5">
         <div className="relative">
           <Icons.Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
           <Input
@@ -311,7 +311,7 @@ export function FieldPalette({
             placeholder="Search 18 field types..."
             value={searchQuery}
             onChange={e => onSearchChange(e.target.value)}
-            className="text-[13px] pl-9 bg-primary/5 border-border/60 rounded-none] h-[38px]"
+            className="text-[13px] pl-9 bg-primary/5 border-primary/5 rounded-none] h-[38px]"
           />
         </div>
       </div>
@@ -351,7 +351,7 @@ export function FieldPalette({
       </div>
 
       {/* Footer hint */}
-      <div className="px-3 py-2.5 border-t border-border">
+      <div className="px-3 py-2.5  border-t border-primary/5">
         <p className="text-[11px] text-muted-foreground/50 text-center">
           Drag fields to the canvas to add them
         </p>

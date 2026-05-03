@@ -699,7 +699,7 @@ describe("SingleRegistryService", () => {
       ctx.adapter.selectOne.mockImplementation(async (table: string) => {
         if (table !== "dynamic_singles") return null;
         const { calculateSchemaHash } = await import(
-          "../../../services/schema/schema-hash"
+          "../../schema/services/schema-hash"
         );
         return dbRow({
           schema_hash: calculateSchemaHash(fields),

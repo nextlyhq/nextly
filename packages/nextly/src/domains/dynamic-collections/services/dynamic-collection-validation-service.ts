@@ -193,7 +193,7 @@ export class DynamicCollectionValidationService {
         throw new Error(errorMessage);
       }
 
-      if (field.type === "relation") {
+      if (field.type === "relationship") {
         this.validateRelationshipField(field);
       }
     }

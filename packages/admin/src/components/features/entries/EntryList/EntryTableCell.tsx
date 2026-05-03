@@ -256,7 +256,7 @@ function UploadCell({ value }: { value: unknown }) {
   return (
     <div className="flex items-center gap-2">
       {isImage && thumbnailUrl ? (
-        <Avatar size="sm">
+        <Avatar size="md">
           <AvatarImage src={thumbnailUrl} alt={filename} />
           <AvatarFallback>
             <Image className="h-4 w-4" />

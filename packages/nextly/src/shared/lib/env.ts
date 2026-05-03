@@ -36,10 +36,6 @@ export const _envSchema = z
     // Additional allowed origins for CSRF validation (comma-separated)
     NEXTLY_ALLOWED_ORIGINS: z.string().optional(),
 
-    // Legacy Auth.js env vars -- kept in schema for migration detection only
-    AUTH_SECRET: z.string().optional(),
-    NEXTAUTH_SECRET: z.string().optional(),
-
     // OAuth providers (optional at boot; required only if that provider is enabled)
     AUTH_GOOGLE_ID: z.string().optional(),
     AUTH_GOOGLE_SECRET: z.string().optional(),
@@ -56,13 +52,9 @@ export const _envSchema = z
   .superRefine((val, ctx) => {
     const isProd = val.NODE_ENV === "production";
 
-    // Resolve the auth secret: prefer NEXTLY_SECRET, fall back to legacy vars
-    const resolvedSecret =
-      val.NEXTLY_SECRET ?? val.AUTH_SECRET ?? val.NEXTAUTH_SECRET;
-
     // Production hard requirements
     if (isProd) {
-      if (!resolvedSecret || resolvedSecret.length < 32) {
+      if (!val.NEXTLY_SECRET || val.NEXTLY_SECRET.length < 32) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["NEXTLY_SECRET"],
@@ -137,8 +129,6 @@ export const _envSchema = z
 
 export type BaseEnv = z.infer<typeof _envSchema>;
 export type Env = BaseEnv & {
-  // Resolved auth secret (NEXTLY_SECRET with legacy fallback during migration)
-  NEXTLY_SECRET_RESOLVED: string | undefined;
   // Parsed allowed origins array from comma-separated NEXTLY_ALLOWED_ORIGINS
   NEXTLY_ALLOWED_ORIGINS_PARSED: string[];
 };
@@ -146,7 +136,7 @@ export type Env = BaseEnv & {
 function validateEnv(): Env {
   const parsed = _envSchema.safeParse(process.env);
   if (!parsed.success) {
-    console.error("❌ Environment validation failed:");
+    console.error("Environment validation failed:");
     parsed.error.issues.forEach(issue => {
       console.error(`  ${issue.path.join(".")}: ${issue.message}`);
     });
@@ -154,13 +144,6 @@ function validateEnv(): Env {
   }
 
   const data = parsed.data;
-
-  // Check for legacy env vars and provide clear migration guidance
-  checkLegacyEnvVars(data);
-
-  // Resolve secret: prefer NEXTLY_SECRET, fall back to legacy vars
-  const resolvedSecret =
-    data.NEXTLY_SECRET ?? data.AUTH_SECRET ?? data.NEXTAUTH_SECRET;
 
   // Parse allowed origins from comma-separated string
   const allowedOrigins = data.NEXTLY_ALLOWED_ORIGINS
@@ -171,35 +154,10 @@ function validateEnv(): Env {
 
   const normalized: Env = Object.freeze({
     ...data,
-    NEXTLY_SECRET_RESOLVED: resolvedSecret,
     NEXTLY_ALLOWED_ORIGINS_PARSED: allowedOrigins,
   });
 
   return normalized;
-}
-
-/**
- * Check for legacy Auth.js environment variables and warn about migration.
- * In production without NEXTLY_SECRET, fail fast with a clear error.
- */
-function checkLegacyEnvVars(data: BaseEnv): void {
-  const hasLegacy = Boolean(data.AUTH_SECRET || data.NEXTAUTH_SECRET);
-  const hasNew = Boolean(data.NEXTLY_SECRET);
-
-  if (hasLegacy && !hasNew) {
-    const found = [
-      data.AUTH_SECRET ? "AUTH_SECRET" : null,
-      data.NEXTAUTH_SECRET ? "NEXTAUTH_SECRET" : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
-
-    console.warn(
-      `[nextly] WARNING: Legacy env var "${found}" detected. ` +
-        `Please rename to "NEXTLY_SECRET" in your .env file. ` +
-        `Legacy support will be removed in a future version.`
-    );
-  }
 }
 
 // Lazy-initialised env: the proxy defers validateEnv() until a property is
@@ -240,8 +198,6 @@ export function validateEnvObject(obj: Record<string, unknown>): Env {
     throw parsed.error;
   }
   const data = parsed.data;
-  const resolvedSecret =
-    data.NEXTLY_SECRET ?? data.AUTH_SECRET ?? data.NEXTAUTH_SECRET;
   const allowedOrigins = data.NEXTLY_ALLOWED_ORIGINS
     ? data.NEXTLY_ALLOWED_ORIGINS.split(",")
         .map(s => s.trim())
@@ -249,7 +205,6 @@ export function validateEnvObject(obj: Record<string, unknown>): Env {
     : [];
   return Object.freeze({
     ...data,
-    NEXTLY_SECRET_RESOLVED: resolvedSecret,
     NEXTLY_ALLOWED_ORIGINS_PARSED: allowedOrigins,
   });
 }

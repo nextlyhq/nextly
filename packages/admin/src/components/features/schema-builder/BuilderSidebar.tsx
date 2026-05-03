@@ -77,7 +77,7 @@ export function BuilderSidebar({
     <div
       ref={sidebarRef}
       className={cn(
-        "h-auto lg:h-full flex flex-col bg-background lg:border-l border-border relative",
+        "h-auto lg:h-full flex flex-col bg-background lg :border-l border-primary/5 relative",
         className
       )}
     >
@@ -89,7 +89,7 @@ export function BuilderSidebar({
       )}
 
       {header && (
-        <div className="p-4 border-b border-border bg-background">{header}</div>
+        <div className="p-4  border-b border-primary/5 bg-background">{header}</div>
       )}
 
       <Tabs
@@ -104,7 +104,7 @@ export function BuilderSidebar({
             <button
               type="button"
               onClick={() => onTabChange("")}
-              className="lg:hidden absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full z-[60] flex items-end justify-center w-12 h-6 rounded-none bg-background border border-b-0 border-border shadow-inner-subtle text-muted-foreground hover:text-foreground transition-all duration-200"
+              className="lg:hidden absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full z-[60] flex items-end justify-center w-12 h-6 rounded-none bg-background  border border-primary/5 border-b-0 border-primary/5 shadow-inner-subtle text-muted-foreground hover:text-foreground transition-all duration-200"
               aria-label="Close panel"
             >
               <Icons.X className="h-4 w-4 mb-0.5" />
@@ -128,7 +128,7 @@ export function BuilderSidebar({
         {/* Tab bar - Bottom on mobile, Top on desktop */}
         <TabsList
           className={cn(
-            `shrink-0 grid ${colsClass} gap-0 px-0 py-0 border-t lg:border-t-0 lg:border-b border-border bg-background h-auto w-full rounded-none`,
+            `shrink-0 grid ${colsClass} gap-0 px-0 py-0  border-t border-primary/5 lg:border-t-0 lg :border-b border-primary/5 bg-background h-auto w-full rounded-none`,
             isSticky &&
               "fixed bottom-0 left-0 right-0 z-[60] lg:static lg:border-t-0"
           )}

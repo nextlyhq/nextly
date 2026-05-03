@@ -41,7 +41,7 @@ import type { RBACAccessControlService } from "../auth/rbac-access-control-servi
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
 import type { ComponentDataService } from "../components/component-data-service";
-import type { DynamicCollectionService } from "../dynamic-collections";
+import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";

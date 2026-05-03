@@ -59,7 +59,7 @@ export function EntryEmptyState({
   onCreateClick,
 }: EntryEmptyStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 px-4 border border-dashed rounded-none bg-card rounded-none">
+    <div className="flex flex-col items-center justify-center py-16 px-4  border border-primary/5 border-dashed rounded-none bg-card rounded-none">
       <div className="rounded-none bg-primary/5 p-4 mb-4">
         <FileText className="h-8 w-8 text-muted-foreground" />
       </div>

@@ -389,7 +389,7 @@ function CollapsedPluginDropdown({
         <DropdownMenuContent
           side="right"
           align="start"
-          className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-border/50"
+          className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-primary/5"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >

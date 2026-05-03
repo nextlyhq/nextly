@@ -84,7 +84,7 @@ export class ErrorBoundary extends Component<
 
       return (
         <div className="flex items-center justify-center p-4">
-          <div className="rounded-none border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
+          <div className="rounded-none  border border-primary/5 border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
             <h2 className="mb-2 text-lg font-semibold text-red-900 dark:text-red-100">
               Something went wrong
             </h2>

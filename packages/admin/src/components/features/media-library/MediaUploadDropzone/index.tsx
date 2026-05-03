@@ -17,11 +17,11 @@
  * - Width: Full width (w-full)
  *
  * **Visual States**:
- * - Default: Dashed border (border-2 border-dashed border-border)
- * - Hover: Primary border (border-primary-300 bg-accent/50)
- * - Active (dragging): Primary border (border-primary-500 bg-primary-50)
+ * - Default: Dashed  border border-primary/5 (border-2 border-dashed border-primary/5)
+ * - Hover: Primary  border border-primary/5 (border-primary-300 bg-accent/50)
+ * - Active (dragging): Primary  border border-primary/5 (border-primary-500 bg-primary-50)
  * - Uploading: Progress bars for each file
- * - Error: Red border (border-destructive bg-destructive/10)
+ * - Error: Red  border border-primary/5 (border-destructive bg-destructive/10)
  * - Collapsed: Compact 64px height with small icon
  *
  * **Supported File Types**:
@@ -454,7 +454,7 @@ export function MediaUploadDropzone({
   // Border styles — border-2 dashed, prominent, mode-aware
   const borderStyles = {
     default:
-      "border-2 border-dashed border-border hover:border-primary/50 dark:border-muted-foreground/40 dark:hover:border-primary/60",
+      "border-2 border-dashed border-primary/5 hover:border-primary/50 dark:border-primary/5-foreground/40 dark:hover:border-primary/60",
     active: "border-2 border-dashed border-primary",
     reject: "border-2 border-dashed border-destructive",
     uploading: "border-2 border-dashed border-primary/80",
@@ -466,7 +466,7 @@ export function MediaUploadDropzone({
   // Avoid bg-white: it's a fixed color that wins over dark:bg-card due to Tailwind specificity.
   const backgroundStyles = {
     default: "bg-card",
-    active: "bg-primary/5 dark:bg-primary/10",
+    active: "bg-primary/5 dark:bg-primary/5",
     reject: "bg-destructive/5 dark:bg-destructive/10",
     uploading: "bg-card",
     error: "bg-destructive/5 dark:bg-destructive/10",
@@ -647,7 +647,7 @@ export function MediaUploadDropzone({
                   <X className="h-4 w-4 text-destructive" />
                 )}
                 {item.status === "pending" && (
-                  <div className="h-4 w-4 rounded-none border-2 border-muted-foreground" />
+                  <div className="h-4 w-4 rounded-none border-2 border-primary/5-foreground" />
                 )}
               </div>
 

@@ -204,7 +204,7 @@ export function RichTextTablePlugin({
                         return (
                           <CellTag
                             key={colIdx}
-                            className={`border border-border px-2 py-1 ${
+                            className={ `border border-primary/5 px-2 py-1 ${
                               isHeader
                                 ? "bg-primary/5 font-medium"
                                 : "bg-background"

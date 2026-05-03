@@ -195,7 +195,7 @@ export function RoleAssignDialog({
             Cancel
           </Button>
           <Button onClick={onConfirm} disabled={isLoading}>
-            {isLoading && <Spinner size="sm" className="mr-2" />}
+            {isLoading && <Spinner size="md" className="mr-2" />}
             Assign Role
           </Button>
         </DialogFooter>

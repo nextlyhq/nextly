@@ -111,8 +111,8 @@ function FieldRenderer({
   formData,
   error,
 }: FieldRendererProps) {
-  const inputClassName = `w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-    error ? "border-red-500" : "border-gray-300"
+  const inputClassName = `w-full px-3 py-2  border border-primary/5 rounded-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+    error ? "border-red-500" : "border-primary/5"
   }`;
 
   switch (field.type) {
@@ -221,7 +221,7 @@ function FieldRenderer({
               checked={(value as boolean) || false}
               onChange={e => onChange(field.name, e.target.checked)}
               required={field.required}
-              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              className="w-4 h-4 text-blue-600 border-primary/5 rounded focus:ring-blue-500"
             />
             <span className="text-sm text-gray-700">
               {field.label}
@@ -260,7 +260,7 @@ function FieldRenderer({
                         );
                       }
                     }}
-                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    className="w-4 h-4 text-blue-600 border-primary/5 rounded focus:ring-blue-500"
                   />
                   <span className="text-sm text-gray-700">{opt.label}</span>
                 </label>
@@ -291,7 +291,7 @@ function FieldRenderer({
                   checked={(value as string) === opt.value}
                   onChange={e => onChange(field.name, e.target.value)}
                   required={field.required}
-                  className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  className="w-4 h-4 text-blue-600 border-primary/5 focus:ring-blue-500"
                 />
                 <span className="text-sm text-gray-700">{opt.label}</span>
               </label>
@@ -382,7 +382,7 @@ function FieldRenderer({
 
     default:
       return (
-        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <div className="mb-4 p-3 bg-yellow-50  border border-primary/5 border-yellow-200 rounded-none">
           <p className="text-sm text-yellow-700">
             Unsupported field type: {field.type} ({field.name})
           </p>
@@ -528,7 +528,7 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
   // when using the admin API directly or if status is included in the response
   if (form.status === "closed") {
     return (
-      <div className="p-6 bg-gray-50 border border-gray-200 rounded-lg text-center">
+      <div className="p-6 bg-primary/5  border border-primary/5 rounded-none text-center">
         <p className="text-gray-600">
           {form.closedMessage ||
             "This form is no longer accepting submissions."}
@@ -539,14 +539,14 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
 
   if (submitResult?.success) {
     return (
-      <div className="p-6 bg-green-50 border border-green-200 rounded-lg text-center">
+      <div className="p-6 bg-green-50  border border-primary/5 border-green-200 rounded-none text-center">
         <div className="text-4xl mb-3">✓</div>
         <h3 className="text-lg font-semibold text-green-800 mb-2">Success!</h3>
         <p className="text-green-700">{submitResult.message}</p>
         <button
           type="button"
           onClick={() => setSubmitResult(null)}
-          className="mt-4 px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700"
+          className="mt-4 px-4 py-2 text-sm bg-green-600 text-white rounded-none hover:bg-green-700"
         >
           Submit Another Response
         </button>
@@ -561,7 +561,7 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
       }}
     >
       {submitResult && !submitResult.success && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+        <div className="mb-4 p-4 bg-red-50  border border-primary/5 border-red-200 rounded-none">
           <p className="text-red-700">{submitResult.message}</p>
         </div>
       )}
@@ -581,7 +581,7 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
         <button
           type="submit"
           disabled={isSubmitting}
-          className={`w-full py-3 px-4 rounded-lg font-medium text-white transition-colors ${
+          className={`w-full py-3 px-4 rounded-none font-medium text-white transition-colors ${
             isSubmitting
               ? "bg-gray-400 cursor-not-allowed"
               : "bg-blue-600 hover:bg-blue-700"
@@ -613,10 +613,10 @@ function FormsList({ forms, selectedForm, onSelectForm }: FormsListProps) {
         <button
           key={form.id}
           onClick={() => onSelectForm(form)}
-          className={`w-full text-left p-4 rounded-lg border transition-colors ${
+          className={`w-full text-left p-4 rounded-none  border border-primary/5 transition-colors ${
             selectedForm?.id === form.id
               ? "border-blue-500 bg-blue-50"
-              : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+              : "border-primary/5 hover:border-primary/5 hover:bg-primary/5"
           }`}
         >
           <div className="flex items-center justify-between">
@@ -736,7 +736,7 @@ export default function FormsPage() {
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
+      <header className="bg-white  border-b border-primary/5">
         <div className="max-w-7xl mx-auto px-4 py-6">
           <div className="flex items-center justify-between">
             <div>
@@ -753,7 +753,7 @@ export default function FormsPage() {
                   void seedForms();
                 }}
                 disabled={isSeeding}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-none text-sm font-medium transition-colors ${
                   isSeeding
                     ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                     : "bg-blue-600 text-white hover:bg-blue-700"
@@ -763,7 +763,7 @@ export default function FormsPage() {
               </button>
               <Link
                 href="/admin/collections/forms"
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-200 text-gray-700 hover:bg-gray-300"
+                className="px-4 py-2 rounded-none text-sm font-medium bg-gray-200 text-gray-700 hover:bg-gray-300"
               >
                 Open Admin
               </Link>
@@ -787,13 +787,13 @@ export default function FormsPage() {
               onClick={() => {
                 void fetchForms();
               }}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              className="px-4 py-2 bg-blue-600 text-white rounded-none hover:bg-blue-700"
             >
               Retry
             </button>
           </div>
         ) : forms.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
+          <div className="text-center py-12 bg-white rounded-none  border border-primary/5">
             <div className="text-4xl mb-3">📋</div>
             <h2 className="text-xl font-semibold text-gray-900 mb-2">
               No Forms Found
@@ -806,7 +806,7 @@ export default function FormsPage() {
                 void seedForms();
               }}
               disabled={isSeeding}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              className="px-6 py-3 bg-blue-600 text-white rounded-none hover:bg-blue-700 font-medium"
             >
               {isSeeding ? "Creating Forms..." : "Create Demo Forms"}
             </button>
@@ -815,7 +815,7 @@ export default function FormsPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Forms List */}
             <div className="lg:col-span-1">
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <div className="bg-white rounded-none  border border-primary/5 p-4">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
                   Available Forms ({forms.length})
                 </h2>
@@ -830,8 +830,8 @@ export default function FormsPage() {
             {/* Selected Form */}
             <div className="lg:col-span-2">
               {selectedForm ? (
-                <div className="bg-white rounded-lg border border-gray-200 p-6">
-                  <div className="mb-6 pb-4 border-b border-gray-200">
+                <div className="bg-white rounded-none  border border-primary/5 p-6">
+                  <div className="mb-6 pb-4  border-b border-primary/5">
                     <h2 className="text-xl font-semibold text-gray-900">
                       {selectedForm.name}
                     </h2>
@@ -844,7 +844,7 @@ export default function FormsPage() {
                   <FormRenderer form={selectedForm} />
                 </div>
               ) : (
-                <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+                <div className="bg-white rounded-none  border border-primary/5 p-12 text-center">
                   <div className="text-4xl mb-3">👈</div>
                   <h2 className="text-xl font-semibold text-gray-900 mb-2">
                     Select a Form
@@ -860,7 +860,7 @@ export default function FormsPage() {
 
         {/* Submissions Section */}
         {forms.length > 0 && (
-          <div className="mt-8 bg-white rounded-lg border border-gray-200 p-6">
+          <div className="mt-8 bg-white rounded-none  border border-primary/5 p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">
                 View Submissions
@@ -882,7 +882,7 @@ export default function FormsPage() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-gray-200 bg-white mt-8">
+      <footer className="border-t border-primary/5 bg-white mt-8">
         <div className="max-w-7xl mx-auto px-4 py-6">
           <div className="flex items-center justify-between text-sm text-gray-500">
             <p>Form Builder Plugin Demo - Nextly CMS</p>

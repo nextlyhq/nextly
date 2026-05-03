@@ -41,9 +41,9 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
         variant={href ? "interactive" : "default"}
         className={cn(
           "group relative overflow-hidden transition-all duration-300",
-          "border-border/60 bg-card",
+          "border-primary/5 bg-card",
           href &&
-            "hover-subtle-row hover:border-primary/20 active:scale-[0.985] active:translate-y-0.5",
+            "hover-subtle-row hover:border-primary/5 active:scale-[0.985] active:translate-y-0.5",
           className
         )}
       >
@@ -86,7 +86,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
               </div>
 
               {(footer || change !== undefined) && (
-                <div className="flex items-center justify-between pt-5 border-t border-border/10">
+                <div className="flex items-center justify-between pt-5  border-t border-primary/5">
                   <div className="flex items-center gap-2">
                     {change !== undefined && (
                       <div

@@ -22,7 +22,7 @@ import type React from "react";
 const GrayBar = ({ className }: { className?: string }) => (
   <div
     aria-hidden="true"
-    className={`animate-pulse rounded-none bg-gray-50 dark:bg-gray-400 ${className ?? ""}`}
+    className={`animate-pulse rounded-none bg-primary/5 dark:bg-gray-400 ${className ?? ""}`}
   />
 );
 
@@ -31,7 +31,7 @@ export const SinglesTableSkeleton: React.FC = () => {
   const columns = ["label", "source", "status", "fields", "created", "actions"];
 
   return (
-    <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+    <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
       <div className="border-0 rounded-none shadow-none">
         <Table>
           {/* Header Skeleton */}
@@ -54,7 +54,7 @@ export const SinglesTableSkeleton: React.FC = () => {
           {/* Body Skeleton */}
           <TableBody>
             {Array.from({ length: SKELETON_ROW_COUNT }).map((_, rowIdx) => (
-              <TableRow key={rowIdx} className="border-b border-border">
+              <TableRow key={rowIdx} className="border-b border-primary/5">
                 {columns.map(col => (
                   <TableCell key={col} className="py-3">
                     {col === "actions" ? (
@@ -73,7 +73,7 @@ export const SinglesTableSkeleton: React.FC = () => {
       </div>
 
       {/* Footer Skeleton */}
-      <div className="table-footer border-t border-border">
+      <div className="table-footer border-t border-primary/5 bg-[hsl(var(--table-header-bg))]">
         <div className="flex items-center justify-between px-2 py-4 p-4">
           <div className="flex items-center gap-2 text-sm">
             <GrayBar className="h-4 w-[120px]" />

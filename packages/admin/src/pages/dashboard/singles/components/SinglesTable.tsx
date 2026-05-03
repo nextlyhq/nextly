@@ -178,7 +178,11 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
       return next;
     });
   };
@@ -373,183 +377,188 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
 
   const ALWAYS_VISIBLE = new Set(["select", "actions", "label", "createdAt"]);
 
-  const columnDefs = useMemo<Column<ApiSingle>[]>(() => [
-    // Checkbox column for bulk selection
-    {
-      key: "select" as keyof ApiSingle,
-      label: (
-        <BulkSelectCheckbox
-          checked={selectAllCheckboxState}
-          onCheckedChange={handleToggleSelectAllOnPage}
-          rowId="select-all"
-          rowLabel="Select all Singles on page"
-        />
-      ),
-      hideLabelOnMobile: true,
-      render: (_value, single) => (
-        <BulkSelectCheckbox
-          checked={isSelected(single.id)}
-          onCheckedChange={() => toggleSelection(single.id)}
-          rowId={single.id}
-          rowLabel={single.label}
-        />
-      ),
-    },
-    {
-      key: "label",
-      label: "SINGLE",
-      hideLabelOnMobile: true,
-      render: (_value, single) => {
-        return (
-          <div className="flex items-center gap-3">
-            <div className="table-row-icon-cover">
-              {React.createElement(
-                iconMap[single.admin?.icon || ""] || FileText,
-                { className: "h-4 w-4" }
-              )}
+  const columnDefs = useMemo<Column<ApiSingle>[]>(
+    () => [
+      // Checkbox column for bulk selection
+      {
+        key: "select" as keyof ApiSingle,
+        label: (
+          <BulkSelectCheckbox
+            checked={selectAllCheckboxState}
+            onCheckedChange={handleToggleSelectAllOnPage}
+            rowId="select-all"
+            rowLabel="Select all Singles on page"
+          />
+        ),
+        hideLabelOnMobile: true,
+        render: (_value, single) => (
+          <BulkSelectCheckbox
+            checked={isSelected(single.id)}
+            onCheckedChange={() => toggleSelection(single.id)}
+            rowId={single.id}
+            rowLabel={single.label}
+          />
+        ),
+      },
+      {
+        key: "label",
+        label: "SINGLE",
+        hideLabelOnMobile: true,
+        render: (_value, single) => {
+          return (
+            <div className="flex items-center gap-3">
+              <div className="table-row-icon-cover">
+                {React.createElement(
+                  iconMap[single.admin?.icon || ""] || FileText,
+                  { className: "h-4 w-4" }
+                )}
+              </div>
+              <div className="min-w-0 flex-1 flex flex-col">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      handleEdit(single);
+                    }}
+                    disabled={single.locked}
+                    className="font-medium text-sm text-foreground truncate text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {single.label}
+                  </button>
+                  {single.locked && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Locked: Cannot be edited or deleted from UI</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground truncate">
+                  {single.slug}
+                </div>
+              </div>
             </div>
-            <div className="min-w-0 flex-1 flex flex-col">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
+          );
+        },
+      },
+      {
+        key: "source",
+        label: "SOURCE",
+        render: (_value, single) => {
+          const sourceBadge = getSourceBadge(single.source);
+          return (
+            <Badge
+              variant={sourceBadge.variant}
+              className="whitespace-nowrap text-muted-foreground font-normal"
+            >
+              {sourceBadge.icon}
+              {sourceBadge.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: "migrationStatus",
+        label: "STATUS",
+        render: (_value, single) => {
+          const migrationBadge = getMigrationBadge(single.migrationStatus);
+          return (
+            <Badge variant={migrationBadge.variant}>
+              {migrationBadge.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: "fields",
+        label: "FIELDS",
+        render: (_value, single) => (
+          <span className="text-sm tabular-nums">{getFieldCount(single)}</span>
+        ),
+      },
+      {
+        key: "createdAt",
+        label: "CREATED",
+        hideOnMobile: true,
+        render: createdAt => (
+          <span className="text-sm text-muted-foreground">
+            {formatDate(createdAt as string | undefined)}
+          </span>
+        ),
+      },
+      {
+        key: "actions" as keyof ApiSingle,
+        label: "ACTIONS",
+        render: (_, single) => {
+          const isLocked = single.locked;
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm">
+                  <MoreHorizontal className="h-4 w-4" />
+                  <span className="sr-only">Open menu</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
                   onClick={e => {
                     e.stopPropagation();
                     handleEdit(single);
                   }}
-                  disabled={single.locked}
-                  className="font-medium text-sm text-foreground truncate text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
+                  className={isLocked ? "opacity-50" : ""}
                 >
-                  {single.label}
-                </button>
-                {single.locked && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Locked: Cannot be edited or deleted from UI</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-              <div className="text-xs text-muted-foreground truncate">
-                {single.slug}
-              </div>
-            </div>
-          </div>
-        );
+                  <Pencil className="h-4 w-4 mr-2" />
+                  Edit
+                  {isLocked && (
+                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleViewDocument(single);
+                  }}
+                >
+                  <FileEdit className="h-4 w-4 mr-2" />
+                  View Document
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleDelete(single);
+                  }}
+                  disabled={isLocked}
+                  className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                  {isLocked && (
+                    <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
+                  )}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
       },
-    },
-    {
-      key: "source",
-      label: "SOURCE",
-      render: (_value, single) => {
-        const sourceBadge = getSourceBadge(single.source);
-        return (
-          <Badge
-            variant={sourceBadge.variant}
-            className="whitespace-nowrap text-muted-foreground font-normal"
-          >
-            {sourceBadge.icon}
-            {sourceBadge.label}
-          </Badge>
-        );
-      },
-    },
-    {
-      key: "migrationStatus",
-      label: "STATUS",
-      render: (_value, single) => {
-        const migrationBadge = getMigrationBadge(single.migrationStatus);
-        return (
-          <Badge variant={migrationBadge.variant}>{migrationBadge.label}</Badge>
-        );
-      },
-    },
-    {
-      key: "fields",
-      label: "FIELDS",
-      render: (_value, single) => (
-        <span className="text-sm tabular-nums">{getFieldCount(single)}</span>
-      ),
-    },
-    {
-      key: "createdAt",
-      label: "CREATED",
-      hideOnMobile: true,
-      render: createdAt => (
-        <span className="text-sm text-muted-foreground">
-          {formatDate(createdAt as string | undefined)}
-        </span>
-      ),
-    },
-    {
-      key: "actions" as keyof ApiSingle,
-      label: "ACTIONS",
-      render: (_, single) => {
-        const isLocked = single.locked;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreHorizontal className="h-4 w-4" />
-                <span className="sr-only">Open menu</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleEdit(single);
-                }}
-                className={isLocked ? "opacity-50" : ""}
-              >
-                <Pencil className="h-4 w-4 mr-2" />
-                Edit
-                {isLocked && (
-                  <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleViewDocument(single);
-                }}
-              >
-                <FileEdit className="h-4 w-4 mr-2" />
-                View Document
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={e => {
-                  e.stopPropagation();
-                  handleDelete(single);
-                }}
-                disabled={isLocked}
-                className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-                {isLocked && (
-                  <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
-                )}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
-      },
-    },
-  ], [
-    selectAllCheckboxState,
-    handleToggleSelectAllOnPage,
-    isSelected,
-    toggleSelection,
-    handleEdit,
-    handleViewDocument,
-    handleDelete,
-    formatDate,
-    getFieldCount,
-  ]);
+    ],
+    [
+      selectAllCheckboxState,
+      handleToggleSelectAllOnPage,
+      isSelected,
+      toggleSelection,
+      handleEdit,
+      handleViewDocument,
+      handleDelete,
+      formatDate,
+      getFieldCount,
+    ]
+  );
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
@@ -649,7 +658,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             onChange={setSearch}
             placeholder="Search Singles..."
             isLoading={isLoading}
-            className="w-full md:max-w-sm"
+            className="w-full md:max-w-sm bg-white text-black border-primary/5"
           />
         </div>
 
@@ -658,7 +667,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 relative">
+                <Button variant="secondary" size="md" className="relative">
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
                   {(sourceFilter !== "all" || migrationFilter !== "all") && (
@@ -730,7 +739,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9">
+                <Button variant="secondary" size="md">
                   <Icons.Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>
@@ -761,7 +770,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       ) : (
         /* Responsive table */
         /* Responsive table and Pagination Card */
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}
@@ -770,18 +779,16 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             tableWrapperClassName="border-0 rounded-none shadow-none"
           />
           {hasData && data && (
-            <div className="table-footer border-t border-border p-4">
-              <Pagination
-                currentPage={page}
-                totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isLoading}
-                totalItems={data.meta.total}
-              />
-            </div>
+            <Pagination
+              currentPage={page}
+              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
+              pageSize={pageSize}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              isLoading={isLoading}
+              totalItems={data.meta.total}
+            />
           )}
         </div>
       )}
