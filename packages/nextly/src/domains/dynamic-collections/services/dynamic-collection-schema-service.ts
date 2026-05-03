@@ -73,7 +73,7 @@ export class DynamicCollectionSchemaService {
     const columns = fields
       .map(f => {
         // Skip many-to-many fields as they don't create columns in the main table
-        if (f.type === "relation" && f.options?.relationType === "manyToMany") {
+        if (f.type === "relationship" && f.options?.relationType === "manyToMany") {
           return null;
         }
 
@@ -88,16 +88,13 @@ export class DynamicCollectionSchemaService {
         // one-to-one relationships should be unique
         const unique =
           f.unique ||
-          (f.type === "relation" && f.options?.relationType === "oneToOne")
+          (f.type === "relationship" && f.options?.relationType === "oneToOne")
             ? "UNIQUE"
             : "";
 
-        // Handle default value (support both 'default' and 'defaultValue')
-        const defaultValue =
-          f.default !== undefined ? f.default : f.defaultValue;
         const defaultVal =
-          defaultValue !== undefined && defaultValue !== null
-            ? `DEFAULT ${this.formatDefaultValue(defaultValue, f.type)}`
+          f.default !== undefined && f.default !== null
+            ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
         // Add CHECK constraints for validation
@@ -115,9 +112,10 @@ export class DynamicCollectionSchemaService {
           if (
             f.validation.minLength !== undefined &&
             (f.type === "text" ||
-              f.type === "string" ||
+              f.type === "textarea" ||
               f.type === "email" ||
-              f.type === "password")
+              f.type === "password" ||
+              f.type === "code")
           ) {
             checks.push(
               `LENGTH(${this.quoteIdentifier(f.name)}) >= ${f.validation.minLength}`
@@ -146,7 +144,7 @@ export class DynamicCollectionSchemaService {
         }
 
         // Handle relations (foreign keys)
-        if (f.type === "relation" && f.options?.target) {
+        if (f.type === "relationship" && f.options?.target) {
           const relationType = f.options.relationType || "manyToOne"; // Default to many-to-one
           const targetTable = `dc_${f.options.target}`;
 
@@ -243,7 +241,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
     // Generate many-to-many junction tables
     fields.forEach(f => {
       if (
-        f.type === "relation" &&
+        f.type === "relationship" &&
         f.options?.relationType === "manyToMany" &&
         f.options?.target
       ) {
@@ -257,7 +255,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 
     // essential for JOIN performance, PostgreSQL does NOT automatically index foreign keys!
     fields.forEach(f => {
-      if (f.type === "relation" && f.options?.relationType !== "manyToMany") {
+      if (f.type === "relationship" && f.options?.relationType !== "manyToMany") {
         const indexName = `idx_${tableName}_${f.name}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -273,7 +271,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 
     // Add manual indexes requested by the user
     fields.forEach(f => {
-      if (f.index && f.type !== "relation") {
+      if (f.index && f.type !== "relationship") {
         const indexName = `idx_${tableName}_${f.name}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -386,7 +384,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
       if (!oldFieldMap.has(field.name)) {
         // Skip manyToMany fields - they don't get columns, they get junction tables
         if (
-          field.type === "relation" &&
+          field.type === "relationship" &&
           field.options?.relationType === "manyToMany"
         ) {
           // Generate junction table instead
@@ -402,8 +400,8 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
         // value for existing rows. Use explicit defaultValue if provided, otherwise
         // use a sensible default based on field type.
         let defaultVal = "";
-        if (field.defaultValue !== undefined) {
-          defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, field.type)}`;
+        if (field.default !== undefined) {
+          defaultVal = `DEFAULT ${this.formatDefaultValue(field.default, field.type)}`;
         } else if (field.required) {
           // Required field without explicit default - provide sensible default for existing rows
           defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type)}`;
@@ -419,7 +417,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
         // For PostgreSQL/MySQL, we can add them
         if (this.dialect !== "sqlite") {
           // Add foreign key for non-manyToMany relations
-          if (field.type === "relation" && field.options?.target) {
+          if (field.type === "relationship" && field.options?.target) {
             const targetTable = `dc_${field.options.target}`;
             const onDelete = field.options.onDelete || "set null";
             const onUpdate = field.options.onUpdate || "no action";
@@ -641,12 +639,12 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
     // add-junction (data loss for the join) — admin UI ideally warns
     // before this kind of edit.
     if (
-      a.type === "relation" &&
+      a.type === "relationship" &&
       a.options?.relationType === "manyToMany"
     ) {
       return false;
     }
-    if (a.type === "relation") {
+    if (a.type === "relationship") {
       return (
         a.options?.target === b.options?.target &&
         a.options?.relationType === b.options?.relationType
@@ -678,7 +676,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
       "chips",
     ];
     const hasJsonField = fields.some(f => jsonbFieldTypes.includes(f.type));
-    const hasRelation = fields.some(f => f.type === "relation");
+    const hasRelation = fields.some(f => f.type === "relationship");
 
     // Build base imports based on dialect
     const baseImports = ["text", "index", "uniqueIndex"];
@@ -704,7 +702,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
     const columns = fields
       .filter(
         f =>
-          !(f.type === "relation" && f.options?.relationType === "manyToMany")
+          !(f.type === "relationship" && f.options?.relationType === "manyToMany")
       )
       .map(f => {
         const drizzleType = this.mapFieldTypeToDrizzleDialectAware(f);
@@ -714,14 +712,12 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
         // Auto-add unique for one-to-one relationships
         if (
           f.unique ||
-          (f.type === "relation" && f.options?.relationType === "oneToOne")
+          (f.type === "relationship" && f.options?.relationType === "oneToOne")
         ) {
           modifiers.push(".unique()");
         }
 
-        // Handle default value (support both 'default' and 'defaultValue')
-        const defaultValue =
-          f.default !== undefined ? f.default : f.defaultValue;
+        const defaultValue = f.default;
         if (defaultValue !== undefined && defaultValue !== null) {
           if (f.type === "json") {
             modifiers.push(`.default(${JSON.stringify(defaultValue)})`);
@@ -734,7 +730,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 
         // Add references for foreign keys
         if (
-          f.type === "relation" &&
+          f.type === "relationship" &&
           f.options?.target &&
           f.options?.relationType !== "manyToMany"
         ) {
@@ -758,7 +754,7 @@ CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
       .filter(
         f =>
           f.index ||
-          (f.type === "relation" && f.options?.relationType !== "manyToMany")
+          (f.type === "relationship" && f.options?.relationType !== "manyToMany")
       )
       .map(
         f =>
@@ -996,7 +992,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     tableName: string,
     fields: FieldDefinition[]
   ): string {
-    const relationFields = fields.filter(f => f.type === "relation");
+    const relationFields = fields.filter(f => f.type === "relationship");
     if (relationFields.length === 0) {
       return "";
     }
@@ -1057,20 +1053,20 @@ ${relationDefs}
     validation?: FieldDefinition["validation"]
   ): string {
     if (this.dialect === "sqlite") {
-      // SQLite type mapping - SQLite has dynamic typing, so types are simplified
+      // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
-        string: "text",
         text: "text",
+        textarea: "text",
         number: options?.format === "float" ? "real" : "integer",
-        decimal: "real",
-        boolean: "integer", // SQLite uses 0/1 for boolean
+        checkbox: "integer", // SQLite uses 0/1 for boolean
         date: "integer", // Store as Unix timestamp
         email: "text",
         password: "text",
-        richtext: "text",
+        code: "text",
+        richText: "text",
         json: "text", // JSON stored as text in SQLite
         chips: "text", // Chips stored as JSON text in SQLite
-        relation: "text", // Store foreign key as text (UUID or ID)
+        relationship: "text", // Store foreign key as text (UUID or ID)
       };
       return sqliteTypeMap[type] || "text";
     }
@@ -1078,42 +1074,42 @@ ${relationDefs}
     // MySQL type mapping
     if (this.dialect === "mysql") {
       const mysqlTypeMap: Record<string, string> = {
-        string: `varchar(${length || 255})`,
         text:
           options?.variant === "short"
             ? `varchar(${validation?.maxLength || 255})`
             : "text",
+        textarea: "text",
         number: options?.format === "float" ? "decimal(10,2)" : "integer",
-        decimal: "decimal(10,2)",
-        boolean: "boolean",
+        checkbox: "boolean",
         date: "timestamp",
         email: `varchar(${validation?.maxLength || 255})`,
         password: `varchar(${validation?.maxLength || 255})`,
-        richtext: "text",
+        code: "text",
+        richText: "text",
         json: "json", // MySQL uses 'json' type, not 'jsonb'
         chips: "json", // Chips stored as JSON array
-        relation: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
+        relationship: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
       };
       return mysqlTypeMap[type] || "text";
     }
 
     // PostgreSQL type mapping (default)
     const typeMap: Record<string, string> = {
-      string: `varchar(${length || 255})`,
       text:
         options?.variant === "short"
           ? `varchar(${validation?.maxLength || 255})`
           : "text",
+      textarea: "text",
       number: options?.format === "float" ? "decimal(10,2)" : "integer",
-      decimal: "decimal(10,2)",
-      boolean: "boolean",
+      checkbox: "boolean",
       date: "timestamp",
       email: `varchar(${validation?.maxLength || 255})`,
       password: `varchar(${validation?.maxLength || 255})`,
-      richtext: "text",
+      code: "text",
+      richText: "text",
       json: "jsonb",
       chips: "jsonb", // Chips stored as JSON array
-      relation: "text", // Store foreign key as text (UUID or ID)
+      relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
   }
@@ -1154,19 +1150,15 @@ ${relationDefs}
    */
   private getDefaultValueForType(type: string): string {
     switch (type) {
-      case "string":
       case "text":
       case "textarea":
       case "email":
       case "password":
       case "richText":
-      case "richtext":
       case "code":
         return "''";
       case "number":
-      case "decimal":
         return "0";
-      case "boolean":
       case "checkbox":
         return this.dialect === "sqlite" ? "0" : "FALSE";
       case "date":
@@ -1181,7 +1173,6 @@ ${relationDefs}
         return "'{}'";
       case "chips":
         return "'[]'";
-      case "relation":
       case "relationship":
       case "upload":
         // Relations are nullable by nature when adding to existing tables
@@ -1202,19 +1193,20 @@ ${relationDefs}
   formatDefaultValue(value: unknown, type: string): string {
     // Handle string-like types (need quotes in SQL)
     if (
-      type === "string" ||
       type === "text" ||
+      type === "textarea" ||
       type === "email" ||
       type === "password" ||
-      type === "richtext" ||
+      type === "richText" ||
+      type === "code" ||
       type === "select" ||
       type === "radio"
     ) {
       return `'${value}'`;
     }
 
-    // Handle boolean (SQLite uses 0/1, PostgreSQL uses TRUE/FALSE)
-    if (type === "boolean") {
+    // Handle checkbox (SQLite uses 0/1, PostgreSQL uses TRUE/FALSE)
+    if (type === "checkbox") {
       if (this.dialect === "sqlite") {
         return value ? "1" : "0";
       }
@@ -1237,13 +1229,13 @@ ${relationDefs}
       return `'${value}'`;
     }
 
-    // Handle numeric types (number, decimal) - no quotes
-    if (type === "number" || type === "decimal") {
+    // Handle numeric types (no quotes)
+    if (type === "number") {
       return String(value);
     }
 
-    // Handle relation (text field, needs quotes)
-    if (type === "relation") {
+    // Handle relationship (text field, needs quotes)
+    if (type === "relationship") {
       return `'${value}'`;
     }
 

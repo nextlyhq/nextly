@@ -33,35 +33,23 @@ export type CollectionSchemaDefinition = {
 /**
  * Field types for dynamic collections (UI-created collections).
  *
- * Includes legacy aliases for backwards compatibility:
- * - string → text
- * - richtext → richText
- * - decimal → number
- * - boolean → checkbox
- * - relation → relationship
- *
  * Note: This is separate from the core FieldType in collections/fields/types
- * to support legacy field type names stored in the database.
+ * to support the field surface available to UI-built collections.
  */
 export type DynamicFieldType =
   | "text"
-  | "string" // Legacy alias for text
   | "textarea"
   | "richText"
-  | "richtext" // Legacy alias
   | "email"
   | "password"
   | "code"
   | "number"
-  | "decimal" // Legacy alias
   | "checkbox"
-  | "boolean" // Legacy alias for checkbox
   | "date"
   | "select"
   | "radio"
   | "upload"
   | "relationship"
-  | "relation" // Legacy alias
   | "repeater"
   | "group"
   | "blocks"
@@ -84,7 +72,6 @@ export type FieldDefinition = {
   index?: boolean;
   private?: boolean;
   default?: unknown;
-  defaultValue?: unknown; // Keep for backward compatibility
   length?: number;
 
   options?: {
@@ -168,7 +155,4 @@ export type FieldDefinition = {
   /** Whether this component field allows multiple instances (array) */
   repeatable?: boolean;
 
-  // Legacy fields (keep for backward compatibility)
-  relatedCollection?: string;
-  relationType?: "oneToOne" | "oneToMany" | "manyToOne" | "manyToMany";
 };

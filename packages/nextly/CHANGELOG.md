@@ -1,5 +1,46 @@
 # @revnixhq/nextly
 
+## Unreleased
+
+### Breaking changes (Phase 4.10 / Category B)
+
+Dropped legacy field-type aliases and the legacy `defaultValue`/`relatedCollection`/top-level `relationType` fields. Pre-Alpha; no migration script. Existing UI-built collections persisted with legacy names need to be regenerated or the schema_definition column updated by hand.
+
+Field-type aliases removed (rename mapping):
+
+- `string` to `text`
+- `richtext` to `richText`
+- `decimal` to `number`
+- `boolean` to `checkbox`
+- `relation` to `relationship`
+
+`FieldDefinition` legacy fields removed:
+
+- `defaultValue` to `default`
+- `relatedCollection` to `relationTo`
+- top-level `relationType` to `options.relationType`
+
+Runtime checks that handled both legacy and canonical names now treat legacy names as unknown field types (loud "unknown field type" load errors, not silent corruption). The 6 mutation-service many-to-many checks now read both `options.relationType === "manyToMany"` and `hasMany === true` to cover code-first relationship fields per Lesson 3 in the deferred-tasks doc.
+
+### Internal cleanup (Phase 4.10 / Category C)
+
+- Deleted 12 deprecated re-export shim files under `src/services/schema/*` (7 files) and `src/services/dynamic-collections/*` (5 files). None were in the `package.json` exports map, so external consumers cannot have been depending on them through supported imports. Internal consumers updated to canonical locations under `src/domains/*/services/*`.
+- Dropped the `IStorageAdapter` and `StorageAdapterInfo` type re-exports from `storage/adapters/base-adapter.ts`. Import these types from `@revnixhq/nextly/storage` (or `storage/types` internally) directly. The `BaseStorageAdapter` abstract class stays in `storage/adapters/base-adapter.ts`; it has real consumers via `LocalStorageAdapter` and external storage plugins.
+
+### Breaking changes (Phase 4.10 / Category D)
+
+- `defineConfig({ db, tables, storage: <adapter> })` is no longer accepted. Use `defineConfig({ adapter, storage: [<storagePlugin>(...)] })` exclusively. The legacy ad-hoc adapter creation path is gone, along with the `db?` / `tables?` / `storage?` interface fields on `NextlyServiceConfig` and the `db?` field on `ServiceMap`.
+- Deleted the `StorageConfig` legacy interface from `@revnixhq/nextly/storage`. Configure storage via the storage-plugins array.
+- Plugin admin `group` field is gone. Use `placement: AdminPlacement.X` exclusively. The deprecated `getPluginPlacements` / `updatePluginPlacements` methods on `GeneralSettingsService` are removed.
+- `routeHandler` no longer reads `plugin.admin.group` (the admin-meta payload's `group` field is gone) and no longer serves the dead `PATCH /api/admin-meta/plugin-placements` endpoint (returned 410 Gone; now 404 from the catch-all).
+
+### Breaking changes (Phase 4.10 / Category E)
+
+- Auth.js legacy cookie detection on `/auth/session` is gone. The `SESSION_UPGRADED` 401 response code is deleted. Existing logged-in Auth.js sessions get a normal `AUTH_REQUIRED` 401 and force-logout cleanly. The `/auth/logout` handler no longer clears legacy Auth.js cookies either.
+- `LEGACY_COOKIE_NAMES` const deleted from `auth/cookies/cookie-config.ts`.
+- `AUTH_SECRET` and `NEXTAUTH_SECRET` env var fallbacks are gone. Set `NEXTLY_SECRET` (32+ characters in production) directly. The runtime no longer reads or warns about the legacy var names.
+- `NEXTLY_SECRET_RESOLVED` indirection on the env interface is gone. Consumers read `env.NEXTLY_SECRET` directly. (~13 internal call sites updated.)
+
 ## 0.0.140
 
 ### Minor Changes — BREAKING

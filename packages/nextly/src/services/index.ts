@@ -61,14 +61,14 @@ export type {
   UploadServiceResult,
 } from "./upload-service";
 
-export type { IStorageAdapter as StorageProvider } from "../storage/adapters/base-adapter";
+export type { IStorageAdapter as StorageProvider } from "../storage/types";
 
 export * from "./shared";
 
 export * from "./base-service";
 export * from "./users";
 export * from "./dispatcher";
-export * from "./dynamic-collections";
+export * from "../domains/dynamic-collections";
 export * from "./collection-file-manager";
 export * from "./collections-handler";
 
@@ -88,7 +88,7 @@ export {
   DynamicCollectionValidationService,
   DynamicCollectionSchemaService,
   DynamicCollectionRegistryService,
-} from "./dynamic-collections/index";
+} from "../domains/dynamic-collections";
 
 export { RoleQueryService, RoleMutationService } from "./auth/role/index";
 
@@ -110,7 +110,7 @@ export {
   calculateSchemaHash,
   schemaHashesMatch,
   hasSchemaChanged,
-} from "./schema";
+} from "../domains/schema/services/schema-hash";
 
 export { AccessControlService } from "./access";
 export type {

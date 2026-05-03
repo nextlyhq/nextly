@@ -39,7 +39,6 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
   const {
     adapter,
     adapterDrizzleDb,
-    db,
     logger,
     basePath,
     schemasDir,
@@ -47,11 +46,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     hookRegistry,
   } = ctx;
 
-  // CollectionService — composes file manager, dynamic-collection,
+  // CollectionService composes file manager, dynamic-collection,
   // metadata, relationship, access control, and entry services.
   container.registerSingleton<CollectionService>("collectionService", () => {
     // Raw Drizzle instance for non-BaseService classes that need it directly.
-    const drizzleDb = db ?? adapterDrizzleDb;
+    const drizzleDb = adapterDrizzleDb;
 
     const fileManager = new CollectionFileManager(drizzleDb, {
       schemasDir: schemasDir ?? `${basePath}/src/db/schemas/dynamic`,
@@ -163,7 +162,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
   // access. Wires PermissionSeedService so createCollection() auto-seeds
   // CRUD permissions for newly created collections.
   container.registerSingleton<CollectionsHandler>("collectionsHandler", () => {
-    const drizzleDb = db ?? adapterDrizzleDb;
+    const drizzleDb = adapterDrizzleDb;
     const handler = new CollectionsHandler(
       adapter,
       drizzleDb,

@@ -983,12 +983,8 @@ async function handleAdminMetaRequest(): Promise<Response> {
       name: plugin.name,
       version: plugin.version,
       description: plugin.admin?.description,
-      group: plugin.admin?.group, // kept for backward compat
       placement:
-        hostOverride?.placement ??
-        plugin.admin?.placement ??
-        plugin.admin?.group ??
-        "plugins",
+        hostOverride?.placement ?? plugin.admin?.placement ?? "plugins",
       order: hostOverride?.order ?? plugin.admin?.order,
       after: hostOverride?.after ?? plugin.admin?.after,
       appearance: effectiveAppearance,
@@ -1091,29 +1087,6 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   }
 }
 
-/**
- * PATCH /api/admin-meta/plugin-placements
- *
- * @deprecated Plugin placement overrides are no longer supported.
- * Placement is defined by the plugin author via `definePlugin({ admin: { placement } })`
- * and optionally overridden by the host developer via `defineConfig({ admin: { pluginOverrides } })`.
- * Returns 410 Gone.
- */
-async function handleAdminMetaPluginPlacements(
-  _req: Request
-): Promise<Response> {
-  return new Response(
-    JSON.stringify({
-      error: "Gone",
-      message:
-        "Plugin placement overrides are no longer supported. " +
-        "Placement is defined by the plugin author via definePlugin() " +
-        "and optionally overridden by the host developer via defineConfig({ admin: { pluginOverrides } }).",
-    }),
-    { status: 410, headers: { "Content-Type": "application/json" } }
-  );
-}
-
 // ============================================================================
 // CRUD Handler Wrappers
 // ============================================================================
@@ -1160,9 +1133,6 @@ async function handlePut(req: Request, params: string[]) {
 async function handlePatch(req: Request, params: string[]) {
   if (params[0] === "admin-meta" && params[1] === "sidebar-groups") {
     return handleAdminMetaSidebarGroups(req);
-  }
-  if (params[0] === "admin-meta" && params[1] === "plugin-placements") {
-    return handleAdminMetaPluginPlacements(req);
   }
   return handleServiceRequest(req, params, "PATCH");
 }

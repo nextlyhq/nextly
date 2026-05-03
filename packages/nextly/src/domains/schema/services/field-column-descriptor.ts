@@ -125,15 +125,14 @@ export function getColumnDescriptor(
 
 /**
  * Maps a field config to a logical column kind. Centralises the
- * field-type → column-kind matrix that used to live in two
+ * field-type to column-kind matrix that used to live in two
  * dialect-specific switches per file. The hasMany / relationTo[]
- * "promote relation to JSON" rule lives here too — previously
+ * "promote relationship to JSON" rule lives here too; previously
  * `build-from-fields.ts` ignored it and shipped wrong types.
  */
 function classifyFieldKind(field: FieldDefinition): ColumnKind {
   switch (field.type) {
     case "text":
-    case "string":
     case "email":
     case "password":
     case "slug":
@@ -143,26 +142,22 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "textarea":
     case "richText":
-    case "richtext":
     case "code":
       return "longText";
 
     case "number":
-    case "decimal":
       return "double";
 
     case "checkbox":
-    case "boolean":
       return "boolean";
 
     case "date":
       return "timestamp";
 
     case "relationship":
-    case "relation":
     case "upload": {
       // hasMany or array-target relationships are stored as JSON
-      // arrays of FK ids. Single-target → plain FK column.
+      // arrays of FK ids. Single-target -> plain FK column.
       const hasMany = (field as { hasMany?: boolean }).hasMany;
       const relationTo = (field as { relationTo?: unknown }).relationTo;
       if (hasMany || Array.isArray(relationTo)) return "json";

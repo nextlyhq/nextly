@@ -18,7 +18,7 @@ import { EmailProviderService } from "../services/email-provider-service";
 // ── Mock env BEFORE any service imports touch it ───────────────────────────
 vi.mock("../../../lib/env", () => ({
   env: {
-    NEXTLY_SECRET_RESOLVED: "test-secret-must-be-32chars-long!!", // 36 chars
+    NEXTLY_SECRET: "test-secret-must-be-32chars-long!!", // 36 chars
     DB_DIALECT: "sqlite",
     DATABASE_URL: undefined,
     NODE_ENV: "test",
