@@ -110,7 +110,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
   if (!token) {
     return (
       <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+        <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Invalid Link
@@ -141,7 +141,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
   if (isSuccess) {
     return (
       <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+        <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Password Reset
@@ -173,7 +173,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
     <div className="w-full max-w-[480px] mx-auto">
       <Card
         className={cn(
-          "transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-2 sm:p-4 md:p-6",
+          "transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-2 sm:p-4 md:p-6",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
         )}
       >
@@ -220,7 +220,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                           autoComplete="new-password"
                           placeholder="Create a strong password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
                         />
                       </FormControl>
                       <button
@@ -256,7 +256,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                           autoComplete="new-password"
                           placeholder="Confirm your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
                         />
                       </FormControl>
                       <button

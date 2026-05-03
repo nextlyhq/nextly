@@ -55,7 +55,7 @@ export const FormLabelWithTooltip = React.forwardRef<
               <TooltipContent
                 side="right"
                 className={cn(
-                  "max-w-[250px] text-[12px] break-words relative z-[100] shadow-md border bg-black text-white dark:bg-zinc-800 dark:text-zinc-50 px-3 py-2 rounded-none",
+                  "max-w-[250px] text-[12px] break-words relative z-[100] shadow-md  border border-primary/5 bg-black text-white dark:bg-zinc-800 dark:text-zinc-50 px-3 py-2 rounded-none",
                   tooltipClassName
                 )}
               >

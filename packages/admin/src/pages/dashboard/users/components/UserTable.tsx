@@ -600,7 +600,7 @@ export default function UserTable() {
             onChange={setSearch}
             placeholder="Search users by name or email"
             isLoading={isFetching}
-            className="flex-1 max-w-sm"
+            className="flex-1 max-w-sm bg-white text-black border-primary/5"
           />
         </div>
 
@@ -615,7 +615,7 @@ export default function UserTable() {
             /* Columns Dropdown */
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9">
+                <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
                   <Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>
@@ -641,7 +641,7 @@ export default function UserTable() {
       </div>
 
       {/* Responsive table and Pagination Card */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         {isError ? (
           <div className="p-8">
             <Alert variant="destructive">
@@ -668,7 +668,7 @@ export default function UserTable() {
 
         {/* Pagination */}
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-border p-4">
+          <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
             <Pagination
               currentPage={page}
               totalPages={data.meta.totalPages}

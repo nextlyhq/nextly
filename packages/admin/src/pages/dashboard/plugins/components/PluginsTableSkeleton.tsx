@@ -28,7 +28,7 @@ export const PluginsTableSkeleton: React.FC = () => {
         </div>
       </div>
 
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         <div className="border-0 rounded-none shadow-none">
           <Table>
             {/* Header Skeleton */}
@@ -57,7 +57,7 @@ export const PluginsTableSkeleton: React.FC = () => {
             {/* Body Skeleton */}
             <TableBody>
               {Array.from({ length: SKELETON_ROW_COUNT }).map((_, rowIdx) => (
-                <TableRow key={rowIdx} className="border-b border-border">
+                <TableRow key={rowIdx} className="border-b border-primary/5">
                   {columns.map(col => (
                     <TableCell key={col} className="py-3">
                       {col === "select" ? (
@@ -82,7 +82,7 @@ export const PluginsTableSkeleton: React.FC = () => {
         </div>
 
         {/* Footer Skeleton */}
-        <div className="table-footer border-t border-border">
+        <div className="table-footer border-t border-primary/5 bg-[hsl(var(--table-header-bg))]">
           <div className="flex items-center justify-between px-2 py-4 p-4">
             <div className="flex items-center gap-2 text-sm">
               <GrayBar className="h-4 w-[120px]" />

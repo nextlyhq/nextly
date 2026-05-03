@@ -231,7 +231,7 @@ function ComponentCard({ component, onSelect }: ComponentCardProps) {
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex flex-col items-start gap-2 p-3 rounded-none border border-border",
+        "flex flex-col items-start gap-2 p-3 rounded-none  border border-primary/5",
         "bg-background hover:bg-accent hover:border-accent-foreground/20",
         "transition-colors text-left w-full",
         "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"

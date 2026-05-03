@@ -19,6 +19,12 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
   Label,
   ResponsiveTable,
@@ -32,7 +38,7 @@ import {
 import * as React from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
-import { Info, Plus } from "@admin/components/icons";
+import { Columns, Info, Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { Pagination } from "@admin/components/shared/pagination";
@@ -364,6 +370,19 @@ function ImageSizesContent({
   const [isLoading, setIsLoading] = React.useState(true);
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState(10);
+  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(new Set());
+
+  const toggleColumn = (key: string) => {
+    setHiddenColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   // Fetch sizes on mount
   const loadSizes = React.useCallback(async () => {
@@ -448,7 +467,9 @@ function ImageSizesContent({
   );
 
   // Columns definition for ResponsiveTable
-  const columns: Column<ImageSize>[] = React.useMemo(
+  const ALWAYS_VISIBLE = new Set(["id", "name"]);
+
+  const columnDefs: Column<ImageSize>[] = React.useMemo(
     () => [
       {
         key: "name",
@@ -520,20 +541,56 @@ function ImageSizesContent({
     [handleEdit, handleDelete]
   );
 
+  const columns = React.useMemo(
+    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
+    [columnDefs, hiddenColumns]
+  );
+
+  const toggleableColumns = columnDefs.filter(
+    col => !ALWAYS_VISIBLE.has(String(col.key))
+  );
+
   return (
     <div className="space-y-4">
-      {/* Search Bar */}
-      <div className="flex items-center justify-between gap-4">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search image sizes..."
-          className="max-w-sm"
-        />
+      {/* Search Bar & Columns Filter */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search image sizes..."
+            className="flex-1 max-w-sm bg-white text-black border-primary/5"
+            isLoading={isLoading}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
+                <Columns className="mr-2 h-4 w-4" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {toggleableColumns.map(col => (
+                <DropdownMenuCheckboxItem
+                  key={String(col.key)}
+                  checked={!hiddenColumns.has(String(col.key))}
+                  onCheckedChange={() => toggleColumn(String(col.key))}
+                >
+                  {typeof col.label === "string" ? col.label : String(col.key)}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* Table Wrapper */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         {isLoading ? (
           <TableSkeleton columns={7} rowCount={pageSize} />
         ) : (
@@ -549,7 +606,7 @@ function ImageSizesContent({
             tableWrapperClassName="border-0 rounded-none shadow-none"
             footer={
               (filteredSizes.length > 0 || isLoading) && (
-                <div className="table-footer border-t border-border p-4">
+                <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
                   <Pagination
                     currentPage={page}
                     totalPages={Math.max(

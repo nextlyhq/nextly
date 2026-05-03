@@ -39,8 +39,8 @@ export function PublicationWidget({
   });
 
   return (
-    <Card className="shadow-sm border-border">
-      <CardHeader className="pb-3 border-b border-border/50">
+    <Card className="shadow-sm border-primary/5">
+      <CardHeader className="pb-3  border-b border-primary/5">
         <CardTitle className="text-sm font-semibold tracking-wide uppercase text-muted-foreground">
           Publishing
         </CardTitle>
@@ -69,7 +69,7 @@ export function PublicationWidget({
           <span className="font-medium text-foreground">Admin</span>
         </div>
       </CardContent>
-      <CardFooter className="flex flex-col gap-3 pt-4 border-t border-border/50">
+      <CardFooter className="flex flex-col gap-3 pt-4  border-t border-primary/5">
         <Button
           type="button"
           onClick={onSave}

@@ -67,7 +67,7 @@ export function SingleFormActions({
             variant="outline"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="flex-1 shadow-none bg-background border-border hover-unified"
+            className="flex-1 shadow-none bg-background border-primary/5 hover-unified"
           >
             Cancel
           </Button>

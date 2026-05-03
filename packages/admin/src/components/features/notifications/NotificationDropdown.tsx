@@ -71,7 +71,7 @@ export function NotificationDropdown(): JSX.Element {
       data-testid="notification-dropdown"
       className="w-96 max-h-[480px] overflow-y-auto"
     >
-      <div className="px-4 py-3 border-b border-border">
+      <div className="px-4 py-3  border-b border-primary/5">
         <h3 className="font-semibold text-sm">Recent schema changes</h3>
       </div>
 
@@ -113,7 +113,7 @@ export function NotificationDropdown(): JSX.Element {
             ))}
           </div>
           {hasMore && (
-            <div className="px-4 py-3 border-t border-border text-center">
+            <div className="px-4 py-3  border-t border-primary/5 text-center">
               {moreError && (
                 <p className="text-destructive text-xs mb-2">{moreError}</p>
               )}

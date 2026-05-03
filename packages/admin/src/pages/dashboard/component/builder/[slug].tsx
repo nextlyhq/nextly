@@ -172,7 +172,7 @@ export default function ComponentBuilderEditPage({
   if (isLoading) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <div className="p-6 border-b border-border">
+        <div className="p-6  border-b border-primary/5">
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
         </div>
@@ -182,7 +182,7 @@ export default function ComponentBuilderEditPage({
             <Skeleton className="h-12 w-full mb-2" />
             <Skeleton className="h-12 w-full" />
           </div>
-          <div className="w-[400px] border-l border-border p-4">
+          <div className="w-[400px]  border-l border-primary/5 p-4">
             <Skeleton className="h-8 w-full mb-4" />
             <Skeleton className="h-48 w-full" />
           </div>

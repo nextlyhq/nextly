@@ -75,7 +75,7 @@ export function MediaBulkActionBar({
       aria-label="Bulk actions for selected media"
       aria-live="polite"
       className={cn(
-        "flex items-center justify-between gap-4 w-full p-3 rounded-none border border-primary/20 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
+        "flex items-center justify-between gap-4 w-full p-3 rounded-none  border border-primary/5 border-primary/5 bg-primary/5 animate-in fade-in slide-in-from-top-2 duration-300",
         className
       )}
     >
@@ -111,7 +111,7 @@ export function MediaBulkActionBar({
           size="sm"
           onClick={onMoveToFolder}
           disabled={isDeleting}
-          className="gap-1.5 h-8 text-xs font-normal bg-card border-primary/20 text-primary hover:bg-primary/5"
+          className="gap-1.5 h-8 text-xs font-normal bg-card border-primary/5 text-primary hover:bg-primary/5"
         >
           <FolderInput className="h-3.5 w-3.5" />
           Move

@@ -253,12 +253,12 @@ export default function PluginsTable() {
           value={search}
           onChange={setSearch}
           placeholder="Search plugins..."
-          className="w-full md:max-w-sm"
+          className="w-full md:max-w-sm bg-white text-black border-primary/5"
         />
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9">
+              <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -283,7 +283,7 @@ export default function PluginsTable() {
       </div>
 
       {/* Boxed table and Pagination Card */}
-      <div className="rounded-none border border-border bg-card overflow-hidden">
+      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
         <ResponsiveTable
           data={paginatedPlugins}
           columns={columns}
@@ -296,7 +296,7 @@ export default function PluginsTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {totalCount > 0 && (
-          <div className="border-t border-border bg-[hsl(var(--table-header-bg))] p-4">
+          <div className="border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
             <Pagination
               currentPage={page}
               totalPages={Math.ceil(totalCount / pageSize)}

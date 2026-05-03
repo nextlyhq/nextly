@@ -156,7 +156,7 @@ export function RichTextToolbar({
   return (
     <div
       className={cn(
-        "flex items-center gap-0.5 p-1 border-b flex-wrap",
+        "flex items-center gap-0.5 p-1  border-b border-primary/5 flex-wrap",
         disabled && "opacity-50 pointer-events-none"
       )}
       role="toolbar"
@@ -352,7 +352,7 @@ export function RichTextToolbar({
                 >
                   <Paintbrush className="h-4 w-4" />
                   <span
-                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-none border"
+                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-none  border border-primary/5"
                     style={{ backgroundColor: bgColor }}
                   />
                   <input

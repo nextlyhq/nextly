@@ -67,7 +67,7 @@ export function SmtpConfigFields({
         control={control}
         name="smtpSecure"
         render={({ field }) => (
-          <FormItem className="flex items-center justify-between rounded-none border border-border p-4">
+          <FormItem className="flex items-center justify-between rounded-none  border border-primary/5 p-4">
             <div className="space-y-0.5">
               <FormLabel>Use Secure Connection (SSL/TLS)</FormLabel>
               <FormDescription>

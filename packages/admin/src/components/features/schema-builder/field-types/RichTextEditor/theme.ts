@@ -97,13 +97,13 @@ export const lexicalTheme: EditorThemeClasses = {
 
   // Blockquotes
   quote:
-    "border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic text-gray-700 dark:text-gray-300 my-4",
+    "border-l-4 border-primary/5 dark:border-primary/30 pl-4 italic text-gray-700 dark:text-gray-300 my-4",
 
   // Tables (if we add table support later)
   table: "border-collapse w-full my-4",
-  tableCell: "border border-gray-300 dark:border-gray-600 px-3 py-2",
+  tableCell: "border border-primary/5 px-3 py-2",
   tableCellHeader:
-    "border border-gray-300 dark:border-gray-600 px-3 py-2 font-bold bg-gray-50 dark:bg-gray-800",
+    "border border-primary/5 px-3 py-2 font-bold bg-gray-50 dark:bg-gray-800",
 
   // Layout/spacing
   indent: "ml-6",

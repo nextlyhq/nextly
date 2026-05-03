@@ -74,7 +74,7 @@ export function FormSettingsTab() {
       <div className="w-full flex flex-col gap-8">
         {/* Submission Settings */}
         <section className="mb-12">
-          <div className="border-b border-border pb-3">
+          <div className="border-b border-primary/5 pb-3">
             <h3 className="text-[16px] font-bold text-foreground tracking-tight">
               Submission Settings
             </h3>
@@ -92,7 +92,7 @@ export function FormSettingsTab() {
                   updateSettings({ submitButtonText: e.target.value })
                 }
                 placeholder="Submit"
-                className="bg-transparent h-8 w-40 text-right pr-2 focus-visible:ring-1 border-border/40 text-[13px]"
+                className="bg-transparent h-8 w-40 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
               />
             </SettingRow>
 
@@ -121,7 +121,7 @@ export function FormSettingsTab() {
                     updateSettings({ resetButtonText: e.target.value })
                   }
                   placeholder="Reset"
-                  className="bg-transparent h-8 w-40 text-right pr-2 focus-visible:ring-1 border-border/40 text-[13px]"
+                  className="bg-transparent h-8 w-40 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
                 />
               </SettingRow>
             )}
@@ -130,7 +130,7 @@ export function FormSettingsTab() {
 
         {/* After Submission */}
         <section className="mb-12">
-          <div className="border-b border-border pb-3">
+          <div className="border-b border-primary/5 pb-3">
             <h3 className="text-[16px] font-bold text-foreground tracking-tight">
               After Submission
             </h3>
@@ -151,7 +151,7 @@ export function FormSettingsTab() {
                   }
                 }}
               >
-                <TabsList className="bg-muted p-1 h-8">
+                <TabsList className="bg-primary/5 p-1 h-8">
                   <TabsTrigger
                     value="message"
                     className="px-4 py-1 text-[11px] font-medium data-[state=active]:bg-background data-[state=active]:shadow-sm"
@@ -186,7 +186,7 @@ export function FormSettingsTab() {
                   }
                   placeholder="Thank you for your submission!"
                   rows={4}
-                  className="bg-transparent text-[13px] leading-relaxed w-full border-border/60 focus-visible:ring-1"
+                  className="bg-transparent text-[13px] leading-relaxed w-full border-primary/5 focus-visible:ring-1"
                 />
               </div>
             ) : (
@@ -202,7 +202,7 @@ export function FormSettingsTab() {
                       updateSettings({ redirectUrl: e.target.value })
                     }
                     placeholder="https://example.com/thank-you"
-                    className="bg-transparent h-8 w-56 text-right pr-2 focus-visible:ring-1 border-border/40 text-[13px]"
+                    className="bg-transparent h-8 w-56 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
                   />
                 </SettingRow>
               </div>
@@ -215,7 +215,7 @@ export function FormSettingsTab() {
       <div className="w-full flex flex-col gap-8">
         {/* Spam Protection */}
         <section>
-          <div className="border-b border-border pb-3">
+          <div className="border-b border-primary/5 pb-3">
             <h3 className="text-[16px] font-bold text-foreground tracking-tight">
               Spam Protection
             </h3>
@@ -250,7 +250,7 @@ export function FormSettingsTab() {
 
         {/* Data Storage */}
         <section>
-          <div className="border-b border-border pb-3">
+          <div className="border-b border-primary/5 pb-3">
             <h3 className="text-[16px] font-bold text-foreground tracking-tight">
               Data Storage
             </h3>
@@ -286,7 +286,7 @@ export function FormSettingsTab() {
                   }
                   placeholder="Unlimited"
                   min={1}
-                  className="bg-transparent h-8 w-28 text-right pr-2 focus-visible:ring-1 border-border/40 text-[13px]"
+                  className="bg-transparent h-8 w-28 text-right pr-2 focus-visible:ring-1 border-primary/5 text-[13px]"
                 />
                 <span className="text-[12px] text-muted-foreground font-medium">
                   Entries

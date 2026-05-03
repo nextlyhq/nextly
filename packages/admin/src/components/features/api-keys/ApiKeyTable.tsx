@@ -29,7 +29,7 @@ import {
   TableSkeleton,
 } from "@revnixhq/ui";
 import type React from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 
 import {
   AlertTriangle,
@@ -38,8 +38,11 @@ import {
   Loader2,
   MoreHorizontal,
   Trash2,
-  Filter,
 } from "@admin/components/icons";
+import { PageContainer } from "@admin/components/layout/page-container";
+import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { Pagination } from "@admin/components/shared/pagination";
+import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
@@ -60,9 +63,11 @@ export interface ApiKeyTableProps {
 // Helpers
 // ============================================================
 
-type KeyStatus = "active" | "expired" | "revoked";
+// ============================================================
+// Helpers
+// ============================================================
 
-type StatusFilter = "all" | KeyStatus;
+type KeyStatus = "active" | "expired" | "revoked";
 
 function getStatus(key: ApiKeyMeta): KeyStatus {
   if (!key.isActive) return "revoked";
@@ -152,8 +157,11 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   onRevoke,
 }) => {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  // Pagination state
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
@@ -166,6 +174,11 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       return next;
     });
   };
+
+  const handlePageSizeChange = useCallback((newPageSize: number) => {
+    setPageSize(newPageSize);
+    setPage(0);
+  }, []);
 
   const handleEdit = useCallback((key: ApiKeyMeta) => onEdit(key), [onEdit]);
   const handleRevoke = useCallback(
@@ -277,7 +290,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                className="h-8 w-8 p-0 border border-border"
+                className="h-8 w-8 p-0  border border-primary/5"
                 disabled={isRevoked}
                 title={
                   isRevoked
@@ -325,13 +338,6 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
     const term = search.trim().toLowerCase();
 
     return data.filter(key => {
-      // Status filter
-      const status = getStatus(key);
-
-      if (statusFilter !== "all" && status !== statusFilter) {
-        return false;
-      }
-
       // Search filter
       if (!term) return true;
 
@@ -348,7 +354,20 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
       return haystack.includes(term);
     });
-  }, [data, search, statusFilter]);
+  }, [data, search]);
+
+  const paginatedData = useMemo(() => {
+    const start = page * pageSize;
+    return filteredData.slice(start, start + pageSize);
+  }, [filteredData, page, pageSize]);
+
+  const totalItems = filteredData.length;
+  const totalPages = Math.ceil(totalItems / pageSize);
+
+  // Reset page when search changes
+  useEffect(() => {
+    setPage(0);
+  }, [search]);
 
   // ── Error state ────────────────────────────────────────────
   if (isError) {
@@ -367,7 +386,17 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
   // ── Loading state ──────────────────────────────────────────
   if (isLoading && data.length === 0) {
-    return <TableSkeleton columns={7} rowCount={5} hideWrapper hideFooter />;
+    return (
+      <div className="space-y-4">
+        {/* Skeleton Toolbar */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar value="" onChange={() => {}} placeholder="Search API keys..." isLoading={true} className="bg-white text-black border-primary/5" />
+          </div>
+        </div>
+        <TableSkeleton columns={7} rowCount={5} />
+      </div>
+    );
   }
 
   return (
@@ -381,61 +410,17 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               onChange={setSearch}
               placeholder="Search API keys by name, description, or role..."
               isLoading={isLoading}
+              className="bg-white text-black border-primary/5"
             />
           </div>
         </div>
 
-        {/* Right: Filters & Column visibility */}
+        {/* Right: Column visibility */}
         <div className="flex items-center gap-2">
-          {/* Filter Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 relative hover-unified"
-              >
-                <Filter className="mr-2 h-4 w-4" />
-                Filter
-                {statusFilter !== "all" && (
-                  <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "all"}
-                onCheckedChange={() => setStatusFilter("all")}
-              >
-                All Status
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "active"}
-                onCheckedChange={() => setStatusFilter("active")}
-              >
-                Active
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "expired"}
-                onCheckedChange={() => setStatusFilter("expired")}
-              >
-                Expired
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "revoked"}
-                onCheckedChange={() => setStatusFilter("revoked")}
-              >
-                Revoked
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           {/* Columns Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9 hover-unified">
+              <Button variant="outline" size="sm" className="h-9 hover-unified bg-white text-black border-primary/5 hover:bg-white/90">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -459,13 +444,13 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
       {/* Table card */}
       {isLoading && data.length === 0 ? (
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <div className="p-4 space-y-3">
             <Skeleton className="h-[200px] w-full rounded-none" />
           </div>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <div className="space-y-1">
             {isLoading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground pb-2 px-6 pt-4">
@@ -474,12 +459,26 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               </div>
             )}
             <ResponsiveTable
-              data={filteredData}
+              data={paginatedData}
               columns={columns}
               emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
               ariaLabel="API keys table"
               tableWrapperClassName="border-0 rounded-none shadow-none"
             />
+
+            {/* Table Footer with Pagination */}
+            <div className="table-footer  border-t border-primary/5 bg-[hsl(var(--table-header-bg))] p-4">
+              <Pagination
+                currentPage={page}
+                totalPages={Math.max(1, totalPages)}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                totalItems={totalItems}
+                isLoading={isLoading}
+              />
+            </div>
           </div>
         </div>
       )}

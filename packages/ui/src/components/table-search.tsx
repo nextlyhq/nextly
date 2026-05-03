@@ -56,7 +56,7 @@ export function TableSearch({
         value={value}
         onChange={e => onChange(e.target.value)}
         aria-busy={isLoading}
-        className="h-10 w-full rounded-none border border-input bg-background pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 transition-all"
+        className="h-10 w-full rounded-none  border border-primary/5 bg-background pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 transition-all"
       />
       {(value || isLoading) && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">

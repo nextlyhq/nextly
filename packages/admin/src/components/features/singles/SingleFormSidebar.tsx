@@ -70,7 +70,7 @@ export function SingleFormSidebar({
     <div className="h-full flex flex-col bg-background overflow-y-auto">
       {/* Action Buttons */}
       {actions && (
-        <div className="px-6 py-4 border-b border-border bg-background shrink-0">
+        <div className="px-6 py-4  border-b border-primary/5 bg-background shrink-0">
           {actions}
         </div>
       )}
@@ -86,7 +86,7 @@ export function SingleFormSidebar({
 
         {/* SEO section */}
         {seoField && (
-          <div className="px-6 py-4 border-b border-border">
+          <div className="px-6 py-4  border-b border-primary/5">
             <EntryFormContent fields={[seoField]} />
           </div>
         )}
@@ -95,7 +95,7 @@ export function SingleFormSidebar({
         <div>
           <div
             onClick={() => setIsDocInfoOpen(!isDocInfoOpen)}
-            className="w-full flex items-center justify-between bg-primary/10 text-primary px-6 py-3 transition-all duration-200 cursor-pointer border-y border-primary/20 hover:border-primary/50 relative z-10"
+            className="w-full flex items-center justify-between bg-primary/5 text-primary px-6 py-3 transition-all duration-200 cursor-pointer  border-y border-primary/5 border-primary/5 hover:border-primary/50 relative z-10"
           >
             <h3 className="text-sm font-medium">Document Info</h3>
             <ChevronDown
@@ -107,7 +107,7 @@ export function SingleFormSidebar({
           </div>
 
           {isDocInfoOpen && (
-            <div className="space-y-4 px-6 pt-6 pb-6 border-b border-primary/20 z-0">
+            <div className="space-y-4 px-6 pt-6 pb-6  border-b border-primary/5 border-primary/5 z-0">
               <div>
                 <dt className="text-xs font-medium text-primary/50 mb-1">
                   Document ID

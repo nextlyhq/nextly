@@ -532,7 +532,7 @@ function EmailProviderTable() {
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="h-8 w-8 p-0 border border-border"
+              className="h-8 w-8 p-0  border border-primary/5"
             >
               <MoreHorizontal className="h-4 w-4" />
             </Button>
@@ -604,7 +604,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={false}
-              className="flex-1 max-w-sm"
+              className="flex-1 max-w-sm bg-white text-black border-primary/5"
             />
           </div>
         </div>
@@ -632,7 +632,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={true}
-              className="flex-1 max-w-sm"
+              className="flex-1 max-w-sm bg-white text-black border-primary/5"
             />
           </div>
         </div>
@@ -652,28 +652,27 @@ function EmailProviderTable() {
             onChange={setSearch}
             placeholder="Search providers by name..."
             isLoading={isLoading}
-            className="flex-1 max-w-sm"
+            className="flex-1 max-w-sm bg-white text-black border-primary/5"
           />
-          <div className="flex items-center gap-2">
-            <Select value={type} onValueChange={handleTypeChange}>
-              <SelectTrigger className="h-9 w-[130px] border border-border">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="smtp">SMTP</SelectItem>
-                <SelectItem value="resend">Resend</SelectItem>
-                <SelectItem value="sendlayer">SendLayer</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
         </div>
 
-        {/* Right: Column visibility */}
+        {/* Right: Filters & Column visibility */}
         <div className="flex items-center gap-2">
+          <Select value={type} onValueChange={handleTypeChange}>
+            <SelectTrigger className="h-9 w-[130px] bg-white text-black border-primary/5 hover:bg-white/90">
+              <SelectValue placeholder="All Types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              <SelectItem value="smtp">SMTP</SelectItem>
+              <SelectItem value="resend">Resend</SelectItem>
+              <SelectItem value="sendlayer">SendLayer</SelectItem>
+            </SelectContent>
+          </Select>
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
                 <Columns className="mr-2 h-4 w-4" />
                 Columns
               </Button>
@@ -696,7 +695,7 @@ function EmailProviderTable() {
       </div>
 
       {/* Table */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         <ResponsiveTable
           data={data?.data || []}
           columns={columns}
@@ -705,7 +704,7 @@ function EmailProviderTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-border p-4">
+          <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
             <Pagination
               currentPage={page}
               totalPages={data.meta.totalPages}

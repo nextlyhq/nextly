@@ -110,7 +110,7 @@ export function PageErrorFallback({
   return (
     <PageContainer>
       <div className="flex min-h-[60vh] items-center justify-center p-4">
-        <div className="w-full max-w-xl bg-background border border-border/50 rounded-none p-8 md:p-12 flex flex-col items-center text-center animate-in fade-in zoom-in duration-500">
+        <div className="w-full max-w-xl bg-background  border border-primary/5 rounded-none p-8 md:p-12 flex flex-col items-center text-center animate-in fade-in zoom-in duration-500">
           <div className="h-16 w-16 bg-primary/5 rounded-none flex items-center justify-center mb-8">
             <AlertCircle className="h-8 w-8 text-foreground" />
           </div>
@@ -141,7 +141,7 @@ export function PageErrorFallback({
                 onClick={reset}
                 variant="outline"
                 size="lg"
-                className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold border-border/50 hover:bg-accent active:scale-95 transition-all duration-200"
+                className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold border-primary/5 hover:bg-accent active:scale-95 transition-all duration-200"
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Try again
@@ -170,11 +170,11 @@ export function PageErrorFallback({
                 <summary className="cursor-pointer text-xs font-medium text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center justify-center gap-2 outline-none">
                   <span>View technical details</span>
                 </summary>
-                <div className="mt-4 p-4 rounded-none bg-accent/50 border border-border/30 overflow-hidden">
+                <div className="mt-4 p-4 rounded-none bg-accent/50  border border-primary/5 overflow-hidden">
                   <pre className="text-[11px] font-mono text-muted-foreground/80 overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[200px] custom-scrollbar">
                     {error.message}
                     {error.stack && (
-                      <span className="opacity-50 block mt-2 pt-2 border-t border-border/20">
+                      <span className="opacity-50 block mt-2 pt-2  border-t border-primary/5">
                         {error.stack}
                       </span>
                     )}

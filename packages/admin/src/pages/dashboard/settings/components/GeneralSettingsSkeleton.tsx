@@ -11,9 +11,9 @@ export const GeneralSettingsSkeleton: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Locale & Formatting Section */}
-      <div className="rounded-none border border-border bg-card overflow-hidden">
+      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
         {/* Card Header Skeleton */}
-        <div className="flex items-center gap-4 px-6 py-5 border-b border-border/60 bg-primary/5">
+        <div className="flex items-center gap-4 px-6 py-5  border-b border-primary/5 bg-primary/5">
           <Skeleton className="h-9 w-9 rounded-none" />
           <div className="space-y-2">
             <Skeleton className="h-4 w-32" />
@@ -42,9 +42,9 @@ export const GeneralSettingsSkeleton: React.FC = () => {
       </div>
 
       {/* Appearance Section */}
-      <div className="rounded-none border border-border bg-card overflow-hidden">
+      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
         {/* Card Header Skeleton */}
-        <div className="flex items-center gap-4 px-6 py-5 border-b border-border/60 bg-primary/5">
+        <div className="flex items-center gap-4 px-6 py-5  border-b border-primary/5 bg-primary/5">
           <Skeleton className="h-9 w-9 rounded-none" />
           <div className="space-y-2">
             <Skeleton className="h-4 w-24" />

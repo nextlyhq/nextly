@@ -649,7 +649,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             onChange={setSearch}
             placeholder="Search Singles..."
             isLoading={isLoading}
-            className="w-full md:max-w-sm"
+            className="w-full md:max-w-sm bg-white text-black border-primary/5"
           />
         </div>
 
@@ -658,7 +658,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9 relative">
+                <Button variant="outline" size="sm" className="h-9 relative bg-white text-black border-primary/5 hover:bg-white/90">
                   <Filter className="mr-2 h-4 w-4" />
                   Filter
                   {(sourceFilter !== "all" || migrationFilter !== "all") && (
@@ -730,7 +730,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9">
+                <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
                   <Icons.Columns className="mr-2 h-4 w-4" />
                   Columns
                 </Button>
@@ -761,7 +761,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       ) : (
         /* Responsive table */
         /* Responsive table and Pagination Card */
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}
@@ -770,7 +770,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             tableWrapperClassName="border-0 rounded-none shadow-none"
           />
           {hasData && data && (
-            <div className="table-footer border-t border-border p-4">
+            <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
               <Pagination
                 currentPage={page}
                 totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}

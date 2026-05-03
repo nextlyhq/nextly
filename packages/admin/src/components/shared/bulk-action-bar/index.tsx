@@ -156,7 +156,7 @@ export function BulkActionBar({
       className={cn(
         "fixed bottom-0 right-0 z-40 transition-[left,width] duration-200 ease-linear",
         "left-0 md:left-(--sidebar-width-safe)",
-        "border-t border-border bg-background shadow-lg",
+        "border-t border-primary/5 bg-background shadow-lg",
         "animate-in slide-in-from-bottom duration-300",
         className
       )}

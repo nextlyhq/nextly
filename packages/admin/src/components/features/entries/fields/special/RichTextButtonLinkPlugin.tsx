@@ -422,7 +422,7 @@ export function RichTextButtonLinkPlugin({
                     type="color"
                     value={bgColor}
                     onChange={e => setBgColor(e.target.value)}
-                    className="h-9 w-9 rounded-none border border-input cursor-pointer p-0.5"
+                    className="h-9 w-9 rounded-none  border border-primary/5 cursor-pointer p-0.5"
                   />
                   <Input
                     value={bgColor}
@@ -441,7 +441,7 @@ export function RichTextButtonLinkPlugin({
                   type="color"
                   value={textColor}
                   onChange={e => setTextColor(e.target.value)}
-                  className="h-9 w-9 rounded-none border border-input cursor-pointer p-0.5"
+                  className="h-9 w-9 rounded-none  border border-primary/5 cursor-pointer p-0.5"
                 />
                 <Input
                   value={textColor}
@@ -470,7 +470,7 @@ export function RichTextButtonLinkPlugin({
                 <span
                   className={`inline-flex items-center justify-center rounded-none font-medium transition-colors ${
                     variant === "outline"
-                      ? "border border-input bg-background"
+                      ? "border border-primary/5 bg-background"
                       : ""
                   } ${
                     size === "sm"

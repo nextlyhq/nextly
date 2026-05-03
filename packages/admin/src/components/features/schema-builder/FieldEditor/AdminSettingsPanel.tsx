@@ -114,7 +114,7 @@ export function AdminSettingsPanel({
         </div>
 
         {localField.admin?.condition ? (
-          <div className="space-y-2 p-3 rounded-none border border-border bg-background">
+          <div className="space-y-2 p-3 rounded-none  border border-primary/5 bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Show this field when:
             </p>

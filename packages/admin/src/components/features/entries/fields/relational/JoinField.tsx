@@ -160,7 +160,7 @@ export function JoinField({ field, className }: JoinFieldProps) {
   if (isCreateMode || !entryId) {
     return (
       <div className={cn("space-y-2", className)}>
-        <div className="flex items-center gap-2 rounded-none border border-dashed border-muted-foreground/25 bg-primary/5 p-4 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 rounded-none  border border-primary/5 border-dashed border-primary/5-foreground/25 bg-primary/5 p-4 text-sm text-muted-foreground">
           <AlertCircle className="h-4 w-4" />
           <span>
             Save this {collectionSlug || "entry"} first to see related{" "}
@@ -255,7 +255,7 @@ export function JoinField({ field, className }: JoinFieldProps) {
       </div>
 
       {/* Entries list */}
-      <ul className="space-y-1 rounded-none border bg-primary/5">
+      <ul className="space-y-1 rounded-none  border border-primary/5 bg-primary/5">
         {entries.map(entry => {
           const entryData = entry as Record<string, unknown>;
           const id = entryData.id as string;

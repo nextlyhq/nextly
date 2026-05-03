@@ -247,15 +247,15 @@ export function UserRoleSelector({
                           <CommandItem
                             value={role.name}
                             onSelect={() => toggleRole(role.id)}
-                            className="flex items-start gap-4 px-4 py-4 cursor-pointer w-full overflow-hidden hover-unified data-[selected=true]:bg-primary/10 data-[selected=true]:text-primary"
+                            className="flex items-start gap-4 px-4 py-4 cursor-pointer w-full overflow-hidden hover-unified data-[selected=true]:bg-primary/5 data-[selected=true]:text-primary"
                           >
                             {/* Checkbox indicator */}
                             <div
                               className={cn(
-                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-none border transition-colors mt-0.5",
+                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-none  border border-primary/5 transition-colors mt-0.5",
                                 isSelected
                                   ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-input bg-background"
+                                  : "border-primary/5 bg-background"
                               )}
                               aria-hidden="true"
                             >

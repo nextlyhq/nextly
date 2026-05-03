@@ -659,7 +659,7 @@ export default function CollectionTable() {
             onChange={setSearch}
             placeholder="Search collections..."
             isLoading={isFetching}
-            className="w-full md:max-w-sm"
+            className="w-full md:max-w-sm bg-white text-black border-primary/5"
           />
         </div>
 
@@ -678,7 +678,7 @@ export default function CollectionTable() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-9 relative"
+                      className="h-9 relative bg-white text-black border-primary/5 hover:bg-white/90"
                     >
                       <Filter className="mr-2 h-4 w-4" />
                       Filter
@@ -768,7 +768,7 @@ export default function CollectionTable() {
                 </DropdownMenu>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-9">
+                    <Button variant="outline" size="sm" className="h-9 bg-white text-black border-primary/5 hover:bg-white/90">
                       <Icons.Columns className="mr-2 h-4 w-4" />
                       Columns
                     </Button>
@@ -807,7 +807,7 @@ export default function CollectionTable() {
       ) : isEmpty ? (
         <CollectionsEmptyState isSearching={isSearching || isFiltering} />
       ) : (
-        <div className="table-wrapper md:rounded-none md:border md:border-border md:bg-card overflow-hidden">
+        <div className="table-wrapper md:rounded-none md :border border-primary/5 md:border-primary/5 md:bg-card overflow-hidden">
           <ResponsiveTable
             data={filteredData}
             columns={columns}
@@ -816,7 +816,7 @@ export default function CollectionTable() {
             tableWrapperClassName="border-0 rounded-none shadow-none"
           />
           {data && data.meta.totalPages > 0 && (
-            <div className="table-footer md:border-t border-border p-4">
+            <div className="table-footer border-t border-primary/5 p-4 bg-[hsl(var(--table-header-bg))]">
               <Pagination
                 currentPage={page}
                 totalPages={data.meta.totalPages}

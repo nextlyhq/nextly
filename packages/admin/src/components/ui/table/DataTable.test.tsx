@@ -456,14 +456,14 @@ describe("DataTable", () => {
     });
   });
 
-  it("shows table container with border", () => {
+  it("shows table container with  border border-primary/5", () => {
     const fetcher = createMockDataFetcher(mockUsers);
     const { container } = render(
       <DataTable columns={testColumns} fetcher={fetcher} />
     );
 
-    // Parent container should have border classes
-    const tableContainer = container.querySelector(".border");
+    // Parent container should have  border border-primary/5 classes
+    const tableContainer = container.querySelector(" .border border-primary/5");
     expect(tableContainer).toBeInTheDocument();
   });
 

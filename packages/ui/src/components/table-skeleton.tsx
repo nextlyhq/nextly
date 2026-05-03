@@ -64,7 +64,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
           {/* Body Skeleton */}
           <TableBody>
             {Array.from({ length: rowCount }).map((_, rowIdx) => (
-              <TableRow key={rowIdx} className="border-b border-border">
+              <TableRow key={rowIdx} className="border-b border-primary/5">
                 {Array.from({ length: columns }).map((_, colIdx) => (
                   <TableCell key={colIdx} className="py-3">
                     {colIdx === 0 ? (
@@ -94,7 +94,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
 
       {/* Footer Skeleton */}
       {!hideFooter && (
-        <div className="table-footer border-t border-border">
+        <div className="table-footer  border-t border-primary/5">
           <div className="flex items-center justify-between px-2 py-4 p-4">
             <div className="flex items-center gap-2 text-sm">
               <GrayBar className="h-4 w-[120px]" />
@@ -124,7 +124,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
   }
 
   return (
-    <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+    <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
       {content}
     </div>
   );

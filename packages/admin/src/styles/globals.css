@@ -584,8 +584,8 @@
 
 .adminapp {
   /* Base colors - using Slate neutral scale */
-  --background: 210 20% 98%;
-  /* off-white #f9fafb per Antigravity standards */
+  --background: 0 0% 100%;
+  /* Pure white for weightless aesthetic */
   --foreground: 222.2 47.4% 11.2%;
   /* slate-900 */
 
@@ -612,8 +612,7 @@
   /* slate-900 */
 
   /* Utility colors */
-  --muted: 210 40% 96.1%;
-  /* slate-100 */
+  --muted: 0 0% 96%;
   --muted-foreground: 215.4 16.3% 46.9%;
   /* slate-500 */
   --accent: 215.4 16.3% 46.9%;
@@ -635,11 +634,9 @@
   --warning-foreground: 222.2 47.4% 11.2%;
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
-  /* Element colors - using Slate scale */
-  --border: 214.3 31.8% 91.4%;
-  /* slate-200 */
-  --input: 214.3 31.8% 91.4%;
-  /* slate-200 */
+  /* Element colors - using primary/5 for weightless design */
+  --border: 0 0% 0% / 0.05;
+  --input: 0 0% 94%;
   --ring: var(--primary);
 
   /* Chart colors for data visualization */
@@ -662,8 +659,8 @@
   /* white */
 
   /* Sidebar specific colors - using Slate scale */
-  --sidebar-background: 210 40% 98%;
-  /* slate-50 */
+  --sidebar-background: 0 0% 100%;
+  /* Pure white for weightless aesthetic */
   --sidebar-foreground: 215.3 25% 26.7%;
   /* slate-700 */
   --sidebar-primary: 222.2 47.4% 11.2%;
@@ -679,11 +676,9 @@
   --sidebar-ring: var(--primary);
 
   /* Data table specific colors */
-  --table-row-hover: 210 40% 98%;
-  /* slate-50 */
+  --table-row-hover: 0 0% 98%;
   --table-row-selected: var(--primary);
-  --table-border: 214.3 31.8% 91.4%;
-  /* slate-200 */
+  --table-border: var(--border);
 
   /* Fix Tailwind v4 color evaluation with color-mix */
   --color-background: hsl(var(--background));
@@ -831,15 +826,6 @@
   --color-ring: hsl(var(--ring));
 }
 
-/**
-    * Base Styles
-    *
-    * Scoped styles for adminapp elements only
-    */
-.adminapp * {
-  border-color: hsl(var(--border));
-}
-
 .adminapp {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -848,26 +834,13 @@
 
 /**
  * Table Header & Footer Background + Border System
- *
- * Color ladder (light → dark):
- *   Page container:    hsl(210 40% 96.1%) = #f1f5f9  (slate-100)
- *   Table header/foot: hsl(214 32% 94%)   = #edf0f5  (subtle gray)
- *   Table borders:     hsl(214 32% 87%)   = #d8dfe8  (clearly visible)
- *
- * Each step is distinct enough to read as a separate zone without
- * any harsh contrast — subtle but structured.
  */
 .adminapp {
-  /* --table-header-bg: 0 0% 94%;*/
-  --table-border-color: 0 0% 88%;
+  --table-header-bg: 0 0% 100%;
 }
 
 .adminapp.dark {
-  /* Dark mode table colors - ensuring readable contrast */
-  /* Header/Footer: slate-800/muted (dark but distinct from bg) */
-  /* --table-header-bg: 217.2 32.6% 17.5%; */
-  /* Borders: slate-700/border (visible against dark bg) */
-  --table-border-color: 215.4 16.3% 25.9%;
+  --table-header-bg: 222 47% 6%;
 }
 
 .adminapp thead {
@@ -880,19 +853,6 @@
 
 .adminapp .table-footer {
   background-color: hsl(var(--table-header-bg));
-}
-
-/* Table borders — darker than header/footer bg and page container */
-.adminapp table,
-.adminapp th,
-.adminapp td,
-.adminapp tr {
-  border-color: hsl(var(--table-border-color));
-}
-
-/* Table wrapper outer border — same as row borders for visual consistency */
-.adminapp .table-wrapper {
-  border-color: hsl(var(--table-border-color));
 }
 
 /**
@@ -1336,41 +1296,9 @@ button[data-slot="radio-group-item"][data-state="checked"],
 /**
     * Component States & Animations
     * 
-    * Enhanced state styles for interactive components
+/**
+    * Enhanced Data-Slot Component Styles
     */
-/* [data-state="open"] {
-  animation: fade-in 200ms ease-out;
-} */
-
-/* [data-state="closed"] {
-  animation: fade-out 200ms ease-in;
-} */
-
-/* @keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes fade-out {
-  from {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  to {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-} */
-
-/* Loading spinner animation */
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1392,22 +1320,15 @@ button[data-slot="radio-group-item"][data-state="checked"],
   transition: all 0.2s ease;
 }
 
-/* [data-slot^="button"]:focus-visible {
-  outline: 2px solid hsl(var(--focus-ring));
-  outline-offset: 2px;
-} */
-
 /* Form component enhancements */
 [data-slot="input"]:focus,
 [data-slot="textarea"]:focus {
   border-color: hsl(var(--ring));
-  /* box-shadow: 0 0 0 2px hsla(var(--ring) / 0.2); */
 }
 
 [data-slot="input"][aria-invalid="true"],
 [data-slot="textarea"][aria-invalid="true"] {
   border-color: hsl(var(--destructive));
-  /* box-shadow: 0 0 0 2px hsla(var(--destructive) / 0.2); */
 }
 
 /* Dialog enhancements */
@@ -1419,9 +1340,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   background-color: hsl(var(--background)) !important;
   color: hsl(var(--foreground)) !important;
   border: 1px solid hsl(var(--border));
-  /* box-shadow:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1),
-    0 4px 6px -2px rgba(0, 0, 0, 0.05); */
   opacity: 1 !important;
 }
 
@@ -1473,12 +1391,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
 [data-slot="card"] {
   transition: all 0.2s ease;
 }
-
-/* [data-slot="card"]:hover {
-  box-shadow:
-    0 4px 6px -1px rgba(0, 0, 0, 0.1),
-    0 2px 4px -1px rgba(0, 0, 0, 0.06);
-} */
 
 /* Badge enhancements */
 [data-slot="badge"] {
@@ -1616,33 +1528,18 @@ button[data-slot="radio-group-item"][data-state="checked"],
   overflow: hidden;
 }
 
-/* [data-slot="data-table-row"]:hover {
-  background-color: var(--table-row-hover);
-} */
-
-/* [data-slot="data-table-row"][data-state="selected"] {
-  background-color: var(--table-row-selected);
-} */
-
 [data-slot="data-table-toolbar"] {
   background-color: hsl(var(--background));
-  /* background-color: hsl(var(--background)); */
   border: 1px solid hsl(var(--border));
   border-radius: 0px !important;
 }
 
-/* [data-slot="data-table-search"] input {
-  transition: all 0.2s ease;
-} */
-
 [data-slot="data-table-search"] input:focus {
   border-color: hsl(var(--ring));
-  /* box-shadow: 0 0 0 2px hsla(var(--ring) / 0.2); */
 }
 
 [data-slot="data-table-pagination"] {
   background-color: hsl(var(--background));
-  /* background-color: hsl(var(--background)); */
   border: 1px solid hsl(var(--border));
   border-radius: 0px !important;
 }
@@ -1810,10 +1707,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   --tw-ring-offset-color: hsl(var(--background));
 }
 
-/* .focus-visible\:ring-ring:focus-visible {
-  --tw-ring-color: hsl(var(--ring));
-} */
-
 /**
  * Lexical Editor Typeahead Styles
  *
@@ -1823,9 +1716,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
   background: hsl(var(--popover));
   border: 1px solid hsl(var(--border));
   border-radius: 0px !important;
-  /* box-shadow:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1),
-    0 4px 6px -2px rgba(0, 0, 0, 0.05); */
   max-height: 300px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1881,7 +1771,7 @@ button[data-slot="radio-group-item"][data-state="checked"],
 
 /* Page Container Dark Mode Fix */
 .adminapp .admin-page-container {
-  background-color: hsl(var(--secondary));
+  background-color: hsl(var(--background));
 }
 
 .adminapp.dark .admin-page-container {
@@ -2028,10 +1918,6 @@ button[data-slot="radio-group-item"][data-state="checked"],
 .hover-unified {
   @apply hover:bg-primary/5 hover:text-primary transition-colors;
 }
-
-/* [data-active="true"] svg {
-  color: inherit !important;
-} */
 
 /**
  * SUBTLE ROW HOVER

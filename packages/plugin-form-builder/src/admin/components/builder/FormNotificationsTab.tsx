@@ -209,8 +209,8 @@ function IntegrationModal({
       ref={overlayRef}
       onClick={handleOverlayClick}
     >
-      <div className="bg-background rounded-xl border border-border shadow-md w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="px-6 py-5 border-b border-border flex items-center justify-between sticky top-0 bg-background z-10">
+      <div className="bg-background rounded-none border border-primary/5 shadow-md w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="px-6 py-5 border-b border-primary/5 flex items-center justify-between sticky top-0 bg-background z-10">
           <h3 className="text-lg font-semibold text-foreground">
             {isEditing ? "Edit Email Integration" : "Add Email Integration"}
           </h3>
@@ -255,7 +255,7 @@ function IntegrationModal({
                 Email Provider
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-9 w-full rounded-none border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={form.providerId ?? ""}
                 onChange={e =>
                   update("providerId", e.target.value || undefined)
@@ -276,7 +276,7 @@ function IntegrationModal({
                 Email Template
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-9 w-full rounded-none border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={form.templateSlug ?? ""}
                 onChange={e =>
                   update("templateSlug", e.target.value || undefined)
@@ -311,14 +311,14 @@ function IntegrationModal({
           </div>
 
           {/* Recipient Configuration */}
-          <div className="space-y-4 pt-4 border-t border-border">
+          <div className="space-y-4 pt-4 border-t border-primary/5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">
                   Recipient Type
                 </label>
                 <select
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="flex h-9 w-full rounded-none border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   value={form.recipientType}
                   onChange={e =>
                     update(
@@ -340,7 +340,7 @@ function IntegrationModal({
                 </label>
                 {form.recipientType === "field" ? (
                   <select
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="flex h-9 w-full rounded-none border border-input bg-transparent px-3 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     value={form.to}
                     onChange={e => update("to", e.target.value)}
                   >
@@ -372,7 +372,7 @@ function IntegrationModal({
                   {form.cc.map((email, i) => (
                     <div
                       key={i}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted text-xs font-medium border border-border"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/5 text-xs font-medium border border-primary/5"
                     >
                       <span>{email}</span>
                       <button
@@ -432,7 +432,7 @@ function IntegrationModal({
                   {form.bcc.map((email, i) => (
                     <div
                       key={i}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted text-xs font-medium border border-border"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/5 text-xs font-medium border border-primary/5"
                     >
                       <span>{email}</span>
                       <button
@@ -483,7 +483,7 @@ function IntegrationModal({
             </div>
           </div>
 
-          <div className="pt-4 border-t border-border flex items-center justify-between">
+          <div className="pt-4 border-t border-primary/5 flex items-center justify-between">
             <div>
               <label className="text-sm font-medium text-foreground">
                 Enable Integration
@@ -499,12 +499,12 @@ function IntegrationModal({
                 checked={form.enabled}
                 onChange={e => update("enabled", e.target.checked)}
               />
-              <div className="w-9 h-5 bg-muted peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary border border-border"></div>
+              <div className="w-9 h-5 bg-primary/5 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-primary/5 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary border border-primary/5"></div>
             </label>
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-border bg-muted/20 flex items-center justify-end gap-3 rounded-b-xl">
+        <div className="px-6 py-4 border-t border-primary/5 bg-primary/5/20 flex items-center justify-end gap-3 rounded-b-xl">
           <Button type="button" variant="outline" onClick={onCancel}>
             Cancel
           </Button>
@@ -590,7 +590,7 @@ export function FormNotificationsTab() {
 
   return (
     <div className="form-notifications-tab">
-      <div className="flex items-center justify-between mb-8 pb-4 border-b border-border">
+      <div className="flex items-center justify-between mb-8 pb-4 border-b border-primary/5">
         <div>
           <h3 className="text-xl font-semibold text-foreground">
             Email Integrations
@@ -606,8 +606,8 @@ export function FormNotificationsTab() {
 
       {/* List */}
       {notifications.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-12 mt-6 border-2 border-dashed border-border rounded-md bg-muted/20">
-          <div className="flex items-center justify-center w-12 h-12 rounded-md border border-border bg-background mb-4 text-primary">
+        <div className="flex flex-col items-center justify-center p-12 mt-6 border-2 border-dashed border-primary/5 rounded-none bg-primary/5/20">
+          <div className="flex items-center justify-center w-12 h-12 rounded-none border border-primary/5 bg-background mb-4 text-primary">
             <svg
               className="h-6 w-6"
               viewBox="0 0 24 24"

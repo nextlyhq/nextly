@@ -39,7 +39,7 @@ export function RoleStatusSection({
       case "deprecated":
         return "text-destructive bg-destructive/10 border-destructive/20";
       default:
-        return "text-muted-foreground bg-primary/5 border-border";
+        return "text-muted-foreground bg-primary/5 border-primary/5";
     }
   };
 
@@ -73,10 +73,10 @@ export function RoleStatusSection({
                   <label
                     key={option.id}
                     className={cn(
-                      "group relative flex cursor-pointer items-center rounded-none border p-4 transition-all outline-none",
+                      "group relative flex cursor-pointer items-center rounded-none  border border-primary/5 p-4 transition-all outline-none",
                       isChecked
-                        ? "bg-primary/10 border-primary"
-                        : "border-border bg-card hover-unified hover:border-primary/25",
+                        ? "bg-primary/5 border-primary"
+                        : "border-primary/5 bg-card hover-unified hover:border-primary/25",
                       isLoading && "opacity-50 cursor-not-allowed"
                     )}
                   >
@@ -95,8 +95,8 @@ export function RoleStatusSection({
                     {/* Custom Radio Circle */}
                     <div
                       className={cn(
-                        "mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded-none border",
-                        isChecked ? "border-primary" : "border-border"
+                        "mr-3 flex h-4 w-4 shrink-0 items-center justify-center rounded-none  border border-primary/5",
+                        isChecked ? "border-primary" : "border-primary/5"
                       )}
                     >
                       {isChecked && (
@@ -118,7 +118,7 @@ export function RoleStatusSection({
                     {/* Status Badge */}
                     <div
                       className={cn(
-                        "flex items-center gap-1.5 rounded-none px-2.5 py-0.5 text-xs font-medium border",
+                        "flex items-center gap-1.5 rounded-none px-2.5 py-0.5 text-xs font-medium  border border-primary/5",
                         getStatusColor(option.id)
                       )}
                     >

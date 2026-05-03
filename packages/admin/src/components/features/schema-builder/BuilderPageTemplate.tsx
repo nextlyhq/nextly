@@ -72,7 +72,7 @@ function DragOverlayContent({
   if (data.source === "palette") {
     const IconComponent = iconMap[data.icon] ?? Icons.FileText;
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-none border border-primary bg-background shadow-lg">
+      <div className="flex items-center gap-2 px-3 py-2 rounded-none  border border-primary/5 border-primary bg-background shadow-lg">
         <IconComponent className="h-4 w-4 text-primary shrink-0" />
         <span className="text-xs font-medium text-foreground">
           {data.label}
@@ -88,14 +88,14 @@ function DragOverlayContent({
 
   return (
     <div
-      className="flex items-center gap-3 py-3 px-4 bg-background border border-border/60 rounded-none shadow-lg cursor-grabbing"
+      className="flex items-center gap-3 py-3 px-4 bg-background  border border-primary/5 rounded-none shadow-lg cursor-grabbing"
       style={{ minWidth: 320 }}
     >
       <div className="p-1.5 shrink-0">
         <Icons.GripVertical className="h-4 w-4 text-primary" />
       </div>
       <div
-        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80 mr-1"
+        className="shrink-0 flex items-center justify-center w-9 h-9 bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80 mr-1"
         style={{
           borderRadius: "6px",
           border: "1px solid hsl(var(--primary) / 0.25)",
@@ -108,11 +108,11 @@ function DragOverlayContent({
           {field.label || field.name || "Unnamed Field"}
         </span>
         <span className="text-muted-foreground/40 text-xs shrink-0">•</span>
-        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-none border border-border/60 bg-primary/5 text-muted-foreground capitalize">
+        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-none  border border-primary/5 bg-primary/5 text-muted-foreground capitalize">
           {field.type}
         </span>
         {isRequired && (
-          <span className="text-[10px] px-2 py-0 leading-5 bg-red-50 text-red-600 font-normal rounded-none border border-red-200 shrink-0">
+          <span className="text-[10px] px-2 py-0 leading-5 bg-red-50 text-red-600 font-normal rounded-none  border border-primary/5 border-red-200 shrink-0">
             Required
           </span>
         )}
@@ -233,7 +233,7 @@ export function BuilderPageTemplate<T extends FieldValues = FieldValues>({
                         }
                       >
                         {headerIcon && (
-                          <div className="p-2 sm:p-2.5 rounded-none bg-primary/10 text-primary shrink-0">
+                          <div className="p-2 sm:p-2.5 rounded-none bg-primary/5 text-primary shrink-0">
                             {headerIcon}
                           </div>
                         )}
@@ -299,7 +299,7 @@ export function BuilderPageTemplate<T extends FieldValues = FieldValues>({
               </div>
 
               {/* Right Sidebar */}
-              <div className="w-full lg:w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l-[1px] border-border bg-background lg:h-full z-20">
+              <div className="w-full lg:w-[400px] shrink-0  border-t border-primary/5 lg:border-t-0 lg:border-l-[1px] border-primary/5 bg-background lg:h-full z-20">
                 <BuilderSidebar
                   activeTab={sidebarTab}
                   onTabChange={setSidebarTab}

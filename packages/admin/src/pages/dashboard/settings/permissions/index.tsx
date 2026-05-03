@@ -148,10 +148,10 @@ function ResourceSection({ group }: { group: ResourceGroup }) {
       </div>
 
       {/* Permissions table */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         <div className="border-0 rounded-none shadow-none">
           <table className="w-full text-sm">
-            <thead className="bg-primary/5 border-b border-border">
+            <thead className="bg-primary/5  border-b border-primary/5">
               <tr>
                 <th className="px-6 py-4 text-left font-medium text-foreground">
                   Name
@@ -170,7 +170,7 @@ function ResourceSection({ group }: { group: ResourceGroup }) {
                   key={perm.id}
                   className={
                     index < permissions.length - 1
-                      ? "border-b border-border hover-unified"
+                      ? "border-b border-primary/5 hover-unified"
                       : "hover-unified"
                   }
                 >
@@ -267,10 +267,10 @@ function PermissionsContent() {
   return (
     <>
       {/* Page Header and Info */}
-      <div className="rounded-none border border-border bg-card overflow-hidden mb-6">
-        <div className="border-b border-border bg-primary/5 px-6 py-5">
+      <div className="rounded-none  border border-primary/5 bg-card overflow-hidden mb-6">
+        <div className="border-b border-primary/5 bg-primary/5 px-6 py-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-none bg-primary/10 shrink-0">
+            <div className="flex h-10 w-10 items-center justify-center rounded-none bg-primary/5 shrink-0">
               <Shield className="h-5 w-5 text-primary" />
             </div>
             <div>
@@ -281,7 +281,7 @@ function PermissionsContent() {
             </div>
           </div>
         </div>
-        <div className="px-6 py-5 border-b border-border bg-primary/5">
+        <div className="px-6 py-5  border-b border-primary/5 bg-primary/5">
           <div className="flex items-start gap-3">
             <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
             <div className="text-sm text-muted-foreground">
@@ -340,7 +340,7 @@ function PermissionsContent() {
           </AlertDescription>
         </Alert>
       ) : filteredGroups.length === 0 ? (
-        <div className="rounded-none border border-border bg-card p-10 text-center">
+        <div className="rounded-none  border border-primary/5 bg-card p-10 text-center">
           <Shield className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
           <p className="text-sm font-medium text-foreground">
             {search || typeFilter !== "all"

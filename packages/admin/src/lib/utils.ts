@@ -56,7 +56,7 @@ export const getAvatarColor = (name: string) => {
     "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400",
     "bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400",
     "bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400",
-    "bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80",
+    "bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80",
     "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400",
     "bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400",
     "bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400",

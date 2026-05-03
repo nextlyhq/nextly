@@ -255,7 +255,7 @@ function FolderTreeItem({
                 "shrink-0 w-5 h-5 flex items-center justify-center rounded-none text-[9px] font-bold tabular-nums transition-all duration-200",
                 isActive
                   ? "bg-primary/20 text-primary"
-                  : "bg-primary/5 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
+                  : "bg-primary/5 text-muted-foreground group-hover:bg-primary/5 group-hover:text-primary"
               )}
             >
               {itemCount}
@@ -284,7 +284,7 @@ function FolderTreeItem({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="w-48 shadow-none border-border/50"
+              className="w-48 shadow-none border-primary/5"
             >
               <DropdownMenuItem
                 onClick={() => onCreateSubfolder(folder.id)}

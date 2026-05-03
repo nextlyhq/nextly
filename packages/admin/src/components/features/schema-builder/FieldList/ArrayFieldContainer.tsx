@@ -73,7 +73,7 @@ export function ArrayFieldContainer({
 
   // Progressively darker shade per nesting depth
   const arrayBgClasses: Record<number, string> = {
-    0: "light:bg-slate-50 dark:transparent",
+    0: "light:bg-primary/5 dark:transparent",
     1: "light:bg-primary/5 dark:transparent",
     2: "light:bg-slate-200 dark:transparent",
     3: "light:bg-slate-300 dark:transparent",
@@ -91,7 +91,7 @@ export function ArrayFieldContainer({
           {/* Nested field rows */}
           {fieldCount > 0 && (
             <div
-              className="border-border/60 rounded-none overflow-hidden bg-background mb-2"
+              className="border-primary/5 rounded-none overflow-hidden bg-background mb-2"
               style={{ borderRadius: "6px" }}
             >
               <SortableContext

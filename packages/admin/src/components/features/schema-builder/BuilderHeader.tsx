@@ -73,7 +73,7 @@ export function BuilderHeader({
   };
 
   return (
-    <div className="shrink-0 z-50 bg-background border-b border-border">
+    <div className="shrink-0 z-50 bg-background  border-b border-primary/5">
       <div className="flex items-center justify-between px-6 py-4">
         {/* Left section: Back button and title */}
         <div className="flex items-center gap-4">

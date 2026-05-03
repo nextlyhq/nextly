@@ -80,7 +80,7 @@ export function BulkActionBar({
       : `${itemLabel}${itemLabel.endsWith("s") ? "" : "s"}`;
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded-none border bg-primary/5 px-4 py-3">
+    <div className="flex items-center justify-between gap-4 rounded-none  border border-primary/5 bg-primary/5 px-4 py-3">
       {/* Selection info */}
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium">

@@ -98,11 +98,11 @@ export function SortableFieldItem({
         }
       }}
       className={`
-        group relative flex items-center gap-4 py-3 px-4 border-b outline-none select-none
+        group relative flex items-center gap-4 py-3 px-4  border-b border-primary/5 outline-none select-none
         touch-none transition-colors duration-150 focus-visible:bg-primary/5 focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-primary
         ${isSystem ? "bg-primary/5 opacity-60 cursor-not-allowed" : "cursor-grab active:cursor-grabbing hover-subtle-row"}
         ${isDragging ? "opacity-0" : ""}
-        ${isSelected && !isSystem ? "bg-primary/5 border-transparent" : "border-border"}
+        ${isSelected && !isSystem ? "bg-primary/5 border-transparent" : "border-primary/5"}
         ${hasError && !isDragging ? "bg-destructive/5" : ""}
         ${hasWarning && !isDragging ? "bg-yellow-500/5" : ""}
       `}
@@ -119,7 +119,7 @@ export function SortableFieldItem({
 
       {/* Field type icon */}
       <div
-        className={`shrink-0 flex items-center justify-center w-9 h-9 rounded-none] border transition-colors ${isSystem ? "border-muted-foreground/20 bg-primary/5 text-muted-foreground/60" : "border-primary/25 bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"} mr-1`}
+        className={`shrink-0 flex items-center justify-center w-9 h-9 rounded-none]  border border-primary/5 transition-colors ${isSystem ? "border-primary/5-foreground/20 bg-primary/5 text-muted-foreground/60" : "border-primary/25 bg-primary/5 text-primary dark:bg-primary/20 dark:text-primary-foreground/80"} mr-1`}
       >
         <IconComponent className="h-4 w-4" />
       </div>
@@ -154,7 +154,7 @@ export function SortableFieldItem({
         <span className="text-muted-foreground/40 text-xs shrink-0">•</span>
 
         {/* Field type as a gray pill matching Required badge style */}
-        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-none border border-border/60 bg-primary/5 text-muted-foreground">
+        <span className="text-[10px] font-medium shrink-0 px-2 py-0 leading-5 rounded-none  border border-primary/5 bg-primary/5 text-muted-foreground">
           {formatFieldType(field.type)}
         </span>
 
@@ -198,7 +198,7 @@ export function SortableFieldItem({
         {isSystem ? (
           <Badge
             variant="outline"
-            className="text-[10px] px-2 py-0.5 shrink-0 bg-primary/5 border-muted-foreground/20 text-muted-foreground/70 font-medium gap-1"
+            className="text-[10px] px-2 py-0.5 shrink-0 bg-primary/5 border-primary/5-foreground/20 text-muted-foreground/70 font-medium gap-1"
           >
             <Icons.Lock className="h-2.5 w-2.5" />
             System

@@ -447,7 +447,7 @@ function OptionsEditor({
       />
 
       {options.length === 0 ? (
-        <div className="p-4 bg-muted/30 rounded-md border border-dashed border-border text-center text-xs text-muted-foreground">
+        <div className="p-4 bg-primary/5/30 rounded-none border border-dashed border-primary/5 text-center text-xs text-muted-foreground">
           No options defined. Add an option to get started.
         </div>
       ) : (
@@ -676,7 +676,7 @@ function ValidationTab({
 
       {/* Info for fields without validation options */}
       {(field.type === "checkbox" || field.type === "hidden") && (
-        <div className="p-3 bg-muted/30 rounded-md text-xs text-muted-foreground text-center border border-dashed border-border">
+        <div className="p-3 bg-primary/5/30 rounded-none text-xs text-muted-foreground text-center border border-dashed border-primary/5">
           No additional validation options for this field type.
         </div>
       )}
@@ -739,10 +739,10 @@ export function FieldEditor({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-primary/5">
         <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
           Field Properties
-          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-bold dark:bg-primary/20 dark:text-primary-foreground/90">
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-primary/5 text-primary font-bold dark:bg-primary/20 dark:text-primary-foreground/90">
             {getTypeLabel(field.type)}
           </span>
         </h3>
@@ -754,7 +754,7 @@ export function FieldEditor({
         onValueChange={setActiveTab}
         className="flex-1 flex flex-col"
       >
-        <div className="border-b bg-muted/10 border-border">
+        <div className="border-b bg-primary/5/10 border-primary/5">
           <TabsList className="w-full justify-start gap-0">
             <TabsTrigger
               value="general"
@@ -802,7 +802,7 @@ export function FieldEditor({
       </Tabs>
 
       {/* Sticky Footer with actions */}
-      <div className="p-4 bg-background border-t border-border flex gap-2 shrink-0">
+      <div className="p-4 bg-background border-t border-primary/5 flex gap-2 shrink-0">
         {onDuplicate && (
           <Button
             type="button"

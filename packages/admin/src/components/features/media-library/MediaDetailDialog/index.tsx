@@ -168,9 +168,9 @@ export function MediaDetailDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-7xl w-full h-[80vh] p-0 flex flex-col gap-0 overflow-hidden bg-background shadow-2xl border sm:rounded-none">
+        <DialogContent className="max-w-7xl w-full h-[80vh] p-0 flex flex-col gap-0 overflow-hidden bg-background shadow-2xl  border border-primary/5 sm:rounded-none">
           {/* 1. Header Row (Fixed Height) */}
-          <div className="h-16 border-b flex items-center justify-between px-6 bg-background shrink-0 z-10 w-full relative">
+          <div className="h-16  border-b border-primary/5 flex items-center justify-between px-6 bg-background shrink-0 z-10 w-full relative">
             <div className="flex items-center gap-2">
               <DialogTitle className="text-xl font-bold tracking-tight">
                 Attachment Details
@@ -181,7 +181,7 @@ export function MediaDetailDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-8 w-8 rounded-none shadow-none hover-unified text-primary/80 border-primary/20"
+                className="h-8 w-8 rounded-none shadow-none hover-unified text-primary/80 border-primary/5"
                 onClick={onPrevious}
                 disabled={!hasPrevious}
               >
@@ -190,7 +190,7 @@ export function MediaDetailDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-8 w-8 rounded-none shadow-none hover-unified text-primary/80 border-primary/20"
+                className="h-8 w-8 rounded-none shadow-none hover-unified text-primary/80 border-primary/5"
                 onClick={onNext}
                 disabled={!hasNext}
               >
@@ -199,7 +199,7 @@ export function MediaDetailDialog({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-8 w-8 rounded-none shadow-none hover:bg-destructive/10 hover:text-destructive text-muted-foreground border-border"
+                className="h-8 w-8 rounded-none shadow-none hover:bg-destructive/10 hover:text-destructive text-muted-foreground border-primary/5"
                 onClick={() => onOpenChange(false)}
               >
                 <X className="h-4 w-4" />
@@ -249,13 +249,13 @@ export function MediaDetailDialog({
 
             {/* RIGHT: Sidebar (Fixed 35% Width) */}
             <div
-              className="flex-[0_0_35%] bg-background flex flex-col overflow-hidden h-full min-w-[320px] border-l"
+              className="flex-[0_0_35%] bg-background flex flex-col overflow-hidden h-full min-w-[320px]  border-l border-primary/5"
               style={{ width: "35%", minWidth: "35%" }}
             >
               {/* Fixed Scrollable Area */}
               <div className="flex-1 overflow-y-auto px-6 py-6 scrollbar-thin">
                 {/* Metadata Grid - Compact 2-column look */}
-                <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-[11px] text-muted-foreground border-b pb-4 mb-4">
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-[11px] text-muted-foreground  border-b border-primary/5 pb-4 mb-4">
                   <div className="space-y-1 overflow-hidden">
                     <span className="font-bold text-foreground/80 block uppercase tracking-wider text-[10px]">
                       Uploaded on
@@ -405,7 +405,7 @@ export function MediaDetailDialog({
               </div>
 
               {/* Footer Actions - Premium Spacing */}
-              <div className="px-6 h-16 border-t text-xs flex items-center justify-between shrink-0 bg-primary/5 mt-auto">
+              <div className="px-6 h-16  border-t border-primary/5 text-xs flex items-center justify-between shrink-0 bg-primary/5 mt-auto">
                 <a
                   href={media.url}
                   target="_blank"
@@ -420,7 +420,7 @@ export function MediaDetailDialog({
                     variant="outline"
                     size="sm"
                     onClick={() => { void handleDownload(); }}
-                    className="h-8 text-xs font-semibold gap-2 border-primary/20 hover-unified"
+                    className="h-8 text-xs font-semibold gap-2 border-primary/5 hover-unified"
                   >
                     <Download className="h-3.5 w-3.5" />
                     Download

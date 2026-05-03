@@ -541,10 +541,10 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
         {isLoading ? (
           <EntryTableSkeleton />
         ) : (
-          <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+          <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
             <div className="border-0 rounded-none shadow-none">
               <Table>
-                <TableHeader>
+                <TableHeader className="bg-[hsl(var(--table-header-bg))]">
                   {/* Normal header */}
                   {table.getHeaderGroups().map(headerGroup => (
                     <TableRow key={headerGroup.id}>
@@ -621,7 +621,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
             </div>
 
             {/* Pagination */}
-            <div className="table-footer border-t border-border">
+            <div className="table-footer border-t border-primary/5 bg-[hsl(var(--table-header-bg))]">
               <EntryTablePagination
                 pagination={pagination}
                 onPageChange={onPageChange}
