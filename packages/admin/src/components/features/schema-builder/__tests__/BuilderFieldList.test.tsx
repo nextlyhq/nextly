@@ -65,7 +65,7 @@ const u3: BuilderField = {
 };
 
 describe("BuilderFieldList", () => {
-  it("renders the System Fields row with title + slug as inert chips + the dismiss toggle", () => {
+  it("renders the System Fields row with title + slug as inert chips + the Hide button", () => {
     render(
       withDndContext(
         <BuilderFieldList
@@ -80,16 +80,16 @@ describe("BuilderFieldList", () => {
     );
     // PR D renamed the group from "Built in" to "System Fields" and made
     // every system row an inert chip (no role="button", no onClick).
+    // PR G (feedback 2) wraps the chips in a bordered box with an
+    // alert-style "Hide" button positioned top-right inside the box.
     expect(screen.getByText(/system fields/i)).toBeInTheDocument();
     expect(screen.getByText("title")).toBeInTheDocument();
     expect(screen.getByText("slug")).toBeInTheDocument();
     // System chips are not buttons.
     expect(screen.queryByRole("button", { name: /^title$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^slug$/i })).toBeNull();
-    // Default ON since PR B; visible toggle is the inline X dismiss.
-    expect(
-      screen.getByRole("button", { name: /hide system fields/i })
-    ).toBeInTheDocument();
+    // Default ON; visible toggle is the alert-style "Hide" button.
+    expect(screen.getByRole("button", { name: /^hide$/i })).toBeInTheDocument();
   });
 
   it("packs user fields with widths summing to <= 100 into one row", () => {

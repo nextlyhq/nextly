@@ -1,82 +1,70 @@
-// Why: PR D collapses the 2-row "Built in" group into a single compact
-// horizontal row labeled "System Fields" containing all 5 reserved
-// names. They're rendered as inert chips -- not clickable, no per-row
-// badges, no editor opens. The "Show / Hide system fields" pref still
-// lives in localStorage and stays in sync with the BuilderSettingsModal
-// switch via the existing `builder:show-system-fields` window event.
+// Why: PR D introduced a single compact horizontal row labeled "System
+// Fields" containing all 5 reserved names. PR G (feedback 2) wraps the
+// chips in a bordered dashed box with an alert-style "Hide" button
+// positioned top-right inside the box. The "Show / Hide system fields"
+// pref still lives in localStorage and stays in sync with the
+// BuilderSettingsModal switch via the existing
+// `builder:show-system-fields` window event.
 //
 // Caller (BuilderFieldList) owns the localStorage state + window-event
 // listener; this component just renders what it's told and emits an
-// onSetVisible callback for its own dismiss / show button. The button
+// onSetVisible(false) callback when the user clicks Hide. The button
 // also broadcasts via the window event so the Settings modal switch
 // reflects the change without a refresh.
+//
+// All 5 names always render together (PR G dropped the partial "show
+// 3 internals only" state). When the user wants the box back, they
+// re-enable it from the Settings modal.
 import type { BuilderField } from "../types";
 
 const STORAGE_KEY = "builder.showSystemInternals";
+const INTERNAL_NAMES = ["id", "createdAt", "updatedAt"] as const;
 
 type Props = {
   /** The system fields actually present in builder.fields (typically title + slug). */
   systemFields: readonly BuilderField[];
-  /** Whether to render the 3 synthesized internals (id, createdAt, updatedAt). */
-  showInternals: boolean;
   onSetVisible: (next: boolean) => void;
 };
 
-const INTERNAL_NAMES = ["id", "createdAt", "updatedAt"] as const;
-
-export function SystemFieldsRow({
-  systemFields,
-  showInternals,
-  onSetVisible,
-}: Props) {
-  const setVisible = (next: boolean) => {
-    onSetVisible(next);
+export function SystemFieldsRow({ systemFields, onSetVisible }: Props) {
+  const handleHide = () => {
+    onSetVisible(false);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, String(next));
+      window.localStorage.setItem(STORAGE_KEY, "false");
       window.dispatchEvent(
-        new CustomEvent("builder:show-system-fields", { detail: next })
+        new CustomEvent("builder:show-system-fields", { detail: false })
       );
     }
   };
 
   return (
     <div className="space-y-1">
-      <div className="flex items-center gap-2">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          System Fields
-        </div>
-        {showInternals && (
-          <button
-            type="button"
-            aria-label="Hide system fields"
-            className="text-[10px] text-muted-foreground hover:text-foreground leading-none"
-            onClick={() => setVisible(false)}
-            title="Hide system fields"
-          >
-            ×
-          </button>
-        )}
+      {/* PR G: label sits OUTSIDE the box per feedback 2. */}
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        System Fields
       </div>
 
-      {/* Why: single horizontal row of inert chips, fully locked. Wraps
-          on narrow viewports. */}
-      <div className="flex flex-wrap gap-1.5">
-        {systemFields.map(f => (
-          <SystemChip key={f.id} name={f.name} type={f.type} />
-        ))}
-        {showInternals &&
-          INTERNAL_NAMES.map(n => <SystemChip key={n} name={n} type="" />)}
-      </div>
-
-      {!showInternals && (
+      {/* PR G: dashed bordered box containing all 5 chips + alert-style
+          Hide button positioned top-right inside the box. */}
+      <div className="relative border border-dashed border-border bg-muted/20 rounded-md px-3 pt-3 pb-2">
         <button
           type="button"
-          onClick={() => setVisible(true)}
-          className="text-xs text-muted-foreground hover:text-foreground"
+          onClick={handleHide}
+          className="absolute top-2 right-2 text-[10px] text-muted-foreground hover:text-foreground hover-subtle-row px-1.5 py-0.5 rounded-sm"
+          title="Hide system fields. Re-enable from Settings."
         >
-          ▸ Show system fields ({INTERNAL_NAMES.length})
+          Hide
         </button>
-      )}
+
+        <div className="flex flex-wrap gap-1.5 pr-12">
+          {systemFields.map(f => (
+            <SystemChip key={f.id} name={f.name} type={f.type} />
+          ))}
+          {INTERNAL_NAMES.map(n => (
+            <SystemChip key={n} name={n} type="" />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
