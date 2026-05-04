@@ -52,7 +52,9 @@ describe("FieldPickerModal", () => {
       />
     );
     await user.type(screen.getByRole("textbox", { name: /search/i }), "rich");
-    expect(screen.getByText("Rich text")).toBeInTheDocument();
+    // PR C renamed `richText` label to "Editor"; the hint contains
+    // "Lexical rich-text editor" so "rich" still matches the row.
+    expect(screen.getByText("Editor")).toBeInTheDocument();
     expect(screen.queryByText("Email")).not.toBeInTheDocument();
   });
 
@@ -88,5 +90,45 @@ describe("FieldPickerModal", () => {
       "zzznotamatch"
     );
     expect(screen.getByText(/no field types match/i)).toBeInTheDocument();
+  });
+
+  it("renders an icon + label + Add chip per row (PR C)", () => {
+    render(
+      <FieldPickerModal
+        open
+        excludedTypes={[]}
+        onCancel={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    );
+    const row = screen.getByRole("button", { name: /^text\b/i });
+    // The row contains an SVG icon and an "Add" chip.
+    expect(row.querySelector("svg")).not.toBeNull();
+    expect(row.textContent).toMatch(/Add/);
+  });
+
+  it("never lists blocks (removed in PR C)", () => {
+    render(
+      <FieldPickerModal
+        open
+        excludedTypes={[]}
+        onCancel={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    );
+    // Block-specific copy that the legacy catalog used.
+    expect(screen.queryByText(/heterogeneous block list/i)).toBeNull();
+  });
+
+  it("lists toggle (restored in PR C)", () => {
+    render(
+      <FieldPickerModal
+        open
+        excludedTypes={[]}
+        onCancel={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Toggle")).toBeInTheDocument();
   });
 });

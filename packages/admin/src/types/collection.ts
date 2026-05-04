@@ -21,19 +21,20 @@
 export type FieldPrimitiveType =
   // Text types
   | "text"
-  | "string" // Legacy alias for text
+  | "string" // Alias for text
   | "textarea"
   | "richText"
-  | "richtext" // Legacy alias
+  | "richtext" // Alias
   | "email"
   | "password"
   | "code"
   // Number types
   | "number"
-  | "decimal" // Legacy alias
+  | "decimal" // Alias
   // Selection types
   | "checkbox"
-  | "boolean" // Legacy alias for checkbox
+  | "boolean" // Alias for checkbox
+  | "toggle" // Boolean rendered as a switch (legacy palette had this)
   | "date"
   | "select"
   | "radio"
@@ -42,7 +43,7 @@ export type FieldPrimitiveType =
   | "upload"
   // Relational types
   | "relationship"
-  | "relation" // Legacy alias
+  | "relation" // Alias
   // Structured types
   | "repeater"
   | "group"
@@ -67,10 +68,22 @@ export interface FieldDefinitionAdmin {
   description?: string;
   /** Placeholder text for the input */
   placeholder?: string;
-  /** Conditional logic for showing/hiding the field */
+  /**
+   * Conditional logic for showing/hiding the field.
+   * PR E2 (2026-05-03) widened this to support type-aware operators.
+   * Legacy `{ field, equals }` shape stays valid (the runtime evaluator
+   * normalizes it to `{ field, operator: "equals", value: equals }`).
+   */
   condition?: {
     field: string;
-    equals: string;
+    operator?: string;
+    value?:
+      | string
+      | number
+      | boolean
+      | { min: number | string; max: number | string };
+    /** @deprecated Legacy shape; use `operator: "equals"` + `value` instead. */
+    equals?: string;
   };
   /** Hide the gutter for group fields */
   hideGutter?: boolean;

@@ -1,9 +1,8 @@
-// Why: BuilderToolbar lock contract — breadcrumb + name on the left,
-// kind-aware action cluster on the right. Hooks button hidden for
-// Components per config. Save schema disabled when nothing dirty and
-// when the collection is locked. Source badge renders when source is
-// passed, plus a tooltip-bearing reason when locked. Unsaved-count badge
-// appears when count > 0.
+// Why: BuilderToolbar lock contract -- breadcrumb + name on the left,
+// kind-aware action cluster on the right. PR D simplifications:
+// - No icon tile, no source badge, no Hooks button, no unsaved-count
+//   badge. Save schema disabled when nothing dirty and when locked.
+// - Locked state surfaces via the disabled buttons' tooltip text.
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,26 +15,24 @@ const collectionConfig: BuilderConfig = {
   kind: "collection",
   basicsFields: [],
   advancedFields: [],
-  toolbar: { showHooks: true, previewSchemaChange: true },
+  toolbar: { previewSchemaChange: true },
   picker: {},
 };
 
 const componentConfig: BuilderConfig = {
   ...collectionConfig,
   kind: "component",
-  toolbar: { showHooks: false, previewSchemaChange: false },
+  toolbar: { previewSchemaChange: false },
 };
 
 describe("BuilderToolbar", () => {
-  it("renders breadcrumb, name, Settings, Hooks, Save schema for collections", () => {
+  it("renders breadcrumb, name, Settings, Save schema for collections", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
-        icon="FileText"
         unsavedCount={0}
         onOpenSettings={vi.fn()}
-        onOpenHooks={vi.fn()}
         onSave={vi.fn()}
       />
     );
@@ -44,18 +41,46 @@ describe("BuilderToolbar", () => {
     expect(
       screen.getByRole("button", { name: /settings/i })
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /hooks/i })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /save schema/i })
     ).toBeInTheDocument();
   });
 
-  it("hides Hooks for components (per config)", () => {
+  it("does not render an unsaved badge (removed in PR D)", () => {
     render(
       <BuilderToolbar
-        config={componentConfig}
-        name="Hero"
-        icon="Box"
+        config={collectionConfig}
+        name="Posts"
+        unsavedCount={3}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+    // No "3 unsaved" text or "unsaved" word visible. The Save Schema
+    // button being enabled is the only unsaved signal.
+    expect(screen.queryByText(/unsaved/i)).toBeNull();
+    expect(screen.queryByLabelText(/unsaved changes/i)).toBeNull();
+  });
+
+  it("does not render a source badge anymore (removed in PR D)", () => {
+    render(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Posts"
+        unsavedCount={0}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/^Code$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^UI$/)).not.toBeInTheDocument();
+  });
+
+  it("does not render a Hooks button (UI removed in PR D)", () => {
+    render(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Posts"
         unsavedCount={0}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -66,19 +91,22 @@ describe("BuilderToolbar", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the unsaved-count badge when count > 0", () => {
+  it("does not render the icon tile (removed in PR D)", () => {
     render(
       <BuilderToolbar
-        config={collectionConfig}
-        name="Posts"
-        icon="FileText"
-        unsavedCount={3}
+        config={componentConfig}
+        name="Hero"
+        unsavedCount={0}
         onOpenSettings={vi.fn()}
-        onOpenHooks={vi.fn()}
         onSave={vi.fn()}
       />
     );
-    expect(screen.getByLabelText(/3 unsaved changes/i)).toBeInTheDocument();
+    // The legacy first-letter tile rendered the first character of the
+    // icon name in a square. With it removed, the standalone "H" or "F"
+    // letter shouldn't appear before the breadcrumb.
+    const breadcrumb = screen.getByText(/components/i);
+    const sibling = breadcrumb.previousSibling;
+    expect(sibling).toBeNull();
   });
 
   it("disables Save schema when no unsaved changes", () => {
@@ -86,49 +114,27 @@ describe("BuilderToolbar", () => {
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
-        icon="FileText"
         unsavedCount={0}
         onOpenSettings={vi.fn()}
-        onOpenHooks={vi.fn()}
         onSave={vi.fn()}
       />
     );
     expect(screen.getByRole("button", { name: /save schema/i })).toBeDisabled();
   });
 
-  it("renders the source badge when source is provided (UI)", () => {
+  it("disables Save schema and Settings when locked", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
-        icon="FileText"
-        source="ui"
-        unsavedCount={0}
-        onOpenSettings={vi.fn()}
-        onOpenHooks={vi.fn()}
-        onSave={vi.fn()}
-      />
-    );
-    expect(screen.getByText(/^UI$/)).toBeInTheDocument();
-  });
-
-  it("disables Save schema and Settings when locked, renders the Code badge", () => {
-    render(
-      <BuilderToolbar
-        config={collectionConfig}
-        name="Posts"
-        icon="FileText"
-        source="code"
         locked
         unsavedCount={0}
         onOpenSettings={vi.fn()}
-        onOpenHooks={vi.fn()}
         onSave={vi.fn()}
       />
     );
     expect(screen.getByRole("button", { name: /save schema/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /settings/i })).toBeDisabled();
-    expect(screen.getByText(/^Code$/)).toBeInTheDocument();
   });
 
   it("invokes onSave when Save schema is clicked (and dirty)", async () => {
@@ -138,10 +144,8 @@ describe("BuilderToolbar", () => {
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
-        icon="FileText"
         unsavedCount={2}
         onOpenSettings={vi.fn()}
-        onOpenHooks={vi.fn()}
         onSave={onSave}
       />
     );

@@ -11,6 +11,6 @@ export const COLLECTION_BUILDER_CONFIG: BuilderConfig = {
   kind: "collection",
   basicsFields: ["singularName", "pluralName", "slug", "description", "icon"],
   advancedFields: ["adminGroup", "order", "status", "i18n", "showSystemFields"],
-  toolbar: { showHooks: true, previewSchemaChange: true },
+  toolbar: { previewSchemaChange: true },
   picker: {},
 };

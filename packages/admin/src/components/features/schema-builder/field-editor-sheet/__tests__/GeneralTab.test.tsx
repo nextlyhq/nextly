@@ -87,3 +87,55 @@ describe("GeneralTab", () => {
     expect(screen.getByRole("switch", { name: /required/i })).toBeDisabled();
   });
 });
+
+describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
+  const blank: BuilderField = {
+    id: "fnew",
+    name: "",
+    label: "",
+    type: "text",
+    isSystem: false,
+    validation: {},
+  };
+
+  it("renders Label BEFORE Name in the DOM", () => {
+    render(<Controlled initial={blank} />);
+    const labelInput = screen.getByLabelText(/^Label$/);
+    const nameInput = screen.getByLabelText(/^Name$/);
+    expect(labelInput.compareDocumentPosition(nameInput)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("auto-derives Name from Label (snake_case) while Name is still auto", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled initial={blank} onChange={onChange} />);
+    await user.type(screen.getByLabelText(/^Label$/), "Blog Post");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.label).toBe("Blog Post");
+    expect(last.name).toBe("blog_post");
+  });
+
+  it("stops auto-deriving Name once the user manually edits Name", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const seeded: BuilderField = {
+      ...blank,
+      label: "Body",
+      name: "body",
+    };
+    render(<Controlled initial={seeded} onChange={onChange} />);
+    // Override Name manually.
+    const nameInput = screen.getByLabelText(/^Name$/) as HTMLInputElement;
+    await user.clear(nameInput);
+    await user.type(nameInput, "content");
+    onChange.mockClear();
+
+    // Now keep typing in Label. Name must NOT change.
+    await user.type(screen.getByLabelText(/^Label$/), " text");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.label).toBe("Body text");
+    expect(last.name).toBe("content");
+  });
+});

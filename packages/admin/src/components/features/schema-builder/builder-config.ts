@@ -27,9 +27,11 @@ export type BuilderConfig = {
   basicsFields: readonly BasicsField[];
   /** Which Advanced-tab rows to render in BuilderSettingsModal. */
   advancedFields: readonly AdvancedField[];
+  // Why: Hooks UI removed in PR D per feedback Section 2; code-first hooks
+  // in nextly.config.ts continue to work, but the toolbar button and
+  // HooksEditorSheet are gone. The HooksEditor component remains in the
+  // codebase until PR F deletes it.
   toolbar: {
-    /** Show the Hooks button in BuilderToolbar (Collections + Singles only). */
-    showHooks: boolean;
     /** Run schema-change preview before save (Collections only — Singles and
      * Components apply the mutation directly per the per-kind audit). */
     previewSchemaChange: boolean;

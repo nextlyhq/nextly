@@ -27,9 +27,7 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
-  HooksEditorSheet,
   type BuilderSettingsValues,
-  type EnabledHook,
 } from "@admin/components/features/schema-builder";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -37,12 +35,13 @@ import { toast } from "@admin/components/ui";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import {
-  convertHooksToStoredFormat,
   convertToBuilderField,
   convertToFieldDefinition,
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
@@ -61,9 +60,16 @@ type FormData = z.infer<typeof singleFormSchema>;
 type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
-  | { kind: "picker"; insertAt: number }
-  | { kind: "edit"; fieldId: string }
-  | { kind: "hooks" };
+  // PR D: parentFieldId? scopes the picker to a group/repeater.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
+  // Why: NEW in PR C. Sheet renders in create mode against this draft;
+  // on Apply we append, on Cancel we discard.
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
+  | { kind: "edit"; fieldId: string };
+// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
+// removed from the toolbar (feedback Section 2).
 
 interface SingleBuilderEditPageProps {
   params?: { slug?: string };
@@ -81,7 +87,6 @@ export default function SingleBuilderEditPage({
   });
 
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
-  const [hooks, setHooks] = useState<EnabledHook[]>([]);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
   // Why: was a JSON string of just field IDs, which silently masked
@@ -129,10 +134,6 @@ export default function SingleBuilderEditPage({
   }, [single, builder, isInitialized]);
 
   const isLocked = single?.locked === true;
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
-  );
 
   // Dirty count: number of user fields that were added, removed, or had
   // any of their editable shape change since load.
@@ -160,7 +161,6 @@ export default function SingleBuilderEditPage({
     }
 
     const fieldDefinitions = userFields.map(convertToFieldDefinition);
-    const storedHooks = convertHooksToStoredFormat(hooks);
 
     updateSingle(
       {
@@ -177,7 +177,10 @@ export default function SingleBuilderEditPage({
           // Status pass-through; the typed Partial<ApiSingle> doesn't
           // include status yet, so cast at the boundary.
           ...(settings.status === true ? { status: true } : {}),
-          ...(storedHooks.length > 0 ? { hooks: storedHooks } : {}),
+          // Why: hooks payload removed in PR D -- the Singles page
+          // never hydrated `hooks` state from `single.hooks`, so this
+          // spread always sent `undefined`. Hooks for Singles are still
+          // configurable code-first via nextly.config.ts.
         },
       },
       {
@@ -194,7 +197,24 @@ export default function SingleBuilderEditPage({
         },
       }
     );
-  }, [builder, hooks, settings, slug, updateSingle]);
+  }, [builder, settings, slug, updateSingle]);
+
+  // Why: PR D feedback -- duplicate icon on each field card. Same shape
+  // as the collections page handler.
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
 
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and
@@ -282,12 +302,9 @@ export default function SingleBuilderEditPage({
       <BuilderToolbar
         config={SINGLE_BUILDER_CONFIG}
         name={settings.singularName || slug}
-        icon={settings.icon}
-        source={single.source as "code" | "ui" | undefined}
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        onOpenHooks={() => setActive({ kind: "hooks" })}
         onSave={() => handleSave()}
       />
 
@@ -302,6 +319,7 @@ export default function SingleBuilderEditPage({
           onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
           onEditField={fieldId => setActive({ kind: "edit", fieldId })}
           onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+          onDuplicateField={handleDuplicateField}
           onReorder={() => {
             // Reorder is driven by handleDragEnd above; useFieldBuilder
             // owns the sortable wiring.
@@ -326,12 +344,78 @@ export default function SingleBuilderEditPage({
       {active.kind === "picker" && (
         <FieldPickerModal
           open
+          // PR D: title scopes the picker to the parent for nested adds.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
           excludedTypes={SINGLE_BUILDER_CONFIG.picker.excludedTypes ?? []}
           onCancel={() => setActive({ kind: "none" })}
-          onSelect={type => {
-            builder.handleFieldAdd(type);
+          // Why: PR C flow change -- pick opens sheet in create mode.
+          // Field commits on Apply, discards on Cancel.
+          // PR D: thread parentFieldId through.
+          onSelect={type =>
+            setActive({
+              kind: "create",
+              parentFieldId: active.parentFieldId,
+              draft: {
+                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                name: "",
+                label: "",
+                type,
+                validation: {},
+              },
+            })
+          }
+        />
+      )}
+
+      {active.kind === "create" && (
+        <FieldEditorSheet
+          open
+          mode="create"
+          field={active.draft}
+          siblingFields={
+            active.parentFieldId
+              ? (builder.fields.find(f => f.id === active.parentFieldId)
+                  ?.fields ?? [])
+              : builder.fields
+          }
+          readOnly={isLocked}
+          isInsideRepeatingAncestor={
+            active.parentFieldId
+              ? // Why: same logic as collections page -- the new field
+                // counts as nested if its parent is a repeating
+                // container OR is itself nested in one.
+                (() => {
+                  const parent = builder.fields.find(
+                    f => f.id === active.parentFieldId
+                  );
+                  if (!parent) return false;
+                  const parentIsRepeating =
+                    parent.type === "repeater" ||
+                    (parent.type === "component" && parent.repeatable === true);
+                  return (
+                    parentIsRepeating ||
+                    isInsideRepeatingAncestor(parent.id, builder.fields)
+                  );
+                })()
+              : false
+          }
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
             setActive({ kind: "none" });
           }}
+          onDelete={() => setActive({ kind: "none" })}
         />
       )}
 
@@ -340,10 +424,12 @@ export default function SingleBuilderEditPage({
           open
           mode="edit"
           field={editingField}
-          siblingNames={builder.fields
-            .filter(f => f.id !== editingField.id)
-            .map(f => f.name)}
+          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
           readOnly={isLocked}
+          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
+            editingField.id,
+            builder.fields
+          )}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
             builder.handleFieldUpdate(next);
@@ -353,18 +439,18 @@ export default function SingleBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
+          // PR D: parent-aware "+ Add field" inside group/repeater editors.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
         />
       )}
 
-      {active.kind === "hooks" && (
-        <HooksEditorSheet
-          open
-          hooks={hooks}
-          fieldNames={fieldNames}
-          onClose={() => setActive({ kind: "none" })}
-          onChange={setHooks}
-        />
-      )}
+      {/* Hooks UI removed in PR D (feedback Section 2). */}
 
       {isSaving && (
         <div aria-live="polite" className="sr-only">

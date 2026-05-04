@@ -10,7 +10,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
   Textarea,
 } from "@revnixhq/ui";
 import { useId, useMemo, useState } from "react";
@@ -152,13 +151,45 @@ function renderEditor({
     field.type === "toggle" ||
     field.type === "boolean"
   ) {
+    // Why: tri-state semantics (Q8 + brainstorm 2026-05-04 Option B).
+    // The user explicitly chooses True / False / Unset. "Unset" maps
+    // to onChange(null) so the parent strips the defaultValue key
+    // entirely (no `defaultValue: null` literal in storage). Reading:
+    // the selected radio is derived from value === true / false /
+    // else.
+    const selected: "true" | "false" | "unset" =
+      value === true ? "true" : value === false ? "false" : "unset";
     return (
-      <Switch
-        id={inputId}
-        checked={value === true}
-        disabled={readOnly}
-        onCheckedChange={v => onChange(v === true)}
-      />
+      <div
+        role="radiogroup"
+        aria-label="Default value"
+        className="flex items-center gap-4"
+      >
+        <BoolRadio
+          name={`${inputId}-bool`}
+          label="True"
+          value="true"
+          selected={selected}
+          disabled={readOnly}
+          onSelect={() => onChange(true)}
+        />
+        <BoolRadio
+          name={`${inputId}-bool`}
+          label="False"
+          value="false"
+          selected={selected}
+          disabled={readOnly}
+          onSelect={() => onChange(false)}
+        />
+        <BoolRadio
+          name={`${inputId}-bool`}
+          label="Unset"
+          value="unset"
+          selected={selected}
+          disabled={readOnly}
+          onSelect={() => onChange(null)}
+        />
+      </div>
     );
   }
 
@@ -264,6 +295,46 @@ function JsonEditor({
         <p className="text-xs text-destructive">Invalid JSON: {error}</p>
       )}
     </>
+  );
+}
+
+function BoolRadio({
+  name,
+  label,
+  value,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  name: string;
+  label: string;
+  value: "true" | "false" | "unset";
+  selected: "true" | "false" | "unset";
+  disabled?: boolean;
+  onSelect: () => void;
+}) {
+  // Why: native <input type="radio"> matches the test's
+  // getByRole("radio", { name: ... }) lookup and gives us the right
+  // a11y semantics for free. We don't introduce a new RadioGroup
+  // primitive into the UI lib for this single use case.
+  const id = `${name}-${value}`;
+  return (
+    <label
+      htmlFor={id}
+      className="flex items-center gap-1.5 text-sm cursor-pointer"
+    >
+      <input
+        id={id}
+        type="radio"
+        name={name}
+        value={value}
+        checked={selected === value}
+        disabled={disabled}
+        onChange={() => !disabled && onSelect()}
+        className="h-3.5 w-3.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      <span className={disabled ? "text-muted-foreground" : ""}>{label}</span>
+    </label>
   );
 }
 

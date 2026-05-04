@@ -93,18 +93,107 @@ describe("DefaultValueField", () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
-  it("renders a switch for type=checkbox and toggles", async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(
-      <DefaultValueField
-        field={baseField({ type: "checkbox", defaultValue: false })}
-        onChange={onChange}
-      />
-    );
-    const sw = screen.getByRole("switch");
-    await user.click(sw);
-    expect(onChange).toHaveBeenLastCalledWith(true);
+  // Why: PR E3 (Q8) replaced the legacy Switch with a tri-state radio
+  // group (True / False / Unset) for checkbox / toggle / boolean. "Unset"
+  // maps to onChange(null) so the parent strips the defaultValue key
+  // entirely (locked decision: brainstorm 2026-05-04 Option B). The old
+  // Switch-based test moved into this describe block.
+  describe("tri-state boolean default (PR E3)", () => {
+    const makeBoolField = (defaultValue?: boolean | null): BuilderField =>
+      baseField({
+        name: "isPublished",
+        label: "Is Published",
+        type: "boolean",
+        ...(defaultValue !== undefined ? { defaultValue } : {}),
+      });
+
+    it("renders three radios (True / False / Unset) for boolean type", () => {
+      render(<DefaultValueField field={makeBoolField()} onChange={vi.fn()} />);
+      expect(
+        screen.getByRole("radio", { name: /^true$/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("radio", { name: /^false$/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("radio", { name: /^unset$/i })
+      ).toBeInTheDocument();
+    });
+
+    it("selects Unset when defaultValue is missing", () => {
+      render(<DefaultValueField field={makeBoolField()} onChange={vi.fn()} />);
+      expect(screen.getByRole("radio", { name: /^unset$/i })).toBeChecked();
+      expect(screen.getByRole("radio", { name: /^true$/i })).not.toBeChecked();
+      expect(screen.getByRole("radio", { name: /^false$/i })).not.toBeChecked();
+    });
+
+    it("selects False when defaultValue is the literal false", () => {
+      render(
+        <DefaultValueField field={makeBoolField(false)} onChange={vi.fn()} />
+      );
+      expect(screen.getByRole("radio", { name: /^false$/i })).toBeChecked();
+    });
+
+    it("selects True when defaultValue is the literal true", () => {
+      render(
+        <DefaultValueField field={makeBoolField(true)} onChange={vi.fn()} />
+      );
+      expect(screen.getByRole("radio", { name: /^true$/i })).toBeChecked();
+    });
+
+    it("calls onChange(true) when user picks True", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(<DefaultValueField field={makeBoolField()} onChange={onChange} />);
+      await user.click(screen.getByRole("radio", { name: /^true$/i }));
+      expect(onChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("calls onChange(false) when user picks False", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(<DefaultValueField field={makeBoolField()} onChange={onChange} />);
+      await user.click(screen.getByRole("radio", { name: /^false$/i }));
+      expect(onChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("calls onChange(null) when user picks Unset (strips the key downstream)", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <DefaultValueField field={makeBoolField(true)} onChange={onChange} />
+      );
+      await user.click(screen.getByRole("radio", { name: /^unset$/i }));
+      expect(onChange).toHaveBeenLastCalledWith(null);
+    });
+
+    it("applies the same tri-state to checkbox and toggle types", () => {
+      const checkboxField = makeBoolField();
+      checkboxField.type = "checkbox";
+      render(<DefaultValueField field={checkboxField} onChange={vi.fn()} />);
+      expect(
+        screen.getByRole("radio", { name: /^true$/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("radio", { name: /^false$/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("radio", { name: /^unset$/i })
+      ).toBeInTheDocument();
+    });
+
+    it("disables all three radios when readOnly", () => {
+      render(
+        <DefaultValueField
+          field={makeBoolField(true)}
+          readOnly
+          onChange={vi.fn()}
+        />
+      );
+      expect(screen.getByRole("radio", { name: /^true$/i })).toBeDisabled();
+      expect(screen.getByRole("radio", { name: /^false$/i })).toBeDisabled();
+      expect(screen.getByRole("radio", { name: /^unset$/i })).toBeDisabled();
+    });
   });
 
   it("shows the selected option's label for type=select", () => {

@@ -12,6 +12,8 @@
 // were added in PR 2 alongside the page-level mount of FieldEditorSheet.
 import { Input, Label, Switch, Textarea } from "@revnixhq/ui";
 
+import { toSnakeName } from "@admin/lib/builder";
+
 import type { BuilderField } from "../types";
 
 import { DefaultValueField } from "./DefaultValueField";
@@ -23,6 +25,10 @@ type Props = {
   siblingNames: readonly string[];
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
+  /** PR D: routed through to TypeSpecificEditor so the legacy Group /
+   * Repeater editors can render an "+ Add field" button scoped to the
+   * field being edited. */
+  onAddNestedField?: (parentFieldId: string) => void;
 };
 
 const TYPES_WITH_PLACEHOLDER = new Set([
@@ -47,7 +53,12 @@ const TYPES_WITH_TYPE_SPECIFIC_EDITOR = new Set([
   "blocks",
 ]);
 
-export function GeneralTab({ field, readOnly = false, onChange }: Props) {
+export function GeneralTab({
+  field,
+  readOnly = false,
+  onChange,
+  onAddNestedField,
+}: Props) {
   const isSystem = field.isSystem === true;
   const nameDisabled = readOnly || isSystem;
 
@@ -62,8 +73,44 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
       validation: { ...field.validation, ...next },
     });
 
+  // Why: PR E1 -- typing in Label auto-derives Name (snake_case) until
+  // the user manually edits Name. Same auto-derive-then-stop pattern
+  // as the slug in BasicsTab. Override signal: the current name differs
+  // from what an auto-derive of the OLD label would have produced.
+  // System fields keep Name locked (nameDisabled) so the auto-derive
+  // is a no-op there too.
+  const setLabel = (label: string) => {
+    if (nameDisabled) {
+      onChange({ ...field, label });
+      return;
+    }
+    const previousAutoName = toSnakeName(field.label);
+    const isStillAutoName = !field.name || field.name === previousAutoName;
+    onChange({
+      ...field,
+      label,
+      name: isStillAutoName ? toSnakeName(label) : field.name,
+    });
+  };
+
   return (
     <div className="space-y-4">
+      {/* PR E1: Label first per feedback Section 4. Typing in Label
+          auto-derives Name via toSnakeName until the user manually
+          edits Name. */}
+      <div className="space-y-1">
+        <Label htmlFor="field-label">Label</Label>
+        <Input
+          id="field-label"
+          value={field.label}
+          disabled={readOnly}
+          onChange={e => setLabel(e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          What content authors see in the record editor.
+        </p>
+      </div>
+
       <div className="space-y-1">
         <Label htmlFor="field-name">Name</Label>
         <Input
@@ -74,20 +121,7 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
         />
         <p className="text-xs text-muted-foreground">
           Internal identifier. Used in the database column name and API response
-          key.
-        </p>
-      </div>
-
-      <div className="space-y-1">
-        <Label htmlFor="field-label">Label</Label>
-        <Input
-          id="field-label"
-          value={field.label}
-          disabled={readOnly}
-          onChange={e => set("label", e.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">
-          What content authors see in the record editor.
+          key. Auto-derived from Label until you edit it.
         </p>
       </div>
 
@@ -132,7 +166,20 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
       <DefaultValueField
         field={field}
         readOnly={readOnly}
-        onChange={v => set("defaultValue", v)}
+        onChange={v => {
+          if (v === null) {
+            // Why: PR E3 tri-state Unset (Q8 + brainstorm 2026-05-04
+            // Option B): null from DefaultValueField means the user
+            // picked "Unset". Strip the defaultValue key entirely so
+            // every field type stores "no default" the same way (key
+            // missing, not key present with null).
+            const { defaultValue: _drop, ...rest } = field;
+            void _drop;
+            onChange(rest);
+          } else {
+            set("defaultValue", v);
+          }
+        }}
       />
 
       {TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(field.type) && (
@@ -144,6 +191,7 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
             field={field}
             readOnly={readOnly}
             onChange={onChange}
+            onAddNestedField={onAddNestedField}
           />
         </div>
       )}

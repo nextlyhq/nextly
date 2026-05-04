@@ -37,13 +37,16 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
       />
     );
-    for (const name of ["General", "Validation", "Admin", "Advanced"]) {
+    // PR E1 (2026-05-03): renamed "Admin" -> "Display" per feedback
+    // Section 4. The tab `value` stays "admin" so this assertion uses
+    // the visible label, not the value.
+    for (const name of ["General", "Validation", "Display", "Advanced"]) {
       expect(screen.getByRole("tab", { name })).toBeInTheDocument();
     }
   });
@@ -54,7 +57,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -74,7 +77,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={systemField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -91,7 +94,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={vi.fn()}
         onDelete={vi.fn()}
@@ -108,7 +111,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         readOnly
         onCancel={vi.fn()}
         onApply={vi.fn()}
@@ -134,7 +137,7 @@ describe("FieldEditorSheet — shell", () => {
         open
         mode="edit"
         field={userField}
-        siblingNames={[]}
+        siblingFields={[]}
         onCancel={vi.fn()}
         onApply={onApply}
         onDelete={vi.fn()}
@@ -142,5 +145,44 @@ describe("FieldEditorSheet — shell", () => {
     );
     await user.click(screen.getByRole("button", { name: /^apply$/i }));
     expect(onApply).toHaveBeenCalledWith(userField);
+  });
+});
+
+describe("FieldEditorSheet -- isInsideRepeatingAncestor prop (PR E3)", () => {
+  it("forwards the prop to AdvancedTab so unique is disabled", async () => {
+    const user = userEvent.setup();
+    render(
+      <FieldEditorSheet
+        open
+        mode="edit"
+        field={userField}
+        siblingFields={[]}
+        isInsideRepeatingAncestor
+        onCancel={vi.fn()}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole("tab", { name: /advanced/i }));
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+  });
+
+  it("leaves unique enabled when the prop is omitted", async () => {
+    const user = userEvent.setup();
+    render(
+      <FieldEditorSheet
+        open
+        mode="edit"
+        field={userField}
+        siblingFields={[]}
+        onCancel={vi.fn()}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole("tab", { name: /advanced/i }));
+    expect(
+      screen.getByRole("switch", { name: /^unique$/i })
+    ).not.toBeDisabled();
   });
 });

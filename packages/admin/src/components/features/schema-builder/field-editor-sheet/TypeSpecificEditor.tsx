@@ -26,6 +26,12 @@ type Props = {
   field: BuilderField;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
+  /**
+   * PR D: page-level callback that opens the FieldPickerModal scoped to
+   * the parent (this field). Used by the legacy ArrayFieldEditor /
+   * GroupFieldEditor below to render an "+ Add field" button.
+   */
+  onAddNestedField?: (parentFieldId: string) => void;
 };
 
 /**
@@ -42,6 +48,7 @@ export function TypeSpecificEditor({
   field,
   readOnly = false,
   onChange,
+  onAddNestedField,
 }: Props) {
   // Patch helper — every adapter mutates `field` immutably through here.
   const patch = (changes: Partial<BuilderField>) => {
@@ -94,6 +101,22 @@ export function TypeSpecificEditor({
         // Legacy editor expects "select" | "radio" — checkbox is multi-select
         // so it shares the select layout (multi-checkbox).
         fieldType={field.type === "radio" ? "radio" : "select"}
+        // PR E3: select-only admin knobs.
+        isClearable={field.admin?.isClearable}
+        onIsClearableChange={
+          readOnly ? noop : (v: boolean) => patchAdmin({ isClearable: v })
+        }
+        placeholder={field.admin?.placeholder}
+        onPlaceholderChange={
+          readOnly ? noop : (s: string) => patchAdmin({ placeholder: s })
+        }
+        // PR E3: radio-only admin knob.
+        layout={field.admin?.layout}
+        onLayoutChange={
+          readOnly
+            ? noop
+            : (l: "horizontal" | "vertical") => patchAdmin({ layout: l })
+        }
       />
     );
   }
@@ -133,6 +156,13 @@ export function TypeSpecificEditor({
             ? noop
             : (f: RelationshipFilter | undefined) =>
                 patch({ relationshipFilter: f })
+        }
+        // PR E3: picker shape.
+        appearance={field.admin?.appearance}
+        onAppearanceChange={
+          readOnly
+            ? noop
+            : (a: "drawer" | "select") => patchAdmin({ appearance: a })
         }
       />
     );
@@ -187,6 +217,11 @@ export function TypeSpecificEditor({
           readOnly ? noop : (v: boolean) => patchAdmin({ hideGutter: v })
         }
         nestedFields={field.fields}
+        onAddField={
+          readOnly || !onAddNestedField
+            ? undefined
+            : () => onAddNestedField(field.id)
+        }
       />
     );
   }
@@ -215,6 +250,11 @@ export function TypeSpecificEditor({
             : (n: string | undefined) => patch({ rowLabelField: n })
         }
         nestedFields={field.fields}
+        onAddField={
+          readOnly || !onAddNestedField
+            ? undefined
+            : () => onAddNestedField(field.id)
+        }
       />
     );
   }
