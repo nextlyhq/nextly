@@ -69,3 +69,36 @@ describe("FieldEditorSheet — AdvancedTab", () => {
     expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
   });
 });
+
+describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
+  it("does not disable unique when isInsideRepeatingAncestor is omitted", () => {
+    render(<Controlled initial={f} />);
+    expect(
+      screen.getByRole("switch", { name: /^unique$/i })
+    ).not.toBeDisabled();
+  });
+
+  it("greys out the unique switch and shows tooltip when isInsideRepeatingAncestor is true", () => {
+    render(
+      <AdvancedTab field={f} isInsideRepeatingAncestor onChange={vi.fn()} />
+    );
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+    expect(
+      screen.getByText(
+        /unique can't be enforced inside a repeater or repeatable component/i
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("readOnly takes precedence over isInsideRepeatingAncestor (both disable)", () => {
+    render(
+      <AdvancedTab
+        field={f}
+        readOnly
+        isInsideRepeatingAncestor
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+  });
+});

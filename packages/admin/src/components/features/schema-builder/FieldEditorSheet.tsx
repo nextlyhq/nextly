@@ -56,6 +56,12 @@ type Props = {
    * commits the new child via builder.handleNestedFieldAdd.
    */
   onAddNestedField?: (parentFieldId: string) => void;
+  /**
+   * PR E3: page-computed flag indicating the field being edited is a
+   * descendant of a repeating container. Forwarded to AdvancedTab to
+   * disable the `unique` switch with explanatory tooltip.
+   */
+  isInsideRepeatingAncestor?: boolean;
 };
 
 type TabKey = "general" | "validation" | "admin" | "advanced";
@@ -70,6 +76,7 @@ export function FieldEditorSheet({
   onApply,
   onDelete,
   onAddNestedField,
+  isInsideRepeatingAncestor = false,
 }: Props) {
   const [draft, setDraft] = useState<BuilderField>(field);
   const [tab, setTab] = useState<TabKey>("general");
@@ -147,6 +154,7 @@ export function FieldEditorSheet({
               <AdvancedTab
                 field={draft}
                 readOnly={readOnly}
+                isInsideRepeatingAncestor={isInsideRepeatingAncestor}
                 onChange={setDraft}
               />
             </TabsContent>

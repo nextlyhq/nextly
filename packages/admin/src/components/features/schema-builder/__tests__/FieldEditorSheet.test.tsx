@@ -147,3 +147,42 @@ describe("FieldEditorSheet — shell", () => {
     expect(onApply).toHaveBeenCalledWith(userField);
   });
 });
+
+describe("FieldEditorSheet -- isInsideRepeatingAncestor prop (PR E3)", () => {
+  it("forwards the prop to AdvancedTab so unique is disabled", async () => {
+    const user = userEvent.setup();
+    render(
+      <FieldEditorSheet
+        open
+        mode="edit"
+        field={userField}
+        siblingFields={[]}
+        isInsideRepeatingAncestor
+        onCancel={vi.fn()}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole("tab", { name: /advanced/i }));
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+  });
+
+  it("leaves unique enabled when the prop is omitted", async () => {
+    const user = userEvent.setup();
+    render(
+      <FieldEditorSheet
+        open
+        mode="edit"
+        field={userField}
+        siblingFields={[]}
+        onCancel={vi.fn()}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole("tab", { name: /advanced/i }));
+    expect(
+      screen.getByRole("switch", { name: /^unique$/i })
+    ).not.toBeDisabled();
+  });
+});
