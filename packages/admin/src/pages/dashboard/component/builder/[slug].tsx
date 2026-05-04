@@ -48,6 +48,8 @@ import {
   convertToBuilderField,
   convertToFieldDefinition,
   DEFAULT_SYSTEM_FIELDS,
+  findFieldById,
+  findParentContainerId,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
@@ -295,15 +297,27 @@ export default function ComponentBuilderEditPage({
   // as the collections / singles page handlers.
   const handleDuplicateField = useCallback(
     (fieldId: string) => {
-      const source = builder.fields.find(f => f.id === fieldId);
+      // Why: PR I -- duplicate is now reachable from nested rows in the
+      // field list. Walk the tree to locate source and its parent (if
+      // any), then append the duplicate either to the parent's children
+      // or to top-level. takenNames scopes to siblings.
+      const source = findFieldById(builder.fields, fieldId);
       if (!source) return;
-      const takenNames = builder.fields.map(f => f.name);
+      const parent = findParentContainerId(builder.fields, fieldId);
+      const siblings = parent
+        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
+        : builder.fields;
+      const takenNames = siblings.map(f => f.name);
       const duplicate: BuilderField = {
         ...source,
         id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
         name: nextDuplicateName(source.name, takenNames),
       };
-      builder.setFields([...builder.fields, duplicate]);
+      if (parent) {
+        builder.handleNestedFieldAdd(parent.containerId, duplicate);
+      } else {
+        builder.setFields([...builder.fields, duplicate]);
+      }
     },
     [builder]
   );
@@ -386,9 +400,11 @@ export default function ComponentBuilderEditPage({
 
   // ---------------------------- Render --------------------------------------
 
+  // Why: PR I -- nested children live in parent.fields[]; the shallow
+  // .find() only sees top-level fields. findFieldById walks the tree.
   const editingField =
     active.kind === "edit"
-      ? builder.fields.find(f => f.id === active.fieldId)
+      ? (findFieldById(builder.fields, active.fieldId) ?? null)
       : null;
 
   return (
@@ -441,9 +457,10 @@ export default function ComponentBuilderEditPage({
           // PR D: title scopes the picker to the parent for nested adds.
           title={
             active.parentFieldId
-              ? `Add field to ${
-                  builder.fields.find(f => f.id === active.parentFieldId)
-                    ?.name ?? "parent"
+              ? // Why: PR I -- parentFieldId can point to a nested parent.
+                `Add field to ${
+                  findFieldById(builder.fields, active.parentFieldId)?.name ??
+                  "parent"
                 }`
               : undefined
           }
@@ -474,17 +491,20 @@ export default function ComponentBuilderEditPage({
           field={active.draft}
           siblingFields={
             active.parentFieldId
-              ? (builder.fields.find(f => f.id === active.parentFieldId)
-                  ?.fields ?? [])
+              ? // Why: PR I -- parentFieldId can be nested.
+                (findFieldById(builder.fields, active.parentFieldId)?.fields ??
+                [])
               : builder.fields
           }
           readOnly={isLocked}
           isInsideRepeatingAncestor={
             active.parentFieldId
-              ? // Why: same logic as the other 2 builder pages.
+              ? // Why: same logic as the other 2 builder pages. PR I:
+                // findFieldById replaces shallow .find().
                 (() => {
-                  const parent = builder.fields.find(
-                    f => f.id === active.parentFieldId
+                  const parent = findFieldById(
+                    builder.fields,
+                    active.parentFieldId
                   );
                   if (!parent) return false;
                   const parentIsRepeating =
@@ -515,7 +535,21 @@ export default function ComponentBuilderEditPage({
           open
           mode="edit"
           field={editingField}
-          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
+          siblingFields={(() => {
+            // Why: PR I -- when editing a nested field, siblings are the
+            // parent's children (minus self), not all top-level fields.
+            const parent = findParentContainerId(
+              builder.fields,
+              editingField.id
+            );
+            if (!parent) {
+              return builder.fields.filter(f => f.id !== editingField.id);
+            }
+            const container = findFieldById(builder.fields, parent.containerId);
+            return (container?.fields ?? []).filter(
+              f => f.id !== editingField.id
+            );
+          })()}
           readOnly={isLocked}
           isInsideRepeatingAncestor={isInsideRepeatingAncestor(
             editingField.id,
