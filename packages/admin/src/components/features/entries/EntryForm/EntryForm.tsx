@@ -25,6 +25,7 @@ import { cn } from "@admin/lib/utils";
 
 import { DocumentTabs } from "../DocumentTabs";
 
+import { ActionBar } from "./ActionBar";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -39,6 +40,7 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import { useRailCollapsed } from "./useRailCollapsed";
 
 // ============================================================================
 // Types
@@ -212,6 +214,16 @@ export function EntryForm({
     getFormValues: () => form.getValues(),
   });
 
+  // Rail collapse state (PR 5: persisted in localStorage). The toggle button
+  // lives in ActionBar; the rail itself reads `railCollapsed` to decide
+  // whether to render at all.
+  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+
+  // Whether this collection has Draft/Published status enabled at the meta
+  // level. When false, ActionBar hides the Status pill and merges Save Draft
+  // + Publish into a single "Save" button (per Q-D2=A in the redesign spec).
+  const hasStatus = (collection as { status?: boolean }).status === true;
+
   // ---------------------------------------------------------------------------
   // Keyboard Shortcuts (standalone mode only)
   // ---------------------------------------------------------------------------
@@ -274,14 +286,32 @@ export function EntryForm({
 
           <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
             {/* Main Content */}
-            <div className="flex-1 lg:p-8 pt-6">
+            <div className="flex-1 lg:p-8 pt-6 min-w-0">
               <div className="mb-6">{headerContent}</div>
               {/* Document tabs (Q-D6=c). Edit + API + Versions(Soon) + LivePreview(Soon). */}
-              <div className="-mx-8 mb-6">
+              <div className="-mx-8">
                 <DocumentTabs
                   scope="collection"
                   slug={collection.name}
                   entryId={entry?.id}
+                />
+              </div>
+              {/* Action bar (Q-D2=A). Status pill + Preview/Save Draft/Publish/More
+                  + Rail toggle. Replaces the rail's old action area. */}
+              <div className="-mx-8 mb-6">
+                <ActionBar
+                  mode={mode}
+                  entry={entry}
+                  singularLabel={singularLabel}
+                  hasStatus={hasStatus}
+                  isSubmitting={isSubmitting}
+                  isPreviewAvailable={isPreviewAvailable}
+                  onPreview={openPreview}
+                  previewLabel={previewLabel}
+                  onCancel={handleCancel}
+                  onDelete={handleDelete}
+                  isRailCollapsed={railCollapsed}
+                  onToggleRail={toggleRail}
                 />
               </div>
               <EntryFormHeader
@@ -330,25 +360,20 @@ export function EntryForm({
               )}
             </div>
 
-            {/* Sidebar */}
-            <div className="w-full lg:w-[360px] shrink-0  border-t border-primary/5 lg:border-t-0 lg :border-l border-primary/5 lg:border-primary/5 bg-background flex flex-col relative z-10">
-              <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                <EntryFormSidebar
-                  mode={mode}
-                  entry={entry}
-                  actions={
-                    <EntryFormActions
-                      mode={mode}
-                      isSubmitting={isSubmitting}
-                      onCancel={handleCancel}
-                      isPreviewAvailable={isPreviewAvailable}
-                      onPreview={openPreview}
-                      previewLabel={previewLabel}
-                    />
-                  }
-                />
+            {/* Rail (collapsible per Q-D4 + railCollapsed state). Width 320px
+                (down from 360px per spec section 2.1). On <1024px the rail
+                hides entirely until the mobile sheet ships in a follow-up. */}
+            {!railCollapsed && (
+              <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
+                <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                  <EntryFormSidebar
+                    mode={mode}
+                    entry={entry}
+                    hasStatus={hasStatus}
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </EntryFormProvider>
       </div>
