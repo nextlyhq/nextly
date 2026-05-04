@@ -1,7 +1,7 @@
 # Builder Redesign Smoke Checklist (PR F)
 
 **Date:** 2026-05-04
-**Scope:** Manual smoke for PRs A through E4. Run against any dev sandbox (e.g., the one stood up by `e2e/builder-e2e/scripts/setup-project.sh`).
+**Scope:** Manual smoke for PRs A through E4. Run against any dev sandbox (`apps/playground` or a `create-nextly-app`-scaffolded project linked via yalc).
 
 For each section, perform the action and verify the expected behavior. Tick the box when verified.
 
