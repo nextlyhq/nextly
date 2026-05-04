@@ -11,6 +11,7 @@
 import { Alert, AlertDescription, AlertTitle, Skeleton } from "@revnixhq/ui";
 
 import { APIPlayground } from "@admin/components/features/entries/APIPlayground";
+import { DocumentTabs } from "@admin/components/features/entries/DocumentTabs";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -127,6 +128,10 @@ export default function SingleAPIPlaygroundPage({
             ]}
           />
         </div>
+
+        {/* Document tabs (Q-D6=c) — same strip as the Edit page so users feel
+            they're still on the same single. */}
+        <DocumentTabs scope="single" slug={slug} />
 
         {/* Page header */}
         <div className="mb-8">
