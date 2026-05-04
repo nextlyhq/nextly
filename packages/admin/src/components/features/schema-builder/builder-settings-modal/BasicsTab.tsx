@@ -47,39 +47,84 @@ export function BasicsTab({ fields, values, onChange }: Props) {
     });
   };
 
+  const hasPlural = fields.includes("pluralName");
+
   return (
     <div className="space-y-4 py-2">
-      {(fields.includes("singularName") || fields.includes("pluralName")) && (
-        // Why: singular + plural visually paired in a 50/50 row per
-        // feedback Section 1. Collapses to stacked on mobile.
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {fields.includes("singularName") && (
-            <div className="space-y-1">
-              <Label htmlFor="singularName">Singular name</Label>
-              <Input
-                id="singularName"
-                value={values.singularName}
-                onChange={e => setSingular(e.target.value)}
-              />
-            </div>
-          )}
+      {/* PR G feedback 2: when the per-kind config has NO pluralName
+          (singles, components), pack singular + slug + icon into a
+          single 3-col row. Collections still use the 2x2 layout
+          (singular+plural, slug+icon). Collapses sensibly on mobile. */}
+      {!hasPlural &&
+        (fields.includes("singularName") ||
+          fields.includes("slug") ||
+          fields.includes("icon")) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {fields.includes("singularName") && (
+              <div className="space-y-1">
+                <Label htmlFor="singularName">Singular name</Label>
+                <Input
+                  id="singularName"
+                  value={values.singularName}
+                  onChange={e => setSingular(e.target.value)}
+                />
+              </div>
+            )}
+            {fields.includes("slug") && (
+              <div className="space-y-1">
+                <Label>Slug</Label>
+                <SlugInput
+                  singular={values.singularName}
+                  value={values.slug}
+                  onChange={next => set("slug", next)}
+                />
+              </div>
+            )}
+            {fields.includes("icon") && (
+              <div className="space-y-1">
+                <Label>Icon</Label>
+                <IconPicker
+                  value={values.icon}
+                  onChange={next => set("icon", next)}
+                />
+              </div>
+            )}
+          </div>
+        )}
 
-          {fields.includes("pluralName") && (
-            <div className="space-y-1">
-              <Label htmlFor="pluralName">Plural name</Label>
-              <Input
-                id="pluralName"
-                value={values.pluralName ?? ""}
-                onChange={e => set("pluralName", e.target.value)}
-              />
-            </div>
-          )}
-        </div>
-      )}
+      {hasPlural &&
+        (fields.includes("singularName") || fields.includes("pluralName")) && (
+          // Why: collections -- singular + plural visually paired in a
+          // 50/50 row per feedback Section 1. Collapses to stacked on
+          // mobile.
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {fields.includes("singularName") && (
+              <div className="space-y-1">
+                <Label htmlFor="singularName">Singular name</Label>
+                <Input
+                  id="singularName"
+                  value={values.singularName}
+                  onChange={e => setSingular(e.target.value)}
+                />
+              </div>
+            )}
 
-      {(fields.includes("slug") || fields.includes("icon")) && (
-        // Why: slug + icon paired in their own 50/50 row per feedback
-        // Section 1. Description (full-width) renders below.
+            {fields.includes("pluralName") && (
+              <div className="space-y-1">
+                <Label htmlFor="pluralName">Plural name</Label>
+                <Input
+                  id="pluralName"
+                  value={values.pluralName ?? ""}
+                  onChange={e => set("pluralName", e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+      {hasPlural && (fields.includes("slug") || fields.includes("icon")) && (
+        // Why: collections -- slug + icon paired in their own 50/50
+        // row. Description (full-width) renders below.
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {fields.includes("slug") && (
             <div className="space-y-1">
