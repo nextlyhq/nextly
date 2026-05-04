@@ -83,7 +83,15 @@ export function getUserFormSchema(isEdit: boolean) {
       avatarUrl: z
         .string()
         .trim()
-        .url("Enter a valid URL")
+        // Accept either a fully-qualified URL (https://cdn.example.com/foo.png)
+        // OR a server-relative path (/uploads/foo.png) returned by the local
+        // media adapter. The previous `.url()` validator rejected relative
+        // paths, which silently blocked submission whenever a user picked
+        // an avatar from the local media library.
+        .refine(
+          val => val === "" || /^(https?:\/\/.+|\/.+)$/.test(val),
+          "Enter a valid URL or media path"
+        )
         .optional()
         .or(z.literal("")),
       active: z.boolean().optional(),
@@ -103,4 +111,4 @@ export const editUserFormSchema = getUserFormSchema(true);
 
 export type CreateUserFormValues = z.infer<typeof createUserFormSchema>;
 export type EditUserFormValues = z.infer<typeof editUserFormSchema>;
-export type UserFormValues = CreateUserFormValues  ;
+export type UserFormValues = CreateUserFormValues;

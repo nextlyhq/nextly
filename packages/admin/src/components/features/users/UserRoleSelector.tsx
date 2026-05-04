@@ -198,8 +198,12 @@ export function UserRoleSelector({
                 disabled={disabled || roles.length === 0}
                 className={cn(
                   "w-full justify-between h-auto py-3 px-4 font-normal transition-colors cursor-pointer",
+                  // Use theme tokens so the trigger keeps adequate contrast in
+                  // both light and dark modes. The previous `bg-slate-700`/
+                  // `text-white` had no dark-mode variant and visibly washed
+                  // out against the dark background.
                   selectedRoles.length > 0
-                    ? "bg-slate-700 text-white hover-unified"
+                    ? "bg-accent text-accent-foreground hover-unified"
                     : "text-muted-foreground hover-unified"
                 )}
               >
@@ -247,7 +251,10 @@ export function UserRoleSelector({
                           <CommandItem
                             value={role.name}
                             onSelect={() => toggleRole(role.id)}
-                            className="flex items-start gap-4 px-4 py-4 cursor-pointer w-full overflow-hidden hover-unified data-[selected=true]:bg-primary/5 data-[selected=true]:text-primary"
+                            // Selected/highlighted state uses the popover's
+                            // accent tokens so the highlighted row remains
+                            // legible in both light and dark themes.
+                            className="flex items-start gap-4 px-4 py-4 cursor-pointer w-full overflow-hidden hover-unified data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
                           >
                             {/* Checkbox indicator */}
                             <div
