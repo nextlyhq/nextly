@@ -1,9 +1,10 @@
 // Why: slug auto-derives from the singular name via toSnakeName. PR B
-// dropped the loud "AUTO" badge + "Edit" text button in favor of a dim
-// "Slug:" label, bold value, and a Lucide Pencil icon button -- matches
-// feedback Section 1's request for a quieter, more dev-focused
-// presentation. Once the user clicks the pencil, the value becomes an
-// inline editable input with a "Done" button.
+// dropped the loud "AUTO" badge + "Edit" text button in favor of a
+// quieter, more dev-focused presentation: bold value + Lucide Pencil
+// icon button. PR G (feedback 2) removed the dim "Slug:" prefix --
+// the parent Label already says "Slug" so the prefix was redundant.
+// Once the user clicks the pencil, the value becomes an inline
+// editable input with a "Done" button.
 import { Button, Input } from "@revnixhq/ui";
 import { Pencil } from "lucide-react";
 import { useState } from "react";
@@ -41,7 +42,6 @@ export function SlugInput({ value, onChange }: Props) {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground">Slug:</span>
       <span className="font-mono text-sm font-medium text-foreground flex-1 truncate">
         {value || <span className="text-muted-foreground italic">none</span>}
       </span>
