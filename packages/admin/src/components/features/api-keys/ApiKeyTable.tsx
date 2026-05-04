@@ -27,6 +27,7 @@ import {
 import type React from "react";
 import { useCallback, useMemo, useState, useEffect } from "react";
 
+import { SettingsTableToolbar } from "@admin/components/features/settings";
 import {
   AlertTriangle,
   Columns,
@@ -363,26 +364,20 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Search + Filters toolbar (outside table card, like Forms/Entries) */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-          <div className="flex-1 max-w-md w-full">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search API keys by name, description, or role..."
-              isLoading={isLoading}
-              className="bg-background text-foreground border-primary/5"
-            />
-          </div>
-        </div>
-
-        {/* Right: Column visibility */}
-        <div className="flex items-center gap-2">
-          {/* Columns Dropdown */}
+      <SettingsTableToolbar
+        search={
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search API keys by name, description, or role..."
+            isLoading={isLoading}
+            className="w-full bg-background text-foreground border-input"
+          />
+        }
+        columns={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="md">
                 <Columns className="h-4 w-4" />
                 Columns
               </Button>
@@ -401,8 +396,8 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
+        }
+      />
 
       {/* Table card */}
       {isLoading && data.length === 0 ? (
