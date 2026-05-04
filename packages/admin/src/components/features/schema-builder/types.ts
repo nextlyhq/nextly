@@ -140,6 +140,25 @@ export interface BuilderFieldAdmin {
   placeholder?: string;
   /** Hide the gutter (vertical line and padding) for group fields */
   hideGutter?: boolean;
+  /**
+   * Select fields only -- show a clear button on the picker.
+   * Defaults to true when the field is not required, false otherwise.
+   * PR E3: matches Payload's SelectAdmin.isClearable.
+   */
+  isClearable?: boolean;
+  /**
+   * Radio fields only -- horizontal vs vertical option layout.
+   * Defaults to "horizontal" (Payload's default).
+   * PR E3: matches Payload's RadioAdmin.layout.
+   */
+  layout?: "horizontal" | "vertical";
+  /**
+   * Relationship fields only -- picker shape.
+   * "select" (default) renders the inline collection picker; "drawer"
+   * opens a side drawer better suited to long-list searching.
+   * PR E3: matches Payload's RelationshipAdmin.appearance.
+   */
+  appearance?: "drawer" | "select";
 }
 
 // ============================================================
@@ -613,6 +632,27 @@ export interface SelectOptionsEditorProps {
   onHasManyChange?: (hasMany: boolean) => void;
   /** The field type (select or radio) */
   fieldType: "select" | "radio";
+  /**
+   * Select fields only -- whether the picker shows a clear button.
+   * Stored as `field.admin.isClearable`. PR E3.
+   */
+  isClearable?: boolean;
+  /** Callback when isClearable changes. */
+  onIsClearableChange?: (isClearable: boolean) => void;
+  /**
+   * Select fields only -- placeholder text shown when no value picked.
+   * Stored as `field.admin.placeholder`. PR E3.
+   */
+  placeholder?: string;
+  /** Callback when placeholder changes. */
+  onPlaceholderChange?: (placeholder: string) => void;
+  /**
+   * Radio fields only -- horizontal vs vertical layout.
+   * Stored as `field.admin.layout`. PR E3.
+   */
+  layout?: "horizontal" | "vertical";
+  /** Callback when layout changes. */
+  onLayoutChange?: (layout: "horizontal" | "vertical") => void;
 }
 
 /**
@@ -831,6 +871,13 @@ export interface RelationshipEditorProps {
   filterOptions?: RelationshipFilter;
   /** Callback when filter options change */
   onFilterOptionsChange?: (filter: RelationshipFilter | undefined) => void;
+  /**
+   * Picker shape: "select" inline picker (default) or "drawer" overlay.
+   * Stored as `field.admin.appearance`. PR E3.
+   */
+  appearance?: "drawer" | "select";
+  /** Callback when appearance changes. */
+  onAppearanceChange?: (appearance: "drawer" | "select") => void;
 }
 
 // ============================================================
