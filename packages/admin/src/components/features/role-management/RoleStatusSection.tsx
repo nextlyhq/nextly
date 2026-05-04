@@ -30,32 +30,6 @@ export function RoleStatusSection({
     return null;
   }
 
-  const getStatusColor = (id: string) => {
-    switch (id) {
-      case "active":
-        return "text-success bg-success/10 border-success/20";
-      case "inactive":
-        return "text-warning bg-warning/10 border-warning/20";
-      case "deprecated":
-        return "text-destructive bg-destructive/10 border-destructive/20";
-      default:
-        return "text-muted-foreground bg-primary/5 border-primary/5";
-    }
-  };
-
-  const getDotColor = (id: string) => {
-    switch (id) {
-      case "active":
-        return "bg-success";
-      case "inactive":
-        return "bg-warning";
-      case "deprecated":
-        return "bg-destructive";
-      default:
-        return "bg-primary/5-foreground";
-    }
-  };
-
   return (
     <>
       <FormField
@@ -114,22 +88,6 @@ export function RoleStatusSection({
                     >
                       {option.name}
                     </span>
-
-                    {/* Status Badge */}
-                    <div
-                      className={cn(
-                        "flex items-center gap-1.5 rounded-none px-2.5 py-0.5 text-xs font-medium  border border-primary/5",
-                        getStatusColor(option.id)
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "h-1.5 w-1.5 rounded-none",
-                          getDotColor(option.id)
-                        )}
-                      />
-                      {option.name}
-                    </div>
                   </label>
                 );
               })}
