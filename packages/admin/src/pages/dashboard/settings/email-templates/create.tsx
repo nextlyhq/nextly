@@ -1,18 +1,22 @@
 "use client";
 
+import { Button } from "@revnixhq/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  EMAIL_TEMPLATE_FORM_ID,
   EmailTemplateForm,
   formValuesToCreatePayload,
   templateToFormValues,
   type TemplateFormValues,
 } from "@admin/components/features/settings/EmailTemplateForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import { Loader2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
+import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
@@ -86,14 +90,40 @@ export default function CreateEmailTemplatePage() {
     [createTemplate]
   );
 
+  const submitting = isPending || isLoadingDuplicate;
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout
+          actions={
+            <>
+              <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
+                <Button type="button" variant="outline" disabled={submitting}>
+                  Cancel
+                </Button>
+              </Link>
+              <Button
+                type="submit"
+                form={EMAIL_TEMPLATE_FORM_ID}
+                disabled={submitting}
+              >
+                {isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Template"
+                )}
+              </Button>
+            </>
+          }
+        >
           <EmailTemplateForm
             mode="create"
             initialValues={initialValues}
-            isPending={isPending || isLoadingDuplicate}
+            isPending={submitting}
             onSubmit={handleSubmit}
           />
         </SettingsLayout>

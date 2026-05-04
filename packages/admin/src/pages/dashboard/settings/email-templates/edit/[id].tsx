@@ -4,11 +4,13 @@ import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import { useCallback } from "react";
 
 import {
+  EMAIL_TEMPLATE_FORM_ID,
   EmailTemplateForm,
   formValuesToUpdatePayload,
   type TemplateFormValues,
 } from "@admin/components/features/settings/EmailTemplateForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import { Loader2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -100,13 +102,7 @@ export default function EditEmailTemplatePage() {
       <PageContainer>
         <SettingsLayout>
           <div className="space-y-6">
-            <div className="flex items-center gap-4">
-              <Skeleton className="w-9 rounded-none" />
-              <div className="space-y-2">
-                <Skeleton className="h-6 w-48" />
-                <Skeleton className="h-4 w-72" />
-              </div>
-            </div>
+            <Skeleton className="h-12 w-full rounded-none" />
             <Skeleton className="h-[500px] w-full rounded-none" />
           </div>
         </SettingsLayout>
@@ -130,7 +126,9 @@ export default function EditEmailTemplatePage() {
               <Button
                 size="md"
                 variant="outline"
-                onClick={() => { void refetch(); }}
+                onClick={() => {
+                  void refetch();
+                }}
                 className="ml-2"
               >
                 Retry
@@ -150,7 +148,31 @@ export default function EditEmailTemplatePage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout
+          actions={
+            <>
+              <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
+                <Button type="button" variant="outline" disabled={isPending}>
+                  Cancel
+                </Button>
+              </Link>
+              <Button
+                type="submit"
+                form={EMAIL_TEMPLATE_FORM_ID}
+                disabled={isPending}
+              >
+                {isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  "Update Template"
+                )}
+              </Button>
+            </>
+          }
+        >
           <EmailTemplateForm
             mode="edit"
             template={template}
