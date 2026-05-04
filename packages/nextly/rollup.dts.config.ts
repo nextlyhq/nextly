@@ -21,7 +21,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, type Plugin, type RollupOptions } from "rollup";
@@ -253,7 +253,7 @@ function rewriteDtsChunkExtensions(): Plugin {
  * them.
  */
 function isExternal(id: string): boolean {
-  if (id.startsWith(".") || id.startsWith("/")) return false;
+  if (id.startsWith(".") || isAbsolute(id)) return false;
   if (id.startsWith("@nextly/")) return false;
   return true;
 }
