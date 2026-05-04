@@ -39,6 +39,19 @@ export function DisplayTab({
   const setA = (next: Partial<NonNullable<BuilderField["admin"]>>) =>
     onChange({ ...field, admin: { ...a, ...next } });
 
+  // PR H feedback 2.2: when there's no condition yet, show "+ Add
+  // Condition" button. Click seeds an empty condition object so the
+  // ConditionBuilder mounts (and the user picks source / operator /
+  // value from there). Removing the condition (via ConditionBuilder's
+  // internal "Remove" affordance) clears it back to undefined,
+  // restoring the button.
+  const hasCondition = field.admin?.condition !== undefined;
+  const handleAddCondition = () => {
+    setA({
+      condition: { field: "", operator: "equals", value: "" },
+    });
+  };
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -51,38 +64,32 @@ export function DisplayTab({
         />
       </div>
 
-      {/* PR E1: Read-only + Hidden side-by-side in a 50/50 row with
-          helper taglines explaining what each does. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <SwitchRow
-          ariaLabel="Read only"
-          label="Read only"
-          help="Displayed but cannot be edited."
-          checked={a.readOnly === true}
-          disabled={readOnly}
-          onChange={v => setA({ readOnly: v })}
-        />
-        <SwitchRow
-          ariaLabel="Hidden"
-          label="Hidden"
-          help="Not shown in the record editor."
-          checked={a.hidden === true}
-          disabled={readOnly}
-          onChange={v => setA({ hidden: v })}
-        />
-      </div>
+      {/* PR H feedback 2.2: Read-only and Hidden each on their own
+          full-width row (was 50/50 grid in PR E1). */}
+      <SwitchRow
+        ariaLabel="Read only"
+        label="Read only"
+        help="Displayed but cannot be edited."
+        checked={a.readOnly === true}
+        disabled={readOnly}
+        onChange={v => setA({ readOnly: v })}
+      />
+      <SwitchRow
+        ariaLabel="Hidden"
+        label="Hidden"
+        help="Not shown in the record editor."
+        checked={a.hidden === true}
+        disabled={readOnly}
+        onChange={v => setA({ hidden: v })}
+      />
 
-      <details
-        className="space-y-2"
-        open={field.admin?.condition !== undefined}
-      >
-        <summary className="cursor-pointer text-sm">
-          Conditional visibility
-        </summary>
-        {/* PR E2: visual rule builder replaces the JSON textarea per
-            feedback Section 4. ConditionBuilder accepts the legacy
-            { field, equals } shape via backwards-compat normalization. */}
-        <div className="mt-2">
+      {/* PR H feedback 2.2: Conditional Visibility as label+button row
+          (was a `<details>` accordion). When no condition exists,
+          show "+ Add Condition" button. When set, render the
+          ConditionBuilder inline. */}
+      <div className="space-y-2">
+        <Label>Conditional Visibility</Label>
+        {hasCondition ? (
           <ConditionBuilder
             condition={field.admin?.condition}
             siblingFields={siblingFields.filter(f => f.id !== field.id)}
@@ -91,8 +98,18 @@ export function DisplayTab({
               setA({ condition: next })
             }
           />
-        </div>
-      </details>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={readOnly}
+            onClick={handleAddCondition}
+          >
+            + Add Condition
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
