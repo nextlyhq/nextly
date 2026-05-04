@@ -96,8 +96,11 @@ e2e/auth-e2e/.sandbox/
 e2e/auth-e2e/playwright-report/
 e2e/auth-e2e/test-results/
 
-# Superpowers brainstorm session artifacts
+# Superpowers brainstorm session artifacts (any location).
+# Catches the dot-prefixed root variant, plus any nested superpowers/ folder
+# that the tooling drops into docs/ or elsewhere.
 .superpowers/
+**/superpowers/
 
 # Template testing scaffolds (created during E2E testing, never committed)
 templates-testing/
