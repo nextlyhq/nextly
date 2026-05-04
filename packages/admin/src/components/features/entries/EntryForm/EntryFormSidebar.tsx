@@ -22,12 +22,9 @@ export interface EntryFormSidebarProps {
   entry?: EntryData | null;
   /** Whether sidebar should be hidden (embedded mode) */
   hidden?: boolean;
-  /** Sidebar specific fields configured via admin.position = 'sidebar' */
-  fields?: FieldConfig[];
-  /** Explicitly extracted slug field */
+  /** Slug field, optionally surfaced as the first thing in the rail today.
+   *  PR 6 of the redesign moves slug into the Document panel and drops this prop. */
   slugField?: FieldConfig;
-  /** Explicitly extracted seo field group */
-  seoField?: FieldConfig;
   /** Action buttons (Save, Cancel, Delete, etc.) */
   actions?: React.ReactNode;
 }
@@ -37,15 +34,19 @@ export interface EntryFormSidebarProps {
 // ============================================================================
 
 /**
- * EntryFormSidebar - Tabless sidebar with actions, slug, sidebar fields, SEO and metadata
+ * EntryFormSidebar — actions, slug, and Document Info.
+ *
+ * Per Q-D1=B in the Content Manager redesign spec, the rail is system-content
+ * only: no user-defined fields render here. The legacy `fields` and
+ * `seoField` props (and their rendering branches) were removed in PR 3 since
+ * `admin.position: 'sidebar'` is dead in the Builder UI and the name-based
+ * "seo" matcher misclassified arbitrary user components.
  */
 export function EntryFormSidebar({
   mode,
   entry,
   hidden = false,
-  fields = [],
   slugField,
-  seoField,
   actions,
 }: EntryFormSidebarProps) {
   const isCreateMode = mode === "create";
@@ -53,13 +54,9 @@ export function EntryFormSidebar({
   const { formatDate } = useAdminDateFormatter();
 
   const createdAt =
-    (entry?.createdAt) ??
-    (entry?.created_at as string | undefined) ??
-    undefined;
+    entry?.createdAt ?? (entry?.created_at as string | undefined) ?? undefined;
   const updatedAt =
-    (entry?.updatedAt) ??
-    (entry?.updated_at as string | undefined) ??
-    undefined;
+    entry?.updatedAt ?? (entry?.updated_at as string | undefined) ?? undefined;
 
   const formatDocumentDate = (dateString: string | undefined) => {
     if (!dateString) return "—";
@@ -88,24 +85,10 @@ export function EntryFormSidebar({
 
       {/* Main content */}
       <div className="flex-1 flex flex-col">
-        {/* Slug field */}
+        {/* Slug field — system content. PR 6 moves this into the Document panel. */}
         {slugField && (
           <div className="px-6 py-4  border-b border-primary/5">
             <EntryFormContent fields={[slugField]} />
-          </div>
-        )}
-
-        {/* Sidebar-positioned component fields — accordion, full-bleed */}
-        {fields.length > 0 && (
-          <div className="flex flex-col">
-            <EntryFormContent fields={fields} className="space-y-0" />
-          </div>
-        )}
-
-        {/* SEO section */}
-        {seoField && (
-          <div className="px-6 py-4  border-b border-primary/5">
-            <EntryFormContent fields={[seoField]} />
           </div>
         )}
 
