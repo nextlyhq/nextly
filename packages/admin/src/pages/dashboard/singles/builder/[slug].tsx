@@ -41,6 +41,7 @@ import {
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
@@ -385,6 +386,26 @@ export default function SingleBuilderEditPage({
               : builder.fields
           }
           readOnly={isLocked}
+          isInsideRepeatingAncestor={
+            active.parentFieldId
+              ? // Why: same logic as collections page -- the new field
+                // counts as nested if its parent is a repeating
+                // container OR is itself nested in one.
+                (() => {
+                  const parent = builder.fields.find(
+                    f => f.id === active.parentFieldId
+                  );
+                  if (!parent) return false;
+                  const parentIsRepeating =
+                    parent.type === "repeater" ||
+                    (parent.type === "component" && parent.repeatable === true);
+                  return (
+                    parentIsRepeating ||
+                    isInsideRepeatingAncestor(parent.id, builder.fields)
+                  );
+                })()
+              : false
+          }
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
             if (active.parentFieldId) {
@@ -405,6 +426,10 @@ export default function SingleBuilderEditPage({
           field={editingField}
           siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
           readOnly={isLocked}
+          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
+            editingField.id,
+            builder.fields
+          )}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
             builder.handleFieldUpdate(next);

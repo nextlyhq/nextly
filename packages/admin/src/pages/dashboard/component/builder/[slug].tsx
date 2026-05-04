@@ -50,6 +50,7 @@ import {
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import { componentApi } from "@admin/services/componentApi";
 import type {
@@ -476,6 +477,24 @@ export default function ComponentBuilderEditPage({
               : builder.fields
           }
           readOnly={isLocked}
+          isInsideRepeatingAncestor={
+            active.parentFieldId
+              ? // Why: same logic as the other 2 builder pages.
+                (() => {
+                  const parent = builder.fields.find(
+                    f => f.id === active.parentFieldId
+                  );
+                  if (!parent) return false;
+                  const parentIsRepeating =
+                    parent.type === "repeater" ||
+                    (parent.type === "component" && parent.repeatable === true);
+                  return (
+                    parentIsRepeating ||
+                    isInsideRepeatingAncestor(parent.id, builder.fields)
+                  );
+                })()
+              : false
+          }
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
             if (active.parentFieldId) {
@@ -496,6 +515,10 @@ export default function ComponentBuilderEditPage({
           field={editingField}
           siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
           readOnly={isLocked}
+          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
+            editingField.id,
+            builder.fields
+          )}
           onCancel={() => setActive({ kind: "none" })}
           onApply={next => {
             builder.handleFieldUpdate(next);
