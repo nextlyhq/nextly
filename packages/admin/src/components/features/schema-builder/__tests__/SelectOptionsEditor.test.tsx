@@ -118,3 +118,49 @@ describe("SelectOptionsEditor -- PR E3 admin knobs", () => {
     });
   });
 });
+
+describe("SelectOptionsEditor -- empty state (PR E4)", () => {
+  it("renders the quiet inline helper when options is empty", () => {
+    render(
+      <SelectOptionsEditor
+        options={[]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/no options yet/i)).toBeInTheDocument();
+    // Helper mentions both affordances (Add and Import) by name so the
+    // user knows where to click without us repeating the buttons.
+    expect(screen.getByText(/add or import above/i)).toBeInTheDocument();
+  });
+
+  it("does NOT render the loud 'Add first option' button anymore", () => {
+    render(
+      <SelectOptionsEditor
+        options={[]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(
+      screen.queryByRole("button", { name: /add first option/i })
+    ).toBeNull();
+  });
+
+  it("hides the empty-state helper as soon as options exist", () => {
+    render(
+      <SelectOptionsEditor
+        options={[{ id: "opt_1", label: "Draft", value: "draft" }]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/no options yet/i)).toBeNull();
+  });
+});

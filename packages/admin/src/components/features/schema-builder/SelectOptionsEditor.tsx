@@ -387,22 +387,14 @@ export function SelectOptionsEditor({
           </SortableContext>
         </DndContext>
       ) : (
-        <div className="flex flex-col items-center justify-center p-4 rounded-none  border border-primary/5 border-dashed border-primary/5">
-          <Icons.List className="h-6 w-6 text-muted-foreground mb-2" />
-          <p className="text-xs text-muted-foreground text-center">
-            No options defined
-          </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="md"
-            className="mt-2 h-7 text-xs"
-            onClick={handleAddOption}
-          >
-            <Icons.Plus className="h-3 w-3 mr-1" />
-            Add first option
-          </Button>
-        </div>
+        // PR E4: quiet inline empty state. Drops the dashed container,
+        // the big icon, and the duplicate "Add first option" button.
+        // The header above already shows + Add and Import affordances;
+        // we just point the user at them in soft helper copy. Brainstorm
+        // 2026-05-04 Option B locked this shape.
+        <p className="text-xs text-muted-foreground">
+          No options yet -- click + Add or Import above.
+        </p>
       )}
 
       {/* Column Headers (when options exist) */}
