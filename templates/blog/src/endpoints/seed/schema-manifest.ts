@@ -12,8 +12,9 @@
  * same DB shape and Phase C can populate content uniformly.
  *
  * Edits MUST stay in sync with the corresponding TS files until we ship
- * a generator. The parity test in `__tests__/schema-manifest.test.ts`
- * asserts field-name parity and will fail loudly if the two drift.
+ * a generator. Drift is caught at E2E time when a visual-approach project
+ * runs the seed and a missing manifest field surfaces a registration
+ * mismatch — track this as a known limitation until the generator lands.
  */
 
 export interface ManifestField {
