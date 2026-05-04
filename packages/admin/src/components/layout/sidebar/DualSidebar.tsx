@@ -45,9 +45,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const showBuilder = branding?.showBuilder ?? true;
 
   // Runtime-controlled builder visibility from /api/admin-meta
+  const hasInstalledPlugins = (branding?.plugins?.length ?? 0) > 0;
   const baseMenuItems = useMemo(
-    () => getFilteredMenuItems(showBuilder),
-    [showBuilder]
+    () => getFilteredMenuItems(showBuilder, hasInstalledPlugins),
+    [showBuilder, hasInstalledPlugins]
   );
 
   // Compute standalone plugins from branding metadata

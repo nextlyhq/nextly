@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Badge,
   Table,
   TableBody,
@@ -12,7 +15,7 @@ import {
 import type React from "react";
 
 import * as Icons from "@admin/components/icons";
-import { Package, Puzzle } from "@admin/components/icons";
+import { Info, Package, Puzzle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -85,15 +88,25 @@ function PluginsContent({ activeSlug }: { activeSlug?: string }) {
             <Puzzle className="h-6 w-6 text-primary" />
           </div>
           <div className="space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight">
-              Plugins
-            </h1>
+            <h1 className="text-xl font-semibold tracking-tight">Plugins</h1>
             <p className="text-sm font-normal text-primary/50 mt-1">
               {plugins.length} installed plugin{plugins.length !== 1 ? "s" : ""}
             </p>
           </div>
         </div>
       </div>
+
+      {/* In-development banner */}
+      <Alert variant="info" role="status" className="mb-6">
+        <Info className="h-4 w-4" />
+        <div>
+          <AlertTitle>Plugins are in development</AlertTitle>
+          <AlertDescription>
+            Plugin installation and management is coming soon. The current view
+            is a preview &mdash; some features may not be fully functional.
+          </AlertDescription>
+        </div>
+      </Alert>
 
       {/* Plugins table */}
       <PluginsTable plugins={plugins} activeSlug={activeSlug} />
@@ -148,9 +161,7 @@ function PluginsTable({
         <div className="flex items-start gap-4 mb-8">
           <div className="space-y-1">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold tracking-tight">
-                {name}
-              </h1>
+              <h1 className="text-xl font-semibold tracking-tight">{name}</h1>
               {version && (
                 <span className="inline-flex items-center rounded-none bg-primary/5 px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
                   v{version}
@@ -158,7 +169,9 @@ function PluginsTable({
               )}
             </div>
             {description && (
-              <p className="text-sm font-normal text-primary/50 mt-1">{description}</p>
+              <p className="text-sm font-normal text-primary/50 mt-1">
+                {description}
+              </p>
             )}
           </div>
         </div>
