@@ -31,6 +31,8 @@ import EmailProvidersPage from "./dashboard/settings/email-providers/index";
 import CreateEmailTemplatePage from "./dashboard/settings/email-templates/create";
 import EditEmailTemplatePage from "./dashboard/settings/email-templates/edit/[id]";
 import EmailTemplatesPage from "./dashboard/settings/email-templates/index";
+import CreateImageSizePage from "./dashboard/settings/image-sizes/create";
+import EditImageSizePage from "./dashboard/settings/image-sizes/edit/[id]";
 import ImageSizesSettingsPage from "./dashboard/settings/image-sizes/index";
 import SettingsPage from "./dashboard/settings/index";
 import SettingsPermissionsPage from "./dashboard/settings/permissions/index";
@@ -263,6 +265,16 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Image sizes settings
   [ROUTES.SETTINGS_IMAGE_SIZES]: {
     component: ImageSizesSettingsPage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  [ROUTES.SETTINGS_IMAGE_SIZES_CREATE]: {
+    component: CreateImageSizePage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
+    component: EditImageSizePage,
     type: "private",
     requiredPermission: "manage-settings",
   },
