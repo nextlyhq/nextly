@@ -223,6 +223,12 @@ export function SelectOptionsEditor({
   hasMany,
   onHasManyChange,
   fieldType,
+  isClearable,
+  onIsClearableChange,
+  placeholder,
+  onPlaceholderChange,
+  layout,
+  onLayoutChange,
 }: SelectOptionsEditorProps) {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importData, setImportData] = useState("");
@@ -423,6 +429,77 @@ export function SelectOptionsEditor({
             checked={hasMany || false}
             onCheckedChange={onHasManyChange}
           />
+        </div>
+      )}
+
+      {/* PR E3: Select-only admin knobs -- clearable + placeholder.
+          Stored as field.admin.isClearable and field.admin.placeholder
+          via the patchAdmin helper in TypeSpecificEditor. */}
+      {fieldType === "select" && onIsClearableChange && (
+        <div className="flex items-center justify-between py-2 border-t border-primary/5 mt-3 pt-3">
+          <div className="space-y-0.5">
+            <FormLabelWithTooltip
+              className="text-sm font-medium"
+              label="Clearable"
+              description="Show a clear (X) button next to the picker so users can unset the value"
+            />
+          </div>
+          <Switch
+            aria-label="Clearable"
+            checked={isClearable !== false}
+            onCheckedChange={onIsClearableChange}
+          />
+        </div>
+      )}
+      {fieldType === "select" && onPlaceholderChange && (
+        <div className="space-y-2 mt-3">
+          <FormLabelWithTooltip
+            className="text-xs font-medium"
+            label="Placeholder"
+            description="Text shown in the picker before any option is selected"
+          />
+          <Input
+            value={placeholder ?? ""}
+            onChange={e => onPlaceholderChange(e.target.value)}
+            placeholder="e.g., Choose a category..."
+            className="h-8 text-sm"
+          />
+        </div>
+      )}
+
+      {/* PR E3: Radio-only admin knob -- horizontal vs vertical layout.
+          Stored as field.admin.layout. */}
+      {fieldType === "radio" && onLayoutChange && (
+        <div className="space-y-2 mt-3 border-t border-primary/5 pt-3">
+          <FormLabelWithTooltip
+            className="text-xs font-medium"
+            label="Layout"
+            description="Whether radio options stack vertically or sit side-by-side"
+          />
+          <div className="inline-flex divide-x divide-border rounded-sm border border-border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => onLayoutChange("horizontal")}
+              className={`px-3 py-1 text-xs ${
+                (layout ?? "horizontal") === "horizontal"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Horizontal
+            </button>
+            <button
+              type="button"
+              onClick={() => onLayoutChange("vertical")}
+              className={`px-3 py-1 text-xs ${
+                layout === "vertical"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Vertical
+            </button>
+          </div>
         </div>
       )}
 

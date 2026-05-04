@@ -101,6 +101,22 @@ export function TypeSpecificEditor({
         // Legacy editor expects "select" | "radio" — checkbox is multi-select
         // so it shares the select layout (multi-checkbox).
         fieldType={field.type === "radio" ? "radio" : "select"}
+        // PR E3: select-only admin knobs.
+        isClearable={field.admin?.isClearable}
+        onIsClearableChange={
+          readOnly ? noop : (v: boolean) => patchAdmin({ isClearable: v })
+        }
+        placeholder={field.admin?.placeholder}
+        onPlaceholderChange={
+          readOnly ? noop : (s: string) => patchAdmin({ placeholder: s })
+        }
+        // PR E3: radio-only admin knob.
+        layout={field.admin?.layout}
+        onLayoutChange={
+          readOnly
+            ? noop
+            : (l: "horizontal" | "vertical") => patchAdmin({ layout: l })
+        }
       />
     );
   }
