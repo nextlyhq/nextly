@@ -166,7 +166,20 @@ export function GeneralTab({
       <DefaultValueField
         field={field}
         readOnly={readOnly}
-        onChange={v => set("defaultValue", v)}
+        onChange={v => {
+          if (v === null) {
+            // Why: PR E3 tri-state Unset (Q8 + brainstorm 2026-05-04
+            // Option B): null from DefaultValueField means the user
+            // picked "Unset". Strip the defaultValue key entirely so
+            // every field type stores "no default" the same way (key
+            // missing, not key present with null).
+            const { defaultValue: _drop, ...rest } = field;
+            void _drop;
+            onChange(rest);
+          } else {
+            set("defaultValue", v);
+          }
+        }}
       />
 
       {TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(field.type) && (
