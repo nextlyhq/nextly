@@ -95,6 +95,14 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
         crumb: "Email Templates",
       };
     }
+    if (pathname.includes("email-layout")) {
+      return {
+        title: "Email Layout",
+        description:
+          "Global header and footer HTML wrapped around every email template",
+        crumb: "Email Layout",
+      };
+    }
     if (pathname.includes("api-keys")) {
       return {
         title: "API Keys",

@@ -5,6 +5,7 @@ import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSi
 import * as Icons from "@admin/components/icons";
 import {
   Layers,
+  LayoutGrid,
   Settings,
   Puzzle,
   Users,
@@ -324,6 +325,20 @@ export function SubSidebarContent({
                   <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
                     <FileText className="h-4 w-4" />
                     <span>Templates</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            )}
+            {hasPermission("manage-email-templates") && (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={isActive(ROUTES.SETTINGS_EMAIL_LAYOUT)}
+                  className="justify-start px-3"
+                >
+                  <Link href={ROUTES.SETTINGS_EMAIL_LAYOUT}>
+                    <LayoutGrid className="h-4 w-4" />
+                    <span>Layout</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
