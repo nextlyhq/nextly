@@ -26,19 +26,23 @@ export class MetaService extends BaseService {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get table(): any {
-    const d = this.dialect;
-    if (d === "postgresql" || d === "postgres") return nextlyMetaPg;
+    const d = this.dialect as "postgresql" | "mysql" | "sqlite";
+    if (d === "postgresql") return nextlyMetaPg;
     if (d === "mysql") return nextlyMetaMysql;
     return nextlyMetaSqlite;
   }
 
+  // Drizzle handle. BaseService already exposes `this.db` via its
+  // protected getter, but we widen it locally for the cross-dialect
+  // table reference (whose type varies per dialect). Cast to any to
+  // avoid a TS conflict with BaseService's typed `db`.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private get db(): any {
+  private get drizzle(): any {
     return this.adapter.getDrizzle();
   }
 
   async get<T = unknown>(key: string): Promise<T | null> {
-    const rows = await this.db
+    const rows = await this.drizzle
       .select()
       .from(this.table)
       .where(eq(this.table.key, key))
@@ -57,30 +61,30 @@ export class MetaService extends BaseService {
   async set(key: string, value: unknown): Promise<void> {
     const serialised = JSON.stringify(value);
     const now = new Date();
-    const existing = await this.db
+    const existing = await this.drizzle
       .select({ key: this.table.key })
       .from(this.table)
       .where(eq(this.table.key, key))
       .limit(1);
 
     if (existing.length > 0) {
-      await this.db
+      await this.drizzle
         .update(this.table)
         .set({ value: serialised, updatedAt: now })
         .where(eq(this.table.key, key));
     } else {
-      await this.db
+      await this.drizzle
         .insert(this.table)
         .values({ key, value: serialised, updatedAt: now });
     }
   }
 
   async delete(key: string): Promise<void> {
-    await this.db.delete(this.table).where(eq(this.table.key, key));
+    await this.drizzle.delete(this.table).where(eq(this.table.key, key));
   }
 
   async getAll(): Promise<Record<string, unknown>> {
-    const rows = await this.db.select().from(this.table);
+    const rows = await this.drizzle.select().from(this.table);
     const out: Record<string, unknown> = {};
     for (const row of rows) {
       const raw = row.value as string | null;
