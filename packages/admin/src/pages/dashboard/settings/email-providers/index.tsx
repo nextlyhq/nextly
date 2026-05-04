@@ -31,6 +31,7 @@ import {
 } from "@revnixhq/ui";
 import React, { useState, useCallback, useMemo } from "react";
 
+import { SettingsTableToolbar } from "@admin/components/features/settings";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
   Columns,
@@ -605,7 +606,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={false}
-              className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
+              className="w-full bg-background text-foreground border-input"
             />
           </div>
         </div>
@@ -633,7 +634,7 @@ function EmailProviderTable() {
               onChange={setSearch}
               placeholder="Search providers by name..."
               isLoading={true}
-              className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
+              className="w-full bg-background text-foreground border-input"
             />
           </div>
         </div>
@@ -646,19 +647,17 @@ function EmailProviderTable() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+      <SettingsTableToolbar
+        search={
           <SearchBar
             value={search}
             onChange={setSearch}
             placeholder="Search providers by name..."
             isLoading={isLoading}
-            className="flex-1 max-w-sm bg-white text-black border-primary/5"
+            className="w-full bg-background text-foreground border-input"
           />
-        </div>
-
-        {/* Right: Filters & Column visibility */}
-        <div className="flex items-center gap-2">
+        }
+        filters={
           <Select value={type} onValueChange={handleTypeChange}>
             <SelectTrigger className="w-[130px] bg-background text-foreground border-primary/5 hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
@@ -670,7 +669,8 @@ function EmailProviderTable() {
               <SelectItem value="sendlayer">SendLayer</SelectItem>
             </SelectContent>
           </Select>
-
+        }
+        columns={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="md" className="bg-background">
@@ -692,8 +692,8 @@ function EmailProviderTable() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
+        }
+      />
 
       {/* Table */}
       <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
