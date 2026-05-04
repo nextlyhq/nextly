@@ -132,7 +132,7 @@ See the [database support docs](https://nextlyhq.com/docs/database) for full ver
 
 ## Contributing
 
-Contributions of every size are welcome — from typo fixes to new database adapters. Start with the [Contributing guide](./CONTRIBUTING.md) for local setup, the development workflow, and our PR/commit conventions. First-time contributors should look for issues tagged [`good first issue`](https://github.com/nextlyhq/nextly/labels/good%20first%20issue).
+Contributions of every size are welcome — from typo fixes to new database adapters. Start with the [Contributing guide](./CONTRIBUTING.md) for local setup, the development workflow, and our PR/commit conventions.
 
 ## Telemetry
 
