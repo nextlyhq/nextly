@@ -291,6 +291,7 @@ function ValueInput({
             })
           }
           placeholder="min"
+          className="h-8 text-sm"
         />
         <Input
           type={isDate ? "date" : "number"}
@@ -303,6 +304,7 @@ function ValueInput({
             })
           }
           placeholder="max"
+          className="h-8 text-sm"
         />
       </div>
     );
@@ -347,6 +349,7 @@ function ValueInput({
         onChange={e =>
           onChange(e.target.value === "" ? "" : Number(e.target.value))
         }
+        className="h-8 text-sm"
       />
     );
   }
@@ -358,6 +361,7 @@ function ValueInput({
         value={typeof value === "string" ? value : ""}
         disabled={disabled}
         onChange={e => onChange(e.target.value)}
+        className="h-8 text-sm"
       />
     );
   }
@@ -369,6 +373,7 @@ function ValueInput({
       disabled={disabled}
       onChange={e => onChange(e.target.value)}
       placeholder="value"
+      className="h-8 text-sm"
     />
   );
 }
