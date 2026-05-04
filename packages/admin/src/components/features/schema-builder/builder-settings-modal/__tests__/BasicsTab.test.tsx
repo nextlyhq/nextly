@@ -137,3 +137,48 @@ describe("BasicsTab", () => {
     expect(last.pluralName).toBe("Articles");
   });
 });
+
+describe("BasicsTab -- 3-col layout for kinds without plural (PR G feedback 2)", () => {
+  it("renders singular, slug, and icon when pluralName is omitted from fields", () => {
+    render(
+      <BasicsTab
+        fields={["singularName", "slug", "icon"]}
+        values={{
+          singularName: "Hero",
+          pluralName: "",
+          slug: "hero",
+          description: "",
+          icon: "Box",
+        }}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText(/singular name/i)).toBeInTheDocument();
+    // Slug + Icon labels don't bind to form controls via htmlFor;
+    // assert the label text is present instead.
+    expect(screen.getByText(/^Slug$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Icon$/)).toBeInTheDocument();
+    // Plural name should NOT appear.
+    expect(screen.queryByLabelText(/plural name/i)).toBeNull();
+  });
+
+  it("still renders the 2x2 layout when pluralName IS in fields", () => {
+    render(
+      <BasicsTab
+        fields={["singularName", "pluralName", "slug", "icon"]}
+        values={{
+          singularName: "Article",
+          pluralName: "Articles",
+          slug: "article",
+          description: "",
+          icon: "FileText",
+        }}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText(/singular name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/plural name/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Slug$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Icon$/)).toBeInTheDocument();
+  });
+});
