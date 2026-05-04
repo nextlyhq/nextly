@@ -86,11 +86,3 @@
 - name: "flag: needs-migration-guide"
   color: "f6ae66"
   description: "Requires user-facing migration documentation"
-
-# ── community ──
-- name: "good first issue"
-  color: "7057ff"
-  description: "Suitable for newcomers"
-- name: "help wanted"
-  color: "008672"
-  description: "Maintainers welcome a community contribution here"
