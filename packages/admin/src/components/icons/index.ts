@@ -135,6 +135,9 @@ export {
   PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
   PanelTop, // Collection Builder: tabs field
   Paperclip, // Email Template editor: default attachments
   Pencil, // Collection Settings: icon picker
@@ -195,10 +198,7 @@ export { ChevronUp as ChevronUpIcon } from "lucide-react";
 /**
  * Custom Discord icon (Lucide-compatible)
  */
-export const Discord = ({
-  size = 24,
-  ...props
-}: LucideProps) => {
+export const Discord = ({ size = 24, ...props }: LucideProps) => {
   return React.createElement(
     "svg",
     {
