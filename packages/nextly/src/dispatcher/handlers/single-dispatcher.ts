@@ -69,6 +69,7 @@ import {
   getSingleEntryServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { buildFullDesiredSchema } from "../helpers/desired-schema";
 // Phase 4.9: shared dispatcher helpers. Previously this file kept local
 // copies of offsetPaginationToMeta + unwrapSingleResult; the latter was
 // a near-duplicate of unwrapServiceResult elsewhere. Consolidating onto
@@ -763,16 +764,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      const desired: DesiredSchema = {
-        collections: {},
-        singles: {
-          [slug]: {
-            slug,
-            tableName,
-            fields: fields as DesiredSingle["fields"],
-          },
-        },
-        components: {},
+      const desired = await buildFullDesiredSchema();
+      desired.singles[slug] = {
+        slug,
+        tableName,
+        fields: fields as DesiredSingle["fields"],
       };
 
       const pipelinePreview = await previewDesiredSchema({ desired, db, dialect });
@@ -850,16 +846,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
           : undefined;
 
-      const desired: DesiredSchema = {
-        collections: {},
-        singles: {
-          [slug]: {
-            slug,
-            tableName,
-            fields: fields as DesiredSingle["fields"],
-          },
-        },
-        components: {},
+      const desired = await buildFullDesiredSchema();
+      desired.singles[slug] = {
+        slug,
+        tableName,
+        fields: fields as DesiredSingle["fields"],
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(

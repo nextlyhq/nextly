@@ -176,67 +176,71 @@ export class DynamicCollectionSchemaService {
       .filter(Boolean)
       .join(",\n");
 
-    // Build table creation SQL
-    let sql = `-- Create dynamic collection: ${tableName}
-CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
-`;
+    // Collect all column/constraint definitions into an array and join at
+    // the end. The old approach appended each piece to `sql` with a
+    // hardcoded trailing comma (e.g. `"slug" text NOT NULL,\n`). When
+    // `columns` is empty (no user-defined fields), that left a dangling
+    // comma before the timestamp section, producing invalid SQL.
+    const allColumnDefs: string[] = [];
 
-    // Handle ID column based on dialect
+    // id
     if (this.dialect === "mysql") {
-      sql += `  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL,\n`;
+      allColumnDefs.push(`  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL`);
     } else {
-      sql += `  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL,\n`;
+      allColumnDefs.push(`  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL`);
     }
 
-    // Add title column only if not defined as a collection field (to avoid duplicate columns)
+    // title (only if not user-defined)
     const hasTitleField = fields.some(f => f.name === "title");
     if (!hasTitleField) {
       if (this.dialect === "mysql") {
-        sql += `  ${this.quoteIdentifier("title")} varchar(255) NOT NULL,\n`;
+        allColumnDefs.push(`  ${this.quoteIdentifier("title")} varchar(255) NOT NULL`);
       } else {
-        sql += `  ${this.quoteIdentifier("title")} text NOT NULL,\n`;
+        allColumnDefs.push(`  ${this.quoteIdentifier("title")} text NOT NULL`);
       }
     }
 
-    // Add slug column only if not defined as a collection field (to avoid duplicate columns)
+    // slug (only if not user-defined)
     const hasSlugField = fields.some(f => f.name === "slug");
     if (!hasSlugField) {
       if (this.dialect === "mysql") {
-        sql += `  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL,\n`;
+        allColumnDefs.push(`  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL`);
       } else {
-        sql += `  ${this.quoteIdentifier("slug")} text NOT NULL,\n`;
+        allColumnDefs.push(`  ${this.quoteIdentifier("slug")} text NOT NULL`);
       }
     }
 
-    sql += `${columns}`;
+    // user-defined columns (may be multi-line, already comma-separated internally)
+    if (columns.length > 0) {
+      allColumnDefs.push(columns);
+    }
 
-    // Add CHECK constraints
+    // CHECK constraints
     if (checks.length > 0) {
-      sql += `,\n  CONSTRAINT ${this.quoteIdentifier(`chk_${tableName}_validation`)} CHECK (${checks.join(" AND ")})`;
+      allColumnDefs.push(`  CONSTRAINT ${this.quoteIdentifier(`chk_${tableName}_validation`)} CHECK (${checks.join(" AND ")})`);
     }
 
-    // Add foreign key constraints
-    if (constraints.length > 0) {
-      sql += `,\n${constraints.join(",\n")}`;
+    // FK constraints (each already indented)
+    for (const c of constraints) {
+      allColumnDefs.push(c);
     }
 
-    // Add timestamp columns with dialect-specific defaults
+    // timestamp columns
     if (this.dialect === "sqlite") {
-      sql += `,
-  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL,
-  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL
-);`;
+      allColumnDefs.push(`  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`);
+      allColumnDefs.push(`  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`);
     } else if (this.dialect === "mysql") {
-      sql += `,
-  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
-);`;
+      allColumnDefs.push(`  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`);
+      allColumnDefs.push(`  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`);
     } else {
-      sql += `,
-  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL,
-  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL
-);`;
+      allColumnDefs.push(`  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`);
+      allColumnDefs.push(`  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`);
     }
+
+    let sql = `-- Create dynamic collection: ${tableName}
+CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
+${allColumnDefs.join(",\n")}
+);`;
 
     // Generate many-to-many junction tables
     fields.forEach(f => {

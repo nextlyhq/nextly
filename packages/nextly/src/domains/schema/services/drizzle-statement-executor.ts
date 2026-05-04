@@ -124,9 +124,20 @@ export class DrizzleStatementExecutor
           dbTyped.run(sqlTag.raw(stmt));
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          // drizzle-orm's SQLite session wraps better-sqlite3 errors in a
+          // DrizzleError whose .message is "Failed to run the query '...'".
+          // The original SQLite error ("already exists", etc.) lives in
+          // err.cause. Check both so the guard fires correctly for both
+          // the raw driver error and the drizzle-orm wrapper.
+          const causeMsg =
+            err instanceof Error && err.cause instanceof Error
+              ? err.cause.message
+              : "";
           if (
             msg.includes("already exists") ||
-            msg.includes("duplicate column name")
+            msg.includes("duplicate column name") ||
+            causeMsg.includes("already exists") ||
+            causeMsg.includes("duplicate column name")
           ) {
             // TODO(F8/F15): if a previous apply was aborted mid-recreate,
             // a stale __new_<t> table may survive. The skip-on-already-

@@ -70,6 +70,7 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { buildFullDesiredSchema } from "../helpers/desired-schema";
 // Phase 4.9: shared dispatcher helpers. Previously this file kept local
 // copies of toPaginationMeta / paginatedResponseToMeta / unwrapServiceResult
 // because Phase 4 was migrating dispatchers in parallel; with Phase 4
@@ -319,20 +320,14 @@ const COLLECTIONS_METHODS: Record<
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      // Build a single-collection DesiredSchema for the pipeline preview.
-      // Singles + components buckets stay empty: the dispatcher's preview
-      // endpoint is collection-scoped today (admin Schema Builder posts
-      // per-collection).
-      const desired: DesiredSchema = {
-        collections: {
-          [p.collectionName]: {
-            slug: p.collectionName,
-            tableName,
-            fields: fields as DesiredCollection["fields"],
-          },
-        },
-        singles: {},
-        components: {},
+      // Build a full DesiredSchema so drizzle-kit sees all managed tables.
+      // Without this, singles/components in the live DB are absent from the
+      // desired snapshot and drizzle-kit offers them as rename candidates.
+      const desired = await buildFullDesiredSchema();
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: fields as DesiredCollection["fields"],
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -470,33 +465,12 @@ const COLLECTIONS_METHODS: Record<
         : undefined;
 
       // F3: route through the PushSchemaPipeline via the F2 contract.
-      // Critical: must build the FULL DesiredSchema snapshot (all
-      // managed collections, not just the one being saved). pushSchema
-      // sees any managed table in the live DB but missing from the
-      // desired snapshot as "to be dropped" — without sibling
-      // collections in the snapshot, drizzle-kit would emit DROP TABLE
-      // for them. The post-pushSchema filter strips DROPs for
-      // non-managed tables, but managed siblings need to be present
-      // explicitly so they aren't even considered for drop.
-      const desired: DesiredSchema = {
-        collections: {},
-        singles: {},
-        components: {},
-      };
-
-      // Add all OTHER managed collections from the registry first.
-      // CollectionRegistryService.getAllCollections returns
-      // DynamicCollectionRecord[] — slug + tableName are required
-      // fields, no defensive guards needed.
-      const allCollections = await registry.getAllCollections();
-      for (const c of allCollections) {
-        if (c.slug === p.collectionName) continue;
-        desired.collections[c.slug] = {
-          slug: c.slug,
-          tableName: c.tableName,
-          fields: c.fields ?? [],
-        };
-      }
+      // Build the FULL DesiredSchema (collections + singles + components)
+      // so drizzle-kit sees every managed table. Without this, tables of
+      // other entity types in the live DB are absent from the desired
+      // snapshot and drizzle-kit offers them as rename candidates for the
+      // new collection being saved.
+      const desired = await buildFullDesiredSchema();
 
       // Splice in the user's changes for THIS collection (overwrites
       // any registry entry for the same slug).
