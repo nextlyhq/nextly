@@ -2,7 +2,6 @@
 
 import type { FieldConfig } from "@revnixhq/nextly/config";
 
-import { EntryFormContent } from "./EntryFormContent";
 import {
   ActivityPanel,
   DocumentPanel,
@@ -25,8 +24,9 @@ export interface EntryFormSidebarProps {
   /** Whether this collection has Draft/Published status enabled. Drives
    *  whether the StatusPanel renders. */
   hasStatus?: boolean;
-  /** Slug field — system content rendered above DocumentPanel as a small
-   *  inline editor. PR 6 of the redesign moves slug INTO DocumentPanel. */
+  /** Slug field — threaded into DocumentPanel as the first row with inline
+   *  edit (Q-D5=iv). When the collection has no slug field this stays
+   *  undefined and the slug row is omitted. */
   slugField?: FieldConfig;
 }
 
@@ -37,12 +37,9 @@ export interface EntryFormSidebarProps {
 /**
  * EntryFormSidebar — system-content rail.
  *
- * Stack of named panels (Status, Document, Revisions, Activity) plus a
- * compact Slug surface for now. Per Q-D1=B in the redesign spec the rail
- * is system-content only: no user-defined fields render here.
- *
- * Action buttons MOVED OUT of the rail in PR 5 — they live in the new
- * top action bar (DocumentTabs sibling) implemented in EntryFormActions.
+ * Stack of named panels (Status, Document, Revisions, Activity). Per Q-D1=B
+ * in the redesign spec the rail is system-content only; user fields never
+ * render here.
  */
 export function EntryFormSidebar({
   mode,
@@ -56,14 +53,7 @@ export function EntryFormSidebar({
   return (
     <div className="h-full flex flex-col bg-background overflow-y-auto">
       <StatusPanel entry={entry} hasStatus={hasStatus} />
-
-      {slugField && (
-        <div className="px-5 py-4 border-b border-primary/5">
-          <EntryFormContent fields={[slugField]} />
-        </div>
-      )}
-
-      <DocumentPanel mode={mode} entry={entry} />
+      <DocumentPanel mode={mode} entry={entry} slugField={slugField} />
       <RevisionsPanel />
       <ActivityPanel />
     </div>
