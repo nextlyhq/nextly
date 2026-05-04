@@ -1,2 +1,3 @@
 {"ts":"2026-05-03T05:51:20.106Z","source":"code","status":"success","scope":{"kind":"global"},"summary":{"added":0,"removed":0,"renamed":0,"changed":4},"durationMs":2538,"journalId":"940707b8-c1eb-40db-ad07-5ebf90e251c3"}
 {"ts":"2026-05-03T11:54:15.214Z","source":"code","status":"success","scope":{"kind":"global"},"summary":{"added":0,"removed":0,"renamed":0,"changed":4},"durationMs":1751,"journalId":"8a7d652d-ff72-43a6-81ec-450cabd5dd84"}
+{"ts":"2026-05-04T11:35:15.898Z","source":"ui","status":"success","scope":{"kind":"collection","slug":"test"},"summary":{"added":0,"removed":1,"renamed":0,"changed":9},"durationMs":1619,"journalId":"20f5c6f5-9aab-478c-ac0b-a39d8bf7ccbf"}
