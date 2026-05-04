@@ -12,8 +12,10 @@
 import type { FieldConfig } from "@revnixhq/nextly/config";
 import { Card, CardContent } from "@revnixhq/ui";
 
-import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
+
+import { FieldRow } from "./FieldRow";
 
 // ============================================================================
 // Types
@@ -76,12 +78,15 @@ export function EntryFormContent({
   withCard = false,
   className,
 }: EntryFormContentProps) {
+  // Group fields by row (Q-D4=A: smart auto-pack widths). Width-packing rules
+  // live in packFieldsIntoRows; FieldRow is the flex container.
+  const rows = packFieldsIntoRows(fields);
   const content = (
     <div className={cn("space-y-6", className)}>
-      {fields.map((field, index) => (
-        <FieldRenderer
-          key={getFieldKey(field, index)}
-          field={field}
+      {rows.map((row, i) => (
+        <FieldRow
+          key={getRowKey(row, i)}
+          fields={row}
           disabled={disabled}
           readOnly={readOnly}
         />
@@ -101,13 +106,12 @@ export function EntryFormContent({
 }
 
 /**
- * Generates a stable key for a field
+ * Stable key for a row. Prefers the first field's name (rows are
+ * deterministic given the same input list), with the row index as fallback
+ * for unnamed-layout-field rows.
  */
-function getFieldKey(field: FieldConfig, index: number): string {
-  // Use field name if available, otherwise fall back to index
-  if ("name" in field && field.name) {
-    return field.name;
-  }
-  // For layout fields without names, use type + index
-  return `${field.type}-${index}`;
+function getRowKey(row: FieldConfig[], index: number): string {
+  const first = row[0];
+  if (first && "name" in first && first.name) return `${first.name}-row`;
+  return `row-${first?.type ?? "empty"}-${index}`;
 }
