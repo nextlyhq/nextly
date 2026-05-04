@@ -5,7 +5,7 @@
   --foreground: 222.2 47.4% 11.2%;
   --primary: 0 0% 0%;
   --border: 0 0% 0% / 0.05;
-  --input: 0 0% 0% / 0.05;
+  --input: 240 5% 84%; /* zinc-300, visible field border in light mode */
   --muted: 0 0% 0% / 0.05;
   --card: 0 0% 100%;
 }
@@ -25,6 +25,8 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --input: 240 4% 26%; /* zinc-700, visible field border in dark mode */
+    --border: 240 4% 26%;
   }
 }
 
