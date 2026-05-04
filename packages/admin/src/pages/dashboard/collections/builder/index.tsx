@@ -19,6 +19,7 @@ import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
@@ -80,13 +81,15 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
   };
 
   return (
-    <BuilderSettingsModal
-      open={open}
-      mode="create"
-      config={COLLECTION_BUILDER_CONFIG}
-      initialValues={null}
-      onCancel={() => setOpen(false)}
-      onSubmit={handleSubmit}
-    />
+    <PageContainer>
+      <BuilderSettingsModal
+        open={open}
+        mode="create"
+        config={COLLECTION_BUILDER_CONFIG}
+        initialValues={null}
+        onCancel={() => setOpen(false)}
+        onSubmit={handleSubmit}
+      />
+    </PageContainer>
   );
 }

@@ -248,7 +248,7 @@ export function Login() {
                         spellCheck={false}
                         placeholder="Enter your email address…"
                         {...field}
-                        className="h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -270,7 +270,7 @@ export function Login() {
                           autoComplete="current-password"
                           placeholder="Enter your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button

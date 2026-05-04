@@ -174,7 +174,7 @@ export function Signup() {
                         autoComplete="name"
                         placeholder="Enter your full name…"
                         {...field}
-                        className="h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -198,7 +198,7 @@ export function Signup() {
                         spellCheck={false}
                         placeholder="Enter your email address…"
                         {...field}
-                        className="h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -222,7 +222,7 @@ export function Signup() {
                           autoComplete="new-password"
                           placeholder="Create a strong password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button
@@ -259,7 +259,7 @@ export function Signup() {
                           autoComplete="new-password"
                           placeholder="Confirm your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button

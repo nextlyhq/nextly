@@ -8,6 +8,8 @@
 //   Save Schema button's enabled state is the only unsaved signal now.
 import { Button } from "@revnixhq/ui";
 
+import { Save, Settings } from "@admin/components/icons";
+
 import type { BuilderConfig } from "./builder-config";
 
 type Props = {
@@ -42,7 +44,7 @@ export function BuilderToolbar({
     : undefined;
 
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-3 border-b border-border bg-background">
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
       <div className="flex items-center gap-2 min-w-0">
         <div className="min-w-0">
           <div className="text-xs text-muted-foreground truncate">
@@ -59,12 +61,13 @@ export function BuilderToolbar({
       <div className="ml-auto flex items-center gap-2">
         <Button
           variant="outline"
-          size="sm"
+          size="icon-sm"
           disabled={locked}
           title={lockedTitle}
           onClick={onOpenSettings}
+          aria-label="Settings"
         >
-          Settings
+          <Settings className="h-4 w-4" />
         </Button>
         <Button
           size="sm"
@@ -72,7 +75,8 @@ export function BuilderToolbar({
           title={lockedTitle}
           onClick={onSave}
         >
-          Save schema
+          <Save className="h-4 w-4" />
+          Save
         </Button>
       </div>
     </div>
