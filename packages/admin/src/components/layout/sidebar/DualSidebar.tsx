@@ -378,14 +378,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   const { isActive } = useSidebarNavigation(SIDEBAR_NAVIGATION, pathname);
 
-  // Filtering logic for standard collections
-  const authorizedCollections = useMemo(() => {
-    const visible = (collectionsData?.items ?? []).filter(
-      c => !c.admin?.hidden && !c.admin?.isPlugin
-    );
-    return filterCollectionItems(visible, capabilities);
-  }, [collectionsData, capabilities]);
-
   // Filtering logic for plugins
   const authorizedPlugins = useMemo(() => {
     const visible = (collectionsData?.items ?? []).filter(
@@ -393,30 +385,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     );
     return filterCollectionItems(visible, capabilities);
   }, [collectionsData, capabilities]);
-
-  const firstCollectionUrl = useMemo(() => {
-    if (authorizedCollections.length > 0) {
-      return buildRoute(ROUTES.COLLECTION_ENTRIES, {
-        slug: authorizedCollections[0].name,
-      });
-    }
-    return null;
-  }, [authorizedCollections]);
-
-  const firstSingleUrl = useMemo(() => {
-    if (permittedSingles.length > 0) {
-      return buildRoute(ROUTES.SINGLE_EDIT, { slug: permittedSingles[0].slug });
-    }
-    return null;
-  }, [permittedSingles]);
-
-  const firstPluginUrl = useMemo(() => {
-    const plugins = branding?.plugins;
-    if (plugins && plugins.length > 0) {
-      return ROUTES.PLUGINS;
-    }
-    return null;
-  }, [branding?.plugins]);
 
   // Determine if we should show the second sidebar
   const hasSubSidebar =
@@ -446,15 +414,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     CATEGORIES_WITH_SUB_SIDEBAR.includes(id) || id.startsWith("standalone-");
 
   const resolveItemHref = (item: MainMenuItem): string => {
-    if (item.id === "collections") {
-      return firstCollectionUrl || ROUTES.COLLECTIONS + "?from=collections";
-    }
-    if (item.id === "singles") {
-      return firstSingleUrl || ROUTES.SINGLES + "?from=singles";
-    }
-    if (item.id === "plugins") {
-      return firstPluginUrl || "#";
-    }
+    // collections / singles / plugins are sub-sidebar entry points: clicking
+    // the icon opens the sub-sidebar so the user can pick a specific item.
+    // Auto-navigating to a "first" collection or single misled users into
+    // thinking the icon WAS that specific collection — see findings/
+    // task-3-content-manager-redesign-spec.md (PR 1).
+    if (item.id === "collections") return "#";
+    if (item.id === "singles") return "#";
+    if (item.id === "plugins") return "#";
     if (item.id.startsWith("standalone-")) {
       const slug = item.id.replace("standalone-", "");
       const sp = visibleStandalonePlugins.find(
