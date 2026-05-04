@@ -11,9 +11,11 @@
  * @module pages/dashboard/plugins
  */
 
+import { Alert, AlertDescription, AlertTitle } from "@revnixhq/ui";
 import type React from "react";
 import { Suspense } from "react";
 
+import { Info } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -53,6 +55,19 @@ const PluginsOverviewPage: React.FC = () => {
             </p>
           </div>
         </div>
+
+        {/* In-development banner */}
+        <Alert variant="info" role="status" className="mb-6">
+          <Info className="h-4 w-4" />
+          <div>
+            <AlertTitle>Plugins are in development</AlertTitle>
+            <AlertDescription>
+              Plugin installation and management is coming soon. The current
+              view is a preview &mdash; some features may not be fully
+              functional.
+            </AlertDescription>
+          </div>
+        </Alert>
 
         {/* Plugins table */}
         <Suspense fallback={<PluginsTableSkeleton />}>
