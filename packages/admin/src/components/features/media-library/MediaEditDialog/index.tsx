@@ -3,11 +3,10 @@
 /**
  * MediaEditDialog Component
  *
- * Two-panel dialog for editing media metadata, setting crop point, and
- * viewing generated image sizes.
- *
- * Left panel: Image preview with crop point picker
- * Right panel: Metadata form (alt text, caption, tags, folder) + image sizes
+ * Dialog for editing media metadata. By default the dialog only shows the core
+ * metadata fields (alt text, caption, folder). The crop / focal-point picker
+ * and the generated image-size list are gated behind an "Edit advanced
+ * options" toggle so the dialog stays short and focused.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -63,11 +62,6 @@ const mediaEditSchema = z.object({
   caption: z
     .string()
     .max(1000, "Caption must be less than 1000 characters")
-    .optional()
-    .nullable(),
-  tags: z
-    .string()
-    .max(500, "Tags must be less than 500 characters")
     .optional()
     .nullable(),
 });
@@ -147,12 +141,12 @@ function CropPointPicker({
           style={{ left: `${focalX}%`, top: `${focalY}%` }}
         >
           {/* Outer ring */}
-          <div className="absolute inset-0 rounded-none border-2 border-white shadow-md" />
+          <div className="absolute inset-0 rounded-none border-2 border-background shadow-md" />
           {/* Inner dot */}
-          <div className="absolute inset-[7px] rounded-none bg-white shadow-sm" />
+          <div className="absolute inset-[7px] rounded-none bg-background shadow-sm" />
           {/* Crosshair lines */}
-          <div className="absolute top-1/2 left-0 w-full h-px bg-white/70 -translate-y-px" />
-          <div className="absolute left-1/2 top-0 h-full w-px bg-white/70 -translate-x-px" />
+          <div className="absolute top-1/2 left-0 w-full h-px bg-background/70 -translate-y-px" />
+          <div className="absolute left-1/2 top-0 h-full w-px bg-background/70 -translate-x-px" />
         </div>
       </div>
 
@@ -187,7 +181,7 @@ function CropPointPicker({
                 draggable={false}
               />
             </div>
-            <span className="text-[9px] font-bold text-black dark:text-white uppercase tracking-widest leading-none">
+            <span className="text-[9px] font-bold text-foreground uppercase tracking-widest leading-none">
               {label}
             </span>
           </div>
@@ -276,6 +270,7 @@ export function MediaEditDialog({
   const [isFolderPickerOpen, setIsFolderPickerOpen] = React.useState(false);
   const [focalX, setFocalX] = React.useState(media?.focalX ?? 50);
   const [focalY, setFocalY] = React.useState(media?.focalY ?? 50);
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const { data: rootFolders } = useRootFolders();
 
   const isPending = isSaving || isLoading;
@@ -287,7 +282,6 @@ export function MediaEditDialog({
     defaultValues: {
       altText: media?.altText || "",
       caption: media?.caption || "",
-      tags: Array.isArray(media?.tags) ? media?.tags.join(", ") : "",
     },
   });
 
@@ -297,12 +291,12 @@ export function MediaEditDialog({
       form.reset({
         altText: media.altText || "",
         caption: media.caption || "",
-        tags: Array.isArray(media.tags) ? media.tags.join(", ") : "",
       });
       setSelectedFolderId(media.folderId ?? null);
       setFocalX(media.focalX ?? 50);
       setFocalY(media.focalY ?? 50);
       setIsFolderPickerOpen(false);
+      setAdvancedOpen(false);
       setError(null);
     }
   }, [media, form]);
@@ -321,21 +315,16 @@ export function MediaEditDialog({
       setIsSaving(true);
       setError(null);
 
-      const tags = data.tags
-        ? data.tags
-            .split(",")
-            .map(tag => tag.trim())
-            .filter(tag => tag.length > 0)
-        : undefined;
-
-      // Check if crop point changed
+      // Only include focal point in the payload when the advanced section was
+      // opened AND the user actually moved the crop point. When advanced stays
+      // collapsed we never overwrite the existing focal data.
       const cropPointChanged =
-        focalX !== (media.focalX ?? 50) || focalY !== (media.focalY ?? 50);
+        advancedOpen &&
+        (focalX !== (media.focalX ?? 50) || focalY !== (media.focalY ?? 50));
 
       const updates: MediaUpdateInput = {
         altText: data.altText || undefined,
         caption: data.caption || undefined,
-        tags: tags && tags.length > 0 ? tags : undefined,
         folderId: selectedFolderId,
         ...(cropPointChanged && isImage ? { focalX, focalY } : {}),
       };
@@ -382,12 +371,14 @@ export function MediaEditDialog({
 
   if (!media) return null;
 
+  const showAdvanced = advancedOpen && isImage;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "sm:max-w-4xl p-0 gap-0 overflow-hidden",
-          !isImage && "sm:max-w-2xl"
+          "p-0 gap-0 overflow-hidden",
+          showAdvanced ? "sm:max-w-4xl" : "sm:max-w-2xl"
         )}
       >
         <DialogHeader className="p-6 pb-2">
@@ -399,9 +390,9 @@ export function MediaEditDialog({
 
         <form onSubmit={handleFormSubmit}>
           <div className="px-6 pb-6">
-            <div className={cn("flex gap-6", !isImage && "flex-col")}>
-              {/* Left Panel - Image Preview + Crop Point (images only) */}
-              {isImage && (
+            <div className={cn("flex gap-6", !showAdvanced && "flex-col")}>
+              {/* Left Panel - Image Preview + Crop Point (advanced only) */}
+              {showAdvanced && (
                 <div className="w-full sm:w-[340px] flex-shrink-0 space-y-3">
                   <CropPointPicker
                     imageUrl={media.thumbnailUrl || media.url}
@@ -413,7 +404,7 @@ export function MediaEditDialog({
                 </div>
               )}
 
-              {/* Right Panel - Metadata Form + Sizes */}
+              {/* Right Panel - Metadata Form + (advanced) Sizes */}
               <div className="flex-1 space-y-4 min-w-0">
                 {/* Filename */}
                 <div className="pb-2  border-b border-primary/5">
@@ -453,22 +444,6 @@ export function MediaEditDialog({
                   />
                 </div>
 
-                {/* Tags */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="tags" className="text-sm">
-                    Tags
-                    <span className="ml-1 text-xs text-muted-foreground">
-                      (comma-separated)
-                    </span>
-                  </Label>
-                  <Input
-                    id="tags"
-                    placeholder="e.g., logo, branding, header"
-                    {...form.register("tags")}
-                    disabled={isPending}
-                  />
-                </div>
-
                 {/* Folder */}
                 <div className="space-y-1.5">
                   <Label className="text-sm">Folder</Label>
@@ -479,7 +454,7 @@ export function MediaEditDialog({
                     <PopoverTrigger asChild>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded-none  border border-primary/5 bg-background px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-none border border-input bg-background text-foreground px-3 py-2 text-sm transition-colors hover:bg-accent cursor-pointer"
                       >
                         <FolderIcon className="h-4 w-4 text-muted-foreground" />
                         <span className="flex-1 text-left truncate">
@@ -549,10 +524,33 @@ export function MediaEditDialog({
                   )}
                 </div>
 
-                {/* Image Sizes (if available) */}
-                {parsedSizes && Object.keys(parsedSizes).length > 0 && (
-                  <ImageSizesDisplay sizes={parsedSizes} />
+                {/* Advanced toggle (images only) */}
+                {isImage && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdvancedOpen(prev => !prev)}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold tracking-tight text-muted-foreground hover:text-foreground transition-colors"
+                      aria-expanded={advancedOpen}
+                    >
+                      {advancedOpen ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      )}
+                      {advancedOpen
+                        ? "Hide advanced options"
+                        : "Edit advanced options"}
+                    </button>
+                  </div>
                 )}
+
+                {/* Image Sizes (advanced only) */}
+                {showAdvanced &&
+                  parsedSizes &&
+                  Object.keys(parsedSizes).length > 0 && (
+                    <ImageSizesDisplay sizes={parsedSizes} />
+                  )}
               </div>
             </div>
 
