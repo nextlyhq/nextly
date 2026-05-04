@@ -12,7 +12,7 @@
  * @see packages/admin/src/hooks/useFields.ts for field type icons
  */
 
-import { LucideProps } from "lucide-react";
+import type { LucideProps } from "lucide-react";
 import React from "react";
 
 export type { LucideIcon, LucideProps } from "lucide-react";
