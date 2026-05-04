@@ -357,15 +357,20 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     definition.relationshipFilter = field.relationshipFilter;
   }
 
-  // Upload properties
+  // Upload properties. PR H feedback 2.2: per-knob audit removed
+  // dead config (relationTo, allowEdit, isSortable, displayPreview --
+  // none affected runtime). Allow Create now persisted under
+  // definition.admin.allowCreate to match the framework's
+  // UploadFieldAdminOptions and the runtime UploadInput's read path.
   if (field.type === "upload") {
-    definition.relationTo = field.relationTo;
     definition.mimeTypes = field.mimeTypes;
     definition.maxFileSize = field.maxFileSize;
-    definition.allowCreate = field.allowCreate;
-    definition.allowEdit = field.allowEdit;
-    definition.isSortable = field.isSortable;
-    definition.displayPreview = field.displayPreview;
+    if (field.admin?.allowCreate !== undefined) {
+      definition.admin = {
+        ...(definition.admin ?? {}),
+        allowCreate: field.admin.allowCreate,
+      };
+    }
   }
 
   // Array (repeater) properties
@@ -472,10 +477,10 @@ export function convertToBuilderField(
     allowEdit: field.allowEdit,
     isSortable: field.isSortable,
     relationshipFilter: field.relationshipFilter,
-    // Upload properties
+    // Upload properties. PR H feedback 2.2 dropped displayPreview
+    // (was dead config, never read at runtime).
     mimeTypes: field.mimeTypes,
     maxFileSize: field.maxFileSize,
-    displayPreview: field.displayPreview,
     // Array properties
     labels: field.labels,
     initCollapsed: field.initCollapsed,
@@ -519,6 +524,10 @@ export function convertToBuilderField(
       // handles unknown operators (fail-open) so the cast is safe.
       condition: field.admin.condition as FieldCondition | undefined,
       hideGutter: field.admin.hideGutter,
+      // PR H feedback 2.2: upload field's allowCreate moved to
+      // admin.allowCreate (matches framework's UploadFieldAdminOptions
+      // and the runtime UploadInput's read path).
+      allowCreate: field.admin.allowCreate,
     };
   }
 
