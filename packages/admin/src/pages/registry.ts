@@ -25,6 +25,7 @@ import RolesCreatePage from "./dashboard/roles/create";
 import RolesEditPage from "./dashboard/roles/edit";
 import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
+import EmailLayoutPage from "./dashboard/settings/email-layout/index";
 import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
 import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
 import EmailProvidersPage from "./dashboard/settings/email-providers/index";
@@ -243,6 +244,11 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
     component: EditEmailTemplatePage,
+    type: "private",
+    requiredPermission: "manage-email-templates",
+  },
+  [ROUTES.SETTINGS_EMAIL_LAYOUT]: {
+    component: EmailLayoutPage,
     type: "private",
     requiredPermission: "manage-email-templates",
   },

@@ -63,6 +63,7 @@ export const ROUTES = {
   SETTINGS_EMAIL_TEMPLATES: "/admin/settings/email-templates",
   SETTINGS_EMAIL_TEMPLATES_CREATE: "/admin/settings/email-templates/create",
   SETTINGS_EMAIL_TEMPLATES_EDIT: "/admin/settings/email-templates/edit/[id]",
+  SETTINGS_EMAIL_LAYOUT: "/admin/settings/email-layout",
   SETTINGS_PERMISSIONS: "/admin/settings/permissions",
   SETTINGS_API_KEYS: "/admin/settings/api-keys",
   SETTINGS_API_KEYS_CREATE: "/admin/settings/api-keys/create",
