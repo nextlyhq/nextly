@@ -636,9 +636,9 @@
   --warning-foreground: 222.2 47.4% 11.2%;
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
-  /* Element colors - using primary/5 for weightless design */
+  /* Element colors */
   --border: 0 0% 0% / 0.05;
-  --input: 0 0% 94%;
+  --input: 240 5% 84%; /* zinc-300, visible field border in light mode */
   --ring: var(--primary);
 
   /* Chart colors for data visualization */
@@ -763,11 +763,10 @@
   --warning-foreground: 222.2 47.4% 11.2%;
   /* slate-900 */
 
-  /* Element colors - using dark Slate scale */
+  /* Element colors */
   --border: 215.4 16.3% 12%;
   /* subtle slate-900 */
-  --input: 215.4 16.3% 12%;
-  /* subtle slate-900 */
+  --input: 240 4% 26%; /* zinc-700, visible field border in dark mode */
   --ring: var(--primary);
 
   /* Chart colors for data visualization (same as light mode) */
