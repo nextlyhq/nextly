@@ -28,11 +28,10 @@ const slugField: BuilderField = {
 };
 
 describe("SystemFieldsRow", () => {
-  it("renders title and slug names plus the 3 synthesized internals when shown", () => {
+  it("renders all 5 system field names (title, slug, id, createdAt, updatedAt)", () => {
     render(
       <SystemFieldsRow
         systemFields={[titleField, slugField]}
-        showInternals
         onSetVisible={vi.fn()}
       />
     );
@@ -43,64 +42,65 @@ describe("SystemFieldsRow", () => {
     expect(screen.getByText("updatedAt")).toBeInTheDocument();
   });
 
-  it("hides the 3 internals when showInternals=false (only title + slug)", () => {
+  it("renders the 'System Fields' label above the box", () => {
     render(
       <SystemFieldsRow
         systemFields={[titleField, slugField]}
-        showInternals={false}
         onSetVisible={vi.fn()}
       />
     );
-    expect(screen.getByText("title")).toBeInTheDocument();
-    expect(screen.getByText("slug")).toBeInTheDocument();
-    expect(screen.queryByText("id")).toBeNull();
-    expect(screen.queryByText("createdAt")).toBeNull();
-    expect(screen.queryByText("updatedAt")).toBeNull();
+    expect(screen.getByText(/^System Fields$/)).toBeInTheDocument();
+  });
+
+  it("renders a Hide button (PR G alert-style)", () => {
+    render(
+      <SystemFieldsRow
+        systemFields={[titleField, slugField]}
+        onSetVisible={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^hide$/i })).toBeInTheDocument();
   });
 
   it("renders no per-row buttons -- the system fields are inert", () => {
     render(
       <SystemFieldsRow
         systemFields={[titleField, slugField]}
-        showInternals
         onSetVisible={vi.fn()}
       />
     );
-    // Whatever buttons exist (e.g., the dismiss X) must NOT be one
-    // labeled with a field name -- the rows themselves are not buttons.
     expect(screen.queryByRole("button", { name: /^title$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^slug$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^id$/i })).toBeNull();
   });
 
-  it("calls onSetVisible(false) when the inline X dismiss is clicked", async () => {
+  it("invokes onSetVisible(false) when the Hide button is clicked", async () => {
     const user = userEvent.setup();
     const onSetVisible = vi.fn();
     render(
       <SystemFieldsRow
         systemFields={[titleField, slugField]}
-        showInternals
         onSetVisible={onSetVisible}
       />
     );
-    await user.click(screen.getByLabelText(/hide system fields/i));
+    await user.click(screen.getByRole("button", { name: /^hide$/i }));
     expect(onSetVisible).toHaveBeenCalledWith(false);
   });
 
-  it("shows a 'Show system fields' toggle when showInternals=false", async () => {
+  it("broadcasts via window event so the Settings modal switch stays in sync", async () => {
     const user = userEvent.setup();
-    const onSetVisible = vi.fn();
+    const handler = vi.fn();
+    window.addEventListener("builder:show-system-fields", handler);
     render(
       <SystemFieldsRow
         systemFields={[titleField, slugField]}
-        showInternals={false}
-        onSetVisible={onSetVisible}
+        onSetVisible={vi.fn()}
       />
     );
-    const showButton = screen.getByRole("button", {
-      name: /show system fields/i,
-    });
-    await user.click(showButton);
-    expect(onSetVisible).toHaveBeenCalledWith(true);
+    await user.click(screen.getByRole("button", { name: /^hide$/i }));
+    expect(handler).toHaveBeenCalled();
+    const evt = handler.mock.lastCall?.[0] as CustomEvent<boolean>;
+    expect(evt.detail).toBe(false);
+    window.removeEventListener("builder:show-system-fields", handler);
   });
 });

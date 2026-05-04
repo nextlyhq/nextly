@@ -135,30 +135,34 @@ function SystemFieldsContainer({
 }: {
   systemFields: readonly BuilderField[];
 }) {
-  // Why: state lives here so the inline dismiss + the Settings modal
-  // toggle both land back in the localStorage pref and broadcast via
-  // the existing 'builder:show-system-fields' window event.
-  const [showInternals, setShowInternals] = useState(true);
+  // Why: state lives here so the inline Hide button + the Settings
+  // modal toggle both land back in the localStorage pref and broadcast
+  // via the existing 'builder:show-system-fields' window event. PR G
+  // (feedback 2) made this an all-or-nothing toggle: when false, the
+  // entire SystemFieldsRow unmounts (label + box + chips). The
+  // Settings modal switch is the only way to bring it back.
+  const [showSystemFields, setShowSystemFields] = useState(true);
 
   useEffect(() => {
     const v = localStorage.getItem("builder.showSystemInternals");
-    setShowInternals(v === null ? true : v === "true");
+    setShowSystemFields(v === null ? true : v === "true");
   }, []);
 
   useEffect(() => {
     const onUpdate = (e: Event) => {
-      setShowInternals((e as CustomEvent<boolean>).detail === true);
+      setShowSystemFields((e as CustomEvent<boolean>).detail === true);
     };
     window.addEventListener("builder:show-system-fields", onUpdate);
     return () =>
       window.removeEventListener("builder:show-system-fields", onUpdate);
   }, []);
 
+  if (!showSystemFields) return null;
+
   return (
     <SystemFieldsRow
       systemFields={systemFields}
-      showInternals={showInternals}
-      onSetVisible={setShowInternals}
+      onSetVisible={setShowSystemFields}
     />
   );
 }
