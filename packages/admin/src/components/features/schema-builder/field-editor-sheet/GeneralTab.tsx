@@ -25,10 +25,6 @@ type Props = {
   siblingNames: readonly string[];
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
-  /** PR D: routed through to TypeSpecificEditor so the legacy Group /
-   * Repeater editors can render an "+ Add field" button scoped to the
-   * field being edited. */
-  onAddNestedField?: (parentFieldId: string) => void;
 };
 
 const TYPES_WITH_PLACEHOLDER = new Set([
@@ -53,12 +49,7 @@ const TYPES_WITH_TYPE_SPECIFIC_EDITOR = new Set([
   "blocks",
 ]);
 
-export function GeneralTab({
-  field,
-  readOnly = false,
-  onChange,
-  onAddNestedField,
-}: Props) {
+export function GeneralTab({ field, readOnly = false, onChange }: Props) {
   const isSystem = field.isSystem === true;
   const nameDisabled = readOnly || isSystem;
 
@@ -193,7 +184,6 @@ export function GeneralTab({
             field={field}
             readOnly={readOnly}
             onChange={onChange}
-            onAddNestedField={onAddNestedField}
           />
         </div>
       )}

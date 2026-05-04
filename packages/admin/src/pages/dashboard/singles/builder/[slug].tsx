@@ -604,14 +604,8 @@ export default function SingleBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
-          // PR D: parent-aware "+ Add field" inside group/repeater editors.
-          onAddNestedField={parentId =>
-            setActive({
-              kind: "picker",
-              insertAt: 0,
-              parentFieldId: parentId,
-            })
-          }
+          // Why: PR I dropped onAddNestedField -- the +Add affordance for
+          // nested children moved into BuilderFieldList.
         />
       )}
 

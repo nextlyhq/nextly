@@ -697,15 +697,9 @@ export default function CollectionBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
-          // PR D: parent-aware "+ Add field" inside group/repeater
-          // editors. Switches the overlay to picker with parentFieldId.
-          onAddNestedField={parentId =>
-            setActive({
-              kind: "picker",
-              insertAt: 0,
-              parentFieldId: parentId,
-            })
-          }
+          // Why: PR I dropped onAddNestedField -- the +Add affordance for
+          // nested children moved out of the offcanvas sheet and into
+          // the field list via BuilderFieldList's onAddInsideParent.
         />
       )}
 

@@ -17,8 +17,6 @@
  */
 
 import {
-  Badge,
-  Button,
   Input,
   Label,
   Select,
@@ -50,7 +48,6 @@ export function ArrayFieldEditor({
   rowLabelField,
   onRowLabelFieldChange,
   nestedFields = [],
-  onAddField,
 }: ArrayFieldEditorProps) {
   // Get fields that can be used as row labels (text-like fields with names)
   const labelableFields = useMemo(() => {
@@ -239,55 +236,11 @@ export function ArrayFieldEditor({
         </div>
       </div>
 
-      {/* Nested Fields Info */}
-      <div className="pt-2  border-t border-primary/5">
-        <div className="flex items-center justify-between mb-2">
-          <Label className="text-xs font-medium text-muted-foreground">
-            Nested Fields
-          </Label>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs">
-              {nestedFields.length}{" "}
-              {nestedFields.length === 1 ? "field" : "fields"}
-            </Badge>
-            {onAddField && (
-              // PR D: parent-aware "+ Add field" button. Asks the host
-              // page to open the FieldPickerModal scoped to this repeater.
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={onAddField}
-              >
-                + Add field
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {nestedFields.length === 0 ? (
-          // PR H feedback 2.2: subtle EditorAlert replaces the amber
-          // panel.
-          <EditorAlert>
-            Add fields to this array using the + Add field button above.
-          </EditorAlert>
-        ) : (
-          <EditorAlert>
-            <p>Click on nested fields in the field list to configure them.</p>
-            <p className="mt-1">
-              Fields:{" "}
-              {nestedFields
-                .slice(0, 3)
-                .map(f => f.label || f.name)
-                .join(", ")}
-              {nestedFields.length > 3 && ` +${nestedFields.length - 3} more`}
-            </p>
-          </EditorAlert>
-        )}
-      </div>
-
-      {/* PR H feedback 2.2: subtle EditorAlert replaces the bg-primary/5
-          Tip box. */}
+      {/* Why: PR I -- the "Nested Fields" info section (badge count +
+          +Add field button + alert about clicking the field list) was
+          dropped. The field list itself now shows the nested children
+          and the +Add affordance lives there. The sheet keeps just the
+          knobs that configure the repeater itself. */}
       <EditorAlert>
         Use the Validation tab to set minimum and maximum number of rows.
       </EditorAlert>
