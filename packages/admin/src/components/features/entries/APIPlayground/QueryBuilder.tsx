@@ -297,7 +297,7 @@ export function QueryBuilder({
                 value={params[key] || ""}
                 onChange={e => updateParam(key, e.target.value)}
                 placeholder={placeholder}
-                className="h-10 text-xs font-mono rounded-none border-primary/5 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all placeholder:text-muted-foreground/20"
+                className="h-10 text-xs font-mono rounded-none border-primary/5 bg-primary/5 focus:outline-none focus:border-primary transition-all placeholder:text-muted-foreground/20"
               />
             </div>
           ))}
@@ -344,7 +344,7 @@ export function QueryBuilder({
                       })
                     }
                     placeholder="field"
-                    className="h-10 w-32 text-xs font-mono rounded-none border-primary/5 bg-card focus-visible:ring-2 focus-visible:ring-primary/10 shadow-none"
+                    className="h-10 w-32 text-xs font-mono rounded-none border-primary/5 bg-card focus:outline-none focus:border-primary shadow-none"
                   />
 
                   {/* Operator */}
@@ -354,7 +354,7 @@ export function QueryBuilder({
                       updateWhereCondition(condition.id, { operator: v })
                     }
                   >
-                    <SelectTrigger className="h-10 w-40 text-[10px] uppercase font-black tracking-widest rounded-none border-primary/5 bg-card focus:ring-2 focus:ring-primary/10 shadow-none">
+                    <SelectTrigger className="h-10 w-40 text-[10px] uppercase font-black tracking-widest rounded-none border-primary/5 bg-card focus:outline-none focus:border-primary shadow-none">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="rounded-none border-primary/5 shadow-xl">
@@ -379,7 +379,7 @@ export function QueryBuilder({
                       })
                     }
                     placeholder="value"
-                    className="h-10 flex-1 text-xs font-mono rounded-none border-primary/5 bg-card focus-visible:ring-2 focus-visible:ring-primary/10 shadow-none"
+                    className="h-10 flex-1 text-xs font-mono rounded-none border-primary/5 bg-card focus:outline-none focus:border-primary shadow-none"
                   />
 
                   {/* Remove button */}

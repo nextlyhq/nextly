@@ -293,7 +293,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
             "font-mono text-sm resize-y",
             "min-h-[100px]",
             readOnly && "bg-primary/5 cursor-not-allowed",
-            parseError && "border-destructive focus-visible:ring-destructive"
+            parseError && "border-destructive focus:border-destructive focus:outline-none"
           )}
           style={{ height: heightStyle }}
         />

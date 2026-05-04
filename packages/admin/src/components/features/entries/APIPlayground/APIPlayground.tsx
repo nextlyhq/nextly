@@ -489,7 +489,7 @@ export function APIPlayground({
               onValueChange={v => setAction(v as EndpointAction)}
               disabled={isSingle}
             >
-              <SelectTrigger className="rounded-none border-primary/5 h-12 bg-primary/5 focus:ring-2 focus:ring-primary/10 transition-all">
+              <SelectTrigger className="rounded-none border-primary/5 h-12 bg-primary/5 focus:outline-none focus:border-primary transition-all">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-none border-primary/5 shadow-xl">
@@ -528,7 +528,7 @@ export function APIPlayground({
                 value={entryId}
                 onChange={e => setEntryId(e.target.value)}
                 placeholder="Enter entry ID (e.g., abc123)"
-                className="font-mono text-xs rounded-none border-primary/5 h-12 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all"
+                className="font-mono text-xs rounded-none border-primary/5 h-12 bg-primary/5 focus:outline-none focus:border-primary transition-all"
               />
               {entryIdMissing && (
                 <p className="text-[10px] text-destructive font-medium ml-1">
@@ -575,7 +575,7 @@ export function APIPlayground({
                 <textarea
                   value={requestBody}
                   onChange={e => setRequestBody(e.target.value)}
-                  className="w-full flex-1 font-mono text-xs p-4  border border-primary/5 rounded-none bg-primary/5 resize-none focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/5 transition-all"
+                  className="w-full flex-1 font-mono text-xs p-4 border border-primary/5 rounded-none bg-primary/5 resize-none focus:outline-none focus:border-primary transition-all"
                   placeholder={getBodyPlaceholder()}
                   disabled={!actionRequiresBody}
                 />

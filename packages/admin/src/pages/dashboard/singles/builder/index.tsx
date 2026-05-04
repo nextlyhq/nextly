@@ -16,6 +16,7 @@ import {
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
 import { toast } from "@admin/components/ui";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
 import { toSnakeName } from "@admin/lib/builder";
@@ -75,13 +76,15 @@ export default function SingleBuilderPage(): React.ReactElement | null {
   };
 
   return (
-    <BuilderSettingsModal
-      open={open}
-      mode="create"
-      config={SINGLE_BUILDER_CONFIG}
-      initialValues={null}
-      onCancel={() => setOpen(false)}
-      onSubmit={handleSubmit}
-    />
+    <PageContainer>
+      <BuilderSettingsModal
+        open={open}
+        mode="create"
+        config={SINGLE_BUILDER_CONFIG}
+        initialValues={null}
+        onCancel={() => setOpen(false)}
+        onSubmit={handleSubmit}
+      />
+    </PageContainer>
   );
 }
