@@ -82,7 +82,7 @@ export function EntryTableActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={() => onEdit(entryId)}>
-            <Pencil className="mr-2 h-4 w-4" />
+            <Pencil className="h-4 w-4" />
             Edit
           </DropdownMenuItem>
           <DropdownMenuSeparator />
@@ -90,7 +90,7 @@ export function EntryTableActions({
             onClick={() => onDelete(entryId)}
             className="text-black focus:text-black"
           >
-            <Trash2 className="mr-2 h-4 w-4" />
+            <Trash2 className="h-4 w-4" />
             Delete
           </DropdownMenuItem>
         </DropdownMenuContent>

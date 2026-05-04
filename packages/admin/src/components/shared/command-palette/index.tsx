@@ -239,7 +239,7 @@ export function CommandPalette() {
                 keywords={command.keywords}
                 onSelect={() => handleSelect(() => router.push(command.href))}
               >
-                <Icon className="mr-2 h-4 w-4" />
+                <Icon className="h-4 w-4" />
                 <span>{command.label}</span>
                 {command.shortcut && (
                   <CommandShortcut>{command.shortcut}</CommandShortcut>

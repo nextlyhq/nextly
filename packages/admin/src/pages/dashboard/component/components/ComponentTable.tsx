@@ -515,7 +515,7 @@ export default function ComponentTable() {
                   }}
                   className={isLocked ? "opacity-50" : ""}
                 >
-                  <Pencil className="h-4 w-4 mr-2" />
+                  <Pencil className="h-4 w-4" />
                   Edit
                   {isLocked && (
                     <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
@@ -530,7 +530,7 @@ export default function ComponentTable() {
                   disabled={isLocked}
                   className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="h-4 w-4" />
                   Delete
                   {isLocked && (
                     <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
@@ -631,7 +631,7 @@ export default function ComponentTable() {
                       size="md"
                       className="relative bg-background text-foreground border-primary/5 hover:bg-accent/10"
                     >
-                      <Filter className="mr-2 h-4 w-4" />
+                      <Filter className="h-4 w-4" />
                       Filter
                       {(sourceFilter !== "all" ||
                         migrationFilter !== "all") && (
@@ -716,7 +716,7 @@ export default function ComponentTable() {
                       size="md"
                       className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
                     >
-                      <Icons.Columns className="mr-2 h-4 w-4" />
+                      <Icons.Columns className="h-4 w-4" />
                       Columns
                     </Button>
                   </DropdownMenuTrigger>

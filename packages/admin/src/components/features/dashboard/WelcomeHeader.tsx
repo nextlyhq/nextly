@@ -60,7 +60,7 @@ export function WelcomeHeader() {
               size="md"
               className="h-10 px-6 rounded-none font-bold uppercase tracking-[0.1em] text-[11px] shadow-elevation-primary"
             >
-              <Plus className="mr-2 h-3.5 w-3.5" />
+              <Plus className="h-3.5 w-3.5" />
               Create Collection
             </Button>
           </Link>

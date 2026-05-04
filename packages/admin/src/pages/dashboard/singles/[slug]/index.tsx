@@ -313,7 +313,7 @@ export default function SingleEditPage({
               }
               className="flex-1 sm:flex-initial"
             >
-              <Code className="mr-2 h-4 w-4" />
+              <Code className="h-4 w-4" />
               API
             </Button>
           }

@@ -383,7 +383,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">
-                <Columns className="mr-2 h-4 w-4" />
+                <Columns className="h-4 w-4" />
                 Columns
               </Button>
             </DropdownMenuTrigger>

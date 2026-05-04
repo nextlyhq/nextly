@@ -70,7 +70,7 @@ export function EntryEmptyState({
         Get started by creating your first {singularName.toLowerCase()}.
       </p>
       <Button onClick={onCreateClick}>
-        <Plus className="mr-2 h-4 w-4" />
+        <Plus className="h-4 w-4" />
         Create {singularName}
       </Button>
     </div>
