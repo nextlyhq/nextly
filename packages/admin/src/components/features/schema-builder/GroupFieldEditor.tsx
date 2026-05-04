@@ -17,6 +17,7 @@ import { Badge, Button, Label, Switch } from "@revnixhq/ui";
 import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 
+import { EditorAlert } from "./EditorAlert";
 import type { GroupFieldEditorProps } from "./types";
 
 // ============================================================
@@ -86,42 +87,32 @@ export function GroupFieldEditor({
         </div>
 
         {nestedFields.length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10  border border-primary/5 border-amber-500/20">
-            <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-amber-600 dark:text-amber-400">
-              <p className="font-medium">No nested fields</p>
-              <p className="mt-0.5">
-                Add fields to this group by expanding it in the field list and
-                dragging fields from the palette.
-              </p>
-            </div>
-          </div>
+          // PR H feedback 2.2: subtle EditorAlert replaces the amber
+          // panel.
+          <EditorAlert>
+            Add fields to this group using the + Add field button above.
+          </EditorAlert>
         ) : (
-          <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
-            <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-muted-foreground">
-              <p>Click on nested fields in the field list to configure them.</p>
-              <p className="mt-1">
-                Fields:{" "}
-                {nestedFields
-                  .slice(0, 3)
-                  .map(f => f.label || f.name)
-                  .join(", ")}
-                {nestedFields.length > 3 && ` +${nestedFields.length - 3} more`}
-              </p>
-            </div>
-          </div>
+          <EditorAlert>
+            <p>Click on nested fields in the field list to configure them.</p>
+            <p className="mt-1">
+              Fields:{" "}
+              {nestedFields
+                .slice(0, 3)
+                .map(f => f.label || f.name)
+                .join(", ")}
+              {nestedFields.length > 3 && ` +${nestedFields.length - 3} more`}
+            </p>
+          </EditorAlert>
         )}
       </div>
 
-      {/* Info about groups */}
-      <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
-        <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-        <p className="text-xs text-muted-foreground">
-          <strong>Tip:</strong> Groups organize related fields under a common
-          property without creating repeatable rows like arrays.
-        </p>
-      </div>
+      {/* PR H feedback 2.2: subtle EditorAlert replaces the bg-primary/5
+          Tip box. */}
+      <EditorAlert>
+        Groups organize related fields under a common property without creating
+        repeatable rows like arrays.
+      </EditorAlert>
     </div>
   );
 }
