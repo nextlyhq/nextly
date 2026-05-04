@@ -423,15 +423,15 @@ export function useEntryForm({
   // Reason: defaultValues and form.reset are intentionally excluded — React Query
   // refetches produce new object references even for identical data, and including
   // the full object would reset the form mid-edit, discarding unsaved changes.
+  // Reset the form when the user opens a different entry. defaultValues is
+  // useMemo'd on (fields, entry), so it only changes when entry's identity
+  // changes — keeps this effect from firing on every keystroke. `form` is
+  // a stable RHF ref.
   useEffect(() => {
     if (entry && mode === "edit") {
       form.reset(defaultValues);
     }
-    // We intentionally key the reset on the stable parts of `entry` so that
-    // typing into a field doesn't cause the full entry object to recompute
-    // and trash the user's unsaved changes. defaultValues + form omitted
-    // on purpose; safe because we only reset on identity/timestamp change.
-  }, [entry?.id, entry?.updatedAt, mode]);
+  }, [entry, mode, defaultValues, form]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
