@@ -200,7 +200,7 @@ export async function handleRegister(
           kind: "register-duplicate-swallowed",
           requestId,
           logContext: err.logContext,
-        });=
+        });
         // email to the existing user once email subsystem template support
         // lands (spec §19 follow-up).
         await stallResponse(startTime, deps.loginStallTimeMs);
