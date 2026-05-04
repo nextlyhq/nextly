@@ -342,7 +342,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
           disabled={!canFormat || !!parseError}
           className="flex-shrink-0"
         >
-          <Braces className="h-4 w-4 mr-1.5" />
+          <Braces className="h-4 w-4" />
           Format
         </Button>
       </div>

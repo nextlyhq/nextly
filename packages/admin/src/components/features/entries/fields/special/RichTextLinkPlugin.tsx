@@ -367,7 +367,7 @@ export function RichTextLinkPlugin({
               onClick={removeLink}
               className="sm:mr-auto"
             >
-              <Trash2 className="h-4 w-4 mr-2" />
+              <Trash2 className="h-4 w-4" />
               Remove Link
             </Button>
           )}

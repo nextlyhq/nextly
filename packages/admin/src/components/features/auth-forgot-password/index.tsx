@@ -95,7 +95,7 @@ export function ForgotPassword() {
                 href={ROUTES.LOGIN}
                 className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
+                <ArrowLeft className="h-4 w-4" />
                 Back to Sign In
               </Link>
             </div>

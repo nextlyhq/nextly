@@ -127,7 +127,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                 href={ROUTES.FORGOT_PASSWORD}
                 className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
+                <ArrowLeft className="h-4 w-4" />
                 Request New Link
               </Link>
             </div>
