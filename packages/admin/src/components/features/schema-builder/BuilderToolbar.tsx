@@ -42,7 +42,7 @@ export function BuilderToolbar({
     : undefined;
 
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-3 border-b border-border bg-background">
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
       <div className="flex items-center gap-2 min-w-0">
         <div className="min-w-0">
           <div className="text-xs text-muted-foreground truncate">

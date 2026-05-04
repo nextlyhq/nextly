@@ -137,7 +137,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
       // Common button class
       const getButtonClass = (isActive: boolean) =>
         cn(
-          "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer",
+          "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
           isActive
             ? "!bg-primary text-primary-foreground !border-primary z-20"
             : "bg-background  border border-primary/5 hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
@@ -279,7 +279,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
                     onPageSizeChange(newPageSize);
                   }}
                   disabled={isLoading}
-                  className="h-9 w-[70px] appearance-none rounded-none  border border-primary/5 bg-background px-2 py-1 text-sm font-medium focus-visible:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+                  className="h-9 w-[70px] appearance-none rounded-none  border border-primary/5 bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
                 >
                   {pageSizeOptions.map(size => (
                     <option key={size} value={size}>
@@ -312,7 +312,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(0)}
               disabled={currentPage === 0 || isLoading}
-              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10 cursor-pointer"
+              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to first page"
             >
               <ChevronsLeft className="h-4 w-4" />
@@ -322,7 +322,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage - 1)}
               disabled={currentPage === 0 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+              className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 focus:outline-none focus:border-primary z-10"
               aria-label="Go to previous page"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -335,7 +335,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(currentPage + 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10"
+              className="flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10"
               aria-label="Go to next page"
             >
               <ChevronRight className="h-4 w-4" />
@@ -345,7 +345,7 @@ export const Pagination = React.forwardRef<HTMLDivElement, PaginationProps>(
             <button
               onClick={() => onPageChange(totalPages - 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
-              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring z-10 cursor-pointer"
+              className="hidden sm:flex h-10 w-10 items-center justify-center rounded-none  border border-primary/5 bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
               aria-label="Go to last page"
             >
               <ChevronsRight className="h-4 w-4" />

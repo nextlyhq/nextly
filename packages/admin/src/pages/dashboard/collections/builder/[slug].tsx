@@ -40,6 +40,7 @@ import {
   type BuilderSettingsValues,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
+import { PageContainer } from "@admin/components/layout/page-container";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
@@ -466,7 +467,8 @@ export default function CollectionBuilderEditPage({
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
-      <BuilderToolbar
+      <PageContainer className="flex-1">
+         <BuilderToolbar
         config={COLLECTION_BUILDER_CONFIG}
         name={settings.singularName || slug}
         locked={isLocked}
@@ -474,26 +476,26 @@ export default function CollectionBuilderEditPage({
         onOpenSettings={() => setActive({ kind: "settings" })}
         onSave={() => void handleSave()}
       />
-
-      <DndContext
-        sensors={builder.sensors}
-        onDragStart={builder.handleDragStart}
-        onDragEnd={handleRowDragEnd}
-      >
-        <BuilderFieldList
-          fields={builder.fields}
-          readOnly={isLocked}
-          onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
-          onEditField={fieldId => setActive({ kind: "edit", fieldId })}
-          onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
-          onDuplicateField={handleDuplicateField}
-          onReorder={() => {
-            // Reorder is driven by handleRowDragEnd above. This callback
-            // exists for parents that need notification but our state
-            // lives in the useFieldBuilder hook.
-          }}
-        />
-      </DndContext>
+        <DndContext
+          sensors={builder.sensors}
+          onDragStart={builder.handleDragStart}
+          onDragEnd={handleRowDragEnd}
+        >
+          <BuilderFieldList
+            fields={builder.fields}
+            readOnly={isLocked}
+            onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
+            onEditField={fieldId => setActive({ kind: "edit", fieldId })}
+            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+            onDuplicateField={handleDuplicateField}
+            onReorder={() => {
+              // Reorder is driven by handleRowDragEnd above. This callback
+              // exists for parents that need notification but our state
+              // lives in the useFieldBuilder hook.
+            }}
+          />
+        </DndContext>
+      </PageContainer>
 
       {/* Settings modal — opens for edit (mode="edit") only. */}
       {active.kind === "settings" && (
