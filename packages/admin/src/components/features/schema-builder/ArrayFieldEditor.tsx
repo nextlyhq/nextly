@@ -18,6 +18,7 @@
 
 import {
   Badge,
+  Button,
   Input,
   Label,
   Select,
@@ -48,6 +49,7 @@ export function ArrayFieldEditor({
   rowLabelField,
   onRowLabelFieldChange,
   nestedFields = [],
+  onAddField,
 }: ArrayFieldEditorProps) {
   // Get fields that can be used as row labels (text-like fields with names)
   const labelableFields = useMemo(() => {
@@ -154,7 +156,7 @@ export function ArrayFieldEditor({
       </div>
 
       {/* Row Label Field Selector */}
-      <div className="space-y-2 pt-2 border-t border-border">
+      <div className="space-y-2 pt-2  border-t border-primary/5">
         <FormLabelWithTooltip
           className="text-xs font-medium"
           label="Row Label Field"
@@ -200,7 +202,7 @@ export function ArrayFieldEditor({
       </div>
 
       {/* Admin Options Section */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>
@@ -237,19 +239,33 @@ export function ArrayFieldEditor({
       </div>
 
       {/* Nested Fields Info */}
-      <div className="pt-2 border-t border-border">
+      <div className="pt-2  border-t border-primary/5">
         <div className="flex items-center justify-between mb-2">
           <Label className="text-xs font-medium text-muted-foreground">
             Nested Fields
           </Label>
-          <Badge variant="outline" className="text-xs">
-            {nestedFields.length}{" "}
-            {nestedFields.length === 1 ? "field" : "fields"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-xs">
+              {nestedFields.length}{" "}
+              {nestedFields.length === 1 ? "field" : "fields"}
+            </Badge>
+            {onAddField && (
+              // PR D: parent-aware "+ Add field" button. Asks the host
+              // page to open the FieldPickerModal scoped to this repeater.
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onAddField}
+              >
+                + Add field
+              </Button>
+            )}
+          </div>
         </div>
 
         {nestedFields.length === 0 ? (
-          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
+          <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10  border border-primary/5 border-amber-500/20">
             <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <div className="text-xs text-amber-600 dark:text-amber-400">
               <p className="font-medium">No nested fields</p>

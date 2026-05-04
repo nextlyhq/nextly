@@ -49,7 +49,7 @@ function SortableFieldRow({
   return (
     <tr
       ref={setNodeRef}
-      className={`hover-unified ${isDragging ? "bg-primary/10" : ""}`}
+      className={`${isDragging ? "bg-primary/5" : ""}`}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
       <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -80,14 +80,10 @@ function SortableFieldRow({
       </td>
       <td className="px-6 py-4 whitespace-nowrap text-sm">{field.label}</td>
       <td className="px-6 py-4 whitespace-nowrap text-sm">
-        <Badge variant="outline">
-          {formatFieldTypeLabel(field.type)}
-        </Badge>
+        <Badge variant="outline">{formatFieldTypeLabel(field.type)}</Badge>
       </td>
       <td className="px-6 py-4 whitespace-nowrap text-sm">
-        {"validation" in field &&
-        field.validation &&
-        field.validation.required
+        {"validation" in field && field.validation && field.validation.required
           ? "Yes"
           : "No"}
       </td>

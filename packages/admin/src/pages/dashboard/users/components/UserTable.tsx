@@ -400,7 +400,7 @@ export default function UserTable() {
           const initial = firstName.charAt(0).toUpperCase();
           return (
             <div className="flex items-center gap-3">
-              <Avatar className="h-9 w-9 rounded-none">
+              <Avatar className="w-9 rounded-none">
                 <AvatarImage src={user.image} alt={user.name} />
                 <AvatarFallback className="rounded-none bg-primary/5 text-primary">
                   {initial}
@@ -600,7 +600,7 @@ export default function UserTable() {
             onChange={setSearch}
             placeholder="Search users by name or email"
             isLoading={isFetching}
-            className="flex-1 max-w-sm"
+            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
           />
         </div>
 
@@ -608,15 +608,19 @@ export default function UserTable() {
         <div className="flex items-center gap-2">
           {showLoadingSkeleton ? (
             <>
-              <Skeleton className="h-9 w-[80px]" />
-              <Skeleton className="h-9 w-[100px]" />
+              <Skeleton className="w-[80px]" />
+              <Skeleton className="w-[100px]" />
             </>
           ) : (
             /* Columns Dropdown */
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-9">
-                  <Columns className="mr-2 h-4 w-4" />
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+                >
+                  <Columns className="h-4 w-4" />
                   Columns
                 </Button>
               </DropdownMenuTrigger>
@@ -641,7 +645,7 @@ export default function UserTable() {
       </div>
 
       {/* Responsive table and Pagination Card */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         {isError ? (
           <div className="p-8">
             <Alert variant="destructive">
@@ -668,18 +672,16 @@ export default function UserTable() {
 
         {/* Pagination */}
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-border p-4">
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              totalItems={data.meta.total}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={data.meta.totalPages}
+            totalItems={data.meta.total}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+          />
         )}
       </div>
 

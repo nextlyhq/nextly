@@ -138,7 +138,7 @@ export function EntryTableToolbar({
             value={globalFilter}
             onChange={onGlobalFilterChange}
             placeholder={`Search ${collection.label}...`}
-            className="w-full"
+            className="w-full bg-background text-foreground border-primary/5"
             data-entry-search-input
           />
         </div>
@@ -151,10 +151,10 @@ export function EntryTableToolbar({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="h-9 relative flex-1 sm:flex-none hover-unified"
+                  size="md"
+                  className="relative flex-1 sm:flex-none hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
                 >
-                  <Filter className="mr-2 h-4 w-4" />
+                  <Filter className="h-4 w-4" />
                   Filter
                   {hasActiveFilters && (
                     <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
@@ -172,10 +172,10 @@ export function EntryTableToolbar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                size="sm"
-                className="h-9 flex-1 sm:flex-none hover-unified"
+                size="md"
+                className="flex-1 sm:flex-none hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10"
               >
-                <Columns className="mr-2 h-4 w-4" />
+                <Columns className="h-4 w-4" />
                 Columns
               </Button>
             </DropdownMenuTrigger>
@@ -202,11 +202,11 @@ export function EntryTableToolbar({
                   <DropdownMenuSeparator />
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="md"
                     className="w-full justify-start px-2 font-normal"
                     onClick={onResetColumnVisibility}
                   >
-                    <RotateCcw className="mr-2 h-4 w-4" />
+                    <RotateCcw className="h-4 w-4" />
                     Reset to default
                   </Button>
                 </>

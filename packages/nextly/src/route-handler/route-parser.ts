@@ -878,6 +878,7 @@ function parsePermissionRoutes(
 function parseSingleRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
@@ -956,6 +957,38 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/schema/[slug]/preview → preview single schema changes (dry-run diff)
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "preview" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "previewSingleSchemaChanges",
+      routeParams,
+    };
+  }
+
+  // POST /api/singles/schema/[slug]/apply → apply confirmed single schema changes
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "apply" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "applySingleSchemaChanges",
+      routeParams,
+    };
+  }
+
   return null;
 }
 
@@ -972,12 +1005,50 @@ function parseSingleRoutes(
  * - GET /api/components/[slug] → get component by slug
  * - PATCH /api/components/[slug] → update component
  * - DELETE /api/components/[slug] → delete component
+ * - POST /api/components/schema/[slug]/preview → preview component schema changes
+ * - POST /api/components/schema/[slug]/apply → apply confirmed component schema changes
  */
 function parseComponentRoutes(
-  slug: string | undefined,
+  id: string | undefined,
   httpMethod: string,
-  routeParams: Record<string, string>
+  routeParams: Record<string, string>,
+  subresource?: string,
+  subId?: string
 ): ParsedRoute | null {
+  // POST /api/components/schema/[slug]/preview → preview component schema changes
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "preview" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "components",
+      operation: "single",
+      method: "previewComponentSchemaChanges",
+      routeParams,
+    };
+  }
+
+  // POST /api/components/schema/[slug]/apply → apply confirmed component schema changes
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "apply" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "components",
+      operation: "update",
+      method: "applyComponentSchemaChanges",
+      routeParams,
+    };
+  }
+
+  const slug = id;
+
   // GET /api/components → list all components
   if (!slug && httpMethod === "GET") {
     return {
@@ -1669,7 +1740,7 @@ export function parseRestRoute(
 
   // Handle Singles endpoints (globals)
   if (resource === "singles") {
-    const result = parseSingleRoutes(id, subresource, httpMethod, routeParams);
+    const result = parseSingleRoutes(id, subresource, subId, httpMethod, routeParams);
     if (result) return result;
   }
 
@@ -1681,7 +1752,7 @@ export function parseRestRoute(
 
   // Handle Components endpoints
   if (resource === "components") {
-    const result = parseComponentRoutes(id, httpMethod, routeParams);
+    const result = parseComponentRoutes(id, httpMethod, routeParams, subresource, subId);
     if (result) return result;
   }
 

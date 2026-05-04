@@ -53,6 +53,8 @@ export function RelationshipEditor({
   onIsSortableChange,
   filterOptions,
   onFilterOptionsChange,
+  appearance,
+  onAppearanceChange,
 }: RelationshipEditorProps) {
   const [isCollectionPickerOpen, setIsCollectionPickerOpen] = useState(false);
   const [collectionSearch, setCollectionSearch] = useState("");
@@ -181,15 +183,18 @@ export function RelationshipEditor({
         </Label>
       </div>
 
-      {/* Target Collections */}
+      {/* Link to (PR E1: renamed from "Target Collection(s)"). The
+          polymorphic case is detected by selectedCollections.length > 1
+          and surfaces the same way; only the user-facing label is
+          reworded. */}
       <div className="space-y-2">
         <FormLabelWithTooltip
           className="text-xs font-medium"
-          label="Target Collection(s)"
+          label="Link to"
           description={
             selectedCollections.length > 1
-              ? "Polymorphic relationship - can reference multiple collection types"
-              : "Select the collection this field will reference"
+              ? "This field can link to records from any of the selected collections (polymorphic)."
+              : "Records from this collection will be the link target."
           }
         />
         <div className="space-y-2">
@@ -229,7 +234,7 @@ export function RelationshipEditor({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                size="md"
                 className="w-full justify-start text-xs h-8"
               >
                 <Icons.Plus className="h-3 w-3 mr-1.5" />
@@ -239,7 +244,7 @@ export function RelationshipEditor({
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-64 p-0" align="start">
-              <div className="p-2 border-b border-border">
+              <div className="p-2  border-b border-primary/5">
                 <div className="relative">
                   <Icons.Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
@@ -308,7 +313,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Relationship Options */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         {/* Has Many Toggle */}
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
@@ -350,10 +355,48 @@ export function RelationshipEditor({
       </div>
 
       {/* Admin Options */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>
+
+        {/* PR E3: Appearance picker shape. "select" = inline picker
+            (default, current behavior); "drawer" = side-drawer overlay
+            better for searching long lists. Stored as
+            field.admin.appearance. */}
+        {onAppearanceChange && (
+          <div className="space-y-2">
+            <FormLabelWithTooltip
+              className="text-xs font-medium"
+              label="Appearance"
+              description="How the picker is displayed: inline select or side drawer"
+            />
+            <div className="inline-flex divide-x divide-border rounded-sm border border-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => onAppearanceChange("select")}
+                className={`px-3 py-1 text-xs ${
+                  (appearance ?? "select") === "select"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Select
+              </button>
+              <button
+                type="button"
+                onClick={() => onAppearanceChange("drawer")}
+                className={`px-3 py-1 text-xs ${
+                  appearance === "drawer"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Drawer
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Allow Create */}
         <div className="flex items-center justify-between">
@@ -404,7 +447,7 @@ export function RelationshipEditor({
       </div>
 
       {/* Filter Options (Simplified) */}
-      <div className="space-y-3 pt-2 border-t border-border">
+      <div className="space-y-3 pt-2  border-t border-primary/5">
         <div className="flex items-center justify-between">
           <FormLabelWithTooltip
             className="text-xs font-medium"
@@ -415,7 +458,7 @@ export function RelationshipEditor({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-6 text-xs text-muted-foreground"
               onClick={() => handleFilterUpdate(null)}
             >
@@ -425,7 +468,7 @@ export function RelationshipEditor({
         </div>
 
         {filterOptions ? (
-          <div className="space-y-2 p-3 rounded-none border border-border bg-background">
+          <div className="space-y-2 p-3 rounded-none  border border-primary/5 bg-background">
             <p className="text-xs text-muted-foreground mb-2">
               Only show documents where:
             </p>
@@ -451,7 +494,7 @@ export function RelationshipEditor({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             className="w-full h-8 text-xs"
             onClick={() => handleFilterUpdate({ field: "", equals: "" })}
           >
@@ -463,7 +506,7 @@ export function RelationshipEditor({
 
       {/* Info Box */}
       {selectedCollections.length === 0 && (
-        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10 border border-amber-500/20">
+        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10  border border-primary/5 border-amber-500/20">
           <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-amber-600 dark:text-amber-400">
             <p className="font-medium">No target collection selected</p>

@@ -644,6 +644,9 @@ export class SingleRegistryService extends BaseRegistryService<
         : undefined,
       source: r.source as SingleSource,
       locked: Boolean(r.locked),
+      // Why: read the new status meta-column, defaulting to false for legacy
+      // rows written before the column existed.
+      status: Boolean(r.status),
       configPath,
       schemaHash,
       schemaVersion,

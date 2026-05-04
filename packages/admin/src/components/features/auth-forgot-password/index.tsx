@@ -78,7 +78,7 @@ export function ForgotPassword() {
   if (isSubmitted) {
     return (
       <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+        <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Check Your Email
@@ -93,9 +93,9 @@ export function ForgotPassword() {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
+                <ArrowLeft className="h-4 w-4" />
                 Back to Sign In
               </Link>
             </div>
@@ -109,7 +109,7 @@ export function ForgotPassword() {
     <div className="w-full max-w-[480px] mx-auto">
       <Card
         className={cn(
-          "transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-2 sm:p-4 md:p-6",
+          "transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-2 sm:p-4 md:p-6",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
         )}
       >
@@ -156,7 +156,7 @@ export function ForgotPassword() {
                         spellCheck={false}
                         placeholder="Enter your email address…"
                         {...field}
-                        className="h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -165,7 +165,7 @@ export function ForgotPassword() {
               />
 
               <Button
-                size="lg"
+                size="md"
                 type="submit"
                 disabled={isLoading}
                 className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
@@ -187,7 +187,7 @@ export function ForgotPassword() {
               Remember your password?{" "}
               <Link
                 href={ROUTES.LOGIN}
-                className="text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="text-primary cursor-pointer font-medium transition-colors"
               >
                 Sign in
               </Link>

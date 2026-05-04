@@ -1,10 +1,6 @@
 import { respondAction } from "../../api/response-shapes";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
-  LEGACY_COOKIE_NAMES,
-  serializeClearCookie,
-} from "../cookies/cookie-config";
-import {
   readRefreshTokenCookie,
   clearRefreshTokenCookie,
 } from "../cookies/refresh-token-cookie";
@@ -53,12 +49,10 @@ export async function handleLogout(
     await deps.deleteRefreshTokenByHash(tokenHash);
   }
 
-  // Clear all cookies (current + legacy)
   const clearCookies = [
     clearAccessTokenCookie(),
     clearRefreshTokenCookie(),
     clearCsrfCookie(),
-    ...LEGACY_COOKIE_NAMES.map(name => serializeClearCookie(name, "/admin")),
   ];
 
   // Silent success body is just `{ message }` per spec §7.6.

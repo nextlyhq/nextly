@@ -39,7 +39,7 @@ import { UserSearchResults } from "./UserSearchResults";
  * - WCAG 2.2 AA compliant
  *
  * @design-spec
- * - Dialog: 512px (max-w-lg), 12px border radius
+ * - Dialog: 512px (max-w-lg), 12px  border border-primary/5 radius
  * - Input: 48px height (h-12)
  * - Items: 36px desktop (h-9), 44px mobile (h-11)
  * - Backdrop: bg-black/80 with backdrop blur
@@ -239,7 +239,7 @@ export function CommandPalette() {
                 keywords={command.keywords}
                 onSelect={() => handleSelect(() => router.push(command.href))}
               >
-                <Icon className="mr-2 h-4 w-4" />
+                <Icon className="h-4 w-4" />
                 <span>{command.label}</span>
                 {command.shortcut && (
                   <CommandShortcut>{command.shortcut}</CommandShortcut>

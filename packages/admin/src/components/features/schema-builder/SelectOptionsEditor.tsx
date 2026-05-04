@@ -43,6 +43,10 @@ import {
   Input,
   Label,
   Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   Textarea,
 } from "@revnixhq/ui";
 import { useState, useCallback } from "react";
@@ -167,7 +171,7 @@ function SortableOption({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 p-2 rounded-none border border-border bg-background group"
+      className="flex items-center gap-2 p-2 rounded-none  border border-primary/5 bg-background group"
     >
       {/* Drag Handle */}
       <button
@@ -223,6 +227,12 @@ export function SelectOptionsEditor({
   hasMany,
   onHasManyChange,
   fieldType,
+  isClearable,
+  onIsClearableChange,
+  placeholder,
+  onPlaceholderChange,
+  layout,
+  onLayoutChange,
 }: SelectOptionsEditorProps) {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importData, setImportData] = useState("");
@@ -336,7 +346,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-6 text-xs"
             onClick={() => setIsImportModalOpen(true)}
           >
@@ -346,7 +356,7 @@ export function SelectOptionsEditor({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="md"
             className="h-6 text-xs"
             onClick={handleAddOption}
           >
@@ -381,22 +391,14 @@ export function SelectOptionsEditor({
           </SortableContext>
         </DndContext>
       ) : (
-        <div className="flex flex-col items-center justify-center p-4 rounded-none border border-dashed border-border">
-          <Icons.List className="h-6 w-6 text-muted-foreground mb-2" />
-          <p className="text-xs text-muted-foreground text-center">
-            No options defined
-          </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-2 h-7 text-xs"
-            onClick={handleAddOption}
-          >
-            <Icons.Plus className="h-3 w-3 mr-1" />
-            Add first option
-          </Button>
-        </div>
+        // PR E4: quiet inline empty state. Drops the dashed container,
+        // the big icon, and the duplicate "Add first option" button.
+        // The header above already shows + Add and Import affordances;
+        // we just point the user at them in soft helper copy. Brainstorm
+        // 2026-05-04 Option B locked this shape.
+        <p className="text-xs text-muted-foreground">
+          No options yet -- click + Add or Import above.
+        </p>
       )}
 
       {/* Column Headers (when options exist) */}
@@ -411,7 +413,7 @@ export function SelectOptionsEditor({
 
       {/* hasMany Toggle (only for select, not radio) */}
       {fieldType === "select" && onHasManyChange && (
-        <div className="flex items-center justify-between py-2 border-t border-border mt-3 pt-3">
+        <div className="flex items-center justify-between py-2  border-t border-primary/5 mt-3 pt-3">
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
@@ -423,6 +425,77 @@ export function SelectOptionsEditor({
             checked={hasMany || false}
             onCheckedChange={onHasManyChange}
           />
+        </div>
+      )}
+
+      {/* PR E3: Select-only admin knobs -- clearable + placeholder.
+          Stored as field.admin.isClearable and field.admin.placeholder
+          via the patchAdmin helper in TypeSpecificEditor. */}
+      {fieldType === "select" && onIsClearableChange && (
+        <div className="flex items-center justify-between py-2 border-t border-primary/5 mt-3 pt-3">
+          <div className="space-y-0.5">
+            <FormLabelWithTooltip
+              className="text-sm font-medium"
+              label="Clearable"
+              description="Show a clear (X) button next to the picker so users can unset the value"
+            />
+          </div>
+          <Switch
+            aria-label="Clearable"
+            checked={isClearable !== false}
+            onCheckedChange={onIsClearableChange}
+          />
+        </div>
+      )}
+      {fieldType === "select" && onPlaceholderChange && (
+        <div className="space-y-2 mt-3">
+          <FormLabelWithTooltip
+            className="text-xs font-medium"
+            label="Placeholder"
+            description="Text shown in the picker before any option is selected"
+          />
+          <Input
+            value={placeholder ?? ""}
+            onChange={e => onPlaceholderChange(e.target.value)}
+            placeholder="e.g., Choose a category..."
+            className="h-8 text-sm"
+          />
+        </div>
+      )}
+
+      {/* PR E3: Radio-only admin knob -- horizontal vs vertical layout.
+          Stored as field.admin.layout. */}
+      {fieldType === "radio" && onLayoutChange && (
+        <div className="space-y-2 mt-3 border-t border-primary/5 pt-3">
+          <FormLabelWithTooltip
+            className="text-xs font-medium"
+            label="Layout"
+            description="Whether radio options stack vertically or sit side-by-side"
+          />
+          <div className="inline-flex divide-x divide-border rounded-sm border border-border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => onLayoutChange("horizontal")}
+              className={`px-3 py-1 text-xs ${
+                (layout ?? "horizontal") === "horizontal"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Horizontal
+            </button>
+            <button
+              type="button"
+              onClick={() => onLayoutChange("vertical")}
+              className={`px-3 py-1 text-xs ${
+                layout === "vertical"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Vertical
+            </button>
+          </div>
         </div>
       )}
 
@@ -438,72 +511,67 @@ export function SelectOptionsEditor({
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Format Selection */}
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={importFormat === "csv" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setImportFormat("csv")}
-              >
-                CSV
-              </Button>
-              <Button
-                type="button"
-                variant={importFormat === "json" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setImportFormat("json")}
-              >
-                JSON
-              </Button>
-            </div>
-
-            {/* Format Help */}
-            <div className="text-xs text-muted-foreground p-2 rounded-none bg-primary/5">
-              {importFormat === "csv" ? (
-                <>
-                  <p className="font-medium mb-1">CSV Format:</p>
-                  <pre className="font-mono text-[10px] whitespace-pre-wrap">
-                    {`Draft,draft
-Published,published
-Archived,archived
-
-Or just labels (values auto-generated):
-Draft
-Published
-Archived`}
-                  </pre>
-                </>
-              ) : (
-                <>
-                  <p className="font-medium mb-1">JSON Format:</p>
-                  <pre className="font-mono text-[10px] whitespace-pre-wrap">
-                    {`[
-  { "label": "Draft", "value": "draft" },
-  { "label": "Published", "value": "published" }
-]
-
-Or just strings (values auto-generated):
-["Draft", "Published", "Archived"]`}
-                  </pre>
-                </>
-              )}
-            </div>
-
-            {/* Textarea */}
-            <Textarea
-              value={importData}
-              onChange={e => {
-                setImportData(e.target.value);
+            {/* PR E4: Tabs primitive replaces the two-button format
+                toggle. Each tab content shows a short helper line and
+                the same textarea. The textarea state is shared across
+                tabs (importData) -- importFormat updates as the tab
+                changes, but already-typed text is preserved so users
+                can paste once and switch formats if they realize they
+                pasted the wrong shape. */}
+            <Tabs
+              value={importFormat}
+              onValueChange={v => {
+                setImportFormat(v as "csv" | "json");
                 setImportError(null);
               }}
-              placeholder={
-                importFormat === "csv"
-                  ? "Label,value\nDraft,draft\nPublished,published"
-                  : '[{"label": "Draft", "value": "draft"}]'
-              }
-              className="font-mono text-sm min-h-[150px]"
-            />
+            >
+              <TabsList>
+                <TabsTrigger value="csv">CSV</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="csv" className="space-y-3 mt-3">
+                <p className="text-xs text-muted-foreground">
+                  One line per option.{" "}
+                  <code className="font-mono text-[10px] px-1 py-0.5 rounded-sm bg-muted">
+                    Label,value
+                  </code>{" "}
+                  or just{" "}
+                  <code className="font-mono text-[10px] px-1 py-0.5 rounded-sm bg-muted">
+                    Label
+                  </code>{" "}
+                  (value auto-generated).
+                </p>
+                <Textarea
+                  value={importData}
+                  onChange={e => {
+                    setImportData(e.target.value);
+                    setImportError(null);
+                  }}
+                  placeholder={`Draft,draft\nPublished,published\nArchived`}
+                  className="font-mono text-sm min-h-[150px]"
+                />
+              </TabsContent>
+
+              <TabsContent value="json" className="space-y-3 mt-3">
+                <p className="text-xs text-muted-foreground">
+                  Array of{" "}
+                  <code className="font-mono text-[10px] px-1 py-0.5 rounded-sm bg-muted">
+                    {`{label, value}`}
+                  </code>{" "}
+                  objects, or array of strings (value auto-generated).
+                </p>
+                <Textarea
+                  value={importData}
+                  onChange={e => {
+                    setImportData(e.target.value);
+                    setImportError(null);
+                  }}
+                  placeholder={`[{"label":"Draft","value":"draft"}]`}
+                  className="font-mono text-sm min-h-[150px]"
+                />
+              </TabsContent>
+            </Tabs>
 
             {/* Error Message */}
             {importError && (

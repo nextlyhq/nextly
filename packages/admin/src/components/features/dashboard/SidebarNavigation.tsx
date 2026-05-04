@@ -113,7 +113,7 @@ export function SidebarNavigationItem({
           <DropdownMenuContent
             side="right"
             align="start"
-            className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-border/50"
+            className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-primary/5"
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
           >
@@ -321,7 +321,7 @@ export function SidebarNavigation({
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {!isCollapsed && <Separator className="my-1 bg-sidebar-border/30" />}
+        {!isCollapsed && <Separator className="my-1 bg-border/30" />}
       </>
     );
   };
@@ -337,7 +337,7 @@ export function SidebarNavigation({
               placeholder="Search..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="pl-9 bg-white/50 dark:bg-slate-900/50 border-slate-200/60 dark:border-slate-800/60 text-xs h-9"
+              className="pl-9 bg-background border-primary/5 dark:border-primary/5 text-xs h-9"
             />
           </div>
         </div>
@@ -385,7 +385,7 @@ export function SidebarNavigation({
 
       {/* 5. Separator */}
       {(showCollectionsSection || showSinglesSection) && !isCollapsed && (
-        <Separator className="my-1 bg-sidebar-border/30" />
+        <Separator className="my-1 bg-border/30" />
       )}
 
       {/* 6. Media Library (NIS) */}
@@ -407,14 +407,14 @@ export function SidebarNavigation({
       )}
 
       {/* 6. Separator */}
-      {!isCollapsed && <Separator className="my-1 bg-sidebar-border/30" />}
+      {!isCollapsed && <Separator className="my-1 bg-border/30" />}
 
       {/* 7. Users */}
       <RenderSection label="Users" items={userItems} />
       <DynamicPluginSectionItems placement="users" isActive={isActive} />
 
       {/* 8. Separator */}
-      {!isCollapsed && <Separator className="my-1 bg-sidebar-border/30" />}
+      {!isCollapsed && <Separator className="my-1 bg-border/30" />}
 
       {/* 9. Plugins */}
       {showPluginsSection && (
@@ -492,7 +492,7 @@ export function SidebarNavigation({
 
       {/* 12. Separator */}
       {showSettingsSection && !isCollapsed && (
-        <Separator className="my-1 bg-sidebar-border/30" />
+        <Separator className="my-1 bg-border/30" />
       )}
 
       {/* 13. Builder — runtime-controlled by host config */}

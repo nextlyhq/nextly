@@ -14,6 +14,7 @@
  * @module components/features/notifications/NotificationRow
  */
 
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -26,7 +27,7 @@ export interface NotificationRowProps {
   row: JournalRow;
 }
 
-export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
+export function NotificationRow({ row }: NotificationRowProps): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const failed = row.status === "failed";
   const inProgress = row.status === "in_progress";
@@ -37,7 +38,7 @@ export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
       data-testid="notification-row"
       data-status={row.status}
       className={cn(
-        "border-b border-border last:border-b-0 px-4 py-3",
+        "border-b border-primary/5 last:border-b-0 px-4 py-3",
         expandable && "cursor-pointer hover:bg-primary/5"
       )}
       role={expandable ? "button" : undefined}
@@ -97,7 +98,11 @@ export function NotificationRow({ row }: NotificationRowProps): JSX.Element {
   );
 }
 
-function StatusIcon({ status }: { status: JournalRow["status"] }): JSX.Element {
+function StatusIcon({
+  status,
+}: {
+  status: JournalRow["status"];
+}): ReactElement {
   if (status === "success") {
     // ASCII-only marks keep the test/snapshot stable across icon-pack
     // upgrades; replace with a lucide-react Check if visual polish

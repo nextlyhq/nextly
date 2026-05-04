@@ -8,11 +8,9 @@ import { sql } from "drizzle-orm";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
-import type { CollectionArtifacts } from "./dynamic-collections";
-import {
-  generateRuntimeSchema,
-  type SupportedDialect,
-} from "./schema/runtime-schema-generator";
+import type { CollectionArtifacts } from "../domains/dynamic-collections";
+import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import type { SupportedDialect } from "../domains/schema/services/schema-generator";
 
 export interface FileManagerConfig {
   schemasDir: string;

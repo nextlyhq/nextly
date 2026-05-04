@@ -19,7 +19,10 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import type React from "react";
 
-import { SingleForm } from "@admin/components/features/singles";
+import {
+  SingleForm,
+  type SingleSchema,
+} from "@admin/components/features/singles";
 import { Code } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -87,7 +90,7 @@ function SingleEditPageSkeleton() {
             <Skeleton className="h-5 w-96" />
           </div>
 
-          <div className="bg-card border border-border rounded-none p-6">
+          <div className="bg-card  border border-primary/5 rounded-none p-6">
             <div className="space-y-6">
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
@@ -98,10 +101,10 @@ function SingleEditPageSkeleton() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0 border-t lg:border-t-0 lg:border-l lg:border-border bg-card flex flex-col relative z-10">
+        <div className="w-full lg:w-[360px] shrink-0  border-t border-primary/5 lg:border-t-0 lg :border-l border-primary/5 lg:border-primary/5 bg-card flex flex-col relative z-10">
           <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
             {/* Sidebar Header/Actions Skeleton */}
-            <div className="p-6 border-b border-border space-y-3">
+            <div className="p-6  border-b border-primary/5 space-y-3">
               <div className="flex gap-3">
                 <Skeleton className="h-10 flex-1" />
                 <Skeleton className="h-10 flex-1" />
@@ -120,7 +123,7 @@ function SingleEditPageSkeleton() {
               </div>
 
               {/* Document Info Skeleton */}
-              <div className="pt-6 border-t border-border">
+              <div className="pt-6  border-t border-primary/5">
                 <div className="bg-primary/5 px-6 py-3 mb-4">
                   <Skeleton className="h-4 w-32" />
                 </div>
@@ -293,7 +296,10 @@ export default function SingleEditPage({
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SingleForm
-          schema={schema}
+          // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
+          // expects FieldConfig[] (discriminated). The runtime payload is the
+          // same; widening here until the schema layer unifies on FieldConfig.
+          schema={schema as unknown as SingleSchema}
           document={document}
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
@@ -307,7 +313,7 @@ export default function SingleEditPage({
               }
               className="flex-1 sm:flex-initial"
             >
-              <Code className="mr-2 h-4 w-4" />
+              <Code className="h-4 w-4" />
               API
             </Button>
           }

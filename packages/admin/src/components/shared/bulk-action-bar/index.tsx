@@ -156,7 +156,7 @@ export function BulkActionBar({
       className={cn(
         "fixed bottom-0 right-0 z-40 transition-[left,width] duration-200 ease-linear",
         "left-0 md:left-(--sidebar-width-safe)",
-        "border-t border-border bg-background shadow-lg",
+        "border-t border-primary/5 bg-background shadow-lg",
         "animate-in slide-in-from-bottom duration-300",
         className
       )}
@@ -174,10 +174,10 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="default"
-                size="sm"
+                size="md"
                 disabled={isAssigningRole || isAnyActionLoading}
               >
-                <Shield className="mr-2 h-4 w-4" />
+                <Shield className="h-4 w-4" />
                 Assign Role
               </Button>
             </DropdownMenuTrigger>
@@ -198,13 +198,13 @@ export function BulkActionBar({
           {/* Delete */}
           <Button
             variant="destructive"
-            size="sm"
+            size="md"
             onClick={onDelete}
             disabled={isDeleteDisabled}
             title={!canDelete ? deleteDisabledReason : undefined}
             aria-label={`Delete ${selectedCount} selected item${selectedCount === 1 ? "" : "s"}`}
           >
-            <Trash2 className="mr-2 h-4 w-4" />
+            <Trash2 className="h-4 w-4" />
             Delete
           </Button>
 
@@ -213,10 +213,10 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                size="sm"
+                size="md"
                 disabled={isTogglingStatus || isAnyActionLoading}
               >
-                <ToggleLeft className="mr-2 h-4 w-4" />
+                <ToggleLeft className="h-4 w-4" />
                 Status
               </Button>
             </DropdownMenuTrigger>
@@ -244,11 +244,11 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="default"
-                size="lg"
+                size="md"
                 disabled={isAssigningRole || isAnyActionLoading}
                 className="min-h-[44px] min-w-[44px]"
               >
-                <Shield className="mr-2 h-4 w-4" />
+                <Shield className="h-4 w-4" />
                 Assign Role
               </Button>
             </DropdownMenuTrigger>
@@ -270,7 +270,7 @@ export function BulkActionBar({
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                size="lg"
+                size="md"
                 disabled={isAnyActionLoading}
                 className="min-h-[44px] min-w-[44px]"
               >
@@ -284,7 +284,7 @@ export function BulkActionBar({
                 className="text-destructive"
                 aria-label={`Delete ${selectedCount} selected item${selectedCount === 1 ? "" : "s"}`}
               >
-                <Trash2 className="mr-2 h-4 w-4" />
+                <Trash2 className="h-4 w-4" />
                 Delete
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -292,7 +292,7 @@ export function BulkActionBar({
                 disabled={isTogglingStatus}
                 aria-label={`Enable ${selectedCount} selected account${selectedCount === 1 ? "" : "s"}`}
               >
-                <ToggleLeft className="mr-2 h-4 w-4" />
+                <ToggleLeft className="h-4 w-4" />
                 Enable Accounts
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -300,7 +300,7 @@ export function BulkActionBar({
                 disabled={isTogglingStatus}
                 aria-label={`Disable ${selectedCount} selected account${selectedCount === 1 ? "" : "s"}`}
               >
-                <X className="mr-2 h-4 w-4" />
+                <X className="h-4 w-4" />
                 Disable Accounts
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -308,8 +308,8 @@ export function BulkActionBar({
         </div>
 
         {/* Clear button (right-aligned) */}
-        <Button variant="ghost" size="sm" onClick={onClear} className="ml-auto">
-          <X className="mr-2 h-4 w-4" />
+        <Button variant="ghost" size="md" onClick={onClear} className="ml-auto">
+          <X className="h-4 w-4" />
           Clear
         </Button>
       </div>

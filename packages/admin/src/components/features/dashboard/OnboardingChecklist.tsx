@@ -15,8 +15,8 @@ function StepRow({ step }: { step: OnboardingStep }) {
           className={cn(
             "h-6 w-6 rounded-none flex items-center justify-center transition-all duration-500",
             step.isComplete
-              ? "bg-emerald-500/10 border border-emerald-500/30 scale-110 shadow-glow-success"
-              : "bg-primary/5 border border-primary/10 group-hover:border-primary/30 group-hover:scale-105"
+              ? "bg-emerald-500/10  border border-primary/5 border-emerald-500/30 scale-110 shadow-glow-success"
+              : "bg-primary/5  border border-primary/5 group-hover:border-primary/30 group-hover:scale-105"
           )}
         >
           {step.isComplete ? (
@@ -58,7 +58,7 @@ export const OnboardingChecklist: React.FC = () => {
   const completionPct = (progress.completedCount / progress.totalCount) * 100;
 
   return (
-    <Card className="border-primary/20 bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none] transition-all duration-700 hover:border-primary/40 group/card relative">
+    <Card className="border-primary/5 bg-primary/[0.01] backdrop-blur-md overflow-hidden rounded-none] transition-all duration-700 hover:border-primary/40 group/card relative">
       <div className="absolute top-0 left-0 w-full h-1 bg-primary/5">
         <div
           className="h-full bg-primary shadow-glow-primary transition-all duration-1000 ease-out"
@@ -95,7 +95,7 @@ export const OnboardingChecklist: React.FC = () => {
         </button>
       </CardHeader>
       <CardContent className="px-6 pb-8">
-        <div className="space-y-1 bg-white/40 dark:bg-slate-950/20 p-2 rounded-none] border border-border/5">
+        <div className="space-y-1 bg-white/40 dark:bg-slate-950/20 p-2 rounded-none]  border border-primary/5">
           {progress.steps.map(step => (
             <StepRow key={step.id} step={step} />
           ))}

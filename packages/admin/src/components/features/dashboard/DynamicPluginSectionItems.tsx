@@ -185,7 +185,7 @@ export function DynamicPluginSectionItems({
                         className="justify-start px-3"
                       >
                         <Link href={href}>
-                          <IconComponent className="h-4 w-4 mr-2" />
+                          <IconComponent className="h-4 w-4" />
                           <span>{displayName}</span>
                         </Link>
                       </SidebarMenuButton>

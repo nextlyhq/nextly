@@ -3,37 +3,60 @@
 /**
  * Single Builder — Edit Page
  *
- * Thin wrapper around BuilderPageTemplate + useFieldBuilder.
- * Loads existing single schema data and initializes the builder.
- * Mode-specific: single form schema, settings, hooks, and update mutation.
+ * Mirrors the Collection edit page architecture:
+ *   BuilderToolbar at top, BuilderFieldList in the body inside DndContext,
+ *   overlays (settings modal / picker / editor sheet / hooks sheet) mounted
+ *   lazily based on a single ActiveOverlay union.
+ *
+ * Singles run the same preview → SchemaChangeDialog → apply pipeline as
+ * Collections. Locked code-first Singles render
+ * in readOnly mode (cross-cutting code-first preservation requirement).
  */
 
+import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
 import type React from "react";
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
 import {
-  BuilderPageTemplate,
-  HooksEditor,
-  type EnabledHook,
+  BuilderFieldList,
+  BuilderSettingsModal,
+  BuilderToolbar,
+  FieldEditorSheet,
+  FieldPickerModal,
+  SafeChangeConfirmDialog,
+  SchemaChangeDialog,
+  type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import * as Icons from "@admin/components/icons";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
-import { ROUTES } from "@admin/constants/routes";
+import { useRestart } from "@admin/context/RestartContext";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import {
-  convertToFieldDefinition,
   convertToBuilderField,
+  convertToFieldDefinition,
+  DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
-import { navigateTo } from "@admin/lib/navigation";
+import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
+import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import type {
+  FieldResolution,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "@admin/services/schemaApi";
+import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
 
-import { SingleSettings, type SingleSettingsData } from "./components";
+import { SINGLE_BUILDER_CONFIG } from "./builder-config";
 
 const singleFormSchema = z.object({
   singularName: z
@@ -43,6 +66,20 @@ const singleFormSchema = z.object({
 });
 
 type FormData = z.infer<typeof singleFormSchema>;
+
+type ActiveOverlay =
+  | { kind: "none" }
+  | { kind: "settings" }
+  // PR D: parentFieldId? scopes the picker to a group/repeater.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
+  // Why: NEW in PR C. Sheet renders in create mode against this draft;
+  // on Apply we append, on Cancel we discard.
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
+  | { kind: "edit"; fieldId: string };
+// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
+// removed from the toolbar (feedback Section 2).
 
 interface SingleBuilderEditPageProps {
   params?: { slug?: string };
@@ -59,90 +96,261 @@ export default function SingleBuilderEditPage({
     defaultValues: { singularName: "" },
   });
 
-  const [settings, setSettings] = useState<SingleSettingsData>({});
-  const [hooks, setHooks] = useState<EnabledHook[]>([]);
+  const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
+  const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
+  // Why: was a JSON string of just field IDs, which silently masked
+  // label / width / validation / options edits. Now a frozen array we
+  // diff via countDirtyFields so every meaningful edit bumps the badge.
+  const [originalFields, setOriginalFields] = useState<
+    readonly BuilderField[] | null
+  >(null);
 
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
+  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
+    null
   );
+  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
+  const [showSafeDialog, setShowSafeDialog] = useState(false);
+  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
 
   const { mutate: updateSingle, isPending: isSaving } = useUpdateSingle();
+  const { startRestart, stopRestart } = useRestart();
 
-  // Initialize form with single data
+  // Initialize builder + settings from the loaded Single.
   useEffect(() => {
-    if (single && !isInitialized) {
-      if (single.locked) {
-        navigateTo(ROUTES.SINGLES);
-        return;
-      }
+    if (!single || isInitialized) return;
 
-      builder.form.reset({
-        singularName: single.label || single.slug || "",
-      });
+    builder.form.reset({
+      singularName: single.label || single.slug || "",
+    });
 
-      const schemaFields = single.fields || [];
-      const builderFields = schemaFields.map((field, index: number) =>
-        convertToBuilderField(field as unknown as FieldDefinition, index)
-      );
-      builder.setFields(builderFields);
+    const userSchemaFields = (single.fields ?? []).filter(
+      (f: { name: string }) => f.name !== "title" && f.name !== "slug"
+    );
+    const builderFields = userSchemaFields.map((field, index: number) =>
+      convertToBuilderField(field as unknown as FieldDefinition, index)
+    );
+    const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
+    builder.setFields(allFields);
 
-      setSettings({
-        description: single.description || "",
-        admin: single.admin || {},
-      });
+    setOriginalFields(allFields.filter(f => !f.isSystem));
 
-      setIsInitialized(true);
-    }
+    const adminBlock = (single.admin ?? {}) as Record<string, unknown>;
+    setSettings({
+      singularName: single.label || single.slug || "",
+      slug: single.slug,
+      description: single.description || "",
+      icon: (adminBlock.icon as string | undefined) || "FileText",
+      adminGroup: (adminBlock.group as string | undefined) || "",
+      order: adminBlock.order as number | undefined,
+      // Status from PR 1's backend addition; defaults false for legacy
+      // Singles written before the column existed.
+      status: (single as { status?: boolean }).status === true,
+    });
+
+    setIsInitialized(true);
   }, [single, builder, isInitialized]);
 
+  const isLocked = single?.locked === true;
+
+  // Dirty count: number of user fields that were added, removed, or had
+  // any of their editable shape change since load.
+  const unsavedCount = useMemo(() => {
+    if (!originalFields) return 0;
+    return countDirtyFields(
+      originalFields,
+      builder.fields.filter(f => !f.isSystem)
+    );
+  }, [builder.fields, originalFields]);
+
+  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
+    const userFields = builder.fields.filter(
+      f => !f.isSystem && f.name !== "title" && f.name !== "slug"
+    );
+    const validation = builder.validateFields(userFields);
+    if (!validation.valid) {
+      toast.error(validation.errorMessage);
+      return null;
+    }
+    return userFields.map(convertToFieldDefinition);
+  }, [builder]);
+
+  const applySchemaChanges = useCallback(
+    async (
+      fieldDefinitions: FieldDefinition[],
+      schemaVersion: number,
+      resolutions: Record<string, FieldResolution>,
+      renameResolutions: SchemaRenameResolution[]
+    ) => {
+      if (!slug) return;
+      setIsApplyingSchema(true);
+      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
+      startRestart();
+      try {
+        const result = await singleApi.applySchemaChanges(
+          slug,
+          fieldDefinitions,
+          schemaVersion,
+          resolutions,
+          renameResolutions
+        );
+        if (result.success) {
+          const label = settings?.singularName?.trim() || slug;
+          const summarySuffix =
+            result.toastSummary && result.toastSummary !== "no changes"
+              ? `. ${result.toastSummary}`
+              : "";
+          stopRestart(true, `${label} schema updated${summarySuffix}`);
+          setShowSchemaDialog(false);
+          setPreviewData(null);
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
+        } else {
+          stopRestart(
+            false,
+            result.message || "Failed to apply schema changes"
+          );
+        }
+      } catch (err) {
+        const errorObj = err as { message?: string };
+        stopRestart(
+          false,
+          errorObj?.message || "An error occurred while applying changes"
+        );
+      } finally {
+        setIsApplyingSchema(false);
+        if (typeof window !== "undefined")
+          window.__nextlySchemaApplying = false;
+      }
+    },
+    [slug, startRestart, stopRestart, settings?.singularName, builder.fields]
+  );
+
+  // No-schema-change path: persist labels/settings only.
+  const saveSettingsOnly = useCallback(
+    (fieldDefinitions: FieldDefinition[]) => {
+      if (!slug || !settings) return;
+      updateSingle(
+        {
+          slug,
+          updates: {
+            label: settings.singularName,
+            description: settings.description,
+            fields: fieldDefinitions as unknown as ApiSingle["fields"],
+            admin: {
+              icon: settings.icon,
+              group: settings.adminGroup,
+              ...(settings.order !== undefined
+                ? { order: settings.order }
+                : {}),
+            },
+            ...(settings.status === true ? { status: true } : {}),
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success("Single updated");
+            setOriginalFields(builder.fields.filter(f => !f.isSystem));
+          },
+          onError: err => {
+            const errorObj = err as { message?: string };
+            toast.error(
+              errorObj?.message ||
+                "An unexpected error occurred while updating the Single."
+            );
+          },
+        }
+      );
+    },
+    [slug, settings, updateSingle, builder.fields]
+  );
+
   const handleSave = useCallback(async () => {
-    if (!slug) {
+    if (!slug || !settings) {
       toast.error("Single slug is missing");
       return;
     }
 
-    const isValid = await builder.form.trigger();
-    if (!isValid) {
-      toast.error("Please fix the form errors before saving");
-      return;
-    }
+    const fieldDefinitions = getValidatedFields();
+    if (!fieldDefinitions) return;
 
-    const userFields = builder.fields.filter(f => !f.isSystem);
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return;
-    }
-
-    const formData = builder.form.getValues();
-    const fieldDefinitions = userFields.map(convertToFieldDefinition);
-
-    updateSingle(
-      {
+    try {
+      const preview = await singleApi.previewSchemaChanges(
         slug,
-        updates: {
-          label: formData.singularName,
-          description: settings.description,
-          fields: fieldDefinitions as unknown as ApiSingle["fields"],
-          admin: settings.admin,
-        },
-      },
-      {
-        onSuccess: () => {
-          toast.success("Single updated successfully");
-        },
-        onError: err => {
-          const errorObj = err as { message?: string };
-          toast.error(
-            errorObj?.message ||
-              "An unexpected error occurred while updating the Single."
-          );
-        },
+        fieldDefinitions
+      );
+
+      if (!preview.hasChanges) {
+        saveSettingsOnly(fieldDefinitions);
+        return;
       }
-    );
-  }, [builder, settings, slug, updateSingle]);
+
+      if (preview.classification === "safe") {
+        setPreviewData(preview);
+        setShowSafeDialog(true);
+        return;
+      }
+
+      setPreviewData(preview);
+      setShowSchemaDialog(true);
+    } catch (err) {
+      const errorObj = err as { message?: string };
+      toast.error(errorObj?.message || "Failed to preview schema changes");
+    }
+  }, [slug, settings, getValidatedFields, saveSettingsOnly]);
+
+  // Why: PR D feedback -- duplicate icon on each field card. Same shape
+  // as the collections page handler.
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
+
+  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
+  // by width). We compute the OLD row layout, apply the row swap, and
+  // flatten back to a fields array for handleFieldsReorder. The legacy
+  // builder.handleDragEnd is built for the old palette+field-list model
+  // and ignores row IDs.
+  const handleRowDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
+        return;
+      }
+      const userFields = builder.fields.filter(f => !f.isSystem);
+      const systemFields = builder.fields.filter(f => f.isSystem);
+      const rows = packIntoRows(
+        userFields.map(f => ({
+          id: f.id,
+          width: parseWidth(f.admin?.width),
+          _field: f,
+        }))
+      );
+      const oldIdx = Number(activeIdStr.slice("row-".length));
+      const newIdx = Number(overIdStr.slice("row-".length));
+      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
+      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
+      const reorderedUserFields = reorderedRows.flatMap(row =>
+        row.map(r => (r as { _field: BuilderField })._field)
+      );
+      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
+    },
+    [builder]
+  );
+
+  // ---------------------------- Loading / error guards ----------------------
 
   if (!slug) {
     return (
@@ -157,29 +365,23 @@ export default function SingleBuilderEditPage({
     );
   }
 
-  if (isLoading) {
+  if (isLoading || !isInitialized) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <div className="p-6 border-b border-border">
+        <div className="p-6  border-b border-primary/5">
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
         </div>
-        <div className="flex-1 flex">
-          <div className="flex-1 p-4">
-            <Skeleton className="h-12 w-full mb-2" />
-            <Skeleton className="h-12 w-full mb-2" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-          <div className="w-[400px] border-l border-border p-4">
-            <Skeleton className="h-8 w-full mb-4" />
-            <Skeleton className="h-48 w-full" />
-          </div>
+        <div className="flex-1 p-4">
+          <Skeleton className="h-12 w-full mb-2" />
+          <Skeleton className="h-12 w-full mb-2" />
+          <Skeleton className="h-12 w-full" />
         </div>
       </div>
     );
   }
 
-  if (error) {
+  if (error || !single || !settings) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <PageErrorFallback />
@@ -187,45 +389,221 @@ export default function SingleBuilderEditPage({
     );
   }
 
+  // ---------------------------- Render --------------------------------------
+
+  const editingField =
+    active.kind === "edit"
+      ? builder.fields.find(f => f.id === active.fieldId)
+      : null;
+
   return (
-    <BuilderPageTemplate
-      builder={builder}
-      breadcrumbItems={[
-        {
-          href: ROUTES.DASHBOARD,
-          label: "Dashboard",
-          isDashboard: true,
-        },
-        { href: ROUTES.SINGLES, label: "Singles" },
-      ]}
-      breadcrumbCurrentLabel="Edit Single"
-      headerIcon={<Icons.FileText className="h-5 w-5" />}
-      headerTitle={builder.form.watch("singularName") || "Edit Single"}
-      headerDescription="Define the structure of this global content"
-      onSave={() => {
-        void handleSave();
-      }}
-      onCancel={() => navigateTo(ROUTES.SINGLES)}
-      isSaving={isSaving}
-      saveLabel="Update"
-      entityType="single"
-      settingsSlot={
-        <>
-          <SingleSettings
-            settings={settings}
-            onSettingsChange={setSettings}
-            isExpanded={true}
-            isAdvancedOpen={true}
-            variant="none"
+    <div className="flex flex-col min-h-screen bg-background">
+      <PageContainer className="flex-1">
+        <BuilderToolbar
+          config={SINGLE_BUILDER_CONFIG}
+          name={settings.singularName || slug}
+          locked={isLocked}
+          unsavedCount={unsavedCount}
+          onOpenSettings={() => setActive({ kind: "settings" })}
+          onSave={() => void handleSave()}
+        />
+        <DndContext
+          sensors={builder.sensors}
+          onDragStart={builder.handleDragStart}
+          onDragEnd={handleRowDragEnd}
+        >
+          <BuilderFieldList
+            fields={builder.fields}
+            readOnly={isLocked}
+            onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
+            onEditField={fieldId => setActive({ kind: "edit", fieldId })}
+            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+            onDuplicateField={handleDuplicateField}
+            onReorder={() => {
+              // Reorder is driven by handleDragEnd above; useFieldBuilder
+              // owns the sortable wiring.
+            }}
           />
-          <HooksEditor
-            hooks={hooks}
-            onHooksChange={setHooks}
-            fieldNames={fieldNames}
-            isExpanded={true}
-          />
-        </>
-      }
-    />
+        </DndContext>
+      </PageContainer>
+
+      {active.kind === "settings" && (
+        <BuilderSettingsModal
+          open
+          mode="edit"
+          config={SINGLE_BUILDER_CONFIG}
+          initialValues={settings}
+          onCancel={() => setActive({ kind: "none" })}
+          onSubmit={next => {
+            setSettings(next);
+            setActive({ kind: "none" });
+          }}
+        />
+      )}
+
+      {active.kind === "picker" && (
+        <FieldPickerModal
+          open
+          // PR D: title scopes the picker to the parent for nested adds.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
+          excludedTypes={SINGLE_BUILDER_CONFIG.picker.excludedTypes ?? []}
+          onCancel={() => setActive({ kind: "none" })}
+          // Why: PR C flow change -- pick opens sheet in create mode.
+          // Field commits on Apply, discards on Cancel.
+          // PR D: thread parentFieldId through.
+          onSelect={type =>
+            setActive({
+              kind: "create",
+              parentFieldId: active.parentFieldId,
+              draft: {
+                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                name: "",
+                label: "",
+                type,
+                validation: {},
+              },
+            })
+          }
+        />
+      )}
+
+      {active.kind === "create" && (
+        <FieldEditorSheet
+          open
+          mode="create"
+          field={active.draft}
+          siblingFields={
+            active.parentFieldId
+              ? (builder.fields.find(f => f.id === active.parentFieldId)
+                  ?.fields ?? [])
+              : builder.fields
+          }
+          readOnly={isLocked}
+          isInsideRepeatingAncestor={
+            active.parentFieldId
+              ? // Why: same logic as collections page -- the new field
+                // counts as nested if its parent is a repeating
+                // container OR is itself nested in one.
+                (() => {
+                  const parent = builder.fields.find(
+                    f => f.id === active.parentFieldId
+                  );
+                  if (!parent) return false;
+                  const parentIsRepeating =
+                    parent.type === "repeater" ||
+                    (parent.type === "component" && parent.repeatable === true);
+                  return (
+                    parentIsRepeating ||
+                    isInsideRepeatingAncestor(parent.id, builder.fields)
+                  );
+                })()
+              : false
+          }
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
+            setActive({ kind: "none" });
+          }}
+          onDelete={() => setActive({ kind: "none" })}
+        />
+      )}
+
+      {active.kind === "edit" && editingField && (
+        <FieldEditorSheet
+          open
+          mode="edit"
+          field={editingField}
+          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
+          readOnly={isLocked}
+          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
+            editingField.id,
+            builder.fields
+          )}
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            builder.handleFieldUpdate(next);
+            setActive({ kind: "none" });
+          }}
+          onDelete={() => {
+            builder.handleFieldDelete(editingField.id);
+            setActive({ kind: "none" });
+          }}
+          // PR D: parent-aware "+ Add field" inside group/repeater editors.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
+        />
+      )}
+
+      {/* Hooks UI removed in PR D (feedback Section 2). */}
+
+      {previewData && previewData.classification === "safe" && (
+        <SafeChangeConfirmDialog
+          open={showSafeDialog}
+          onOpenChange={setShowSafeDialog}
+          collectionName={slug}
+          changes={previewData.changes}
+          onConfirm={() => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applySchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                {},
+                []
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {previewData && previewData.classification !== "safe" && (
+        <SchemaChangeDialog
+          open={showSchemaDialog}
+          onOpenChange={setShowSchemaDialog}
+          collectionName={slug}
+          hasDestructiveChanges={previewData.hasDestructiveChanges}
+          classification={previewData.classification}
+          changes={previewData.changes}
+          renamed={previewData.renamed}
+          warnings={previewData.warnings}
+          interactiveFields={previewData.interactiveFields}
+          onConfirm={(resolutions, renameResolutions) => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applySchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                resolutions,
+                renameResolutions
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {(isSaving || isApplyingSchema) && (
+        <div aria-live="polite" className="sr-only">
+          Saving Single changes…
+        </div>
+      )}
+    </div>
   );
 }

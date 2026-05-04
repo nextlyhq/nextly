@@ -136,7 +136,7 @@ export interface GroupInputProps {
  * @returns Rendered group with nested fields
  */
 export function GroupInput({
-  _name,
+  name: _name,
   field,
   basePath = "",
   disabled,
@@ -182,7 +182,7 @@ export function GroupInput({
   return (
     <Card
       className={cn(
-        "shadow-none border border-slate-200 dark:border-slate-800 overflow-hidden",
+        "shadow-none  border border-primary/5 dark:border-primary/5 overflow-hidden",
         field.admin?.className
       )}
     >
@@ -190,7 +190,7 @@ export function GroupInput({
         {/* Card Header - Collapsible trigger */}
         {field.label && (
           <CardHeader
-            className="pb-3 bg-slate-50/80 dark:bg-slate-900/80 border-b border-slate-100 dark:border-slate-800/60 p-4"
+            className="pb-3 bg-primary/5/80 dark:bg-slate-900/80  border-b border-primary/5 dark:border-primary/5 p-4"
             noBorder
           >
             <CollapsibleTrigger asChild>

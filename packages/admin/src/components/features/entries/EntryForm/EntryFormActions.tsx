@@ -98,16 +98,15 @@ export function EntryFormActions({
       <div className="flex items-center gap-3 w-full">
         {/* Secondary Actions */}
         {(showCancel || isPreviewAvailable) && (
-          <div className="flex items-center gap-2 flex-1">
+          <div className="flex items-center gap-1 flex-1">
             {isPreviewAvailable && onPreview && (
               <Button
                 type="button"
                 variant="outline"
                 onClick={onPreview}
                 disabled={isSubmitting}
-                className="flex-1 shadow-none bg-background border-border hover-unified"
               >
-                <Eye className="mr-2 h-4 w-4" />
+                <Eye className="h-4 w-4" />
                 {previewLabel}
               </Button>
             )}
@@ -118,7 +117,7 @@ export function EntryFormActions({
                 variant="outline"
                 onClick={onCancel}
                 disabled={isSubmitting}
-                className="flex-1 shadow-none bg-background border-border hover-unified"
+                className="flex-1 shadow-none bg-background border-primary/5 hover-unified"
               >
                 Cancel
               </Button>
@@ -128,14 +127,15 @@ export function EntryFormActions({
 
         {/* Primary Action */}
         <Button
+          size="md"
           type="submit"
           form={formId}
           disabled={isSubmitting || isInvalid}
-          className="flex-1 shadow-none bg-primary hover:bg-primary/90 text-primary-foreground"
+          className="flex-1"
         >
           {isSubmitting ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" />
               {submittingLabel}
             </>
           ) : (

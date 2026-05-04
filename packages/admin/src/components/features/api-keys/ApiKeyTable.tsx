@@ -13,9 +13,6 @@
 import type { Column } from "@revnixhq/ui";
 import {
   Skeleton,
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Badge,
   Button,
   DropdownMenu,
@@ -26,10 +23,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   ResponsiveTable,
-  TableSkeleton,
 } from "@revnixhq/ui";
 import type React from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 
 import {
   AlertTriangle,
@@ -38,8 +34,8 @@ import {
   Loader2,
   MoreHorizontal,
   Trash2,
-  Filter,
 } from "@admin/components/icons";
+import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
@@ -49,9 +45,7 @@ import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
 export interface ApiKeyTableProps {
   data: ApiKeyMeta[];
-  isLoading: boolean;
-  isError: boolean;
-  error: Error | null;
+  isLoading?: boolean;
   onEdit: (key: ApiKeyMeta) => void;
   onRevoke: (key: ApiKeyMeta) => void;
 }
@@ -60,9 +54,11 @@ export interface ApiKeyTableProps {
 // Helpers
 // ============================================================
 
-type KeyStatus = "active" | "expired" | "revoked";
+// ============================================================
+// Helpers
+// ============================================================
 
-type StatusFilter = "all" | KeyStatus;
+type KeyStatus = "active" | "expired" | "revoked";
 
 function getStatus(key: ApiKeyMeta): KeyStatus {
   if (!key.isActive) return "revoked";
@@ -145,15 +141,16 @@ function getTypeBadgeProps(key: ApiKeyMeta): {
 
 export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   data,
-  isLoading,
-  isError,
-  error,
+  isLoading = false,
   onEdit,
   onRevoke,
 }) => {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  // Pagination state
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
@@ -167,6 +164,11 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
     });
   };
 
+  const handlePageSizeChange = useCallback((newPageSize: number) => {
+    setPageSize(newPageSize);
+    setPage(0);
+  }, []);
+
   const handleEdit = useCallback((key: ApiKeyMeta) => onEdit(key), [onEdit]);
   const handleRevoke = useCallback(
     (key: ApiKeyMeta) => onRevoke(key),
@@ -176,141 +178,144 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   // Toggleable columns (exclude actions)
   const ALWAYS_VISIBLE = new Set(["actions"]);
 
-  const columnDefs: Column<ApiKeyMeta>[] = useMemo(() => [
-    {
-      key: "name",
-      label: "Name",
-      render: (_value, key) => (
-        <div>
-          <span className="font-medium">{key.name}</span>
-          {key.description && (
-            <p className="text-xs text-muted-foreground mt-0.5 max-w-[200px] truncate">
-              {key.description}
-            </p>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "tokenType",
-      label: "Type",
-      render: (_value, key) => {
-        const { label, variant, className, hasWarning } =
-          getTypeBadgeProps(key);
-        return (
-          <div className="flex items-center gap-1.5">
-            {hasWarning && (
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+  const columnDefs: Column<ApiKeyMeta>[] = useMemo(
+    () => [
+      {
+        key: "name",
+        label: "Name",
+        render: (_value, key) => (
+          <div>
+            <span className="font-medium">{key.name}</span>
+            {key.description && (
+              <p className="text-xs text-muted-foreground mt-0.5 max-w-[200px] truncate">
+                {key.description}
+              </p>
             )}
-            <Badge variant={variant} className={className}>
-              {label}
-            </Badge>
           </div>
-        );
+        ),
       },
-    },
-    {
-      key: "keyPrefix",
-      label: "Key",
-      render: (_value, key) => (
-        <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
-          {key.keyPrefix}
-          {"•".repeat(32)}
-        </code>
-      ),
-    },
-    {
-      key: "expiresAt",
-      label: "Expires",
-      hideOnMobile: true,
-      render: (_value, key) => (
-        <span className="text-sm text-muted-foreground">
-          {formatRelativeTime(key.expiresAt, "Never")}
-        </span>
-      ),
-    },
-    {
-      key: "lastUsedAt",
-      label: "Last Used",
-      hideOnMobile: true,
-      render: (_value, key) => (
-        <span className="text-sm text-muted-foreground">
-          {formatRelativeTime(key.lastUsedAt, "Never")}
-        </span>
-      ),
-    },
-    {
-      key: "isActive",
-      label: "Status",
-      render: (_value, key) => {
-        const status = getStatus(key);
-        if (status === "active") {
-          return <Badge variant="success">Active</Badge>;
-        }
-        if (status === "expired") {
-          return <Badge variant="default">Expired</Badge>;
-        }
-        return <Badge variant="destructive">Revoked</Badge>;
+      {
+        key: "tokenType",
+        label: "Type",
+        render: (_value, key) => {
+          const { label, variant, className, hasWarning } =
+            getTypeBadgeProps(key);
+          return (
+            <div className="flex items-center gap-1.5">
+              {hasWarning && (
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              )}
+              <Badge variant={variant} className={className}>
+                {label}
+              </Badge>
+            </div>
+          );
+        },
       },
-    },
-    {
-      key: "id",
-      label: "ID",
-      render: id => (
-        <span
-          className="font-mono text-xs text-muted-foreground"
-          title={id as string}
-        >
-          {(id as string).length > 8
-            ? `${(id as string).slice(0, 8)}...`
-            : (id as string)}
-        </span>
-      ),
-    },
-    {
-      key: "actions" as keyof ApiKeyMeta,
-      label: "Actions",
-      render: (_value, key) => {
-        const isRevoked = !key.isActive;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                className="h-8 w-8 p-0 border border-border"
-                disabled={isRevoked}
-                title={
-                  isRevoked
-                    ? "Actions unavailable for revoked key"
-                    : "Key actions"
-                }
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="cursor-pointer"
-                onClick={() => handleEdit(key)}
-              >
-                <Edit className="h-4 w-4" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer text-destructive focus:text-destructive"
-                onClick={() => handleRevoke(key)}
-              >
-                <Trash2 className="h-4 w-4" />
-                Revoke
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
+      {
+        key: "keyPrefix",
+        label: "Key",
+        render: (_value, key) => (
+          <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+            {key.keyPrefix}
+            {"•".repeat(32)}
+          </code>
+        ),
       },
-    },
-  ], [handleEdit, handleRevoke]);
+      {
+        key: "expiresAt",
+        label: "Expires",
+        hideOnMobile: true,
+        render: (_value, key) => (
+          <span className="text-sm text-muted-foreground">
+            {formatRelativeTime(key.expiresAt, "Never")}
+          </span>
+        ),
+      },
+      {
+        key: "lastUsedAt",
+        label: "Last Used",
+        hideOnMobile: true,
+        render: (_value, key) => (
+          <span className="text-sm text-muted-foreground">
+            {formatRelativeTime(key.lastUsedAt, "Never")}
+          </span>
+        ),
+      },
+      {
+        key: "isActive",
+        label: "Status",
+        render: (_value, key) => {
+          const status = getStatus(key);
+          if (status === "active") {
+            return <Badge variant="success">Active</Badge>;
+          }
+          if (status === "expired") {
+            return <Badge variant="default">Expired</Badge>;
+          }
+          return <Badge variant="destructive">Revoked</Badge>;
+        },
+      },
+      {
+        key: "id",
+        label: "ID",
+        render: id => (
+          <span
+            className="font-mono text-xs text-muted-foreground"
+            title={id as string}
+          >
+            {(id as string).length > 8
+              ? `${(id as string).slice(0, 8)}...`
+              : (id as string)}
+          </span>
+        ),
+      },
+      {
+        key: "actions" as keyof ApiKeyMeta,
+        label: "Actions",
+        render: (_value, key) => {
+          const isRevoked = !key.isActive;
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="h-8 w-8 p-0  border border-primary/5"
+                  disabled={isRevoked}
+                  title={
+                    isRevoked
+                      ? "Actions unavailable for revoked key"
+                      : "Key actions"
+                  }
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => handleEdit(key)}
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                  onClick={() => handleRevoke(key)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Revoke
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
+      },
+    ],
+    [handleEdit, handleRevoke]
+  );
 
   const columns = useMemo(
     () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
@@ -325,13 +330,6 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
     const term = search.trim().toLowerCase();
 
     return data.filter(key => {
-      // Status filter
-      const status = getStatus(key);
-
-      if (statusFilter !== "all" && status !== statusFilter) {
-        return false;
-      }
-
       // Search filter
       if (!term) return true;
 
@@ -348,27 +346,20 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
       return haystack.includes(term);
     });
-  }, [data, search, statusFilter]);
+  }, [data, search]);
 
-  // ── Error state ────────────────────────────────────────────
-  if (isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertTriangle className="h-4 w-4" />
-        <AlertTitle>Error</AlertTitle>
-        <AlertDescription>
-          {error instanceof Error
-            ? error.message
-            : "Failed to load API keys. Please try again."}
-        </AlertDescription>
-      </Alert>
-    );
-  }
+  const paginatedData = useMemo(() => {
+    const start = page * pageSize;
+    return filteredData.slice(start, start + pageSize);
+  }, [filteredData, page, pageSize]);
 
-  // ── Loading state ──────────────────────────────────────────
-  if (isLoading && data.length === 0) {
-    return <TableSkeleton columns={7} rowCount={5} hideWrapper hideFooter />;
-  }
+  const totalItems = filteredData.length;
+  const totalPages = Math.ceil(totalItems / pageSize);
+
+  // Reset page when search changes
+  useEffect(() => {
+    setPage(0);
+  }, [search]);
 
   return (
     <div className="space-y-4">
@@ -381,62 +372,18 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               onChange={setSearch}
               placeholder="Search API keys by name, description, or role..."
               isLoading={isLoading}
+              className="bg-background text-foreground border-primary/5"
             />
           </div>
         </div>
 
-        {/* Right: Filters & Column visibility */}
+        {/* Right: Column visibility */}
         <div className="flex items-center gap-2">
-          {/* Filter Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 relative hover-unified"
-              >
-                <Filter className="mr-2 h-4 w-4" />
-                Filter
-                {statusFilter !== "all" && (
-                  <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "all"}
-                onCheckedChange={() => setStatusFilter("all")}
-              >
-                All Status
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "active"}
-                onCheckedChange={() => setStatusFilter("active")}
-              >
-                Active
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "expired"}
-                onCheckedChange={() => setStatusFilter("expired")}
-              >
-                Expired
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={statusFilter === "revoked"}
-                onCheckedChange={() => setStatusFilter("revoked")}
-              >
-                Revoked
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           {/* Columns Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9 hover-unified">
-                <Columns className="mr-2 h-4 w-4" />
+              <Button variant="outline" size="sm">
+                <Columns className="h-4 w-4" />
                 Columns
               </Button>
             </DropdownMenuTrigger>
@@ -459,13 +406,13 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
       {/* Table card */}
       {isLoading && data.length === 0 ? (
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <div className="p-4 space-y-3">
             <Skeleton className="h-[200px] w-full rounded-none" />
           </div>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
           <div className="space-y-1">
             {isLoading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground pb-2 px-6 pt-4">
@@ -474,11 +421,23 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               </div>
             )}
             <ResponsiveTable
-              data={filteredData}
+              data={paginatedData}
               columns={columns}
               emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
               ariaLabel="API keys table"
               tableWrapperClassName="border-0 rounded-none shadow-none"
+            />
+
+            {/* Table Footer with Pagination */}
+            <Pagination
+              currentPage={page}
+              totalPages={Math.max(1, totalPages)}
+              pageSize={pageSize}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              totalItems={totalItems}
+              isLoading={isLoading}
             />
           </div>
         </div>

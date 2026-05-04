@@ -39,6 +39,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import {
+  resolveStatusFilter,
+  type StatusOption,
+} from "../../../lib/status-filter";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
@@ -227,6 +231,15 @@ export class CollectionQueryService extends BaseService {
     sort?: string;
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
+    /**
+     * Draft/Published filter override. Only takes effect when the collection
+     * has Draft/Published enabled (collection.status === true).
+     * - 'published' (default for public callers): only published rows
+     * - 'draft': only draft rows
+     * - 'all': skip the filter entirely
+     * Trusted callers (overrideAccess: true) default to 'all' if unset.
+     */
+    status?: StatusOption;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
@@ -311,6 +324,25 @@ export class CollectionQueryService extends BaseService {
         if (accessField && accessValue) {
           whereConditions.push(eq(schema[accessField], accessValue));
         }
+      }
+
+      // Apply Draft/Published auto-filter. The helper returns null when the
+      // collection has no status column, the caller is trusted with no
+      // explicit choice, or explicit was 'all'. Otherwise it returns the
+      // value to filter by ('published' for public callers by default).
+      // Guarding on schema.status avoids referencing a column that may not
+      // exist when the collection has status disabled.
+      const collectionForStatus = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus:
+          (collectionForStatus as { status?: boolean }).status === true,
+        overrideAccess: params.overrideAccess === true,
+        explicit: params.status,
+      });
+      if (statusFilter && schema.status) {
+        whereConditions.push(eq(schema.status, statusFilter.value));
       }
 
       // Apply search filter if provided
@@ -748,6 +780,11 @@ export class CollectionQueryService extends BaseService {
     where?: WhereFilter;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Draft/Published filter override (only effective when collection.status === true).
+     * See listEntries for full semantics.
+     */
+    status?: StatusOption;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
@@ -795,6 +832,25 @@ export class CollectionQueryService extends BaseService {
         if (accessField && accessValue) {
           whereConditions.push(eq(schema[accessField], accessValue));
         }
+      }
+
+      // Apply Draft/Published auto-filter. The helper returns null when the
+      // collection has no status column, the caller is trusted with no
+      // explicit choice, or explicit was 'all'. Otherwise it returns the
+      // value to filter by ('published' for public callers by default).
+      // Guarding on schema.status avoids referencing a column that may not
+      // exist when the collection has status disabled.
+      const collectionForStatus = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus:
+          (collectionForStatus as { status?: boolean }).status === true,
+        overrideAccess: params.overrideAccess === true,
+        explicit: params.status,
+      });
+      if (statusFilter && schema.status) {
+        whereConditions.push(eq(schema.status, statusFilter.value));
       }
 
       // Apply search filter if provided
@@ -976,6 +1032,14 @@ export class CollectionQueryService extends BaseService {
     richTextFormat?: RichTextOutputFormat;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Draft/Published filter override (only effective when collection.status === true).
+     * Public callers default to 'published'; trusted callers see all.
+     * If the entry exists but doesn't match the filter (e.g., a 'draft' row
+     * fetched without override), the response is 404 — same as a non-existent
+     * id, so visibility doesn't leak via response codes.
+     */
+    status?: StatusOption;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult> {
@@ -1042,10 +1106,32 @@ export class CollectionQueryService extends BaseService {
         params.overrideAccess
       );
 
+      // Same 404-not-403 reasoning applies to Draft/Published — a public
+      // caller asking for a draft entry by ID gets a 404, never a hint that
+      // it exists.
+      const collectionForStatus = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus:
+          (collectionForStatus as { status?: boolean }).status === true,
+        overrideAccess: params.overrideAccess === true,
+        explicit: params.status,
+      });
+
       const idCondition = eq(schema.id, entryId);
-      const whereCondition = ownerConstraint
-        ? and(idCondition, eq(schema[ownerConstraint.field], ownerConstraint.value))
-        : idCondition;
+      const ownerCondition = ownerConstraint
+        ? eq(schema[ownerConstraint.field], ownerConstraint.value)
+        : null;
+      const statusCondition =
+        statusFilter && schema.status
+          ? eq(schema.status, statusFilter.value)
+          : null;
+      const whereParts = [idCondition, ownerCondition, statusCondition].filter(
+        (c): c is NonNullable<typeof c> => c !== null
+      );
+      const whereCondition =
+        whereParts.length === 1 ? whereParts[0] : and(...whereParts);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const [entry] = await (this.db as any)

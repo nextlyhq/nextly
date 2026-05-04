@@ -3,174 +3,93 @@
 /**
  * Collection Builder — Create Page
  *
- * Thin wrapper around BuilderPageTemplate + useFieldBuilder.
- * Mode-specific: collection form schema, settings, hooks, and create mutation.
+ * The create flow is now a focused settings modal: user fills the modal,
+ * clicks Continue, the collection is created with its system fields only,
+ * and the user lands on the [slug].tsx edit page to add custom fields.
+ *
+ * Page-level wrap chosen over rendering the modal from the listing page
+ * because the existing route /admin/collections/builder is bookmarkable
+ * and used by every "New collection" link in the admin. Treating the
+ * page as a pure modal-host keeps backwards compat with those links.
  */
 
-import { zodResolver } from "@hookform/resolvers/zod";
-import type React from "react";
-import { useState, useCallback, useMemo } from "react";
-import { z } from "zod";
+import { useEffect, useState } from "react";
 
 import {
-  BuilderPageTemplate,
-  CollectionSettings,
-  HooksEditor,
-  type CollectionSettingsData,
-  type EnabledHook,
-} from "@admin/components/features/schema-builder";
+  BuilderSettingsModal,
+  type BuilderSettingsValues,
+} from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
-import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
-import {
-  toSnakeName,
-  convertToFieldDefinition,
-  convertHooksToStoredFormat,
-  DEFAULT_SYSTEM_FIELDS,
-} from "@admin/lib/builder";
+import { toSnakeName } from "@admin/lib/builder";
 import { navigateTo } from "@admin/lib/navigation";
-import type { FieldDefinition } from "@admin/types/collection";
 
-const collectionFormSchema = z.object({
-  singularName: z
-    .string()
-    .trim()
-    .min(1, "Name is required")
-    .max(255, "Name is too long"),
-  pluralName: z.string().trim().max(255, "Plural name is too long").optional(),
-});
+import { COLLECTION_BUILDER_CONFIG } from "./builder-config";
 
-type FormData = z.infer<typeof collectionFormSchema>;
+export default function CollectionBuilderPage(): React.ReactElement | null {
+  const [open, setOpen] = useState(true);
+  const { mutate: createCollection, isPending } = useCreateCollection();
 
-export default function CollectionBuilderPage(): React.ReactElement {
-  const builder = useFieldBuilder<FormData>({
-    resolver: zodResolver(collectionFormSchema),
-    defaultValues: { singularName: "", pluralName: "" },
-    initialFields: DEFAULT_SYSTEM_FIELDS,
-  });
-
-  const [collectionSettings, setCollectionSettings] =
-    useState<CollectionSettingsData>({
-      description: "",
-      timestamps: true,
-      admin: { icon: "Folder" },
-      hooks: [],
-    });
-
-  const [hooks, setHooks] = useState<EnabledHook[]>([]);
-  const [isHooksExpanded, setIsHooksExpanded] = useState(false);
-
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
-  );
-
-  const { mutate: createCollection, isPending: isSaving } =
-    useCreateCollection();
-
-  const handleSave = useCallback(async () => {
-    const isValid = await builder.form.trigger();
-    if (!isValid) {
-      const errors = builder.form.formState.errors;
-      if (errors.singularName) {
-        builder.setSidebarTab("settings");
-        toast.error(
-          "Collection name is required. Please fill it in the Settings tab."
-        );
-      } else {
-        toast.error("Please fix the form errors before saving");
-      }
-      return;
+  // Why: a closed modal on a page that does nothing else is a dead end —
+  // navigate back to the listing as soon as the user dismisses.
+  useEffect(() => {
+    if (!open && !isPending) {
+      navigateTo(ROUTES.COLLECTIONS);
     }
+  }, [open, isPending]);
 
-    const userFields = builder.fields.filter(f => !f.isSystem);
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return;
-    }
-
-    const formData = builder.form.getValues();
-    const singularName = formData.singularName.trim();
-    const pluralName = formData.pluralName?.trim() || undefined;
-    const fieldDefinitions: FieldDefinition[] = userFields.map(
-      convertToFieldDefinition
-    );
-    const storedHooks = convertHooksToStoredFormat(hooks);
-    const derivedSlug = toSnakeName(singularName);
+  const handleSubmit = (values: BuilderSettingsValues) => {
+    const singular = values.singularName.trim();
+    const plural = values.pluralName?.trim() || `${singular}s`;
+    const slug = values.slug?.trim() || toSnakeName(singular);
 
     createCollection(
       {
-        name: derivedSlug,
-        labels: {
-          singular: singularName,
-          plural: pluralName,
-        },
-        description: collectionSettings.description,
-        icon: collectionSettings.admin?.icon,
-        group: collectionSettings.admin?.group,
-        useAsTitle: collectionSettings.admin?.useAsTitle,
-        hidden: collectionSettings.admin?.hidden,
-        order: collectionSettings.admin?.order,
-        sidebarGroup: collectionSettings.admin?.sidebarGroup,
-        fields: fieldDefinitions,
-        hooks: storedHooks.length > 0 ? storedHooks : undefined,
+        name: slug,
+        labels: { singular, plural },
+        description: values.description?.trim() || undefined,
+        icon: values.icon,
+        group: values.adminGroup?.trim() || undefined,
+        order: values.order,
+        status: values.status === true,
+        // Why: useAsTitle + timestamps removed in PR B. Backend defaults
+        // (timestamps always on, useAsTitle = system title) take over.
+        // Code-first config can still override either.
+        // Empty user-fields list: the API auto-injects system columns
+        // (id, title, slug, timestamps, status if enabled). The user
+        // adds custom fields on the next page.
+        fields: [],
       },
       {
         onSuccess: () => {
-          toast.success("Collection created successfully");
-          navigateTo(ROUTES.COLLECTIONS);
+          toast.success("Collection created");
+          // Navigate to the edit page where the user can add fields.
+          // We use the slug we computed because the API doesn't return
+          // the created entity in this response shape.
+          navigateTo(`${ROUTES.COLLECTIONS_BUILDER}/${slug}`);
         },
         onError: err => {
           const error = err as { message?: string };
           toast.error(
-            error?.message ||
-              "An unexpected error occurred while creating the collection."
+            error?.message || "Could not create collection. Please try again."
           );
         },
       }
     );
-  }, [builder, hooks, collectionSettings, createCollection]);
+  };
 
   return (
-    <BuilderPageTemplate
-      builder={builder}
-      breadcrumbItems={[
-        {
-          href: ROUTES.DASHBOARD,
-          label: "Dashboard",
-          isDashboard: true,
-        },
-        { href: ROUTES.COLLECTIONS, label: "Collections" },
-      ]}
-      breadcrumbCurrentLabel="Create Collection"
-      headerTitle="Create Collection"
-      headerDescription="Design a new collection with custom fields and settings."
-      onSave={() => {
-        void handleSave();
-      }}
-      onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
-      isSaving={isSaving}
-      saveLabel="Create"
-      entityType="collection"
-      settingsSlot={
-        <>
-          <CollectionSettings
-            settings={collectionSettings}
-            onSettingsChange={setCollectionSettings}
-            fields={builder.fields}
-            variant="none"
-          />
-          <HooksEditor
-            hooks={hooks}
-            onHooksChange={setHooks}
-            fieldNames={fieldNames}
-            isExpanded={isHooksExpanded}
-            onExpandedChange={setIsHooksExpanded}
-          />
-        </>
-      }
-    />
+    <PageContainer>
+      <BuilderSettingsModal
+        open={open}
+        mode="create"
+        config={COLLECTION_BUILDER_CONFIG}
+        initialValues={null}
+        onCancel={() => setOpen(false)}
+        onSubmit={handleSubmit}
+      />
+    </PageContainer>
   );
 }

@@ -3,131 +3,81 @@
 /**
  * Component Builder — Create Page
  *
- * Thin wrapper around BuilderPageTemplate + useFieldBuilder.
- * Mode-specific: component form schema, settings, and create mutation.
- * Components do not have hooks (unlike collections/singles).
+ * Mirrors the Collection / Single create flow: opens BuilderSettingsModal
+ * directly, on Continue creates the Component (no fields yet) and
+ * navigates to [slug].tsx for field editing.
+ *
+ * Components diverge from Collection/Single: no plural, no useAsTitle,
+ * no order, no status, no timestamps, no hooks. Category replaces
+ * adminGroup.
  */
 
-import { zodResolver } from "@hookform/resolvers/zod";
-import type React from "react";
-import { useState, useCallback } from "react";
-import { z } from "zod";
+import { useEffect, useState } from "react";
 
-import { BuilderPageTemplate } from "@admin/components/features/schema-builder";
+import {
+  BuilderSettingsModal,
+  type BuilderSettingsValues,
+} from "@admin/components/features/schema-builder";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateComponent } from "@admin/hooks/queries/useComponents";
-import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
-import {
-  toSnakeName,
-  convertToFieldDefinition,
-  DEFAULT_SYSTEM_FIELDS,
-} from "@admin/lib/builder";
+import { toSnakeName } from "@admin/lib/builder";
 import { navigateTo } from "@admin/lib/navigation";
 
-import { ComponentSettings, type ComponentSettingsData } from "./components";
+import { COMPONENT_BUILDER_CONFIG } from "./builder-config";
 
-const componentFormSchema = z.object({
-  singularName: z
-    .string()
-    .min(1, "Name is required")
-    .max(255, "Name is too long"),
-});
+export default function ComponentBuilderPage(): React.ReactElement | null {
+  const [open, setOpen] = useState(true);
+  const { mutate: createComponent, isPending } = useCreateComponent();
 
-type FormData = z.infer<typeof componentFormSchema>;
-
-export default function ComponentBuilderPage(): React.ReactElement {
-  const builder = useFieldBuilder<FormData>({
-    resolver: zodResolver(componentFormSchema),
-    defaultValues: { singularName: "" },
-    initialFields: DEFAULT_SYSTEM_FIELDS,
-  });
-
-  const [componentSettings, setComponentSettings] =
-    useState<ComponentSettingsData>({
-      description: "",
-      admin: { icon: "Puzzle" },
-    });
-
-  const { mutate: createComponent, isPending: isSaving } = useCreateComponent();
-
-  const handleSave = useCallback(async () => {
-    const isValid = await builder.form.trigger();
-    if (!isValid) {
-      toast.error("Please fix the form errors before saving");
-      return;
+  useEffect(() => {
+    if (!open && !isPending) {
+      navigateTo(ROUTES.COMPONENTS);
     }
+  }, [open, isPending]);
 
-    const userFields = builder.fields.filter(f => !f.isSystem);
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return;
-    }
-
-    const formData = builder.form.getValues();
-    const fieldDefinitions = userFields.map(convertToFieldDefinition);
+  const handleSubmit = (values: BuilderSettingsValues) => {
+    const singular = values.singularName.trim();
+    const slug = values.slug?.trim() || toSnakeName(singular);
 
     createComponent(
       {
-        slug: toSnakeName(formData.singularName),
-        label: formData.singularName,
-        description: componentSettings.description,
-        fields: fieldDefinitions as unknown as Record<string, unknown>[],
-        admin: componentSettings.admin
-          ? {
-              category: componentSettings.admin.category,
-              icon: componentSettings.admin.icon,
-              hidden: componentSettings.admin.hidden,
-              imageURL: componentSettings.admin.imageURL,
-            }
-          : undefined,
+        slug,
+        label: singular,
+        description: values.description?.trim() || undefined,
+        admin: {
+          category: values.category?.trim() || undefined,
+          icon: values.icon,
+        },
+        // Empty user-fields list — server auto-injects system columns.
+        fields: [],
       },
       {
         onSuccess: () => {
-          toast.success("Component created successfully");
-          navigateTo(ROUTES.COMPONENTS);
+          toast.success("Component created");
+          navigateTo(`${ROUTES.COMPONENTS_BUILDER}/${slug}`);
         },
         onError: err => {
           const error = err as { message?: string };
           toast.error(
-            error?.message ||
-              "An unexpected error occurred while creating the component."
+            error?.message || "Could not create component. Please try again."
           );
         },
       }
     );
-  }, [builder, componentSettings, createComponent]);
+  };
 
   return (
-    <BuilderPageTemplate
-      builder={builder}
-      breadcrumbItems={[
-        {
-          href: ROUTES.DASHBOARD,
-          label: "Dashboard",
-          isDashboard: true,
-        },
-        { href: ROUTES.COMPONENTS, label: "Components" },
-      ]}
-      breadcrumbCurrentLabel="Create Component"
-      headerTitle="Create Component"
-      headerDescription="Design a reusable component with custom fields."
-      onSave={() => {
-        void handleSave();
-      }}
-      onCancel={() => navigateTo(ROUTES.COMPONENTS)}
-      isSaving={isSaving}
-      saveLabel="Save Component"
-      entityType="component"
-      settingsSlot={
-        <ComponentSettings
-          settings={componentSettings}
-          onSettingsChange={setComponentSettings}
-          variant="none"
-          isExpanded={true}
-        />
-      }
-    />
+    <PageContainer>
+      <BuilderSettingsModal
+        open={open}
+        mode="create"
+        config={COMPONENT_BUILDER_CONFIG}
+        initialValues={null}
+        onCancel={() => setOpen(false)}
+        onSubmit={handleSubmit}
+      />
+    </PageContainer>
   );
 }

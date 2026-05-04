@@ -37,7 +37,7 @@ export function OptionsEditor({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="md"
             onClick={() => append({ label: "", value: "" })}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />

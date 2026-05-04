@@ -430,7 +430,7 @@ export function RelationFieldEditor({
 
             {/* Relationship Preview */}
             {selectedContentType && (
-              <Card className="mt-4 border">
+              <Card className="mt-4  border border-primary/5">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">
                     Relationship Preview
@@ -453,7 +453,7 @@ export function RelationFieldEditor({
                         as display field
                       </div>
 
-                      <div className="mt-2 p-3 border rounded-none flex items-center justify-between bg-primary/5">
+                      <div className="mt-2 p-3  border border-primary/5 rounded-none flex items-center justify-between bg-primary/5">
                         <div className="flex items-center gap-2">
                           <Database className="h-4 w-4 text-muted-foreground" />
                           <span className="text-sm">
@@ -462,7 +462,7 @@ export function RelationFieldEditor({
                         </div>
                         <Button
                           type="button"
-                          size="sm"
+                          size="md"
                           variant="outline"
                           className="h-7"
                         >
@@ -472,7 +472,7 @@ export function RelationFieldEditor({
                       </div>
 
                       {form.watch("searchable") && (
-                        <div className="flex items-center gap-2 border rounded-none px-3 py-2 mt-2">
+                        <div className="flex items-center gap-2  border border-primary/5 rounded-none px-3 py-2 mt-2">
                           <Search className="h-4 w-4 text-muted-foreground" />
                           <Input
                             placeholder={`Search ${getSelectedContentTypeName()}...`}
@@ -568,7 +568,7 @@ export function RelationFieldEditor({
 
             {/* Validation Summary */}
             {selectedContentType && (
-              <Card className="mt-4 border">
+              <Card className="mt-4  border border-primary/5">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">
                     Validation Summary

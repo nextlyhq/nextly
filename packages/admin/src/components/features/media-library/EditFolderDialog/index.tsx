@@ -112,7 +112,7 @@ export function EditFolderDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || isPending}>
+            <Button size="md" type="submit" disabled={!name.trim() || isPending}>
               {isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>

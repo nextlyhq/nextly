@@ -115,7 +115,7 @@ export default function RoleTable() {
     filters: { search: debouncedSearch }, // Use debounced search
   };
 
-  const { data, isLoading, _isError, _error } = useRoles(params);
+  const { data, isLoading } = useRoles(params);
 
   // Filter data client-side (until API supports these filters)
   const filteredData = useMemo(() => {
@@ -448,7 +448,7 @@ export default function RoleTable() {
             onChange={setSearch}
             placeholder="Search roles by name"
             isLoading={isLoading}
-            className="flex-1 max-w-sm"
+            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
           />
         </div>
 
@@ -457,8 +457,12 @@ export default function RoleTable() {
           {/* Columns Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9">
-                <Columns className="mr-2 h-4 w-4" />
+              <Button
+                variant="outline"
+                size="md"
+                className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
+              >
+                <Columns className="h-4 w-4" />
                 Columns
               </Button>
             </DropdownMenuTrigger>
@@ -480,7 +484,7 @@ export default function RoleTable() {
       </div>
 
       {/* Responsive table */}
-      <div className="table-wrapper rounded-none border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
         <ResponsiveTable
           data={filteredData}
           columns={columns}
@@ -493,18 +497,16 @@ export default function RoleTable() {
           tableWrapperClassName="border-0 rounded-none shadow-none"
         />
         {data && data.meta.totalPages > 0 && (
-          <div className="table-footer border-t border-border p-4">
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={data.meta.total}
-            />
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={data.meta.totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+            totalItems={data.meta.total}
+          />
         )}
       </div>
 

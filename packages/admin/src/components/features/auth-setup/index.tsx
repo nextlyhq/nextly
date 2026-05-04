@@ -131,7 +131,7 @@ export function Setup() {
     <div className="w-full max-w-[480px] mx-auto">
       <Card
         className={cn(
-          "transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-2 sm:p-4 md:p-6",
+          "transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-2 sm:p-4 md:p-6",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
         )}
       >
@@ -177,7 +177,7 @@ export function Setup() {
                         autoComplete="name"
                         placeholder="Enter your full name…"
                         {...field}
-                        className="h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -201,7 +201,7 @@ export function Setup() {
                         spellCheck={false}
                         placeholder="Enter your email address…"
                         {...field}
-                        className="h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -225,7 +225,7 @@ export function Setup() {
                           autoComplete="new-password"
                           placeholder="Create a strong password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button
@@ -261,7 +261,7 @@ export function Setup() {
                           autoComplete="new-password"
                           placeholder="Confirm your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button
@@ -285,7 +285,7 @@ export function Setup() {
               />
 
               <Button
-                size="lg"
+                size="md"
                 type="submit"
                 disabled={isLoading}
                 className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"

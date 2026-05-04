@@ -52,7 +52,7 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
 async function requireUser(request: Request): Promise<{ id: string }> {
   // getSession returns GetSessionResult; throw the unified auth-required
   // error so the boundary returns canonical 401.
-  const result = await getSession(request, env.NEXTLY_SECRET_RESOLVED || "");
+  const result = await getSession(request, env.NEXTLY_SECRET || "");
   const user = result.authenticated ? result.user : null;
   if (!user) {
     throw NextlyError.authRequired();

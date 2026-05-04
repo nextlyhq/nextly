@@ -290,7 +290,7 @@ export async function requireAuthentication(
   req: Request
 ): Promise<AuthContext | ErrorResponse> {
   // getSession returns GetSessionResult; extract user or null for backward compat
-  const sessionResult = await getSession(req, env.NEXTLY_SECRET_RESOLVED || "");
+  const sessionResult = await getSession(req, env.NEXTLY_SECRET || "");
   if (sessionResult.authenticated) {
     const { user } = sessionResult;
     return {

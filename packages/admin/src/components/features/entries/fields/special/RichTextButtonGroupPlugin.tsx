@@ -332,31 +332,31 @@ export function RichTextButtonGroupPlugin({
               <Button
                 type="button"
                 variant={alignment === "left" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("left")}
               >
-                <AlignLeft className="h-4 w-4 mr-2" />
+                <AlignLeft className="h-4 w-4" />
                 Left
               </Button>
               <Button
                 type="button"
                 variant={alignment === "center" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("center")}
               >
-                <AlignCenter className="h-4 w-4 mr-2" />
+                <AlignCenter className="h-4 w-4" />
                 Center
               </Button>
               <Button
                 type="button"
                 variant={alignment === "right" ? "default" : "outline"}
-                size="sm"
+                size="md"
                 className="flex-1"
                 onClick={() => setAlignment("right")}
               >
-                <AlignRight className="h-4 w-4 mr-2" />
+                <AlignRight className="h-4 w-4" />
                 Right
               </Button>
             </div>
@@ -364,7 +364,7 @@ export function RichTextButtonGroupPlugin({
 
           {/* Individual Button Settings */}
           {buttons.map((button, index) => (
-            <div key={index} className="space-y-3 p-3 rounded-none border">
+            <div key={index} className="space-y-3 p-3 rounded-none  border border-primary/5">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-medium">
                   Button {index + 1}
@@ -453,7 +453,7 @@ export function RichTextButtonGroupPlugin({
                         onChange={e =>
                           updateButton(index, { bgColor: e.target.value })
                         }
-                        className="h-8 w-8 rounded-none border border-input cursor-pointer p-0.5"
+                        className="h-8 w-8 rounded-none  border border-primary/5 cursor-pointer p-0.5"
                         title="Background color"
                       />
                     )}
@@ -463,7 +463,7 @@ export function RichTextButtonGroupPlugin({
                       onChange={e =>
                         updateButton(index, { textColor: e.target.value })
                       }
-                      className="h-8 w-8 rounded-none border border-input cursor-pointer p-0.5"
+                      className="h-8 w-8 rounded-none  border border-primary/5 cursor-pointer p-0.5"
                       title="Text color"
                     />
                   </div>
@@ -486,7 +486,7 @@ export function RichTextButtonGroupPlugin({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               className="w-full"
               onClick={addButton}
             >

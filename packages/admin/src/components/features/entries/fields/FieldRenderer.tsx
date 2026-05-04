@@ -27,6 +27,7 @@ import type {
   DateFieldConfig,
   UploadFieldConfig,
   RelationshipFieldConfig,
+  RepeaterFieldConfig,
   GroupFieldConfig,
   JSONFieldConfig,
   RichTextFieldConfig,
@@ -34,6 +35,8 @@ import type {
 } from "@revnixhq/nextly/config";
 import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
+
+import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
 
 import { FieldWrapper } from "./FieldWrapper";
 import { UploadInput } from "./media/UploadInput";
@@ -73,7 +76,7 @@ const CodeInput = lazy(() =>
  */
 function EditorSkeleton() {
   return (
-    <div className="flex h-[200px] items-center justify-center rounded-none border bg-primary/5 animate-pulse">
+    <div className="flex h-[200px] items-center justify-center rounded-none  border border-primary/5 bg-primary/5 animate-pulse">
       <span className="text-sm text-muted-foreground">Loading editor...</span>
     </div>
   );
@@ -273,12 +276,11 @@ export function FieldRenderer({
     disabled: !conditionFieldPath,
   });
 
-  // Evaluate condition: if condition exists but is not met, don't render the field
+  // PR E2: delegate to the shared evaluator. Supports the full operator
+  // surface (equals / contains / between / before-after / isTrue / etc.)
+  // AND backwards-compat with the legacy { field, equals } shape.
   if (condition && conditionFieldPath) {
-    const targetValue = condition.equals;
-    // Compare as strings to handle both string and number values
-    const currentValue = String(conditionFieldValue ?? "");
-    if (currentValue !== targetValue) {
+    if (!evaluateCondition(condition, conditionFieldValue)) {
       return null;
     }
   }
@@ -460,7 +462,7 @@ export function FieldRenderer({
           <ArrayInput
             {...commonProps}
             name={fieldPath}
-            field={field}
+            field={field as RepeaterFieldConfig}
             // Pass FieldRenderer recursively for nested fields
             renderField={(subField, subBasePath, subControl, options) => (
               <FieldRenderer
@@ -516,7 +518,7 @@ export function FieldRenderer({
       // =========================================
       default:
         return (
-          <div className="rounded-none border border-destructive/50 bg-destructive/10 p-4 text-center">
+          <div className="rounded-none  border border-primary/5 border-destructive/50 bg-destructive/10 p-4 text-center">
             <p className="text-sm text-destructive">
               Unknown field type: {(field as { type: string }).type}
             </p>

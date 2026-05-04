@@ -293,7 +293,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
             "font-mono text-sm resize-y",
             "min-h-[100px]",
             readOnly && "bg-primary/5 cursor-not-allowed",
-            parseError && "border-destructive focus-visible:ring-destructive"
+            parseError && "border-destructive focus:border-destructive focus:outline-none"
           )}
           style={{ height: heightStyle }}
         />
@@ -337,12 +337,12 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          size="md"
           onClick={handleFormat}
           disabled={!canFormat || !!parseError}
           className="flex-shrink-0"
         >
-          <Braces className="h-4 w-4 mr-1.5" />
+          <Braces className="h-4 w-4" />
           Format
         </Button>
       </div>

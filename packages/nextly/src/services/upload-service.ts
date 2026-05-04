@@ -41,7 +41,7 @@
  * ```
  */
 
-import type { IStorageAdapter } from "../storage/adapters/base-adapter";
+import type { IStorageAdapter } from "../storage/types";
 import type { FileMetadata, UploadResult } from "../storage/types";
 
 // magic-byte detection (file-type) and SVG

@@ -283,7 +283,7 @@ export function QueryBuilder({
                     </TooltipTrigger>
                     <TooltipContent
                       side="top"
-                      className="max-w-xs rounded-none border-border bg-popover text-popover-foreground shadow-none"
+                      className="max-w-xs rounded-none border-primary/5 bg-popover text-popover-foreground shadow-none"
                     >
                       <p className="text-[10px] font-medium leading-relaxed">
                         {description}
@@ -297,7 +297,7 @@ export function QueryBuilder({
                 value={params[key] || ""}
                 onChange={e => updateParam(key, e.target.value)}
                 placeholder={placeholder}
-                className="h-10 text-xs font-mono rounded-none border-border/40 bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary/10 transition-all placeholder:text-muted-foreground/20"
+                className="h-10 text-xs font-mono rounded-none border-primary/5 bg-primary/5 focus:outline-none focus:border-primary transition-all placeholder:text-muted-foreground/20"
               />
             </div>
           ))}
@@ -306,16 +306,16 @@ export function QueryBuilder({
 
       {/* Where Conditions */}
       {!isSingle && (
-        <div className="space-y-4 border-t border-border/10 pt-8">
+        <div className="space-y-4  border-t border-primary/5 pt-8">
           <div className="flex items-center justify-between">
             <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 ml-1">
               Where Conditions
             </Label>
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={addWhereCondition}
-              className="gap-2 h-8 px-4 rounded-none text-[10px] uppercase font-bold tracking-widest border-border/40 hover:bg-primary/5 hover:text-primary transition-all"
+              className="gap-2 h-8 px-4 rounded-none text-[10px] uppercase font-bold tracking-widest border-primary/5 hover:bg-primary/5 hover:text-primary transition-all"
             >
               <Plus className="h-3 w-3" />
               Add Filter
@@ -323,7 +323,7 @@ export function QueryBuilder({
           </div>
 
           {whereConditions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 border border-dashed border-border/20 rounded-none bg-primary/5">
+            <div className="flex flex-col items-center justify-center py-10  border border-primary/5 border-dashed border-primary/5 rounded-none bg-primary/5">
               <p className="text-[10px] text-muted-foreground/40 uppercase font-black tracking-widest">
                 No active filters
               </p>
@@ -333,7 +333,7 @@ export function QueryBuilder({
               {whereConditions.map(condition => (
                 <div
                   key={condition.id}
-                  className="flex items-center gap-3 p-4 bg-primary/5 border border-border/20 rounded-none group transition-all"
+                  className="flex items-center gap-3 p-4 bg-primary/5  border border-primary/5 rounded-none group transition-all"
                 >
                   {/* Field name */}
                   <Input
@@ -344,7 +344,7 @@ export function QueryBuilder({
                       })
                     }
                     placeholder="field"
-                    className="h-10 w-32 text-xs font-mono rounded-none border-border/40 bg-card focus-visible:ring-2 focus-visible:ring-primary/10 shadow-none"
+                    className="h-10 w-32 text-xs font-mono rounded-none border-primary/5 bg-card focus:outline-none focus:border-primary shadow-none"
                   />
 
                   {/* Operator */}
@@ -354,10 +354,10 @@ export function QueryBuilder({
                       updateWhereCondition(condition.id, { operator: v })
                     }
                   >
-                    <SelectTrigger className="h-10 w-40 text-[10px] uppercase font-black tracking-widest rounded-none border-border/40 bg-card focus:ring-2 focus:ring-primary/10 shadow-none">
+                    <SelectTrigger className="h-10 w-40 text-[10px] uppercase font-black tracking-widest rounded-none border-primary/5 bg-card focus:outline-none focus:border-primary shadow-none">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="rounded-none border-border/60 shadow-xl">
+                    <SelectContent className="rounded-none border-primary/5 shadow-xl">
                       {OPERATORS.map(op => (
                         <SelectItem
                           key={op.value}
@@ -379,7 +379,7 @@ export function QueryBuilder({
                       })
                     }
                     placeholder="value"
-                    className="h-10 flex-1 text-xs font-mono rounded-none border-border/40 bg-card focus-visible:ring-2 focus-visible:ring-primary/10 shadow-none"
+                    className="h-10 flex-1 text-xs font-mono rounded-none border-primary/5 bg-card focus:outline-none focus:border-primary shadow-none"
                   />
 
                   {/* Remove button */}
@@ -402,7 +402,7 @@ export function QueryBuilder({
               <Label className="text-[10px] uppercase font-bold tracking-widest text-primary/40 ml-1">
                 Generated Where Clause
               </Label>
-              <code className="block text-[10px] bg-primary/5 p-4 border border-primary/10 rounded-none font-mono break-all text-primary/60">
+              <code className="block text-[10px] bg-primary/5 p-4  border border-primary/5 rounded-none font-mono break-all text-primary/60">
                 {params.where}
               </code>
             </div>

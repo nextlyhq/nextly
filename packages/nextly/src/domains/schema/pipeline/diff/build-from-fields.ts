@@ -46,28 +46,37 @@ interface MinimalFieldDef {
   relationTo?: unknown;
 }
 
+/** Optional toggles that affect which system columns are injected. */
+export interface BuildDesiredTableOptions {
+  /** When true, a `status` system column is injected (varchar/text NOT NULL DEFAULT 'draft'). */
+  hasStatus?: boolean;
+}
+
 /**
  * Build a TableSpec for the diff engine from a list of Nextly fields.
  * Field type tokens are translated to introspection-aligned strings via
  * the shared descriptor module so the diff can compare them directly
  * against live-DB output. Reserved system columns (id, title, slug,
- * created_at, updated_at) are injected to match runtime-schema-generator's
- * behavior — the descriptor module owns that list.
+ * created_at, updated_at, and conditionally status) are injected to match
+ * runtime-schema-generator's behavior — the descriptor module owns that list.
  */
 export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: BuildDesiredTableOptions = {}
 ): TableSpec {
   const columns: ColumnSpec[] = [];
 
   // Inject reserved system columns first - mirrors runtime-schema-generator's
-  // behavior. title/slug only when not user-defined (user wins).
+  // behavior. title/slug only when not user-defined (user wins). status only
+  // when the collection/single has Draft/Published enabled.
   const hasTitleField = fields.some(f => f.name === "title");
   const hasSlugField = fields.some(f => f.name === "slug");
   for (const reserved of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,
+    hasStatus: options.hasStatus,
   })) {
     columns.push({
       name: reserved.name,
@@ -96,5 +105,75 @@ export function buildDesiredTableFromFields(
       default: undefined,
     });
   }
+  return { name: tableName, columns };
+}
+
+/**
+ * Build a TableSpec for the diff engine from a component's user fields.
+ * Injects component system columns (_parent_id, _parent_table, _parent_field,
+ * _order, _component_type) instead of collection system columns (title, slug).
+ * Used by previewDesiredSchema when processing desired.components.
+ */
+export function buildDesiredTableFromComponentFields(
+  tableName: string,
+  fields: MinimalFieldDef[],
+  dialect: SupportedDialect
+): TableSpec {
+  const columns: ColumnSpec[] = [];
+
+  // Component system columns — mirrors component-schema-service.ts DDL.
+  if (dialect === "postgresql") {
+    columns.push({ name: "id", type: "text", nullable: false, default: undefined });
+    columns.push({ name: "_parent_id", type: "text", nullable: false, default: undefined });
+    columns.push({ name: "_parent_table", type: "varchar", nullable: false, default: undefined });
+    columns.push({ name: "_parent_field", type: "varchar", nullable: false, default: undefined });
+    columns.push({ name: "_order", type: "int4", nullable: true, default: undefined });
+    columns.push({ name: "_component_type", type: "varchar", nullable: true, default: undefined });
+  } else if (dialect === "mysql") {
+    columns.push({ name: "id", type: "varchar(36)", nullable: false, default: undefined });
+    columns.push({ name: "_parent_id", type: "varchar(36)", nullable: false, default: undefined });
+    columns.push({ name: "_parent_table", type: "varchar(255)", nullable: false, default: undefined });
+    columns.push({ name: "_parent_field", type: "varchar(255)", nullable: false, default: undefined });
+    columns.push({ name: "_order", type: "int(11)", nullable: true, default: undefined });
+    columns.push({ name: "_component_type", type: "varchar(255)", nullable: true, default: undefined });
+  } else {
+    // sqlite
+    columns.push({ name: "id", type: "text", nullable: false, default: undefined });
+    columns.push({ name: "_parent_id", type: "text", nullable: false, default: undefined });
+    columns.push({ name: "_parent_table", type: "text", nullable: false, default: undefined });
+    columns.push({ name: "_parent_field", type: "text", nullable: false, default: undefined });
+    columns.push({ name: "_order", type: "integer", nullable: true, default: undefined });
+    columns.push({ name: "_component_type", type: "text", nullable: true, default: undefined });
+  }
+
+  // User-defined fields.
+  for (const field of fields) {
+    const desc = getColumnDescriptor(
+      field as unknown as Parameters<typeof getColumnDescriptor>[0],
+      dialect
+    );
+    if (!desc) continue;
+    columns.push({
+      name: desc.name,
+      type: desc.dialectType,
+      nullable: desc.nullable,
+      default: undefined,
+    });
+  }
+
+  // Timestamp columns — type tokens must match PostgreSQL udt_name / MySQL
+  // COLUMN_TYPE as returned by introspection. Component DDL uses
+  // TIMESTAMP WITH TIME ZONE (pg → "timestamptz"), DATETIME (mysql), INTEGER (sqlite).
+  if (dialect === "postgresql") {
+    columns.push({ name: "created_at", type: "timestamptz", nullable: false, default: undefined });
+    columns.push({ name: "updated_at", type: "timestamptz", nullable: false, default: undefined });
+  } else if (dialect === "mysql") {
+    columns.push({ name: "created_at", type: "datetime", nullable: false, default: undefined });
+    columns.push({ name: "updated_at", type: "datetime", nullable: false, default: undefined });
+  } else {
+    columns.push({ name: "created_at", type: "integer", nullable: false, default: undefined });
+    columns.push({ name: "updated_at", type: "integer", nullable: false, default: undefined });
+  }
+
   return { name: tableName, columns };
 }

@@ -201,7 +201,7 @@ export default function CreateUserPage(): ReactElement {
 
         {/* Header skeleton */}
         <div className="mb-8">
-          <Skeleton className="h-9 w-48 mb-2" />
+          <Skeleton className="w-48 mb-2" />
           <Skeleton className="h-5 w-96" />
         </div>
 
@@ -221,7 +221,7 @@ export default function CreateUserPage(): ReactElement {
               {getErrorMessage(rolesError, USER_MESSAGES.LOAD_ROLES_ERROR)}
             </span>
             <Button
-              size="sm"
+              size="md"
               variant="outline"
               onClick={() => {
                 void refetchRoles();
@@ -273,7 +273,7 @@ export default function CreateUserPage(): ReactElement {
             >
               {isCreating ? (
                 <>
-                  <Spinner size="sm" className="mr-2" />
+                  <Spinner size="md" className="mr-2" />
                   Creating User...
                 </>
               ) : rolesError ? (
@@ -286,9 +286,9 @@ export default function CreateUserPage(): ReactElement {
         </div>
 
         {/* Form Card */}
-        <div className="bg-card border border-border rounded-none p-6 shadow-none">
+        <div className="bg-card  border border-primary/5 rounded-none p-6 shadow-none">
           {/* Avatar Section */}
-          <div className="flex items-center gap-4 mb-8 pb-8 border-b border-border">
+          <div className="flex items-center gap-4 mb-8 pb-8  border-b border-primary/5">
             <AvatarUploader
               value={watchedAvatar ?? ""}
               onChange={url =>

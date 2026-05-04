@@ -98,7 +98,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
                   type="button"
                   onClick={handleCancel}
                   disabled={isLoading}
-                  className="h-10 px-4 text-sm font-medium border-border"
+                  className="h-10 px-4 text-sm font-medium border-primary/5"
                 >
                   Cancel
                 </Button>
@@ -110,7 +110,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
                   {isLoading ? (
                     <>
                       <Loader2
-                        className="mr-2 h-4 w-4 animate-spin"
+                        className="h-4 w-4 animate-spin"
                         aria-hidden="true"
                       />
                       <span>{isEditMode ? "Updating..." : "Creating..."}</span>
@@ -127,8 +127,8 @@ export function RoleForm({ roleId }: RoleFormProps) {
 
             <div className="flex flex-col gap-6 xl:flex-row items-start">
               {/* Left Sidebar Card - Role details */}
-              <div className="flex w-full flex-col overflow-hidden rounded-none border border-border bg-card xl:w-[380px] xl:shrink-0 sticky top-6">
-                <div className="border-b border-border p-6">
+              <div className="flex w-full flex-col overflow-hidden rounded-none  border border-primary/5 bg-card xl:w-[380px] xl:shrink-0 sticky top-6">
+                <div className="border-b border-primary/5 p-6">
                   <h2 className="text-lg font-semibold text-foreground">
                     Role details
                   </h2>
@@ -174,7 +174,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
 
               {/* Main Content Card - Permissions Card */}
               <div className="flex-1 w-full min-w-0">
-                <div className="flex w-full flex-col overflow-hidden rounded-none border border-border bg-card">
+                <div className="flex w-full flex-col overflow-hidden rounded-none  border border-primary/5 bg-card">
                   <div className="p-6">
                     <h2 className="text-lg font-semibold text-foreground mb-1">
                       Permissions

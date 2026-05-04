@@ -19,7 +19,7 @@ import type { EmailProviderAdapter } from "../types";
 // Bypass env loader — the service doesn't touch env during send().
 vi.mock("../../../lib/env", () => ({
   env: {
-    NEXTLY_SECRET_RESOLVED: "test-secret-must-be-32chars-long!!",
+    NEXTLY_SECRET: "test-secret-must-be-32chars-long!!",
     DB_DIALECT: "sqlite",
     NODE_ENV: "test",
     NEXT_PUBLIC_APP_URL: "http://localhost:3000",

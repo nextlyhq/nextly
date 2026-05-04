@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@revnixhq/ui";
+import { Button, TableSkeleton } from "@revnixhq/ui";
 import type React from "react";
 import { useCallback, useState } from "react";
 
@@ -12,6 +12,7 @@ import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { SearchBar } from "@admin/components/shared/search-bar";
 import { ROUTES } from "@admin/constants/routes";
 import { useApiKeys } from "@admin/hooks/queries/useApiKeys";
 import { navigateTo } from "@admin/lib/navigation";
@@ -53,14 +54,41 @@ const ApiKeysContent: React.FC = () => {
     if (!open) setKeyToRevoke(null);
   }, []);
 
+  // ── Error handling ──────────────────────────────────────────
+  if (isError) {
+    return (
+      <PageErrorFallback
+        error={error || new Error("Failed to load API keys")}
+      />
+    );
+  }
+
+  // ── Loading handling ────────────────────────────────────────
+  if (isLoading && !data) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar
+              value=""
+              onChange={() => {}}
+              placeholder="Search API keys..."
+              isLoading={true}
+              className="bg-background text-foreground border-primary/5"
+            />
+          </div>
+        </div>
+        <TableSkeleton columns={7} rowCount={8} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      {/* Table (handles its own wrapper to keep search inside the card) */}
+      {/* Table */}
       <ApiKeyTable
         data={data?.data ?? []}
         isLoading={isLoading}
-        isError={isError}
-        error={error}
         onEdit={handleEdit}
         onRevoke={handleRevoke}
       />
@@ -93,8 +121,7 @@ const ApiKeysPage: React.FC = () => {
         <SettingsLayout
           actions={
             <Button
-              size="sm"
-              className="flex items-center gap-1"
+              size="md"
               onClick={() => navigateTo(ROUTES.SETTINGS_API_KEYS_CREATE)}
             >
               <Plus className="h-4 w-4" />

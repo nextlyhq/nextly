@@ -39,14 +39,81 @@ export type FieldPosition = "main" | "sidebar";
 // ============================================================
 
 /**
- * Simplified condition for field visibility
- * Shows field when another field equals a specific value
+ * Operator union for FieldCondition. PR E2 (2026-05-03) extends the
+ * legacy { field, equals } shape with type-aware operators per Q6 = (b).
+ *
+ * Operator semantics:
+ *   - equals / notEquals      -- universal scalar equality
+ *   - contains / notContains  -- substring (text-style only)
+ *   - startsWith / endsWith   -- substring at boundary (text-style only)
+ *   - isEmpty / isNotEmpty    -- emptiness check (text-style only); no value
+ *   - greaterThan / lessThan / greaterThanOrEqual / lessThanOrEqual
+ *                              -- numeric comparison (number/date)
+ *   - between                  -- inclusive range (number/date); value is { min, max }
+ *   - before / after           -- date comparison (alias for less/greater on dates)
+ *   - isTrue / isNotTrue       -- boolean-only; no value
+ */
+export type ConditionOperator =
+  | "equals"
+  | "notEquals"
+  | "contains"
+  | "notContains"
+  | "startsWith"
+  | "endsWith"
+  | "isEmpty"
+  | "isNotEmpty"
+  | "greaterThan"
+  | "lessThan"
+  | "greaterThanOrEqual"
+  | "lessThanOrEqual"
+  | "between"
+  | "before"
+  | "after"
+  | "isTrue"
+  | "isNotTrue";
+
+/**
+ * Value shape for the `between` operator.
+ */
+export interface ConditionRangeValue {
+  min: number | string;
+  max: number | string;
+}
+
+/**
+ * Field visibility condition.
+ *
+ * PR E2 extended this from `{ field, equals }` to support type-aware
+ * operators. Legacy shape is preserved as an OPTIONAL `equals` for
+ * backwards-compat at the runtime evaluator boundary; new code writes
+ * `{ field, operator, value? }`.
+ *
+ * Use the `evaluateCondition` helper in `lib/builder/condition-evaluator`
+ * to evaluate at runtime. It normalizes both shapes to the same logic.
  */
 export interface FieldCondition {
-  /** The field name to check */
+  /** The source field name to check. */
   field: string;
-  /** The value that field should equal */
-  equals: string;
+  /**
+   * Operator. Optional only for backwards-compat with the legacy
+   * `{ field, equals }` shape; new code always sets this.
+   */
+  operator?: ConditionOperator;
+  /**
+   * Value to compare against. Type depends on operator:
+   *   - string for text-style operators
+   *   - number for numeric comparison
+   *   - string (ISO 8601) for date comparison
+   *   - { min, max } for between
+   *   - undefined for isEmpty/isNotEmpty/isTrue/isNotTrue
+   */
+  value?: string | number | boolean | ConditionRangeValue;
+  /**
+   * @deprecated Legacy shape from before PR E2. Treated as `{ operator:
+   * "equals", value: equals }` at the evaluator boundary. New code should
+   * use `operator` + `value`.
+   */
+  equals?: string;
 }
 
 // ============================================================
@@ -73,6 +140,25 @@ export interface BuilderFieldAdmin {
   placeholder?: string;
   /** Hide the gutter (vertical line and padding) for group fields */
   hideGutter?: boolean;
+  /**
+   * Select fields only -- show a clear button on the picker.
+   * Defaults to true when the field is not required, false otherwise.
+   * PR E3: matches Payload's SelectAdmin.isClearable.
+   */
+  isClearable?: boolean;
+  /**
+   * Radio fields only -- horizontal vs vertical option layout.
+   * Defaults to "horizontal" (Payload's default).
+   * PR E3: matches Payload's RadioAdmin.layout.
+   */
+  layout?: "horizontal" | "vertical";
+  /**
+   * Relationship fields only -- picker shape.
+   * "select" (default) renders the inline collection picker; "drawer"
+   * opens a side drawer better suited to long-list searching.
+   * PR E3: matches Payload's RelationshipAdmin.appearance.
+   */
+  appearance?: "drawer" | "select";
 }
 
 // ============================================================
@@ -387,29 +473,6 @@ export interface CollectionFormData {
 export type BuilderEntityType = "collection" | "single" | "component";
 
 /**
- * Props for the BuilderHeader component
- */
-export interface BuilderHeaderProps {
-  isEditing: boolean;
-  isSaving: boolean;
-  onSave: () => void;
-  onCancel: () => void;
-  /** Entity type being built (collection or single). Defaults to "collection" */
-  entityType?: BuilderEntityType;
-  /** Custom back route. Defaults to ROUTES.COLLECTIONS or ROUTES.SINGLES based on entityType */
-  backRoute?: string;
-}
-
-/**
- * Props for the FieldPalette component
- */
-export interface FieldPaletteProps {
-  onFieldAdd: (fieldType: string) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
-}
-
-/**
  * Props for the FieldList component
  */
 export interface FieldListProps {
@@ -510,38 +573,10 @@ export interface EnabledHook {
   enabled: boolean;
 }
 
-/**
- * Collection-level settings data
- * Used by the CollectionSettings component
- */
-export interface CollectionSettingsData {
-  /** Display labels */
-  labels?: CollectionLabels;
-  /** Collection description */
-  description?: string;
-  /** Whether to auto-generate timestamps (default: true) */
-  timestamps?: boolean;
-  /** Admin UI configuration */
-  admin?: CollectionAdminConfig;
-  /** Configured hooks for this collection */
-  hooks?: EnabledHook[];
-}
-
-/**
- * Props for the CollectionSettings component
- */
-export interface CollectionSettingsProps {
-  /** Current settings data */
-  settings: CollectionSettingsData;
-  /** Callback when settings change */
-  onSettingsChange: (settings: CollectionSettingsData) => void;
-  /** List of fields for useAsTitle selector */
-  fields: BuilderField[];
-  /** Whether the panel is expanded */
-  isExpanded?: boolean;
-  /** Callback when expanded state changes */
-  onExpandedChange?: (expanded: boolean) => void;
-}
+// CollectionSettingsData / CollectionSettingsProps were retired alongside
+// CollectionSettings.tsx in PR 2 of the Builder redesign. Settings now flow
+// through BuilderSettingsValues + BuilderSettingsModal — see
+// schema-builder/BuilderSettingsModal.tsx.
 
 // ============================================================
 // Select/Radio Options Types
@@ -574,6 +609,27 @@ export interface SelectOptionsEditorProps {
   onHasManyChange?: (hasMany: boolean) => void;
   /** The field type (select or radio) */
   fieldType: "select" | "radio";
+  /**
+   * Select fields only -- whether the picker shows a clear button.
+   * Stored as `field.admin.isClearable`. PR E3.
+   */
+  isClearable?: boolean;
+  /** Callback when isClearable changes. */
+  onIsClearableChange?: (isClearable: boolean) => void;
+  /**
+   * Select fields only -- placeholder text shown when no value picked.
+   * Stored as `field.admin.placeholder`. PR E3.
+   */
+  placeholder?: string;
+  /** Callback when placeholder changes. */
+  onPlaceholderChange?: (placeholder: string) => void;
+  /**
+   * Radio fields only -- horizontal vs vertical layout.
+   * Stored as `field.admin.layout`. PR E3.
+   */
+  layout?: "horizontal" | "vertical";
+  /** Callback when layout changes. */
+  onLayoutChange?: (layout: "horizontal" | "vertical") => void;
 }
 
 /**
@@ -792,6 +848,13 @@ export interface RelationshipEditorProps {
   filterOptions?: RelationshipFilter;
   /** Callback when filter options change */
   onFilterOptionsChange?: (filter: RelationshipFilter | undefined) => void;
+  /**
+   * Picker shape: "select" inline picker (default) or "drawer" overlay.
+   * Stored as `field.admin.appearance`. PR E3.
+   */
+  appearance?: "drawer" | "select";
+  /** Callback when appearance changes. */
+  onAppearanceChange?: (appearance: "drawer" | "select") => void;
 }
 
 // ============================================================
@@ -820,6 +883,12 @@ export interface ArrayFieldEditorProps {
   onRowLabelFieldChange: (field: string | undefined) => void;
   /** Nested fields (for populating row label field selector) */
   nestedFields?: BuilderField[];
+  /**
+   * PR D: parent-aware "+ Add field" button. When provided, the editor
+   * renders a button that asks the host page to open the
+   * FieldPickerModal scoped to the parent (this repeater).
+   */
+  onAddField?: () => void;
 }
 
 // ============================================================
@@ -836,6 +905,12 @@ export interface GroupFieldEditorProps {
   onHideGutterChange: (hideGutter: boolean) => void;
   /** Nested fields within the group */
   nestedFields?: BuilderField[];
+  /**
+   * PR D: parent-aware "+ Add field" button. When provided, the editor
+   * renders a button that asks the host page to open the
+   * FieldPickerModal scoped to the parent (this group).
+   */
+  onAddField?: () => void;
 }
 
 // ============================================================

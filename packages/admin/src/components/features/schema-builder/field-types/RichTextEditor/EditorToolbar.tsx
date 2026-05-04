@@ -28,7 +28,7 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import {
   $createHeadingNode,
   $createQuoteNode,
-  $isHeadingNode
+  $isHeadingNode,
 } from "@lexical/rich-text";
 import { $setBlocksType } from "@lexical/selection";
 import { mergeRegister } from "@lexical/utils";
@@ -64,19 +64,16 @@ import type { Media } from "@admin/types/media";
 
 import { INSERT_IMAGE_COMMAND } from "./ImagePlugin";
 
-const _blockTypeToBlockName = {
-  code: "Code Block",
-  h1: "Heading 1",
-  h2: "Heading 2",
-  h3: "Heading 3",
-  h4: "Heading 4",
-  h5: "Heading 5",
-  h6: "Heading 6",
-  paragraph: "Normal",
-  quote: "Quote",
-};
-
-type BlockType = keyof typeof blockTypeToBlockName;
+type BlockType =
+  | "code"
+  | "h1"
+  | "h2"
+  | "h3"
+  | "h4"
+  | "h5"
+  | "h6"
+  | "paragraph"
+  | "quote";
 
 interface EditorToolbarProps {
   toolbarOptions?: {
@@ -140,7 +137,6 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
           const type = $isHeadingNode(element)
             ? element.getTag()
             : element.getType();
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
           setBlockType(type as BlockType);
         }
       }
@@ -192,9 +188,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
-          $setBlocksType(selection, () =>
-            $createHeadingNode(type)
-          );
+          $setBlocksType(selection, () => $createHeadingNode(type));
         }
       });
     } else if (type === "quote") {
@@ -241,11 +235,10 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-1 p-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+      <div className="flex flex-wrap items-center gap-1 p-2  border-b border-primary/5 dark:border-primary/5 bg-primary/5 dark:bg-gray-800/50">
         {/* Block type selector */}
         <Select
           value={blockType}
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
           onValueChange={value => formatBlock(value as BlockType)}
         >
           <SelectTrigger className="w-[140px] h-8 text-xs">
@@ -274,7 +267,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.bold ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("bold")}
               title="Bold (Cmd+B)"
@@ -286,7 +279,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.italic ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("italic")}
               title="Italic (Cmd+I)"
@@ -298,7 +291,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.underline ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("underline")}
               title="Underline (Cmd+U)"
@@ -310,7 +303,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant={activeFormats.strikethrough ? "default" : "ghost"}
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => formatText("strikethrough")}
               title="Strikethrough"
@@ -330,7 +323,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={insertUnorderedList}
               title="Bullet List"
@@ -341,7 +334,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={insertOrderedList}
               title="Numbered List"
@@ -360,7 +353,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 w-8 p-0"
               onClick={() => setMediaPickerOpen(true)}
               title="Insert Image"
@@ -377,7 +370,7 @@ export function EditorToolbar({ toolbarOptions }: EditorToolbarProps) {
           <Button
             type="button"
             variant={activeFormats.code ? "default" : "ghost"}
-            size="sm"
+            size="md"
             className="h-8 w-8 p-0"
             onClick={() => formatText("code")}
             title="Inline Code"

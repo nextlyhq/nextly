@@ -156,7 +156,7 @@ export function RichTextToolbar({
   return (
     <div
       className={cn(
-        "flex items-center gap-0.5 p-1 border-b flex-wrap",
+        "flex items-center gap-0.5 p-1  border-b border-primary/5 flex-wrap",
         disabled && "opacity-50 pointer-events-none"
       )}
       role="toolbar"
@@ -213,7 +213,7 @@ export function RichTextToolbar({
                     }
                   >
                     <SelectTrigger
-                      size="sm"
+                      size="default"
                       className="h-8 w-[130px] text-xs gap-1"
                     >
                       <Type className="h-3.5 w-3.5 shrink-0" />
@@ -248,7 +248,7 @@ export function RichTextToolbar({
                 <div className="flex items-center">
                   <Select value={fontSize} onValueChange={applyFontSize}>
                     <SelectTrigger
-                      size="sm"
+                      size="default"
                       className="h-8 w-[80px] text-xs gap-1"
                     >
                       <ALargeSmall className="h-3.5 w-3.5 shrink-0" />
@@ -352,7 +352,7 @@ export function RichTextToolbar({
                 >
                   <Paintbrush className="h-4 w-4" />
                   <span
-                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-none border"
+                    className="absolute bottom-1 left-1.5 right-1.5 h-1 rounded-none  border border-primary/5"
                     style={{ backgroundColor: bgColor }}
                   />
                   <input

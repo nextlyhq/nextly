@@ -49,11 +49,13 @@ import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeli
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
+  DesiredComponent,
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
+import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 import { getProductionNotifier } from "../runtime/notifications/index";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
@@ -98,12 +100,24 @@ type SingleDef = {
   dbName?: string;
 };
 
+type ComponentDef = {
+  slug?: string;
+  fields?: unknown[];
+  label?: { singular?: string } | string;
+  description?: string;
+  admin?: unknown;
+};
+
 // Minimal duck-typed surfaces of registry services used here.
 interface CollectionRegistrySurface {
   syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
 }
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
+  updateMigrationStatus(slug: string, status: string): Promise<unknown>;
+}
+interface ComponentRegistrySurface {
+  syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
 }
 interface SchemaRegistrySurface {
   registerDynamicSchema(tableName: string, table: unknown): void;
@@ -146,7 +160,7 @@ export async function reloadNextlyConfig(opts?: {
   // nextly.config.ts mid-edit with syntax errors during dev. Without this
   // guard, the loader rejection bubbles through getNextly() and turns
   // every subsequent request into a 500.
-  let newConfig: { collections?: CollectionDef[]; singles?: SingleDef[] } | undefined;
+  let newConfig: { collections?: CollectionDef[]; singles?: SingleDef[]; components?: ComponentDef[] } | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
@@ -154,7 +168,7 @@ export async function reloadNextlyConfig(opts?: {
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (result as {
-      config?: { collections?: CollectionDef[]; singles?: SingleDef[] };
+      config?: { collections?: CollectionDef[]; singles?: SingleDef[]; components?: ComponentDef[] };
     }).config;
   } catch (err) {
     // NextlyError wraps the underlying loader/bundler error in
@@ -224,19 +238,22 @@ export async function reloadNextlyConfig(opts?: {
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
 
-  // Normalize collections to (slug, tableName, fields) tuples. Drop
-  // entries without a slug — they can't be addressed.
+  // Normalize collections to (slug, tableName, fields, status) tuples. Drop
+  // entries without a slug — they can't be addressed. `status` propagates so
+  // the diff knows whether to expect/inject the status system column.
   const targets: Array<{
     slug: string;
     tableName: string;
     fields: MinimalField[];
+    status?: boolean;
   }> = [];
   for (const c of newConfig.collections ?? []) {
     if (!c.slug) continue;
     targets.push({
       slug: c.slug,
-      tableName: c.tableName ?? `dc_${c.slug}`,
+      tableName: c.tableName ?? resolveCollectionTableName(c.slug, c.dbName),
       fields: (c.fields ?? []) as MinimalField[],
+      status: (c as { status?: boolean }).status === true,
     });
   }
 
@@ -245,6 +262,7 @@ export async function reloadNextlyConfig(opts?: {
     slug: string;
     tableName: string;
     fields: MinimalField[];
+    status?: boolean;
   }> = [];
   for (const s of newConfig.singles ?? []) {
     if (!s.slug) continue;
@@ -255,10 +273,29 @@ export async function reloadNextlyConfig(opts?: {
       slug: s.slug,
       tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
       fields: (s.fields ?? []) as MinimalField[],
+      status: (s as { status?: boolean }).status === true,
     });
   }
 
-  if (targets.length === 0 && singleTargets.length === 0) return;
+  // Normalize components. Table name is always comp_<slug_with_underscores>.
+  const componentTargets: Array<{
+    slug: string;
+    tableName: string;
+    fields: MinimalField[];
+  }> = [];
+  for (const c of newConfig.components ?? []) {
+    if (!c.slug) continue;
+    componentTargets.push({
+      slug: c.slug,
+      tableName: `comp_${c.slug
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")}`,
+      fields: (c.fields ?? []) as MinimalField[],
+    });
+  }
+
+  if (targets.length === 0 && singleTargets.length === 0 && componentTargets.length === 0) return;
 
   // ONE batched introspect for every managed table the config knows about
   // (collections + singles). If the call fails, abort the reload entirely —
@@ -271,6 +308,7 @@ export async function reloadNextlyConfig(opts?: {
       [
         ...targets.map(t => t.tableName),
         ...singleTargets.map(t => t.tableName),
+        ...componentTargets.map(t => t.tableName),
       ]
     );
   } catch (err) {
@@ -288,8 +326,25 @@ export async function reloadNextlyConfig(opts?: {
   // gate. Pure-additive collections + collections whose drop+add pairs
   // can be fully covered by rename candidates flow through to the
   // pipeline. Everything else gets logged + skipped.
+  // Track whether any entity actually needs DDL. We still populate every
+  // desired* map unconditionally so that drizzle-kit's pushSchema sees the
+  // full set of managed tables. Without this, unchanged tables that already
+  // exist in the live DB are absent from the desired schema we hand to
+  // drizzle-kit, which treats them as "dropped" and offers to rename them
+  // into the new (e.g. single_*) tables — the false-positive rename prompt
+  // the user sees on a first-install where collections are synced before
+  // singles.
+  let hasChanges = false;
+
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
+    // Always register the entry so drizzle-kit's schema stays complete.
+    const entry: DesiredCollection = {
+      slug: target.slug,
+      tableName: target.tableName,
+      fields: target.fields as DesiredCollection["fields"],
+      status: target.status === true,
+    };
     try {
       const live = liveByTable.has(target.tableName)
         ? { tables: [liveByTable.get(target.tableName)!] }
@@ -297,11 +352,15 @@ export async function reloadNextlyConfig(opts?: {
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
         target.fields,
-        dialect
+        dialect,
+        { hasStatus: target.status === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
-      if (operations.length === 0) continue;
+      if (operations.length === 0) {
+        desiredCollections[target.slug] = entry;
+        continue;
+      }
 
       const classification = classifyForCodeFirst(operations, dialect);
       if (!classification.safe) {
@@ -311,14 +370,12 @@ export async function reloadNextlyConfig(opts?: {
             `data loss without explicit resolutions. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        desiredCollections[target.slug] = entry;
         continue;
       }
 
-      desiredCollections[target.slug] = {
-        slug: target.slug,
-        tableName: target.tableName,
-        fields: target.fields as DesiredCollection["fields"],
-      };
+      hasChanges = true;
+      desiredCollections[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger?.warn(
@@ -330,6 +387,58 @@ export async function reloadNextlyConfig(opts?: {
   // Per-single diff + safety classification — mirrors the collections loop.
   const desiredSingles: Record<string, DesiredSingle> = {};
   for (const target of singleTargets) {
+    const entry: DesiredSingle = {
+      slug: target.slug,
+      tableName: target.tableName,
+      fields: target.fields as DesiredSingle["fields"],
+      status: target.status === true,
+    };
+    try {
+      const live = liveByTable.has(target.tableName)
+        ? { tables: [liveByTable.get(target.tableName)!] }
+        : { tables: [] };
+      const desiredTable = buildDesiredTableFromFields(
+        target.tableName,
+        target.fields,
+        dialect,
+        { hasStatus: target.status === true }
+      );
+      const operations = diffSnapshots(live, { tables: [desiredTable] });
+
+      if (operations.length === 0) {
+        desiredSingles[target.slug] = entry;
+        continue;
+      }
+
+      const classification = classifyForCodeFirst(operations, dialect);
+      if (!classification.safe) {
+        logger?.warn(
+          `[Nextly HMR] Code-first change for single '${target.slug}' needs review ` +
+            `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
+            `Builder to confirm with resolutions, or revert the config edit.`
+        );
+        desiredSingles[target.slug] = entry;
+        continue;
+      }
+
+      hasChanges = true;
+      desiredSingles[target.slug] = entry;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger?.warn(
+        `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
+      );
+    }
+  }
+
+  // Per-component diff + safety classification — mirrors the singles loop.
+  const desiredComponents: Record<string, DesiredComponent> = {};
+  for (const target of componentTargets) {
+    const entry: DesiredComponent = {
+      slug: target.slug,
+      tableName: target.tableName,
+      fields: target.fields as DesiredComponent["fields"],
+    };
     try {
       const live = liveByTable.has(target.tableName)
         ? { tables: [liveByTable.get(target.tableName)!] }
@@ -341,37 +450,34 @@ export async function reloadNextlyConfig(opts?: {
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
-      if (operations.length === 0) continue;
+      if (operations.length === 0) {
+        desiredComponents[target.slug] = entry;
+        continue;
+      }
 
       const classification = classifyForCodeFirst(operations, dialect);
       if (!classification.safe) {
         logger?.warn(
-          `[Nextly HMR] Code-first change for single '${target.slug}' needs review ` +
+          `[Nextly HMR] Code-first change for component '${target.slug}' needs review ` +
             `(${classification.reason}). Auto-apply skipped. Use the admin Schema ` +
             `Builder to confirm with resolutions, or revert the config edit.`
         );
+        desiredComponents[target.slug] = entry;
         continue;
       }
 
-      desiredSingles[target.slug] = {
-        slug: target.slug,
-        tableName: target.tableName,
-        fields: target.fields as DesiredSingle["fields"],
-      };
+      hasChanges = true;
+      desiredComponents[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger?.warn(
-        `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
+        `[Nextly HMR] Skipping component '${target.slug}' due to error during diff: ${msg}`
       );
     }
   }
 
-  // Nothing to apply across collections or singles.
-  if (
-    Object.keys(desiredCollections).length === 0 &&
-    Object.keys(desiredSingles).length === 0
-  )
-    return;
+  // Nothing to apply across collections, singles, or components.
+  if (!hasChanges) return;
 
   // One batch pipeline call with the full snapshot. The pipeline runs its
   // own introspect + diff inside (the gate's diff above is for safety
@@ -384,7 +490,7 @@ export async function reloadNextlyConfig(opts?: {
   const desired: DesiredSchema = {
     collections: desiredCollections,
     singles: desiredSingles,
-    components: {},
+    components: desiredComponents,
   };
 
   // Per-call factory (not the DI-bound applyDesiredSchema in
@@ -489,22 +595,71 @@ export async function reloadNextlyConfig(opts?: {
         });
       if (codeFirstSingleConfigs.length > 0) {
         await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs);
+
+        // registerSingle defaults migration_status to 'pending'. The
+        // pipeline above just created any missing physical tables, so
+        // mark them 'applied'. We use the pre-pipeline liveByTable
+        // snapshot: any single whose table was absent before the
+        // pipeline ran is now on-disk — no extra DB query needed.
+        for (const target of singleTargets) {
+          if (!liveByTable.has(target.tableName)) {
+            try {
+              await singleReg.updateMigrationStatus(target.slug, "applied");
+            } catch {
+              // Non-fatal: migration status is metadata only.
+            }
+          }
+        }
       }
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above.
     }
 
-    // Pre-compute fresh Drizzle table objects for all affected collections
-    // and singles. Synchronous (schema generation, no DB I/O). Shared
-    // between the two cache-refresh blocks below so we don't generate twice.
+    // Sync dynamic_components metadata — keeps dynamic_components.fields
+    // in step with the DDL changes the pipeline just applied.
+    try {
+      const compReg = (await resolve(
+        "componentRegistryService"
+      )) as ComponentRegistrySurface;
+      const codeFirstComponentConfigs = (newConfig.components ?? [])
+        .filter((c): c is ComponentDef & { slug: string } => !!c.slug)
+        .map(c => {
+          const labelStr =
+            typeof c.label === "string"
+              ? c.label
+              : c.label?.singular ??
+                c.slug
+                  .split(/[-_]/)
+                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+                  .join(" ");
+          return {
+            slug: c.slug,
+            label: labelStr,
+            fields: c.fields ?? [],
+            description: c.description,
+            admin: c.admin,
+          };
+        });
+      if (codeFirstComponentConfigs.length > 0) {
+        await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
+      }
+    } catch {
+      // Non-fatal: same reasoning as collection/single metadata sync above.
+    }
+
+    // Pre-compute fresh Drizzle table objects for all affected collections,
+    // singles, and components. Synchronous (schema generation, no DB I/O).
+    // Shared between the cache-refresh blocks below so we don't generate twice.
     const collectionFreshTables = new Map<string, unknown>();
     const singleFreshTables = new Map<string, unknown>();
+    const componentFreshTables = new Map<string, unknown>();
     try {
       for (const c of Object.values(desiredCollections)) {
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect
+          dialect,
+          { status: c.status === true }
         );
         collectionFreshTables.set(c.tableName, table);
       }
@@ -512,22 +667,34 @@ export async function reloadNextlyConfig(opts?: {
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect
+          dialect,
+          { status: s.status === true }
         );
         singleFreshTables.set(s.tableName, table);
       }
+      for (const comp of Object.values(desiredComponents)) {
+        const { table } = generateRuntimeSchema(
+          comp.tableName,
+          comp.fields as Parameters<typeof generateRuntimeSchema>[1],
+          dialect
+        );
+        componentFreshTables.set(comp.tableName, table);
+      }
     } catch {
-      // Non-fatal: both refresh blocks below will no-op on empty maps.
+      // Non-fatal: all refresh blocks below will no-op on empty maps.
     }
 
     // Refresh SchemaRegistry.dynamicSchemas — used by the adapter's CRUD
-    // path (INSERT / UPDATE / DELETE) for both dc_* and single_* tables.
+    // path (INSERT / UPDATE / DELETE) for dc_*, single_*, and comp_* tables.
     try {
       const schemaReg = (await resolve("schemaRegistry")) as SchemaRegistrySurface;
       for (const [tableName, table] of collectionFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
       for (const [tableName, table] of singleFreshTables) {
+        schemaReg.registerDynamicSchema(tableName, table);
+      }
+      for (const [tableName, table] of componentFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
     } catch {

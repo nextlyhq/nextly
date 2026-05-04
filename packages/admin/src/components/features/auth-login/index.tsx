@@ -173,7 +173,7 @@ export function Login() {
     <div className="w-full max-w-[480px] mx-auto">
       <Card
         className={cn(
-          "transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-2 sm:p-4 md:p-6",
+          "transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-2 sm:p-4 md:p-6",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
         )}
       >
@@ -206,7 +206,7 @@ export function Login() {
               className="space-y-6"
             >
               {emailNotVerified && (
-                <div className="flex items-start gap-3 rounded-none border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
+                <div className="flex items-start gap-3 rounded-none  border border-primary/5 border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
                   <Mail className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
                   <div className="flex-1 text-sm">
                     <p className="font-medium text-amber-800 dark:text-amber-200">
@@ -248,7 +248,7 @@ export function Login() {
                         spellCheck={false}
                         placeholder="Enter your email address…"
                         {...field}
-                        className="h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />
@@ -261,15 +261,7 @@ export function Login() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <div className="flex justify-between items-center">
-                      <FormLabel>Password</FormLabel>
-                      <Link
-                        href={ROUTES.FORGOT_PASSWORD}
-                        className="text-sm text-primary cursor-pointer hover-unified transition-colors font-medium"
-                      >
-                        Forgot password?
-                      </Link>
-                    </div>
+                    <FormLabel>Password</FormLabel>
                     <div className="relative">
                       <FormControl>
                         <Input
@@ -278,12 +270,13 @@ export function Login() {
                           autoComplete="current-password"
                           placeholder="Enter your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-slate-200 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-slate-800"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
+                        tabIndex={-1}
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showPassword ? (
@@ -293,13 +286,21 @@ export function Login() {
                         )}
                       </button>
                     </div>
+                    <div className="flex justify-end">
+                      <Link
+                        href={ROUTES.FORGOT_PASSWORD}
+                        className="text-sm text-primary cursor-pointer transition-colors font-medium mt-1"
+                      >
+                        Forgot password?
+                      </Link>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
               />
 
               <Button
-                size="lg"
+                size="md"
                 type="submit"
                 disabled={isLoading}
                 className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
@@ -320,7 +321,7 @@ export function Login() {
               Don&apos;t have an account?{" "}
               <Link
                 href={ROUTES.REGISTER}
-                className="text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="text-primary cursor-pointer font-medium transition-colors"
               >
                 Sign up
               </Link>

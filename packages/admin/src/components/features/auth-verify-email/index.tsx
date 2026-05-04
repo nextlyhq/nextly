@@ -59,7 +59,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
   if (state === "no-token") {
     return (
       <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+        <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Invalid Link
@@ -75,9 +75,9 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
+                <ArrowLeft className="h-4 w-4" />
                 Back to Sign In
               </Link>
             </div>
@@ -91,7 +91,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
   if (state === "loading") {
     return (
       <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+        <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Verifying Your Email
@@ -113,7 +113,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
   if (state === "success") {
     return (
       <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+        <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
           <CardHeader className="space-y-1 p-0 mb-8" noBorder>
             <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
               Email Verified
@@ -128,7 +128,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
             <div className="mt-2 text-left">
               <Link
                 href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
                 Go to Sign In
                 <ArrowRight className="h-4 w-4 ml-2" />
@@ -143,7 +143,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
   // Error state
   return (
     <div className="w-full max-w-[480px] mx-auto">
-      <Card className="transition-all duration-300 ease-in-out border-slate-200 dark:border-slate-800 shadow-none p-10 opacity-100">
+      <Card className="transition-all duration-300 ease-in-out border-primary/5 dark:border-primary/5 shadow-none p-10 opacity-100">
         <CardHeader className="space-y-1 p-0 mb-8" noBorder>
           <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
             Verification Failed
@@ -158,9 +158,9 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
           <div className="mt-2 text-left">
             <Link
               href={ROUTES.LOGIN}
-              className="inline-flex items-center text-primary cursor-pointer hover-unified font-medium transition-colors"
+              className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeft className="h-4 w-4" />
               Back to Sign In
             </Link>
           </div>

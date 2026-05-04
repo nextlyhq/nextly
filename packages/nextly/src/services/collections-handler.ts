@@ -21,7 +21,7 @@ import {
 } from "./collections/index";
 import type { ComponentDataService } from "./components/component-data-service";
 import type { ComponentRegistryService } from "./components/component-registry-service";
-import { DynamicCollectionService } from "./dynamic-collections";
+import { DynamicCollectionService } from "../domains/dynamic-collections";
 import { consoleLogger } from "./shared";
 import type { Logger } from "./shared";
 

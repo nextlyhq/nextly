@@ -95,7 +95,7 @@ function CollectionCard({
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-none overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/20"
+      className="block group h-full rounded-none overflow-hidden  border border-primary/5 bg-card transition-colors duration-200 hover-subtle-row hover:border-primary/5"
     >
       <Card
         variant="interactive"
@@ -129,7 +129,7 @@ function LoadingSkeleton() {
       {Array.from({ length: 4 }, (_, i) => (
         <Skeleton
           key={i}
-          className="h-32 rounded-none bg-primary/5 border border-border"
+          className="h-32 rounded-none bg-primary/5  border border-primary/5"
         />
       ))}
     </div>
@@ -149,7 +149,9 @@ export const CollectionQuickLinks: React.FC = () => {
 
   const counts = useMemo(() => {
     const raw = statsData?.collectionCounts ?? [];
-    const allowed = new Set((collectionsData?.items ?? []).map(col => col.name));
+    const allowed = new Set(
+      (collectionsData?.items ?? []).map(col => col.name)
+    );
     if (allowed.size === 0) return raw;
     return raw.filter(item => allowed.has(item.slug));
   }, [statsData?.collectionCounts, collectionsData?.items]);
@@ -170,13 +172,13 @@ export const CollectionQuickLinks: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : statsError ? (
-        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none border border-destructive/10">
+        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive/60 justify-center bg-destructive/5 rounded-none  border border-primary/5 border-destructive/10">
           <AlertCircle className="h-4 w-4" />
           <span>Connection Error</span>
         </div>
       ) : counts.length === 0 ? (
-        <div className="py-12 flex flex-col items-center gap-6 bg-primary/5 rounded-none border border-dashed border-border">
-          <div className="p-6 rounded-none bg-primary/5 border border-border/10">
+        <div className="py-12 flex flex-col items-center gap-6 bg-primary/5 rounded-none  border border-primary/5 border-dashed border-primary/5">
+          <div className="p-6 rounded-none bg-primary/5  border border-primary/5">
             <Layers className="h-8 w-8 text-muted-foreground/10" />
           </div>
           <div className="space-y-2 text-center">
@@ -185,7 +187,7 @@ export const CollectionQuickLinks: React.FC = () => {
             </p>
             <Link
               href={ROUTES.COLLECTIONS_CREATE}
-              className="text-[10px] font-bold uppercase tracking-widest text-primary hover-unified flex items-center justify-center gap-2 transition-all"
+              className="text-[10px] font-bold uppercase tracking-widest text-primary flex items-center justify-center gap-2 transition-all"
             >
               Create Collection <ChevronRight className="h-3.5 w-3.5" />
             </Link>
@@ -202,7 +204,7 @@ export const CollectionQuickLinks: React.FC = () => {
                   </h4>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <span className="ml-4 text-[9px] font-bold tabular-nums text-muted-foreground/30 uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-none border border-border">
+                <span className="ml-4 text-[9px] font-bold tabular-nums text-muted-foreground/30 uppercase tracking-widest bg-primary/5 px-2 py-0.5 rounded-none  border border-primary/5">
                   {group.collections.length}
                 </span>
               </div>

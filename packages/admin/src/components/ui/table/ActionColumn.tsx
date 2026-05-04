@@ -34,7 +34,7 @@ export function ActionColumn<TData>({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-        <Button variant="ghost" className="h-8 w-8 p-0">
+        <Button variant="ghost" size="icon-sm">
           <MoreHorizontal className="h-4 w-4" />
           <span className="sr-only">Open menu</span>
         </Button>
@@ -51,7 +51,7 @@ export function ActionColumn<TData>({
               onView(item);
             }}
           >
-            <Eye className="mr-2 h-4 w-4" />
+            <Eye className="h-4 w-4" />
             View
           </DropdownMenuItem>
         )}
@@ -64,7 +64,7 @@ export function ActionColumn<TData>({
               onEdit(item);
             }}
           >
-            <Edit className="mr-2 h-4 w-4" />
+            <Edit className="h-4 w-4" />
             Edit
           </DropdownMenuItem>
         )}
@@ -77,7 +77,7 @@ export function ActionColumn<TData>({
               onDelete(item);
             }}
           >
-            <Trash2 className="mr-2 h-4 w-4" />
+            <Trash2 className="h-4 w-4" />
             Delete
           </DropdownMenuItem>
         )}

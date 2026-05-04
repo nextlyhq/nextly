@@ -564,7 +564,7 @@ export function MediaPickerDialog({
                     key={folder.id}
                     type="button"
                     onClick={() => setActiveFolderId(folder.id)}
-                    className="flex items-center gap-1.5 rounded-none border border-border px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
+                    className="flex items-center gap-1.5 rounded-none  border border-primary/5 px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
                   >
                     <span className="text-muted-foreground">
                       <FolderIcon className="h-3.5 w-3.5" />
@@ -590,7 +590,7 @@ export function MediaPickerDialog({
                   value={typeFilter}
                   onValueChange={handleTypeFilterChange}
                 >
-                  <SelectTrigger className="w-full sm:w-[140px] hover-unified">
+                  <SelectTrigger className="w-full sm:w-[140px] hover-unified bg-white text-black border-primary/5 hover:bg-white/90">
                     <SelectValue placeholder="All Types" />
                   </SelectTrigger>
                   <SelectContent>
@@ -606,7 +606,7 @@ export function MediaPickerDialog({
                   value={`${sortBy}-${sortOrder}`}
                   onValueChange={handleSortChange}
                 >
-                  <SelectTrigger className="w-full sm:w-40 hover-unified">
+                  <SelectTrigger className="w-full sm:w-40 hover-unified bg-white text-black border-primary/5 hover:bg-white/90">
                     <SelectValue placeholder="Sort by..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -704,7 +704,7 @@ export function MediaPickerDialog({
                     onClick={() =>
                       setIsUploadFolderPickerOpen(!isUploadFolderPickerOpen)
                     }
-                    className="flex items-center gap-1.5 rounded-none border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-none  border border-primary/5 bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer"
                   >
                     {activeFolderId ? (
                       <FolderIcon className="h-3.5 w-3.5 text-muted-foreground" />
@@ -728,11 +728,11 @@ export function MediaPickerDialog({
                 </div>
 
                 {isUploadFolderPickerOpen && (
-                  <div className="max-h-[200px] space-y-0.5 overflow-y-auto rounded-none border border-border p-1.5">
+                  <div className="max-h-[200px] space-y-0.5 overflow-y-auto rounded-none  border border-primary/5 p-1.5">
                     {isCreatingFolder ? (
                       <form
                         onSubmit={handleSubmitCreateFolder}
-                        className="space-y-1.5 rounded-none border border-dashed border-primary/40 bg-primary/5 p-2"
+                        className="space-y-1.5 rounded-none  border border-primary/5 border-dashed border-primary/40 bg-primary/5 p-2"
                       >
                         <Input
                           autoFocus
@@ -753,7 +753,7 @@ export function MediaPickerDialog({
                           <Button
                             type="button"
                             variant="ghost"
-                            size="sm"
+                            size="md"
                             className="h-6 px-2 text-xs"
                             onClick={handleCancelCreateFolder}
                             disabled={isCreatingFolderPending}
@@ -762,7 +762,7 @@ export function MediaPickerDialog({
                           </Button>
                           <Button
                             type="submit"
-                            size="sm"
+                            size="md"
                             className="h-6 px-2 text-xs"
                             disabled={
                               isCreatingFolderPending || !newFolderName.trim()
@@ -776,7 +776,7 @@ export function MediaPickerDialog({
                       <button
                         type="button"
                         onClick={handleStartCreateFolder}
-                        className="flex w-full items-center gap-2 rounded-none border border-dashed border-border px-2 py-1.5 text-xs transition-colors hover:border-primary/50 hover:bg-accent"
+                        className="flex w-full items-center gap-2 rounded-none  border border-primary/5 border-dashed border-primary/5 px-2 py-1.5 text-xs transition-colors hover:border-primary/50 hover:bg-accent"
                       >
                         <FolderPlus className="h-3.5 w-3.5" />
                         <span>New folder</span>

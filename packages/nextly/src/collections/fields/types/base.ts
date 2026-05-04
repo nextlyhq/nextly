@@ -42,7 +42,6 @@ export type FieldType =
   | "number"
   // Selection types
   | "checkbox"
-  | "boolean" // Schema Builder alias for "checkbox"
   | "date"
   | "select"
   | "radio"

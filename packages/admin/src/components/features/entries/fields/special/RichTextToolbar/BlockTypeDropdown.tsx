@@ -130,7 +130,7 @@ export function BlockTypeDropdown({
         <Button
           type="button"
           variant="ghost"
-          size="sm"
+          size="md"
           className="h-8 gap-1 px-2 text-xs"
           disabled={disabled}
         >

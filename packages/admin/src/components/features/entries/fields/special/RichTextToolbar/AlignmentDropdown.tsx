@@ -78,7 +78,7 @@ export function AlignmentDropdown({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               className="h-8 gap-0.5 px-1.5"
               disabled={disabled}
             >

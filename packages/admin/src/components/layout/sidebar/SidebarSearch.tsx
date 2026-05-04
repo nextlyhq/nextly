@@ -21,7 +21,7 @@ export function SidebarSearch({
           placeholder={placeholder}
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="pl-9 bg-background border-sidebar-border text-xs h-9"
+          className="pl-9 bg-background border-primary/5 text-xs h-9"
         />
       </div>
     </div>

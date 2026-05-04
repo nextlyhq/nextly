@@ -43,19 +43,19 @@ export function PermissionMatrix({
           <TabsList className="bg-transparent h-auto p-0 border-none space-x-2 auto-cols-auto">
             <TabsTrigger
               value="collection-types"
-              className="rounded-none border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
+              className="rounded-none  border border-primary/5 border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
             >
               Collection Types
             </TabsTrigger>
             <TabsTrigger
               value="single-types"
-              className="rounded-none border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
+              className="rounded-none  border border-primary/5 border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
             >
               Single Types
             </TabsTrigger>
             <TabsTrigger
               value="settings"
-              className="rounded-none border border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
+              className="rounded-none  border border-primary/5 border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
             >
               Settings
             </TabsTrigger>
@@ -78,11 +78,11 @@ export function PermissionMatrix({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => onChange(permissions.map(p => p.id))}
               disabled={disabled || value.length === permissions.length}
               aria-label="Select all permissions"
-              className="text-primary border-primary/20 bg-primary/5 hover-unified transition-colors"
+              className="text-primary border-primary/5 bg-primary/5 hover-unified transition-colors"
             >
               Select All
             </Button>
@@ -90,11 +90,11 @@ export function PermissionMatrix({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => onChange([])}
               disabled={disabled || value.length === 0}
               aria-label="Clear all permissions"
-              className="text-muted-foreground border-border hover-unified hover:text-foreground transition-colors"
+              className="text-muted-foreground border-primary/5 hover-unified hover:text-foreground transition-colors"
             >
               Clear All
             </Button>

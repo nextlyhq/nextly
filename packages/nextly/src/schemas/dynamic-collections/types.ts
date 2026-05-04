@@ -360,6 +360,15 @@ export interface DynamicCollectionInsert {
   /** Whether to auto-generate createdAt/updatedAt fields (default: true) */
   timestamps?: boolean;
 
+  /**
+   * Whether records carry a Draft/Published status column.
+   * When true, a `status` column ('draft' | 'published', default 'draft') is
+   * synthesized into the collection's table. Public callers see only published
+   * records by default; admin callers see everything. See the query-layer
+   * `resolveStatusFilter` for how the filter is enforced. Default: false.
+   */
+  status?: boolean;
+
   /** Admin UI configuration options */
   admin?: CollectionAdminConfig;
 
@@ -506,6 +515,9 @@ export interface DynamicCollectionRecord extends DynamicCollectionInsert {
 
   /** Whether timestamps are enabled (required, defaults to true) */
   timestamps: boolean;
+
+  /** Whether Draft/Published status is enabled (required, defaults to false) */
+  status: boolean;
 
   /** Whether collection is locked from UI edits (required) */
   locked: boolean;

@@ -46,9 +46,9 @@ export function PermissionMatrixHeader({
   );
 
   const headerClass =
-    "p-4 align-middle text-sm font-medium text-foreground border-b border-border bg-primary/5 backdrop-blur-sm sticky top-0 z-10";
+    "p-4 align-middle text-sm font-medium text-foreground  border-b border-primary/5 bg-primary/5 backdrop-blur-sm sticky top-0 z-10";
   const actionClass =
-    "p-4 align-middle text-sm font-medium text-foreground border-b border-border bg-primary/5 backdrop-blur-sm w-[120px] sticky top-0 z-10";
+    "p-4 align-middle text-sm font-medium text-foreground  border-b border-primary/5 bg-primary/5 backdrop-blur-sm w-[120px] sticky top-0 z-10";
 
   return (
     <thead>
@@ -70,7 +70,7 @@ export function PermissionMatrixHeader({
               }
               disabled={disabled || hasLockedCreate}
               aria-label="Toggle all create permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              className="border-primary/5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
             />
             <span>Create</span>
           </div>
@@ -86,7 +86,7 @@ export function PermissionMatrixHeader({
               }
               disabled={disabled || hasLockedView}
               aria-label="Toggle all view permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              className="border-primary/5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
             />
             <span>Read</span>
           </div>
@@ -102,7 +102,7 @@ export function PermissionMatrixHeader({
               }
               disabled={disabled || hasLockedEdit}
               aria-label="Toggle all edit permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              className="border-primary/5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
             />
             <span>Update</span>
           </div>
@@ -121,7 +121,7 @@ export function PermissionMatrixHeader({
               }
               disabled={disabled || hasLockedDelete}
               aria-label="Toggle all delete permissions"
-              className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              className="border-primary/5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
             />
             <span>Delete</span>
           </div>

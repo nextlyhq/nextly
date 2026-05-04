@@ -48,8 +48,8 @@ interface SidebarUserFooterProps {
 export function SidebarUserFooter({
   user,
   collapsed,
-  _isUserPanelOpen,
-  _onTogglePanel,
+  isUserPanelOpen: _isUserPanelOpen,
+  onTogglePanel: _onTogglePanel,
 }: SidebarUserFooterProps) {
   const logout = useLogout();
 
@@ -108,7 +108,7 @@ export function SidebarUserFooter({
               }}
               className="cursor-pointer rounded-none text-black hover-unified focus:bg-primary/5 focus:text-primary"
             >
-              <LogOut className="mr-2 h-4 w-4" />
+              <LogOut className="h-4 w-4" />
               <span>Log out</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -188,7 +188,7 @@ export function SidebarUserFooter({
           }}
           className="cursor-pointer rounded-none text-black hover-unified focus:bg-primary/5 focus:text-primary"
         >
-          <LogOut className="mr-2 h-4 w-4" />
+          <LogOut className="h-4 w-4" />
           <span>Log out</span>
         </DropdownMenuItem>
       </DropdownMenuContent>

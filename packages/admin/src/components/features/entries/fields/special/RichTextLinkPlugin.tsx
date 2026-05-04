@@ -296,7 +296,7 @@ export function RichTextLinkPlugin({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent size="sm" onKeyDown={handleKeyDown}>
+      <DialogContent size="md" onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link className="h-5 w-5" />
@@ -367,7 +367,7 @@ export function RichTextLinkPlugin({
               onClick={removeLink}
               className="sm:mr-auto"
             >
-              <Trash2 className="h-4 w-4 mr-2" />
+              <Trash2 className="h-4 w-4" />
               Remove Link
             </Button>
           )}

@@ -28,7 +28,7 @@ export function buildAuthRouterDeps(
   getService: (name: string) => any
 ): AuthRouterDeps {
   return {
-    secret: env.NEXTLY_SECRET_RESOLVED || "",
+    secret: env.NEXTLY_SECRET || "",
     isProduction: env.NODE_ENV === "production",
     accessTokenTTL: 900, // 15 minutes
     refreshTokenTTL: 7 * 24 * 60 * 60, // 7 days

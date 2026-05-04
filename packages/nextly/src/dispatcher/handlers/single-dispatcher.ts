@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import {
   respondAction,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
@@ -28,18 +29,42 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
+import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
+import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import {
+  BrowserPromptDispatcher,
+  type BrowserRenameResolution,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import {
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
+import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
+import type { DesiredSchema, DesiredSingle } from "../../domains/schema/pipeline/types";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { transformRichTextFields } from "../../lib/field-transform";
+import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
 import {
+  getAdapterFromDI,
   getComponentRegistryFromDI,
+  getMigrationJournalFromDI,
+  getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
@@ -256,7 +281,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // table immediately without a server restart.
             try {
               const { generateRuntimeSchema } = await import(
-                "../../services/schema/runtime-schema-generator"
+                "../../domains/schema/services/runtime-schema-generator"
               );
               const dialect = adapter.getCapabilities().dialect;
               const { table: runtimeTable } = generateRuntimeSchema(
@@ -644,7 +669,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // Re-register runtime schema with updated fields.
               try {
                 const { generateRuntimeSchema } = await import(
-                  "../../services/schema/runtime-schema-generator"
+                  "../../domains/schema/services/runtime-schema-generator"
                 );
                 const dialect = adapter.getCapabilities().dialect;
                 const { table: runtimeTable } = generateRuntimeSchema(
@@ -706,6 +731,202 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ? `Single "${slug}" schema updated and migration applied successfully`
           : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
       return respondMutation(message, updated);
+    },
+  },
+
+  previewSingleSchemaChanges: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const single = await svc.registry.getSingleBySlug(slug);
+      if (!single) throw new Error("Single not found");
+      if (single.locked) {
+        throw new Error(
+          "This single is managed via code and cannot be modified in the UI"
+        );
+      }
+
+      const { fields } = body as { fields: unknown[] };
+      if (!fields) throw new Error("fields is required in request body");
+
+      const currentFields = (single.fields ?? []) as unknown as FieldDefinition[];
+      const tableName = single.tableName;
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) throw new Error("Database adapter not initialized");
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
+
+      const desired: DesiredSchema = {
+        collections: {},
+        singles: {
+          [slug]: {
+            slug,
+            tableName,
+            fields: fields as DesiredSingle["fields"],
+          },
+        },
+        components: {},
+      };
+
+      const pipelinePreview = await previewDesiredSchema({ desired, db, dialect });
+
+      const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
+        tableName,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        db,
+        dialect,
+      });
+
+      const renamed = pipelinePreview.candidates.map(c => ({
+        table: c.tableName,
+        from: c.fromColumn,
+        to: c.toColumn,
+        fromType: c.fromType,
+        toType: c.toType,
+        typesCompatible: c.typesCompatible,
+        defaultSuggestion: c.defaultSuggestion,
+      }));
+
+      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
+      return respondData({
+        ...legacyAsRecord,
+        renamed,
+        schemaVersion: single.schemaVersion ?? 1,
+      });
+    },
+  },
+
+  applySingleSchemaChanges: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const single = await svc.registry.getSingleBySlug(slug);
+      if (!single) throw new Error("Single not found");
+      if (single.locked) {
+        throw new Error(
+          "This single is managed via code and cannot be modified in the UI"
+        );
+      }
+
+      const {
+        fields,
+        confirmed,
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        eventResolutions,
+      } = body as {
+        fields: unknown[];
+        confirmed: boolean;
+        schemaVersion?: number;
+        resolutions?: Record<string, FieldResolution>;
+        renameResolutions?: BrowserRenameResolution[];
+        eventResolutions?: Resolution[];
+      };
+
+      if (!confirmed) throw new Error("Schema changes must be confirmed");
+      if (!fields) throw new Error("fields is required in request body");
+
+      const currentVersion = single.schemaVersion ?? 1;
+      const tableName = single.tableName;
+
+      const legacyBundle = resolutions
+        ? { tableName, byFieldName: resolutions }
+        : undefined;
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) throw new Error("Database adapter not initialized");
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
+      const databaseName =
+        dialect === "mysql"
+          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+          : undefined;
+
+      const desired: DesiredSchema = {
+        collections: {},
+        singles: {
+          [slug]: {
+            slug,
+            tableName,
+            fields: fields as DesiredSingle["fields"],
+          },
+        },
+        components: {},
+      };
+
+      const promptDispatcher = new BrowserPromptDispatcher(
+        renameResolutions ?? [],
+        eventResolutions ?? [],
+        legacyBundle
+      );
+
+      const migrationJournal = getMigrationJournalFromDI() ?? noopMigrationJournal;
+      const pipeline = new PushSchemaPipeline({
+        executor: new DrizzleStatementExecutor(dialect, db),
+        renameDetector: new RegexRenameDetector(),
+        classifier: new RealClassifier(),
+        promptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: new RealPreCleanupExecutor(),
+        migrationJournal,
+        notifier: getProductionNotifier(),
+      });
+
+      const result = await pipeline.apply({
+        desired,
+        db,
+        dialect,
+        source: "ui",
+        promptChannel: "browser",
+        databaseName,
+        uiTargetSlug: slug,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error?.message ?? "Failed to apply schema changes");
+      }
+
+      // Post-apply: update dynamic_singles fields JSON + schema_hash.
+      try {
+        await adapter.update(
+          "dynamic_singles",
+          {
+            fields: JSON.stringify(fields),
+            schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+            migration_status: "applied",
+            updated_at: new Date(),
+          },
+          { and: [{ column: "slug", op: "=", value: slug }] }
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}.`
+        );
+      }
+
+      // Post-apply: refresh in-memory runtime schema.
+      try {
+        const { table: freshTable } = generateRuntimeSchema(
+          tableName,
+          fields as FieldDefinition[],
+          dialect
+        );
+        getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
+        );
+      }
+
+      const newSchemaVersion = currentVersion + 1;
+      void schemaVersion; // accepted but unused (reserved for future optimistic lock)
+
+      return respondAction(`Schema applied for single '${slug}'`, {
+        newSchemaVersion,
+      });
     },
   },
 };

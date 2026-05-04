@@ -370,7 +370,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -575,22 +577,40 @@ export class CollectionMutationService extends BaseService {
         entryData[toSnakeCase(key)] = value;
       }
 
-      // Insert main entry using adapter for database-agnostic RETURNING support
+      // Wrap entry insert and component data save in a transaction so that
+      // a component save failure rolls back the entry — no partial state.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle adapter returns dynamic column shapes
-      const rawEntry = await this.adapter.insert<any>(
-        getTableName(params.collectionName),
-        entryData,
-        { returning: "*" }
-      );
-
-      // Convert snake_case keys from DB response back to camelCase field names
-      // so hooks and the API response use the original field names.
       const entry: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(rawEntry)) {
-        entry[toCamelCase(key)] = value;
-      }
+      await this.adapter.transaction(async tx => {
+        const rawEntry = await tx.insert<any>(
+          getTableName(params.collectionName),
+          entryData,
+          { returning: "*" }
+        );
 
-      // Handle many-to-many relationships
+        // Convert snake_case keys from DB response back to camelCase field names
+        // so hooks and the API response use the original field names.
+        for (const [key, value] of Object.entries(
+          rawEntry as Record<string, unknown>
+        )) {
+          entry[toCamelCase(key)] = value;
+        }
+
+        // Save component field data to separate comp_{slug} tables
+        if (
+          this.componentDataService &&
+          Object.keys(componentFieldData).length > 0
+        ) {
+          await this.componentDataService.saveComponentDataInTransaction(tx, {
+            parentId: entry.id as string,
+            parentTable: getTableName(params.collectionName),
+            fields: fields as unknown as FieldConfig[],
+            data: componentFieldData,
+          });
+        }
+      });
+
+      // Handle many-to-many relationships (uses its own DB reference, outside transaction)
       for (const field of manyToManyFields) {
         const relatedIds = manyToManyData[field.name];
         if (relatedIds && relatedIds.length > 0) {
@@ -601,19 +621,6 @@ export class CollectionMutationService extends BaseService {
             relatedIds
           );
         }
-      }
-
-      // Save component field data to separate comp_{slug} tables
-      if (
-        this.componentDataService &&
-        Object.keys(componentFieldData).length > 0
-      ) {
-        await this.componentDataService.saveComponentData({
-          parentId: entry.id as string,
-          parentTable: getTableName(params.collectionName),
-          fields: fields as unknown as FieldConfig[], // FieldDefinition is compatible with FieldConfig for component detection
-          data: componentFieldData,
-        });
       }
 
       // Execute afterCreate hooks (code-registered)
@@ -859,7 +866,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -1052,17 +1061,51 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
-      await this.db
-        .update(schema)
-        .set({
-          ...finalData,
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.id, params.entryId));
-      // .returning();
+      // Wrap main update and component data save in a transaction so that
+      // a component save failure rolls back the entry update — no partial state.
+      // tx.execute() is used for the UPDATE so it runs on the same DB client
+      // as the transaction (unlike tx.update() which delegates to the pool).
+      const tableName = getTableName(params.collectionName);
+      await this.adapter.transaction(async tx => {
+        const updatePayload = { ...finalData, updatedAt: new Date() };
+
+        // Dialect-aware identifier quoting and placeholder syntax.
+        // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
+        const isMysql = this.dialect === "mysql";
+        const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+        const sqlParams: unknown[] = [];
+        const makePlaceholder = () =>
+          this.dialect === "postgresql"
+            ? `$${sqlParams.length}` // length already incremented by push below
+            : "?";
+
+        const setClauses = Object.entries(updatePayload)
+          .map(([key, val]) => {
+            sqlParams.push(val);
+            return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
+          })
+          .join(", ");
+        sqlParams.push(params.entryId);
+        await tx.execute(
+          `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
+          sqlParams as (string | number | boolean | Date | null | undefined)[]
+        );
+
+        // Save component field data to separate comp_{slug} tables
+        if (
+          this.componentDataService &&
+          Object.keys(componentFieldData).length > 0
+        ) {
+          await this.componentDataService.saveComponentDataInTransaction(tx, {
+            parentId: params.entryId,
+            parentTable: tableName,
+            fields: fields as unknown as FieldConfig[],
+            data: componentFieldData,
+          });
+        }
+      });
 
       // Fetch the updated entry to return it and use in hooks
-
       const [updated] = await this.db
         .select()
         .from(schema)
@@ -1078,7 +1121,7 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Handle many-to-many relationships (replace existing relations)
+      // Handle many-to-many relationships (replace existing relations; outside transaction)
       for (const field of manyToManyFields) {
         if (manyToManyData[field.name] !== undefined) {
           // Delete existing relations
@@ -1099,19 +1142,6 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
-      }
-
-      // Save component field data to separate comp_{slug} tables
-      if (
-        this.componentDataService &&
-        Object.keys(componentFieldData).length > 0
-      ) {
-        await this.componentDataService.saveComponentData({
-          parentId: params.entryId,
-          parentTable: getTableName(params.collectionName),
-          fields: fields as unknown as FieldConfig[], // FieldDefinition is compatible with FieldConfig for component detection
-          data: componentFieldData,
-        });
       }
 
       // Execute afterUpdate hooks (code-registered)
@@ -1512,7 +1542,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -1751,7 +1783,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -2164,7 +2198,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 
@@ -2449,7 +2485,9 @@ export class CollectionMutationService extends BaseService {
 
       // Separate regular fields from many-to-many relations
       const manyToManyFields = fields.filter(
-        f => f.type === "relation" && f.options?.relationType === "manyToMany"
+        f =>
+          f.type === "relationship" &&
+          (f.options?.relationType === "manyToMany" || f.hasMany === true)
       );
       const manyToManyData: Record<string, string[]> = {};
 

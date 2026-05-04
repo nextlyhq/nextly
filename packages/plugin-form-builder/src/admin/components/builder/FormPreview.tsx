@@ -54,7 +54,7 @@ export interface FormPreviewProps {
 export function FormPreview({ fields, formData }: FormPreviewProps) {
   if (fields.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 bg-muted/20 rounded-md border-2 border-dashed border-border text-center">
+      <div className="flex flex-col items-center justify-center p-12 bg-primary/5/20 rounded-none border-2 border-dashed border-primary/5 text-center">
         <div className="text-4xl mb-3">📝</div>
         <p className="text-sm font-medium text-muted-foreground">
           Add some fields to preview your form
@@ -97,7 +97,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
         ))}
       </div>
 
-      <div className="mt-8 pt-6 border-t border-border flex items-center gap-4">
+      <div className="mt-8 pt-6 border-t border-primary/5 flex items-center gap-4">
         <Button type="button" disabled>
           Submit
         </Button>
@@ -140,7 +140,7 @@ function renderFieldPreview(field: FormField): React.ReactNode {
     case "textarea":
       return (
         <textarea
-          className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-none placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full rounded-none border border-input bg-transparent px-3 py-2 text-sm shadow-none placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           placeholder={
             field.placeholder || `Enter ${field.label.toLowerCase()}`
           }
@@ -152,7 +152,7 @@ function renderFieldPreview(field: FormField): React.ReactNode {
     case "select":
       return (
         <select
-          className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-none focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-9 w-full items-center justify-between rounded-none border border-input bg-transparent px-3 py-2 text-sm shadow-none focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           disabled
         >
           <option value="">Select an option</option>
@@ -212,7 +212,7 @@ function renderFieldPreview(field: FormField): React.ReactNode {
 
     case "hidden":
       return (
-        <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground bg-muted/20 border-2 border-dashed border-border rounded-md">
+        <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground bg-primary/5/20 border-2 border-dashed border-primary/5 rounded-none">
           <span className="text-lg">👁️</span>
           <span>Hidden field</span>
         </div>

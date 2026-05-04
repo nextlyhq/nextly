@@ -31,8 +31,8 @@ export function WelcomeHeader() {
           <Skeleton className="h-4 w-48" />
         </div>
         <div className="flex gap-2">
-          <Skeleton className="h-9 w-28" />
-          <Skeleton className="h-9 w-32" />
+          <Skeleton className="w-28" />
+          <Skeleton className="w-32" />
         </div>
       </div>
     );
@@ -57,10 +57,10 @@ export function WelcomeHeader() {
           <Link href={ROUTES.COLLECTIONS_CREATE}>
             <Button
               variant="primary"
-              size="sm"
+              size="md"
               className="h-10 px-6 rounded-none font-bold uppercase tracking-[0.1em] text-[11px] shadow-elevation-primary"
             >
-              <Plus className="mr-2 h-3.5 w-3.5" />
+              <Plus className="h-3.5 w-3.5" />
               Create Collection
             </Button>
           </Link>

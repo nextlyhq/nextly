@@ -3,30 +3,47 @@
 /**
  * Collection Builder — Edit Page
  *
- * Thin wrapper around BuilderPageTemplate + useFieldBuilder.
- * Loads existing collection data and initializes the builder.
- * Mode-specific: collection form schema, settings, hooks, and update mutation.
+ * Wires the new shared schema-builder components onto the Collection edit
+ * route. Replaces the legacy BuilderPageTemplate (right-sidebar with
+ * Settings/Add/Edit tabs) with:
+ *   BuilderToolbar at top (sticky)
+ *   BuilderFieldList in body (WYSIWYG row pack)
+ *   Overlays: BuilderSettingsModal / FieldPickerModal / FieldEditorSheet
+ *   (only one open at a time)
+ *
+ * Schema-change preview + apply pipeline is preserved verbatim from the
+ * legacy page — same SafeChangeConfirmDialog / SchemaChangeDialog, same
+ * RestartContext integration, same toast messaging. The new BuilderToolbar
+ * just calls handleSave; the rest of the flow is unchanged.
+ *
+ * Code-first preservation: locked collections render the page in readOnly
+ * mode (formerly redirected to the listing). Devs can now visually
+ * inspect the schema; every editing affordance is disabled.
  */
 
+import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@revnixhq/ui";
 import type React from "react";
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
 import {
-  BuilderPageTemplate,
-  CollectionSettings,
-  HooksEditor,
+  BuilderFieldList,
+  BuilderSettingsModal,
+  BuilderToolbar,
+  FieldEditorSheet,
+  FieldPickerModal,
   SafeChangeConfirmDialog,
   SchemaChangeDialog,
-  type CollectionSettingsData,
+  type BuilderSettingsValues,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
-import * as Icons from "@admin/components/icons";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
-import { ROUTES } from "@admin/constants/routes";
 import { useRestart } from "@admin/context/RestartContext";
 import { useCollection, useUpdateCollection } from "@admin/hooks/queries";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
@@ -36,7 +53,11 @@ import {
   convertHooksToStoredFormat,
   DEFAULT_SYSTEM_FIELDS,
 } from "@admin/lib/builder";
-import { navigateTo } from "@admin/lib/navigation";
+import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
+import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
   schemaApi,
   type SchemaPreviewResponse,
@@ -62,8 +83,28 @@ const collectionFormSchema = z.object({
 
 type FormData = z.infer<typeof collectionFormSchema>;
 
-type IconMap = Record<string, React.ComponentType<{ className?: string }>>;
-const iconMap = Icons as unknown as IconMap;
+/**
+ * Discriminated union for the single overlay open at a time. "none" means
+ * no overlay; the other variants carry whatever per-overlay state they
+ * need (the field id for the editor, the insert position for the picker).
+ */
+type ActiveOverlay =
+  | { kind: "none" }
+  | { kind: "settings" }
+  // PR D: picker carries an optional parentFieldId so the same overlay
+  // can be opened scoped to a group/repeater for nested adds.
+  | { kind: "picker"; insertAt: number; parentFieldId?: string }
+  // Why: NEW in PR C. The user has chosen a type but hasn't committed
+  // the field yet. Sheet renders in create mode against this draft; on
+  // Apply we append to builder.fields, on Cancel we discard. Avoids the
+  // legacy bug where canceling left an empty placeholder in the list.
+  // PR D: parentFieldId? extends the overlay so the new field can be
+  // committed into a parent group/repeater's nested fields.
+  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
+  | { kind: "edit"; fieldId: string };
+// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
+// removed from the toolbar (feedback Section 2). HooksEditor component
+// stays in the codebase; backend hooks support unchanged.
 
 interface CollectionBuilderEditPageProps {
   params?: { slug?: string };
@@ -80,97 +121,101 @@ export default function CollectionBuilderEditPage({
     defaultValues: { singularName: "", pluralName: "" },
   });
 
-  const [collectionSettings, setCollectionSettings] =
-    useState<CollectionSettingsData>({
-      description: "",
-      timestamps: true,
-      admin: { icon: "Database" },
-      hooks: [],
-    });
-
+  const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
   const [hooks, setHooks] = useState<EnabledHook[]>([]);
+  const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Schema change confirmation dialog state
+  // Why: was a JSON string of just field IDs, which silently masked
+  // label / width / validation / options edits. Now a frozen array we
+  // diff via countDirtyFields so every meaningful edit bumps the badge.
+  const [originalFields, setOriginalFields] = useState<
+    readonly BuilderField[] | null
+  >(null);
+
+  // Schema change confirmation state — preserved verbatim from legacy.
   const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
     null
   );
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
-  // Task 11: safe changes now show a lightweight confirmation instead of
-  // applying silently. Keeps the "all changes require explicit confirm"
-  // user model consistent between code-first and UI-first flows.
   const [showSafeDialog, setShowSafeDialog] = useState(false);
   const [isApplyingSchema, setIsApplyingSchema] = useState(false);
   const { startRestart, stopRestart } = useRestart();
 
-  const fieldNames = useMemo(
-    () => builder.fields.filter(f => f.name?.trim()).map(f => f.name),
-    [builder.fields]
-  );
-
   const { mutate: updateCollection, isPending: isSaving } =
     useUpdateCollection();
 
-  // Initialize form with collection data
+  // Initialize builder + settings from the loaded collection.
   useEffect(() => {
-    if (collection && !isInitialized) {
-      if (collection.locked) {
-        navigateTo(ROUTES.COLLECTIONS);
-        return;
-      }
+    if (!collection || isInitialized) return;
 
-      builder.form.reset({
-        singularName:
-          collection.labels?.singular ||
-          collection.label ||
-          collection.name ||
-          "",
-        pluralName: collection.labels?.plural || collection.label || "",
-      });
+    const singular =
+      collection.labels?.singular || collection.label || collection.name || "";
+    const plural = collection.labels?.plural || collection.label || "";
 
-      const schemaFields = getCollectionFields(collection);
-      const userSchemaFields = schemaFields.filter(
-        (f: FieldDefinition) => f.name !== "title" && f.name !== "slug"
-      );
-      const builderFields = userSchemaFields.map(
-        (field: FieldDefinition, index: number) =>
-          convertToBuilderField(field, index)
-      );
-      builder.setFields([...DEFAULT_SYSTEM_FIELDS, ...builderFields]);
+    builder.form.reset({
+      singularName: singular,
+      pluralName: plural,
+    });
 
-      setCollectionSettings({
-        description: collection.description || "",
-        timestamps: true,
-        admin: {
-          icon: collection.admin?.icon || "Database",
-          group: collection.admin?.group || "",
-          useAsTitle: collection.admin?.useAsTitle,
-          hidden: collection.admin?.hidden,
-          order: (collection.admin as Record<string, unknown>)?.order as
-            | number
-            | undefined,
-          sidebarGroup: (collection.admin as Record<string, unknown>)
-            ?.sidebarGroup as string | undefined,
-        },
-        hooks: [],
-      });
+    const schemaFields = getCollectionFields(collection);
+    const userSchemaFields = schemaFields.filter(
+      (f: FieldDefinition) => f.name !== "title" && f.name !== "slug"
+    );
+    const builderFields = userSchemaFields.map(
+      (field: FieldDefinition, index: number) =>
+        convertToBuilderField(field, index)
+    );
+    const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
+    builder.setFields(allFields);
 
-      if (collection.hooks && Array.isArray(collection.hooks)) {
-        const enabledHooks: EnabledHook[] = collection.hooks.map(hook => ({
-          id: `hook_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-          hookId: hook.hookId,
-          enabled: hook.enabled,
-          config: hook.config,
-        }));
-        setHooks(enabledHooks);
-      }
+    // Pin the load-time field array for dirty detection. countDirtyFields
+    // diffs the full editable shape, so every config edit bumps the badge.
+    setOriginalFields(allFields.filter(f => !f.isSystem));
 
-      setIsInitialized(true);
+    setSettings({
+      singularName: singular,
+      pluralName: plural,
+      slug: slug ?? "",
+      description: collection.description || "",
+      icon: collection.admin?.icon || "Database",
+      adminGroup: collection.admin?.group || "",
+      order: (collection.admin as Record<string, unknown>)?.order as
+        | number
+        | undefined,
+      // collection.status is the Draft/Published flag from PR 1; default
+      // false for collections written before the column existed.
+      status: (collection as { status?: boolean }).status === true,
+    });
+
+    if (collection.hooks && Array.isArray(collection.hooks)) {
+      const enabledHooks: EnabledHook[] = collection.hooks.map(hook => ({
+        id: `hook_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+        hookId: hook.hookId,
+        enabled: hook.enabled,
+        config: hook.config,
+      }));
+      setHooks(enabledHooks);
     }
-  }, [collection, builder, isInitialized]);
+
+    setIsInitialized(true);
+  }, [collection, builder, isInitialized, slug]);
+
+  const isLocked = collection?.locked === true;
+
+  // Dirty count: number of user fields that were added, removed, or had
+  // any of their editable shape change (label / width / validation /
+  // options / defaultValue / nested fields / etc.) since load.
+  const unsavedCount = useMemo(() => {
+    if (!originalFields) return 0;
+    return countDirtyFields(
+      originalFields,
+      builder.fields.filter(f => !f.isSystem)
+    );
+  }, [builder.fields, originalFields]);
 
   // Build validated field definitions from the builder state.
-  // Shared by both the preview and settings-only save paths.
+  // Shared by the preview path and the settings-only save path.
   const getValidatedFields = useCallback((): FieldDefinition[] | null => {
     const systemFieldNames = ["title", "slug"];
     const userFields = builder.fields.filter(
@@ -184,10 +229,8 @@ export default function CollectionBuilderEditPage({
     return userFields.map(convertToFieldDefinition);
   }, [builder]);
 
-  // Apply schema changes after confirmation (or directly for safe changes).
-  // F4 Option E PR 5: renameResolutions are the per-candidate "rename" /
-  // "drop_and_add" picks the dialog collected. Empty array = no renames
-  // detected (or pure-additive change).
+  // Apply schema changes after user confirmation. Same orchestration as
+  // legacy — kept verbatim because the toast / restart wiring is delicate.
   const applySchemaChanges = useCallback(
     async (
       fieldDefinitions: FieldDefinition[],
@@ -197,8 +240,6 @@ export default function CollectionBuilderEditPage({
     ) => {
       if (!slug) return;
       setIsApplyingSchema(true);
-      // Suppress the "schema updated externally" toast from the fetcher
-      // since this change is initiated by us, not an external source
       if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
       startRestart();
       try {
@@ -210,14 +251,7 @@ export default function CollectionBuilderEditPage({
           renameResolutions
         );
         if (result.success) {
-          // F10 PR 6: build a contextual success message
-          // ("Posts schema updated. 1 field added, 1 renamed") and
-          // hand it to stopRestart, which owns the single
-          // toast.success emission. Falls back to a generic message
-          // when `toastSummary` is missing (older nextly versions)
-          // or equals the no-changes phrase.
-          const collectionLabel =
-            builder.form.getValues("singularName")?.trim() || slug;
+          const collectionLabel = settings?.singularName?.trim() || slug;
           const summarySuffix =
             result.toastSummary && result.toastSummary !== "no changes"
               ? `. ${result.toastSummary}`
@@ -228,6 +262,8 @@ export default function CollectionBuilderEditPage({
           );
           setShowSchemaDialog(false);
           setPreviewData(null);
+          // Refresh the dirty baseline so the unsaved badge clears.
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
         } else {
           stopRestart(
             false,
@@ -246,37 +282,37 @@ export default function CollectionBuilderEditPage({
           window.__nextlySchemaApplying = false;
       }
     },
-    [slug, startRestart, stopRestart, builder.form]
+    [slug, startRestart, stopRestart, settings?.singularName, builder.fields]
   );
 
-  // Save non-schema settings (labels, icon, group, etc.) via existing mutation
-  const saveCollectionSettings = useCallback(
+  // Save settings/labels/hooks (no schema changes path).
+  const saveSettingsOnly = useCallback(
     (fieldDefinitions: FieldDefinition[]) => {
-      if (!slug) return;
-      const formData = builder.form.getValues();
-      const singularName = formData.singularName.trim();
-      const pluralName = formData.pluralName?.trim() || undefined;
+      if (!slug || !settings) return;
       const storedHooks = convertHooksToStoredFormat(hooks);
       updateCollection(
         {
           collectionName: slug,
           updates: {
             labels: {
-              singular: singularName,
-              plural: pluralName,
+              singular: settings.singularName,
+              plural: settings.pluralName,
             },
-            icon: collectionSettings.admin?.icon,
-            group: collectionSettings.admin?.group,
-            useAsTitle: collectionSettings.admin?.useAsTitle,
-            hidden: collectionSettings.admin?.hidden,
-            order: collectionSettings.admin?.order,
-            sidebarGroup: collectionSettings.admin?.sidebarGroup,
+            description: settings.description,
+            icon: settings.icon,
+            group: settings.adminGroup,
+            order: settings.order,
+            status: settings.status === true,
+            // Why: useAsTitle + timestamps were removed from the modal in
+            // PR B (system title is always the display; timestamps always
+            // emitted). Backend defaults take over -- code-first config can
+            // still override.
             fields: fieldDefinitions,
             hooks: storedHooks.length > 0 ? storedHooks : undefined,
           },
         },
         {
-          onSuccess: () => toast.success("Collection updated successfully"),
+          onSuccess: () => toast.success("Collection updated"),
           onError: err => {
             const errorObj = err as { message?: string };
             toast.error(
@@ -287,65 +323,99 @@ export default function CollectionBuilderEditPage({
         }
       );
     },
-    [builder, slug, updateCollection, collectionSettings, hooks]
+    [slug, settings, hooks, updateCollection]
   );
 
-  // Main save handler: preview schema changes first, then confirm or auto-apply
+  // Top-level Save schema handler — preview first, branch on classification.
   const handleSave = useCallback(async () => {
     if (!slug) {
       toast.error("Collection slug is missing");
       return;
     }
 
-    const isValid = await builder.form.trigger();
-    if (!isValid) {
-      const errors = builder.form.formState.errors;
-      if (errors.singularName) {
-        builder.setSidebarTab("settings");
-        toast.error(
-          "Collection name is required. Please fill it in the Settings tab."
-        );
-      } else {
-        toast.error("Please fix the form errors before saving");
-      }
-      return;
-    }
-
     const fieldDefinitions = getValidatedFields();
     if (!fieldDefinitions) return;
 
-    // Preview schema changes before applying
     try {
       const preview = await schemaApi.preview(slug, fieldDefinitions);
 
       if (!preview.hasChanges) {
-        // No schema changes -- just update labels/settings via existing mutation
-        saveCollectionSettings(fieldDefinitions);
+        // No schema changes — just persist labels/settings/hooks.
+        saveSettingsOnly(fieldDefinitions);
         return;
       }
 
       if (preview.classification === "safe") {
-        // Task 11: safe changes now prompt via SafeChangeConfirmDialog rather
-        // than applying silently. Always-confirm model means no surprise
-        // restarts and matches the code-first flow where the user also
-        // confirms before the wrapper applies.
         setPreviewData(preview);
         setShowSafeDialog(true);
         return;
       }
 
-      // Destructive or interactive changes -- show confirmation dialog
       setPreviewData(preview);
       setShowSchemaDialog(true);
     } catch (err) {
       const errorObj = err as { message?: string };
       toast.error(errorObj?.message || "Failed to preview schema changes");
     }
-  }, [builder, slug, getValidatedFields, saveCollectionSettings]);
+  }, [slug, getValidatedFields, saveSettingsOnly]);
 
-  // Resolve the header icon from settings
-  const headerIconName = collectionSettings.admin?.icon || "Database";
-  const HeaderIcon = iconMap[headerIconName] || Icons.Database;
+  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
+  // by width). We compute the OLD row layout, apply the row swap, and
+  // Why: PR D feedback -- duplicate icon on each field card. We clone the
+  // field's full shape, mint a new id, and pick the next free numeric-
+  // suffix name. The duplicate is appended at the end of the user-fields
+  // list (insert-at-position is a follow-up).
+  const handleDuplicateField = useCallback(
+    (fieldId: string) => {
+      const source = builder.fields.find(f => f.id === fieldId);
+      if (!source) return;
+      const takenNames = builder.fields.map(f => f.name);
+      const duplicate: BuilderField = {
+        ...source,
+        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: nextDuplicateName(source.name, takenNames),
+      };
+      builder.setFields([...builder.fields, duplicate]);
+    },
+    [builder]
+  );
+
+  // flatten back to a fields array for handleFieldsReorder. The legacy
+  // builder.handleDragEnd is built for the old palette+field-list model
+  // and ignores row IDs.
+  const handleRowDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const activeIdStr = String(active.id);
+      const overIdStr = String(over.id);
+      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
+        return;
+      }
+      const userFields = builder.fields.filter(f => !f.isSystem);
+      const systemFields = builder.fields.filter(f => f.isSystem);
+      const rows = packIntoRows(
+        userFields.map(f => ({
+          id: f.id,
+          width: parseWidth(f.admin?.width),
+          _field: f,
+        }))
+      );
+      const oldIdx = Number(activeIdStr.slice("row-".length));
+      const newIdx = Number(overIdStr.slice("row-".length));
+      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
+      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
+      const reorderedUserFields = reorderedRows.flatMap(row =>
+        row.map(r => (r as { _field: BuilderField })._field)
+      );
+      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
+    },
+    [builder]
+  );
+
+  // ----------------------------------------------------------------
+  // Loading / error guards
+  // ----------------------------------------------------------------
 
   if (!slug) {
     return (
@@ -362,29 +432,23 @@ export default function CollectionBuilderEditPage({
     );
   }
 
-  if (isLoading) {
+  if (isLoading || !isInitialized) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <div className="p-6 border-b border-border">
+        <div className="p-6  border-b border-primary/5">
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
         </div>
-        <div className="flex-1 flex">
-          <div className="flex-1 p-4">
-            <Skeleton className="h-12 w-full mb-2" />
-            <Skeleton className="h-12 w-full mb-2" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-          <div className="w-[400px] border-l border-border p-4">
-            <Skeleton className="h-8 w-full mb-4" />
-            <Skeleton className="h-48 w-full" />
-          </div>
+        <div className="flex-1 p-4">
+          <Skeleton className="h-12 w-full mb-2" />
+          <Skeleton className="h-12 w-full mb-2" />
+          <Skeleton className="h-12 w-full" />
         </div>
       </div>
     );
   }
 
-  if (error) {
+  if (error || !collection || !settings) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <PageErrorFallback />
@@ -392,50 +456,191 @@ export default function CollectionBuilderEditPage({
     );
   }
 
-  return (
-    <>
-      <BuilderPageTemplate
-        builder={builder}
-        breadcrumbItems={[
-          {
-            href: ROUTES.DASHBOARD,
-            label: "Dashboard",
-            isDashboard: true,
-          },
-          { href: ROUTES.COLLECTIONS, label: "Collections" },
-        ]}
-        breadcrumbCurrentLabel="Edit Collection"
-        headerIcon={<HeaderIcon className="h-5 w-5" />}
-        headerTitle={builder.form.watch("singularName") || "Edit Collection"}
-        headerDescription="Manage your collection schema and settings."
-        onSave={() => {
-          void handleSave();
-        }}
-        onCancel={() => navigateTo(ROUTES.COLLECTIONS)}
-        isSaving={isSaving || isApplyingSchema}
-        saveLabel="Update"
-        entityType="collection"
-        settingsSlot={
-          <>
-            <CollectionSettings
-              settings={collectionSettings}
-              onSettingsChange={setCollectionSettings}
-              fields={builder.fields}
-              isExpanded={true}
-              isAdvancedOpen={true}
-              variant="none"
-            />
-            <HooksEditor
-              hooks={hooks}
-              onHooksChange={setHooks}
-              fieldNames={fieldNames}
-              isExpanded={true}
-            />
-          </>
-        }
-      />
+  // ----------------------------------------------------------------
+  // Render
+  // ----------------------------------------------------------------
 
-      {/* Task 11: safe-change lightweight dialog */}
+  const editingField =
+    active.kind === "edit"
+      ? builder.fields.find(f => f.id === active.fieldId)
+      : null;
+
+  return (
+    <div className="flex flex-col min-h-screen bg-background">
+      <PageContainer className="flex-1">
+        <BuilderToolbar
+          config={COLLECTION_BUILDER_CONFIG}
+          name={settings.singularName || slug}
+          locked={isLocked}
+          unsavedCount={unsavedCount}
+          onOpenSettings={() => setActive({ kind: "settings" })}
+          onSave={() => void handleSave()}
+        />
+        <DndContext
+          sensors={builder.sensors}
+          onDragStart={builder.handleDragStart}
+          onDragEnd={handleRowDragEnd}
+        >
+          <BuilderFieldList
+            fields={builder.fields}
+            readOnly={isLocked}
+            onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
+            onEditField={fieldId => setActive({ kind: "edit", fieldId })}
+            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
+            onDuplicateField={handleDuplicateField}
+            onReorder={() => {
+              // Reorder is driven by handleRowDragEnd above. This callback
+              // exists for parents that need notification but our state
+              // lives in the useFieldBuilder hook.
+            }}
+          />
+        </DndContext>
+      </PageContainer>
+
+      {/* Settings modal — opens for edit (mode="edit") only. */}
+      {active.kind === "settings" && (
+        <BuilderSettingsModal
+          open
+          mode="edit"
+          config={COLLECTION_BUILDER_CONFIG}
+          initialValues={settings}
+          onCancel={() => setActive({ kind: "none" })}
+          onSubmit={next => {
+            setSettings(next);
+            setActive({ kind: "none" });
+          }}
+        />
+      )}
+
+      {/* Field picker — opens off the toolbar's "+ Add field" or in-list +. */}
+      {active.kind === "picker" && (
+        <FieldPickerModal
+          open
+          // PR D: title scopes the picker to the parent when adding into
+          // a group/repeater.
+          title={
+            active.parentFieldId
+              ? `Add field to ${
+                  builder.fields.find(f => f.id === active.parentFieldId)
+                    ?.name ?? "parent"
+                }`
+              : undefined
+          }
+          excludedTypes={COLLECTION_BUILDER_CONFIG.picker.excludedTypes ?? []}
+          onCancel={() => setActive({ kind: "none" })}
+          // Why: PR C flow change. Don't append a placeholder field;
+          // build a draft and open the sheet in create mode. The field
+          // is only committed on Apply -- Cancel discards cleanly.
+          // PR D: thread parentFieldId through so the create overlay
+          // knows whether to append to top-level or nested.
+          onSelect={type =>
+            setActive({
+              kind: "create",
+              parentFieldId: active.parentFieldId,
+              draft: {
+                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                name: "",
+                label: "",
+                type,
+                validation: {},
+              },
+            })
+          }
+        />
+      )}
+
+      {/* Field editor sheet -- create mode for a brand-new field that
+          hasn't been committed yet. Apply appends to builder.fields
+          (or to the parent's nested fields when parentFieldId is set). */}
+      {active.kind === "create" && (
+        <FieldEditorSheet
+          open
+          mode="create"
+          field={active.draft}
+          siblingFields={
+            active.parentFieldId
+              ? (builder.fields.find(f => f.id === active.parentFieldId)
+                  ?.fields ?? [])
+              : builder.fields
+          }
+          readOnly={isLocked}
+          isInsideRepeatingAncestor={
+            active.parentFieldId
+              ? // Why: the new field will live inside parentFieldId. It
+                // counts as nested if EITHER parentFieldId itself is a
+                // repeating container OR parentFieldId already lives
+                // inside one. The helper only walks ancestors, so we
+                // OR with a direct type-check on the parent.
+                (() => {
+                  const parent = builder.fields.find(
+                    f => f.id === active.parentFieldId
+                  );
+                  if (!parent) return false;
+                  const parentIsRepeating =
+                    parent.type === "repeater" ||
+                    (parent.type === "component" && parent.repeatable === true);
+                  return (
+                    parentIsRepeating ||
+                    isInsideRepeatingAncestor(parent.id, builder.fields)
+                  );
+                })()
+              : false
+          }
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            if (active.parentFieldId) {
+              builder.handleNestedFieldAdd(active.parentFieldId, next);
+            } else {
+              builder.setFields([...builder.fields, next]);
+            }
+            setActive({ kind: "none" });
+          }}
+          // Why: Delete is hidden in create mode (sheet checks mode), so
+          // this handler shouldn't be reachable. Provide a no-op so the
+          // type contract is satisfied.
+          onDelete={() => setActive({ kind: "none" })}
+        />
+      )}
+
+      {/* Field editor sheet -- opens when a field card is clicked. */}
+      {active.kind === "edit" && editingField && (
+        <FieldEditorSheet
+          open
+          mode="edit"
+          field={editingField}
+          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
+          readOnly={isLocked}
+          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
+            editingField.id,
+            builder.fields
+          )}
+          onCancel={() => setActive({ kind: "none" })}
+          onApply={next => {
+            builder.handleFieldUpdate(next);
+            setActive({ kind: "none" });
+          }}
+          onDelete={() => {
+            builder.handleFieldDelete(editingField.id);
+            setActive({ kind: "none" });
+          }}
+          // PR D: parent-aware "+ Add field" inside group/repeater
+          // editors. Switches the overlay to picker with parentFieldId.
+          onAddNestedField={parentId =>
+            setActive({
+              kind: "picker",
+              insertAt: 0,
+              parentFieldId: parentId,
+            })
+          }
+        />
+      )}
+
+      {/* Hooks UI removed in PR D (feedback Section 2). The HooksEditor
+          component still exists in the codebase and code-first hooks in
+          nextly.config.ts continue to work; only the toolbar button +
+          sheet are gone. */}
+
+      {/* Safe-change confirmation (additive). */}
       {previewData && previewData.classification === "safe" && (
         <SafeChangeConfirmDialog
           open={showSafeDialog}
@@ -445,9 +650,6 @@ export default function CollectionBuilderEditPage({
           onConfirm={() => {
             const fieldDefs = getValidatedFields();
             if (fieldDefs) {
-              // Safe-only path: no interactive resolutions, no rename
-              // candidates expected (the safe dialog only renders for
-              // pure-additive changes).
               void applySchemaChanges(
                 fieldDefs,
                 previewData.schemaVersion,
@@ -460,7 +662,7 @@ export default function CollectionBuilderEditPage({
         />
       )}
 
-      {/* Schema change confirmation dialog -- shown for destructive/interactive changes */}
+      {/* Destructive / interactive change dialog. */}
       {previewData && previewData.classification !== "safe" && (
         <SchemaChangeDialog
           open={showSchemaDialog}
@@ -486,6 +688,13 @@ export default function CollectionBuilderEditPage({
           isApplying={isApplyingSchema}
         />
       )}
-    </>
+
+      {/* Cancel / back navigation surfaced via the unused isSaving state */}
+      {(isSaving || isApplyingSchema) && (
+        <div aria-live="polite" className="sr-only">
+          Saving collection changes…
+        </div>
+      )}
+    </div>
   );
 }

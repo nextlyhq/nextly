@@ -15,18 +15,46 @@ import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
 
 import {
   respondAction,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
+import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
+import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
+import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import {
+  BrowserPromptDispatcher,
+  type BrowserRenameResolution,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
+import {
+  noopMigrationJournal,
+  noopPreRenameExecutor,
+} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
+import type {
+  DesiredComponent,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types";
+import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { NextlyError } from "../../errors";
+import { getProductionNotifier } from "../../runtime/notifications/index";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import { ComponentSchemaService } from "../../services/components/component-schema-service";
-import { getAdapterFromDI, getComponentRegistryFromDI } from "../helpers/di";
+import {
+  getAdapterFromDI,
+  getComponentRegistryFromDI,
+  getMigrationJournalFromDI,
+} from "../helpers/di";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -215,9 +243,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         label: b.label || b.slug,
         tableName,
         fields: b.fields,
-        admin: b.admin as Parameters<
-          typeof svc.registry.registerComponent
-        >[0]["admin"],
+        admin: b.admin,
         description: b.description,
         source: "ui",
         locked: false,
@@ -260,7 +286,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        // Throw NextlyError so the dispatcher's error path emits the
+        // Throw a NextlyError so the dispatcher's error path emits the
         // canonical singular `{ error: ... }` shape with a 403 status.
         // Slug stays in logContext per §13.8 (never on the wire).
         throw NextlyError.forbidden({
@@ -281,101 +307,230 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       if (b?.admin) updateData.admin = b.admin;
       if (b?.description) updateData.description = b.description;
 
-      let migrationStatus = existing.migrationStatus;
-
       if (b?.fields) {
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
 
-        const schemaService = new DynamicCollectionSchemaService();
-        const tableName = existing.tableName;
-
-        // Add updatedAt — Components always have this auto-managed field.
-        const existingFields = (existing.fields ??
-          []) as unknown as FieldConfig[];
-        const oldFieldsWithUpdatedAt: FieldConfig[] = [
-          ...existingFields,
-          {
-            name: "updatedAt",
-            type: "date",
-            required: false,
-          } as unknown as FieldConfig,
-        ];
-        const newFieldsWithUpdatedAt: FieldConfig[] = [
-          ...b.fields,
-          {
-            name: "updatedAt",
-            type: "date",
-            required: false,
-          } as unknown as FieldConfig,
-        ];
-
-        const migrationSQL = schemaService.generateAlterTableMigration(
-          tableName,
-          oldFieldsWithUpdatedAt as unknown as Parameters<
-            typeof schemaService.generateAlterTableMigration
-          >[1],
-          newFieldsWithUpdatedAt as unknown as Parameters<
-            typeof schemaService.generateAlterTableMigration
-          >[2]
-        );
-
-        migrationStatus = "pending";
-
-        try {
-          if (container.has("adapter")) {
-            const adapter = container.get<DrizzleAdapter>("adapter");
-
-            await executeMigrationStatements(adapter, migrationSQL);
-
-            const tableExists = await adapter.tableExists(tableName);
-            if (tableExists) {
-              migrationStatus = "applied";
-              registerComponentRuntimeSchema(
-                adapter,
-                adapter.getCapabilities().dialect,
-                tableName,
-                b.fields
-              );
-            } else {
-              migrationStatus = "failed";
-              console.error(
-                `[Components] Table "${tableName}" not found after migration update`
-              );
-            }
-          } else {
-            console.warn(
-              "[Components] No adapter found in container, migration not executed"
-            );
-          }
-        } catch (migrationError) {
-          migrationStatus = "failed";
-          const message =
-            migrationError instanceof Error
-              ? migrationError.message
-              : String(migrationError);
-          console.error("[Components] Migration execution failed:", message);
-          console.error("[Components] Migration SQL was:", migrationSQL);
+        // Schema changes (rename, drop, add required column) must go through
+        // applyComponentSchemaChanges which runs PushSchemaPipeline. Here we
+        // only store the updated fields JSON — this path is reached when
+        // previewComponentSchemaChanges returned hasChanges: false (labels,
+        // descriptions, or field reordering changed but no DDL is needed).
+        if (container.has("adapter")) {
+          const adapter = container.get<DrizzleAdapter>("adapter");
+          registerComponentRuntimeSchema(
+            adapter,
+            adapter.getCapabilities().dialect,
+            existing.tableName,
+            b.fields
+          );
         }
-
-        updateData.migrationStatus = migrationStatus;
       }
 
       const updated = await svc.registry.updateComponent(
         slug,
-        updateData as Parameters<typeof svc.registry.updateComponent>[1]
+        updateData
       );
 
-      // The toast copy varies by what changed (fields-with-applied vs
-      // fields-pending vs metadata-only) so the admin can react
-      // accordingly without parsing the body.
-      const message =
-        migrationStatus === "applied"
-          ? `Component "${slug}" updated and migration applied successfully.`
-          : b?.fields
-            ? `Component "${slug}" updated. Run migrations to apply schema changes.`
-            : `Component "${slug}" updated.`;
-      return respondMutation(message, updated);
+      return respondMutation(`Component "${slug}" updated.`, updated);
+    },
+  },
+
+  // Preview component schema changes — dry-run diff returning rename candidates
+  // and classification. Mirrors previewSchemaChanges in collection-dispatcher.
+  previewComponentSchemaChanges: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Component slug");
+      const component = await svc.registry.getComponent(slug);
+      if (!component) throw new Error("Component not found");
+      if (component.locked) {
+        throw new Error(
+          "This component is managed via code and cannot be modified in the UI"
+        );
+      }
+
+      const { fields } = body as { fields: unknown[] };
+      if (!fields) throw new Error("fields is required in request body");
+
+      const currentFields = (component.fields ?? []) as unknown as FieldDefinition[];
+      const tableName = component.tableName;
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) throw new Error("Database adapter not initialized");
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
+
+      const desired: DesiredSchema = {
+        collections: {},
+        singles: {},
+        components: {
+          [slug]: {
+            slug,
+            tableName,
+            fields: fields as DesiredComponent["fields"],
+          },
+        },
+      };
+
+      const pipelinePreview = await previewDesiredSchema({ desired, db, dialect });
+
+      const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
+        tableName,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        db,
+        dialect,
+      });
+
+      const renamed = pipelinePreview.candidates.map(c => ({
+        table: c.tableName,
+        from: c.fromColumn,
+        to: c.toColumn,
+        fromType: c.fromType,
+        toType: c.toType,
+        typesCompatible: c.typesCompatible,
+        defaultSuggestion: c.defaultSuggestion,
+      }));
+
+      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
+      return respondData({
+        ...legacyAsRecord,
+        renamed,
+        schemaVersion: component.schemaVersion,
+      });
+    },
+  },
+
+  // Apply confirmed component schema changes via PushSchemaPipeline.
+  // Mirrors applySchemaChanges in collection-dispatcher.
+  applyComponentSchemaChanges: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Component slug");
+      const component = await svc.registry.getComponent(slug);
+      if (!component) throw new Error("Component not found");
+      if (component.locked) {
+        throw new Error(
+          "This component is managed via code and cannot be modified in the UI"
+        );
+      }
+
+      const {
+        fields,
+        confirmed,
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        eventResolutions,
+      } = body as {
+        fields: unknown[];
+        confirmed: boolean;
+        schemaVersion?: number;
+        resolutions?: Record<string, FieldResolution>;
+        renameResolutions?: BrowserRenameResolution[];
+        eventResolutions?: Resolution[];
+      };
+
+      if (!confirmed) throw new Error("Schema changes must be confirmed");
+      if (!fields) throw new Error("fields is required in request body");
+
+      const currentVersion = component.schemaVersion ?? 1;
+      const tableName = component.tableName;
+
+      const legacyBundle = resolutions
+        ? { tableName, byFieldName: resolutions }
+        : undefined;
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) throw new Error("Database adapter not initialized");
+      const dialect = adapter.dialect;
+      const db = adapter.getDrizzle();
+      const databaseName =
+        dialect === "mysql"
+          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+          : undefined;
+
+      const desired: DesiredSchema = {
+        collections: {},
+        singles: {},
+        components: {
+          [slug]: {
+            slug,
+            tableName,
+            fields: fields as DesiredComponent["fields"],
+          },
+        },
+      };
+
+      const promptDispatcher = new BrowserPromptDispatcher(
+        renameResolutions ?? [],
+        eventResolutions ?? [],
+        legacyBundle
+      );
+
+      const migrationJournal = getMigrationJournalFromDI() ?? noopMigrationJournal;
+      const pipeline = new PushSchemaPipeline({
+        executor: new DrizzleStatementExecutor(dialect, db),
+        renameDetector: new RegexRenameDetector(),
+        classifier: new RealClassifier(),
+        promptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: new RealPreCleanupExecutor(),
+        migrationJournal,
+        notifier: getProductionNotifier(),
+      });
+
+      const result = await pipeline.apply({
+        desired,
+        db,
+        dialect,
+        source: "ui",
+        promptChannel: "browser",
+        databaseName,
+        uiTargetSlug: slug,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error?.message ?? "Failed to apply schema changes");
+      }
+
+      // Post-apply: update dynamic_components fields JSON + schema_hash directly
+      // to avoid the registry's auto-bump of schemaVersion / migrationStatus.
+      try {
+        await adapter.update(
+          "dynamic_components",
+          {
+            fields: JSON.stringify(fields),
+            schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+            migration_status: "applied",
+            updated_at: new Date(),
+          },
+          { and: [{ column: "slug", op: "=", value: slug }] }
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}.`
+        );
+      }
+
+      // Post-apply: refresh in-memory runtime schema so CRUD paths reflect
+      // the new column layout without requiring a server restart.
+      // Must use registerComponentRuntimeSchema (not generateRuntimeSchema)
+      // so the registered table includes component system columns
+      // (_parent_id, _parent_table, _parent_field, _order, _component_type)
+      // instead of collection columns (title, slug).
+      registerComponentRuntimeSchema(adapter, dialect, tableName, fields as FieldConfig[]);
+
+      // Pipeline (PipelineResult) does not carry per-slug schema versions;
+      // those live on createApplyDesiredSchema's ApplyResult wrapper. Bump by
+      // 1 locally — matches the collection fallback pattern.
+      const newSchemaVersion = currentVersion + 1;
+
+      void schemaVersion; // accepted but unused (reserved for future optimistic lock)
+
+      return respondAction(`Schema applied for component '${slug}'`, {
+        newSchemaVersion,
+      });
     },
   },
 

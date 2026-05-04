@@ -266,7 +266,7 @@ export function RichTextGalleryPlugin({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
+                  size="md"
                   onClick={goBackToSelect}
                 >
                   Change Selection

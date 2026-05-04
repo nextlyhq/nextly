@@ -368,7 +368,7 @@ function FormBuilderViewInner({
         {/* Action buttons — same variant/size as Collection Builder */}
         <div className="flex items-center gap-2 shrink-0">
           {isDirty && (
-            <span className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md whitespace-nowrap">
+            <span className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-none whitespace-nowrap">
               Unsaved changes
             </span>
           )}
@@ -423,11 +423,11 @@ function FormBuilderViewInner({
       </div>
 
       {/*
-        Outer shell — white card with rounded-md border (no shadow).
+        Outer shell — white card with rounded-none border (no shadow).
         Fills available height in the admin page container.
       */}
       <div
-        className="flex border border-border bg-background overflow-hidden"
+        className="flex border border-primary/5 bg-background overflow-hidden"
         style={{
           borderRadius: "0.5rem",
         }}
@@ -438,7 +438,7 @@ function FormBuilderViewInner({
         <div className="flex-1 min-w-0">
           <div className="w-full px-8 pt-8 pb-12 space-y-6">
             {/* ── Fixed Metadata & Tab Navigation ── */}
-            <div className="bg-background -mx-8 border-b border-border space-y-4">
+            <div className="bg-background -mx-8 border-b border-primary/5 space-y-4">
               <div className="flex flex-wrap gap-4">
                 {/* Form Name */}
                 <div className="flex-1 min-w-[200px] max-w-sm space-y-1.5">
@@ -525,10 +525,10 @@ function FormBuilderViewInner({
                       {tab.label}
                       {tab.count !== null && (
                         <span
-                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-md ml-2 transition-colors ${
+                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-none ml-2 transition-colors ${
                             activeTab === tab.value
-                              ? "bg-primary/10 text-primary"
-                              : "bg-muted text-muted-foreground"
+                              ? "bg-primary/5 text-primary"
+                              : "bg-primary/5 text-muted-foreground"
                           }`}
                         >
                           {tab.count}
@@ -580,7 +580,7 @@ function FormBuilderViewInner({
 
             {/* Save error */}
             {saveError && (
-              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md">
+              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-none">
                 {saveError}
               </div>
             )}
@@ -593,12 +593,12 @@ function FormBuilderViewInner({
         ================================================================= */}
         {activeTab === "builder" && (
           <div
-            className="shrink-0 border-l border-border bg-background flex flex-col"
+            className="shrink-0 border-l border-primary/5 bg-background flex flex-col"
             style={{ width: "360px" }}
           >
             {/* Sidebar tab bar */}
             <div
-              className="shrink-0 grid grid-cols-2 gap-1.5 px-3 py-2.5 border-b border-border"
+              className="shrink-0 grid grid-cols-2 gap-1.5 px-3 py-2.5 border-b border-primary/5"
               style={{ minHeight: "52px" }}
             >
               {(
@@ -638,11 +638,11 @@ function FormBuilderViewInner({
                     disabled={tab.disabled}
                     onClick={() => !tab.disabled && setSidebarTab(tab.value)}
                     className={[
-                      "flex items-center justify-center gap-1.5 w-full text-[13px] font-medium transition-all duration-150 border rounded-md select-none",
+                      "flex items-center justify-center gap-1.5 w-full text-[13px] font-medium transition-all duration-150 border rounded-none select-none",
                       "disabled:opacity-40 disabled:cursor-not-allowed",
                       isActive
                         ? "bg-primary/5 text-primary border-primary/30 cursor-pointer"
-                        : "bg-transparent border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer",
+                        : "bg-transparent border-primary/5 text-muted-foreground hover:text-foreground hover:bg-primary/5/50 cursor-pointer",
                     ].join(" ")}
                     style={{ padding: "8px 12px" }}
                   >
@@ -680,7 +680,7 @@ function FormBuilderViewInner({
                     />
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full px-6 py-16 text-center">
-                      <div className="flex items-center justify-center w-11 h-11 rounded-md bg-muted border border-border mb-4">
+                      <div className="flex items-center justify-center w-11 h-11 rounded-none bg-primary/5 border border-primary/5 mb-4">
                         <SlidersIcon />
                       </div>
                       <p className="text-sm font-medium text-foreground">

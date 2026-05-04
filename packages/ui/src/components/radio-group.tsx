@@ -25,9 +25,9 @@ import { cn } from "../lib/utils";
  *
  * Implementation Notes:
  * - Uses Radix UI primitives for robust accessibility
- * - Visual "checked" state achieved via border expansion (border-[5px])
- * - No inner indicator needed - border expansion provides clear visual feedback
- * - Hover state changes border color for better interactivity
+ * - Visual "checked" state achieved via  border border-primary/5 expansion (border-[5px])
+ * - No inner indicator needed -  border border-primary/5 expansion provides clear visual feedback
+ * - Hover state changes  border border-primary/5 color for better interactivity
  */
 const RadioGroup = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Root>,
@@ -54,12 +54,12 @@ const RadioGroupItem = forwardRef<
       ref={ref}
       data-slot="radio-group-item"
       className={cn(
-        "peer h-4 w-4 shrink-0 rounded-none border border-input bg-background cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/20 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 hover:border-ring data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
+        "peer h-4 w-4 shrink-0 rounded-none border border-primary/5 bg-background cursor-pointer transition-all duration-150 focus:!border-primary focus-visible:!border-primary focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:!border-destructive aria-invalid:focus-visible:!border-destructive disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/30 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
         className
       )}
       {...props}
     >
-      {/* No inner indicator needed - border expansion provides visual feedback */}
+      {/* No inner indicator needed -  border border-primary/5 expansion provides visual feedback */}
       <RadioGroupPrimitive.Indicator />
     </RadioGroupPrimitive.Item>
   );

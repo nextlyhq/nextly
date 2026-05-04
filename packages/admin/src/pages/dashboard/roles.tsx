@@ -58,7 +58,7 @@ const RolesPage: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <Link href={ROUTES.SECURITY_ROLES_CREATE}>
-              <Button size="sm" className="flex items-center gap-1">
+              <Button size="md" className="flex items-center gap-1">
                 <Plus className="h-4 w-4" />
                 <span>Add Role</span>
               </Button>

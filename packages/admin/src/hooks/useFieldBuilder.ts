@@ -45,7 +45,6 @@ import {
   updateFieldById,
   deleteFieldById,
   reorderNestedFields,
-  _nestedFieldPriorityCollision,
   findComponentFieldMissingReference,
   findSelectFieldMissingOptions,
 } from "@admin/lib/builder";
@@ -108,6 +107,8 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
   handleFieldsReorder: (reorderedFields: BuilderField[]) => void;
   handleFieldDelete: (fieldId: string) => void;
   handleFieldUpdate: (updatedField: BuilderField) => void;
+  /** PR D: append an already-configured field to a parent group/repeater's nested fields. */
+  handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
   handleEditorClose: () => void;
 
   // Validation helper
@@ -456,6 +457,28 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     setFields(reorderedFields);
   }, []);
 
+  // Why: PR D parent-aware "+ Add field" inside group/repeater editors.
+  // Unlike handleFieldAdd (which builds an empty field by type), this
+  // accepts an already-configured field and appends it to the parent's
+  // nested fields array. Used by the create-overlay's onApply when the
+  // user has been configuring a child via the FieldEditorSheet.
+  const handleNestedFieldAdd = useCallback(
+    (parentFieldId: string, newField: BuilderField) => {
+      setFields(prev => {
+        const parent = findFieldById(prev, parentFieldId);
+        if (!parent) return prev;
+        if (parent.type === "repeater") {
+          return addFieldToArray(prev, parentFieldId, newField);
+        }
+        if (parent.type === "group") {
+          return addFieldToGroup(prev, parentFieldId, newField);
+        }
+        return prev;
+      });
+    },
+    []
+  );
+
   const handleFieldDelete = useCallback(
     (fieldId: string) => {
       setFields(prev => deleteFieldById(prev, fieldId));
@@ -541,6 +564,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     handleFieldsReorder,
     handleFieldDelete,
     handleFieldUpdate,
+    handleNestedFieldAdd,
     handleEditorClose,
     validateFields,
   };

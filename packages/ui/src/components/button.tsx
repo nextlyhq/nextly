@@ -1,5 +1,6 @@
 import { Slot } from "@radix-ui/react-slot";
 import { cva } from "class-variance-authority";
+import * as React from "react";
 import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
@@ -22,33 +23,36 @@ import type { ButtonProps } from "../types/button";
  * Note: 'primary' is a semantic alias for 'default' variant for better code readability
  */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-none text-sm font-medium cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-none text-sm font-medium cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:opacity-90",
-        primary: "bg-primary text-primary-foreground hover:opacity-90",
+        default:
+          "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
+        primary:
+          "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
         destructive:
-          "bg-destructive text-destructive-foreground hover:opacity-90",
-        outline: "border border-input hover-unified",
+          "bg-destructive text-destructive-foreground border border-transparent hover:opacity-90",
+        outline:
+          "border border-primary/10 text-foreground hover-unified bg-background",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "text-foreground hover-unified",
-        link: "text-primary underline-offset-4 hover:underline",
+          "bg-background border border-primary/10 text-foreground hover:bg-primary/5",
+        ghost: "text-foreground border border-transparent hover-unified",
+        link: "text-primary border border-transparent underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-8 px-3 text-sm rounded-none",
-        md: "h-10 px-4 py-2 text-base rounded-none",
-        lg: "h-11 px-5 py-2.5 text-base rounded-none",
+        default: "h-10 px-6 py-2",
+        sm: "h-9 px-4 text-[13px]",
+        md: "h-10 px-6 text-sm",
+        lg: "h-11 px-8 text-base",
         icon: "h-10 w-10 p-0",
-        "icon-sm": "h-8 w-8 p-0",
+        "icon-sm": "h-9 w-9 p-0",
         "icon-lg": "h-11 w-11 p-0",
       },
     },
     defaultVariants: {
       variant: "default",
-      size: "default",
+      size: "md",
     },
   }
 );
@@ -58,20 +62,30 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     {
       className,
       variant = "default",
-      size = "default",
+      size = "md",
       asChild = false,
+      children,
       ...props
     },
     ref
   ) => {
     const Comp = asChild ? Slot : "button";
+
+    // Automatically apply gap-2 if there are multiple children (e.g., icon + text)
+    const hasMultipleChildren = React.Children.count(children) > 1;
+
     return (
       <Comp
         data-slot={`button.${variant}`}
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(
+          buttonVariants({ variant, size, className }),
+          hasMultipleChildren && "gap-1.5"
+        )}
         ref={ref}
         {...props}
-      />
+      >
+        {children}
+      </Comp>
     );
   }
 );

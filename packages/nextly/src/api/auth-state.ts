@@ -59,7 +59,7 @@ type AuthStatePayload = {
 };
 
 export const GET = withErrorHandler(async (request: NextRequest) => {
-  const secret = env.NEXTLY_SECRET_RESOLVED ?? "";
+  const secret = env.NEXTLY_SECRET ?? "";
   if (!secret) {
     // Misconfigured app — no JWT secret means we can't verify any session.
     // Fail closed with a generic 401 (operators see the cause in logs).

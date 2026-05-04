@@ -115,9 +115,9 @@ export interface CheckboxFieldConfig
     "type" | "validate" | "defaultValue" | "admin"
   > {
   /**
-   * Field type identifier. 'checkbox' is canonical; 'boolean' is the Schema Builder alias.
+   * Field type identifier.
    */
-  type: "checkbox" | "boolean";
+  type: "checkbox";
 
   /**
    * Default value for the field.

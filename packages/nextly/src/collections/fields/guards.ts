@@ -176,8 +176,7 @@ export const isNumberField = createTypeGuard<NumberFieldConfig>("number");
  */
 export const isCheckboxField = (
   field: FieldConfig
-): field is CheckboxFieldConfig =>
-  field.type === "checkbox" || field.type === "boolean";
+): field is CheckboxFieldConfig => field.type === "checkbox";
 
 /**
  * Type guard for date field config.
