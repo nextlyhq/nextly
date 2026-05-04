@@ -1,4 +1,4 @@
-# Audit M13 / T-024: scan staged changes for committed secrets before
+# scan staged changes for committed secrets before
 # lint-staged formats them. `gitleaks protect --staged` only inspects
 # the index, so it's fast and accurate enough to catch common cases
 # (API keys, private keys, AWS/GCP creds, etc).

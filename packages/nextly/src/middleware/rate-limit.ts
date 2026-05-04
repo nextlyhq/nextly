@@ -164,7 +164,7 @@ export interface RateLimitConfig {
   keyGenerator?: (request: Request) => string;
 
   /**
-   * Audit C4 / T-005: when true, the default keyGenerator parses
+   * when true, the default keyGenerator parses
    * `X-Forwarded-For` (filtered through `trustedProxyIps`). When false
    * (default), proxy headers are ignored — direct-internet deployments
    * fall back to a single `unknown` bucket. Wired from
@@ -175,7 +175,7 @@ export interface RateLimitConfig {
   trustProxy?: boolean;
 
   /**
-   * Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS).
+   * CIDR list of proxy IPs (from TRUSTED_PROXY_IPS).
    * Used by the default keyGenerator to walk the X-Forwarded-For chain
    * rightmost-first, returning the first non-proxy hop.
    */
@@ -329,7 +329,7 @@ const DEFAULTS = {
  * traffic still shares one bucket rather than collapsing into a
  * unique-per-request key).
  *
- * Audit C4 / T-005: replaces a leftmost-XFF parser that any direct
+ * replaces a leftmost-XFF parser that any direct
  * attacker could rotate to bypass per-IP rate limits.
  */
 function buildDefaultKeyGenerator(

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Audit C7 / T-004: verify that the Direct API throws when imported
+ * verify that the Direct API throws when imported
  * with a browser-shaped global.
  *
  * Wired into CI alongside `pnpm check-types` / `pnpm test`. Exits 0 on
@@ -31,7 +31,7 @@ try {
 
 if (!threw) {
   console.error(
-    "[verify-server-only] FAIL — Direct API loaded successfully in a browser context. T-004 regressed."
+    "[verify-server-only] FAIL — Direct API loaded successfully in a browser context."
   );
   process.exit(1);
 }

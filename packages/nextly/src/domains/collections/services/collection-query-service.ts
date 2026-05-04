@@ -1031,7 +1031,7 @@ export class CollectionQueryService extends BaseService {
 
       await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
 
-      // Audit M11 / T-023: when read access is `owner-only`, fold the
+      // when read access is `owner-only`, fold the
       // ownership predicate into the SQL WHERE clause. A non-owner gets
       // a 404 (same response shape as a non-existent ID), not a 403,
       // so IDOR-by-iteration leaks nothing about which IDs exist.

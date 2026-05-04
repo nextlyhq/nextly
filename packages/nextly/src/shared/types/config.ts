@@ -265,7 +265,7 @@ export interface SecurityConfig {
   sanitization?: SanitizationConfigInput;
 
   /**
-   * Audit H13 (T-012): request body / multipart size caps. Each
+   * request body / multipart size caps. Each
    * numeric field accepts either a byte count or a human-readable
    * suffix (`"1mb"`, `"500kb"`). Defaults: json 1mb / multipart
    * 50mb / fileSize 10mb / fileCount 10 / fieldCount 50 / fieldSize
@@ -281,7 +281,7 @@ export interface SecurityConfig {
   };
 
   /**
-   * Audit H4 (T-016): per-IP rate limit on `/auth/login`,
+   * per-IP rate limit on `/auth/login`,
    * `/auth/register`, `/auth/forgot-password`, `/auth/reset-password`.
    * One shared bucket per IP across all four endpoints so credential-
    * stuffing from a single source can't cycle paths to refill its

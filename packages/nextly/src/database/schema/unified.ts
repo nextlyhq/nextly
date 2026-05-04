@@ -450,7 +450,7 @@ export const nextlyTables: TableDefinition[] = [
   {
     name: "audit_log",
     comment:
-      "Audit M10 / T-022. Append-only event store for security-sensitive auth events. Operators should revoke UPDATE/DELETE GRANTs in production.",
+      "Append-only event store for security-sensitive auth events. Operators should revoke UPDATE/DELETE GRANTs in production.",
     columns: [
       {
         name: "id",

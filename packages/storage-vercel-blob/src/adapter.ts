@@ -101,7 +101,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns Upload result with URL and storage path
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
-    // Audit H14 (T-013): hard-reject SVG and HTML uploads on Vercel
+    // hard-reject SVG and HTML uploads on Vercel
     // Blob. The platform does not support per-object response headers
     // (no Content-Disposition: attachment, no CSP), so an attacker who
     // can persuade an admin to upload `evil.svg` (or `.html`) gets a
@@ -377,7 +377,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @param filename - Original filename (will be sanitized)
    * @param folder - Optional folder/prefix for organizing uploads
    * @returns Generated pathname
-   * @throws Error if folder fails sanitization (Audit M22 / T-027)
+   * @throws Error if folder fails sanitization
    */
   private buildPathname(filename: string, folder?: string): string {
     const sanitized = this.sanitizeFilename(filename);
@@ -397,7 +397,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
   }
 
   /**
-   * Audit M22 (T-027). Reject folder values that would let a caller
+   * Reject folder values that would let a caller
    * escape the configured prefix via path traversal or weird
    * separators. Vercel Blob is flat-keyed so `/` is just part of the
    * pathname, but an attacker who controls `folder` could still:

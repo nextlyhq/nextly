@@ -4,7 +4,7 @@
  * Provides authenticated encryption for sensitive data at rest. Uses
  * AES-256-GCM with scrypt-derived keys.
  *
- * Format (current — Audit H12 / T-019): `salt.iv.authTag.ciphertext`
+ * Format (current): `salt.iv.authTag.ciphertext`
  *   - 4 dot-separated hex segments.
  *   - 16-byte random salt per encryption — every ciphertext derives a
  *     fresh key from the secret, so two writes of the same plaintext
@@ -36,10 +36,10 @@ const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // 96-bit nonce (recommended for GCM)
 const KEY_LENGTH = 32; // 256-bit key
 const AUTH_TAG_LENGTH = 16; // 128-bit auth tag
-const SALT_LENGTH = 16; // 128-bit per-encryption salt (Audit H12 / T-019)
+const SALT_LENGTH = 16; // 128-bit per-encryption salt
 
 /**
- * Audit H12 (T-019). Pre-T-019 ciphertexts derived their key from this
+ * ciphertexts derived their key from this
  * fixed salt. `decrypt()` still uses it as the fallback when a legacy
  * 3-part ciphertext is presented; new ciphertexts use a random salt.
  */

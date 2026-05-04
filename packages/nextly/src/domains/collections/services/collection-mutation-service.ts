@@ -2287,7 +2287,7 @@ export class CollectionMutationService extends BaseService {
     try {
       const tableName = getTableName(params.collectionName);
 
-      // Audit M11 / T-023: when update access is `owner-only`, fold
+      // when update access is `owner-only`, fold
       // the ownership predicate into the SQL WHERE clause of the
       // initial fetch. A non-owner sees a 404, never gets the row
       // back, and the post-fetch check below stays as a defense-in-
@@ -2317,7 +2317,6 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Defense-in-depth (Audit M11 / T-023): the WHERE-clause filter
       // above is the load-bearing check. This explicit comparison is
       // a safety net that fires only if a future refactor accidentally
       // weakens the fetch query — at which point we'd rather return
@@ -2591,7 +2590,7 @@ export class CollectionMutationService extends BaseService {
     try {
       const tableName = getTableName(params.collectionName);
 
-      // Audit M11 / T-023: when delete access is `owner-only`, fold
+      // when delete access is `owner-only`, fold
       // the ownership predicate into the SQL WHERE clause of the
       // initial fetch. The post-fetch check below remains as a
       // defense-in-depth guard.
@@ -2618,7 +2617,7 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Defense-in-depth (Audit M11 / T-023). See updateSingleEntryInTransaction
+      //See updateSingleEntryInTransaction
       // for the rationale: WHERE-clause filter is load-bearing, this
       // comparison is the safety net.
       const collection = await this.collectionService.getCollection(

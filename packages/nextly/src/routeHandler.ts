@@ -1224,7 +1224,7 @@ export function createDynamicHandlers(options?: {
   const rateLimitConfig = options?.config?.rateLimit as
     | Parameters<typeof createRateLimiter>[0]
     | undefined;
-  // Audit C4 / T-005: the default keyGenerator needs the trust-proxy
+  // the default keyGenerator needs the trust-proxy
   // settings so it can resolve a real client IP rather than blindly
   // trusting X-Forwarded-For. Inject from `security.trustProxy` +
   // TRUSTED_PROXY_IPS env unless the user supplied an override.

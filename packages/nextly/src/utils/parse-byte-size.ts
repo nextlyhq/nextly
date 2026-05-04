@@ -1,7 +1,7 @@
 /**
  * Parse human-readable byte sizes used in `security.limits` config.
  *
- * Audit H13 (T-012). Accepts either a number (interpreted as bytes)
+ * Accepts either a number (interpreted as bytes)
  * or a string with an optional suffix: `b`, `kb`, `mb`, `gb`, `tb`
  * (case-insensitive). `1024` units, not SI — matches the convention
  * common in Node config (Express body-parser, koa-body, etc.).

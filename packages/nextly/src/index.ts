@@ -543,14 +543,12 @@ export type {
 // SECURITY UTILITIES
 // ============================================================
 
-// Audit C4 / T-005
 export {
   getTrustedClientIp,
   parseTrustedProxyIpsEnv,
   type TrustedClientIpOptions,
 } from "./utils/get-trusted-client-ip";
 
-// Audit C3 + H8 / T-008
 export {
   validateExternalUrl,
   safeFetch,

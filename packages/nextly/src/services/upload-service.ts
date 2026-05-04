@@ -44,7 +44,7 @@
 import type { IStorageAdapter } from "../storage/adapters/base-adapter";
 import type { FileMetadata, UploadResult } from "../storage/types";
 
-// Audit C5 (T-006): magic-byte detection (file-type) and SVG
+// magic-byte detection (file-type) and SVG
 // sanitization (isomorphic-dompurify). Both are server-side; no
 // browser-bundle concerns since this module is only imported by the
 // upload route handler, which is server-only.
@@ -157,7 +157,7 @@ const BLOCKED_MIME_TYPES = [
 ];
 
 /**
- * Audit C5 (T-006): file extensions whose execution is potentially
+ * file extensions whose execution is potentially
  * dangerous when served from the same origin as the admin UI.
  * Rejected unconditionally regardless of the client-claimed MIME type.
  * SVG is intentionally NOT blocked here — it's allowed but sanitized
@@ -306,7 +306,7 @@ export class UploadService {
     file: Buffer,
     options: UploadOptions
   ): Promise<UploadServiceResult<UploadedFile>> {
-    // Audit C5 (T-006): filename + extension hygiene. Reject path
+    // filename + extension hygiene. Reject path
     // separators and null bytes BEFORE anything else looks at the
     // filename — defends against directory traversal and the classic
     // "filename.jpg\0.html" trick.
@@ -351,7 +351,7 @@ export class UploadService {
       };
     }
 
-    // Audit C5 (T-006): magic-byte vs claimed-MIME mismatch.
+    // magic-byte vs claimed-MIME mismatch.
     // file-type sniffs the actual bytes; we reject when a client
     // claims `image/jpeg` but the bytes are `text/html` (a classic
     // polyglot / forged-extension trick). Some text-only formats
@@ -370,7 +370,7 @@ export class UploadService {
       };
     }
 
-    // Audit C5 (T-006): SVG sanitization. Allow SVG uploads but strip
+    // SVG sanitization. Allow SVG uploads but strip
     // <script>, on*-handlers, and javascript: URLs from the markup
     // before storage. Replaces the input buffer with the cleaned bytes.
     const sanitized = await sanitizeSvgIfNeeded(file, options.mimeType);
@@ -709,7 +709,7 @@ export class UploadService {
 }
 
 // ============================================================
-// Audit C5 (T-006) — file-name / extension / magic-byte / SVG
+// file-name / extension / magic-byte / SVG
 // ============================================================
 
 function getExtension(filename: string): string {

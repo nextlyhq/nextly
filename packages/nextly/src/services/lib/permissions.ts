@@ -1,4 +1,4 @@
-// Audit C7 (T-004): hard runtime guard. The previous form was a
+// hard runtime guard. The previous form was a
 // try/catch'd dynamic `await import("server-only")` that silently
 // allowed the module to load in client bundles. The audit recommended
 // adding a static `import "server-only"` on top of the runtime

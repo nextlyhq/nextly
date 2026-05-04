@@ -23,7 +23,7 @@ import { z } from "zod";
  */
 export const SecurityHeadersConfigSchema = z.object({
   /**
-   * Audit M3 (T-020). Default is a restrictive policy that still lets
+   * Default is a restrictive policy that still lets
    * a self-hosted admin SPA run. See `SecurityHeadersConfig.contentSecurityPolicy`
    * in `middleware/security-headers.ts` for the full default + override docs.
    */
@@ -133,7 +133,7 @@ export const SanitizationConfigSchema = z.object({
 });
 
 /**
- * Audit H13 (T-012): request body / multipart size caps. Each field
+ * request body / multipart size caps. Each field
  * accepts a byte count or a human-readable suffix (`"1mb"`, `"500kb"`).
  * String shorthand is parsed at runtime; the schema stays permissive.
  */
@@ -169,7 +169,7 @@ export const SecurityLimitsConfigSchema = z.object({
  * ```
  */
 /**
- * Audit H4 (T-016): per-IP rate limit on auth write endpoints
+ * per-IP rate limit on auth write endpoints
  * (`/auth/login`, `/auth/register`, `/auth/forgot-password`,
  * `/auth/reset-password`). Layered on top of the per-user lockout so
  * an attacker can't cycle usernames at full speed from one IP.

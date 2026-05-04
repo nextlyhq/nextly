@@ -11,8 +11,8 @@ import { describe, it, expect } from "vitest";
 import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
 
-// Audit M10 / T-022: spying writer used by the audit-on-CSRF-failure
-// test below. Counts events received and exposes them for assertions.
+// Spying writer used by the audit-on-CSRF-failure test below. Counts
+// events received and exposes them for assertions.
 function makeRecordingAuditWriter() {
   const events: Array<Parameters<typeof NULL_AUDIT_LOG_WRITER.write>[0]> = [];
   return {
@@ -46,8 +46,8 @@ function makeStubDeps(
     allowedOrigins: [],
     trustProxy: false,
     trustedProxyIps: [],
-    // T-016: 0 disables the per-IP envelope so CSRF (which is the
-    // contract under test) still runs first.
+    // 0 disables the per-IP envelope so CSRF (which is the contract
+    // under test) still runs first.
     authRateLimit: { requestsPerHour: 0, windowMs: 3_600_000 },
     auditLog,
     findUserByEmail: unreachable as never,
@@ -148,11 +148,10 @@ describe("CSRF coverage", () => {
     }
   );
 
-  // Audit M10 / T-022: every CSRF rejection records a single
-  // `csrf-failed` event with the request path/method as metadata.
-  // change-password is excluded because its 401 short-circuit (no
-  // session) fires before CSRF, so there's nothing to audit on that
-  // row.
+  // Every CSRF rejection records a single `csrf-failed` event with the
+  // request path/method as metadata. change-password is excluded because
+  // its 401 short-circuit (no session) fires before CSRF, so there's
+  // nothing to audit on that row.
   it("audits one csrf-failed event per CSRF-rejected request", async () => {
     const recording = makeRecordingAuditWriter();
     const deps = makeStubDeps(recording.writer);
