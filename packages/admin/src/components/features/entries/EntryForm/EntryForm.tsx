@@ -15,10 +15,8 @@
  * @since 1.0.0
  */
 
-import { Card, CardContent } from "@revnixhq/ui";
 import type React from "react";
 
-import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
@@ -33,6 +31,7 @@ import { EntryFormHeader } from "./EntryFormHeader";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { TitleHeadlineInput } from "./TitleHeadlineInput";
 import {
   useEntryForm,
   getCollectionFields,
@@ -323,31 +322,15 @@ export function EntryForm({
                 onDelete={handleDelete}
                 isDirty={isDirty}
               />
-              {/* Custom Title & Slug row */}
-              {(titleField || slugField) && (
-                <div className="mb-6">
-                  <Card>
-                    <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                      {titleField && (
-                        <div className="w-full">
-                          <FieldRenderer
-                            field={titleField}
-                            disabled={isSubmitting}
-                            readOnly={false}
-                          />
-                        </div>
-                      )}
-                      {slugField && (
-                        <div className="w-full">
-                          <FieldRenderer
-                            field={slugField}
-                            disabled={isSubmitting}
-                            readOnly={false}
-                          />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+              {/* Pinned title headline (Q-D5=iv). Slug moves into the rail's
+                  DocumentPanel (see below); title becomes a borderless 28px
+                  heading-style input above the field grid. */}
+              {titleField && (
+                <div className="-mx-8 mb-2">
+                  <TitleHeadlineInput
+                    titleField={titleField}
+                    disabled={isSubmitting}
+                  />
                 </div>
               )}
 
@@ -370,6 +353,7 @@ export function EntryForm({
                     mode={mode}
                     entry={entry}
                     hasStatus={hasStatus}
+                    slugField={slugField}
                   />
                 </div>
               </div>
