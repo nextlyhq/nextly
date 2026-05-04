@@ -30,12 +30,16 @@ import {
   setCachedSnapshot,
 } from "../../../init/schema-snapshot-cache";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
+import { ComponentSchemaService } from "../../components/services/component-schema-service";
 
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { buildDesiredTableFromFields } from "./diff/build-from-fields";
+import {
+  buildDesiredTableFromFields,
+  buildDesiredTableFromComponentFields,
+} from "./diff/build-from-fields";
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
@@ -439,6 +443,7 @@ export class PushSchemaPipeline {
       const managedTableNames = [
         ...Object.values(desired.collections).map(c => c.tableName),
         ...Object.values(desired.singles).map(s => s.tableName),
+        ...Object.values(desired.components).map(c => c.tableName),
       ];
 
       // Phase A: our diff.
@@ -474,6 +479,15 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               { hasStatus: s.status === true }
+            )
+          ),
+          ...Object.values(desired.components).map(c =>
+            buildDesiredTableFromComponentFields(
+              c.tableName,
+              c.fields as unknown as Parameters<
+                typeof buildDesiredTableFromComponentFields
+              >[1],
+              dialect
             )
           ),
         ],
@@ -892,6 +906,21 @@ export class PushSchemaPipeline {
         dialect
       );
       out[s.tableName] = table;
+    }
+    // Components (comp_* tables) use component system columns
+    // (_parent_id, _parent_table, _parent_field, _order, _component_type)
+    // instead of collection columns (title, slug). ComponentSchemaService
+    // owns that column layout; generateRuntimeSchema would inject wrong
+    // system columns.
+    const componentSchemaService = new ComponentSchemaService(dialect);
+    for (const c of Object.values(desired.components)) {
+      const componentTable = componentSchemaService.generateRuntimeSchema(
+        c.tableName,
+        c.fields as unknown as Parameters<
+          typeof componentSchemaService.generateRuntimeSchema
+        >[1]
+      );
+      out[c.tableName] = componentTable;
     }
     return out;
   }

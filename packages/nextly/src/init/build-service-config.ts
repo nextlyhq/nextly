@@ -59,14 +59,11 @@ export interface GetNextlyOptions extends Partial<NextlyServiceConfig> {
  * @returns Complete service configuration
  */
 
- console.log("[nextly-core] source-mode reload!!!");
 export function buildServiceConfig(
   providedConfig?: GetNextlyOptions
 ): NextlyServiceConfig {
   // Start with provided config or empty object
   const serviceConfig: Partial<NextlyServiceConfig> = {};
-
-  console.log("[nextly-core] source-mode reload!!!");
 
   // Copy over service config properties (excluding 'config')
   if (providedConfig) {

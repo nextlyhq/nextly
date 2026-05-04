@@ -473,29 +473,6 @@ export interface CollectionFormData {
 export type BuilderEntityType = "collection" | "single" | "component";
 
 /**
- * Props for the BuilderHeader component
- */
-export interface BuilderHeaderProps {
-  isEditing: boolean;
-  isSaving: boolean;
-  onSave: () => void;
-  onCancel: () => void;
-  /** Entity type being built (collection or single). Defaults to "collection" */
-  entityType?: BuilderEntityType;
-  /** Custom back route. Defaults to ROUTES.COLLECTIONS or ROUTES.SINGLES based on entityType */
-  backRoute?: string;
-}
-
-/**
- * Props for the FieldPalette component
- */
-export interface FieldPaletteProps {
-  onFieldAdd: (fieldType: string) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
-}
-
-/**
  * Props for the FieldList component
  */
 export interface FieldListProps {

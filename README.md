@@ -36,13 +36,13 @@
 
 Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST + GraphQL API and a customizable admin dashboard out of the box. No SaaS, no proprietary cloud — your data, your stack.
 
-- Define collections in TypeScript with the [**code-first config**](https://nextlyhq.com/docs/concepts), or build them visually in the [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/schema-builder)
-- Auto-generated [**REST**](https://nextlyhq.com/docs/api/rest) & [**GraphQL**](https://nextlyhq.com/docs/api/graphql) APIs with full TypeScript types
-- Granular [**Roles & Permissions**](https://nextlyhq.com/docs/access-control) and field-level access control out of the box
-- First-class [**PostgreSQL**, **MySQL**, and **SQLite**](https://nextlyhq.com/docs/database/support) support via pluggable adapters
-- Built-in [**Media Library**](https://nextlyhq.com/docs/media) with **S3**, **Vercel Blob**, and **UploadThing** storage adapters
+- Define collections in TypeScript with the [**code-first config**](https://nextlyhq.com/docs/configuration/collections), or build them visually in the [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/builder)
+- Auto-generated [**REST**](https://nextlyhq.com/docs/api-reference/rest-api) & [**GraphQL**](https://nextlyhq.com/docs/api-reference/direct-api) APIs with full TypeScript types
+- Granular [**Roles & Permissions**](https://nextlyhq.com/docs/guides/authentication) and field-level access control out of the box
+- First-class [**PostgreSQL**, **MySQL**, and **SQLite**](https://nextlyhq.com/docs/database) support via pluggable adapters
+- Built-in [**Media Library**](https://nextlyhq.com/docs/guides/media-storage) with **S3**, **Vercel Blob**, and **UploadThing** storage adapters
 - Extensible [**plugin system**](https://nextlyhq.com/docs/plugins) and customizable admin dashboard
-- 100% [**TypeScript**](https://nextlyhq.com/docs/typescript), MIT-licensed, self-hosted
+- 100% [**TypeScript**](https://nextlyhq.com/docs), MIT-licensed, self-hosted
 
 > Explore all features at **[nextlyhq.com](https://nextlyhq.com)**
 
@@ -57,7 +57,7 @@ pnpm create nextly-app@latest
 
 That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.
 
-> Prefer a manual setup? See the [installation guide](https://nextlyhq.com/docs/installation) for clone-and-configure instructions, Docker, and database options.
+> Prefer a manual setup? See the [installation guide](https://nextlyhq.com/docs/getting-started/installation) for clone-and-configure instructions, Docker, and database options.
 
 ## Packages
 
@@ -104,20 +104,23 @@ That's it. Follow the prompts and you'll have a running CMS with admin panel and
 
 ### Database support
 
-| Database   | Minimum | Notes                                                                 |
-| ---------- | ------- | --------------------------------------------------------------------- |
-| PostgreSQL | 15.0+   | Standard PG, Neon, Supabase, RDS, Aurora PG all supported.            |
-| MySQL      | 8.0+    | MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess work on best-effort. |
-| SQLite     | 3.38+   | Bundled with `better-sqlite3`.                                        |
+| Database                                                  | Minimum | Notes                                                                 |
+| --------------------------------------------------------- | ------- | --------------------------------------------------------------------- |
+| [PostgreSQL](https://nextlyhq.com/docs/database/postgres) | 15.0+   | Standard PG, Neon, Supabase, RDS, Aurora PG all supported.            |
+| [MySQL](https://nextlyhq.com/docs/database/mysql)         | 8.0+    | MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess work on best-effort. |
+| [SQLite](https://nextlyhq.com/docs/database/sqlite)       | 3.38+   | Bundled with `better-sqlite3`.                                        |
 
-See the [database support docs](https://nextlyhq.com/docs/database/support) for full version policy and cloud-provider notes.
+See the [database support docs](https://nextlyhq.com/docs/database) for full version policy and cloud-provider notes.
 
 ## Documentation
 
-- [**Installation**](https://nextlyhq.com/docs/installation) — get started in minutes
-- [**Concepts**](https://nextlyhq.com/docs/concepts) — collections, fields, hooks, access control
-- [**API reference**](https://nextlyhq.com/docs/api) — REST and GraphQL
-- [**Admin customization**](https://nextlyhq.com/docs/admin) — extend the dashboard
+- [**Installation**](https://nextlyhq.com/docs/getting-started/installation) — get started in minutes
+- [**Concepts**](https://nextlyhq.com/docs/configuration) — collections, fields, hooks, access control
+- [**Authentication & permissions**](https://nextlyhq.com/docs/guides/authentication) — RBAC, API keys, JWT
+- [**API reference**](https://nextlyhq.com/docs/api-reference/rest-api) — REST and GraphQL
+- [**Direct API**](https://nextlyhq.com/docs/api-reference/direct-api) — programmatic Node.js access
+- [**Database**](https://nextlyhq.com/docs/database) — Postgres, MySQL, SQLite adapters
+- [**Admin customization**](https://nextlyhq.com/docs/admin/customization) — extend the dashboard
 - [**Plugin development**](https://nextlyhq.com/docs/plugins) — build your own integrations
 
 ## Community
