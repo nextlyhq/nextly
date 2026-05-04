@@ -876,14 +876,12 @@ export interface ArrayFieldEditorProps {
   rowLabelField?: string;
   /** Callback when rowLabelField changes */
   onRowLabelFieldChange: (field: string | undefined) => void;
-  /** Nested fields (for populating row label field selector) */
-  nestedFields?: BuilderField[];
   /**
-   * PR D: parent-aware "+ Add field" button. When provided, the editor
-   * renders a button that asks the host page to open the
-   * FieldPickerModal scoped to the parent (this repeater).
+   * Nested fields exposed for the row-label-field selector (the editor
+   * picks a labelable text/number/etc. field by name). PR I dropped the
+   * +Add affordance; this prop is read-only metadata only.
    */
-  onAddField?: () => void;
+  nestedFields?: BuilderField[];
 }
 
 // ============================================================
@@ -891,21 +889,16 @@ export interface ArrayFieldEditorProps {
 // ============================================================
 
 /**
- * Props for the GroupFieldEditor component
+ * Props for the GroupFieldEditor component. PR I dropped the +Add
+ * affordance and the nested-fields display section -- the field list
+ * itself shows the children now. Group editor configures only the parent
+ * (gutter visibility).
  */
 export interface GroupFieldEditorProps {
   /** Whether to hide the gutter (vertical line and padding) */
   hideGutter?: boolean;
   /** Callback when hideGutter changes */
   onHideGutterChange: (hideGutter: boolean) => void;
-  /** Nested fields within the group */
-  nestedFields?: BuilderField[];
-  /**
-   * PR D: parent-aware "+ Add field" button. When provided, the editor
-   * renders a button that asks the host page to open the
-   * FieldPickerModal scoped to the parent (this group).
-   */
-  onAddField?: () => void;
 }
 
 // ============================================================

@@ -75,6 +75,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -102,6 +103,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -121,6 +123,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -139,6 +142,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -160,6 +164,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -178,6 +183,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -202,6 +208,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -224,6 +231,7 @@ describe("BuilderFieldList", () => {
           onDeleteField={vi.fn()}
           onDuplicateField={vi.fn()}
           onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
         />
       )
     );
@@ -232,5 +240,189 @@ describe("BuilderFieldList", () => {
     expect(
       screen.getByRole("button", { name: /add your first field/i })
     ).toBeInTheDocument();
+  });
+});
+
+describe("BuilderFieldList -- nested rendering (PR I)", () => {
+  const repeaterParent: BuilderField = {
+    id: "rep1",
+    name: "heroSections",
+    label: "Hero Sections",
+    type: "repeater",
+    isSystem: false,
+    validation: {},
+    admin: { width: "100%" },
+    fields: [
+      {
+        id: "c1",
+        name: "title",
+        label: "Section Title",
+        type: "text",
+        validation: {},
+      },
+      {
+        id: "c2",
+        name: "image",
+        label: "Image",
+        type: "upload",
+        validation: {},
+      },
+    ],
+  };
+
+  const groupParent: BuilderField = {
+    id: "grp1",
+    name: "address",
+    label: "Address",
+    type: "group",
+    isSystem: false,
+    validation: {},
+    admin: { width: "100%" },
+    fields: [
+      {
+        id: "g1",
+        name: "street",
+        label: "Street",
+        type: "text",
+        validation: {},
+      },
+    ],
+  };
+
+  it("renders the parent's nested children inside a child container", () => {
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, repeaterParent]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
+        />
+      )
+    );
+    expect(screen.getByText("Section Title")).toBeInTheDocument();
+    expect(screen.getByText("Image")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /add field inside hero sections/i })
+    ).toBeInTheDocument();
+  });
+
+  it("clicking a nested row calls onEditField with the nested field id", async () => {
+    const onEdit = vi.fn();
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, repeaterParent]}
+          onAddAt={vi.fn()}
+          onEditField={onEdit}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
+        />
+      )
+    );
+    await userEvent.click(screen.getByText("Section Title"));
+    expect(onEdit).toHaveBeenCalledWith("c1");
+  });
+
+  it("renders a nested container for group fields too", () => {
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, groupParent]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
+        />
+      )
+    );
+    expect(
+      screen.getByRole("button", { name: /add field inside address/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Street")).toBeInTheDocument();
+  });
+
+  it("does NOT render a nested container for component fields (Q4 leaf)", () => {
+    const compParent: BuilderField = {
+      id: "comp1",
+      name: "seoBlock",
+      label: "SEO Block",
+      type: "component",
+      component: "seo-block",
+      isSystem: false,
+      validation: {},
+      admin: { width: "100%" },
+    };
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, compParent]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
+        />
+      )
+    );
+    expect(
+      screen.queryByRole("button", { name: /add field inside/i })
+    ).toBeNull();
+  });
+
+  it("calls onAddInsideParent with the parent id when nested +Add is clicked", async () => {
+    const onAdd = vi.fn();
+    render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, repeaterParent]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+          onAddInsideParent={onAdd}
+        />
+      )
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /add field inside hero sections/i })
+    );
+    expect(onAdd).toHaveBeenCalledWith("rep1");
+  });
+
+  it("forces 50%-width repeaters onto their own row (Q1 visual layout)", () => {
+    // Why: PR I overrides repeater/group widths to 100% during row-pack
+    // so containers always get full horizontal room for their nested
+    // child container. Even if the user set width: 50% on a repeater,
+    // it should not share a row with another atomic field.
+    const halfWidthRepeater: BuilderField = {
+      ...repeaterParent,
+      admin: { width: "50%" },
+    };
+    const { container } = render(
+      withDndContext(
+        <BuilderFieldList
+          fields={[sysTitle, sysSlug, u1, halfWidthRepeater]}
+          onAddAt={vi.fn()}
+          onEditField={vi.fn()}
+          onDeleteField={vi.fn()}
+          onDuplicateField={vi.fn()}
+          onReorder={vi.fn()}
+          onAddInsideParent={vi.fn()}
+        />
+      )
+    );
+    const userRows = container.querySelectorAll('[data-row-id^="row-"]');
+    // u1 alone in row 1, half-width repeater alone in row 2.
+    expect(userRows.length).toBe(2);
   });
 });

@@ -52,6 +52,9 @@ import {
   convertToBuilderField,
   convertHooksToStoredFormat,
   DEFAULT_SYSTEM_FIELDS,
+  findFieldById,
+  findParentContainerId,
+  reorderNestedFields,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
@@ -367,15 +370,28 @@ export default function CollectionBuilderEditPage({
   // list (insert-at-position is a follow-up).
   const handleDuplicateField = useCallback(
     (fieldId: string) => {
-      const source = builder.fields.find(f => f.id === fieldId);
+      // Why: PR I -- duplicate is now reachable from nested rows in the
+      // field list, not only top-level. Walk the tree to locate source
+      // and its parent (if any), then append the duplicate either to
+      // the parent's children or to top-level. takenNames scopes to the
+      // sibling list so nested + top-level can share names safely.
+      const source = findFieldById(builder.fields, fieldId);
       if (!source) return;
-      const takenNames = builder.fields.map(f => f.name);
+      const parent = findParentContainerId(builder.fields, fieldId);
+      const siblings = parent
+        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
+        : builder.fields;
+      const takenNames = siblings.map(f => f.name);
       const duplicate: BuilderField = {
         ...source,
         id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
         name: nextDuplicateName(source.name, takenNames),
       };
-      builder.setFields([...builder.fields, duplicate]);
+      if (parent) {
+        builder.handleNestedFieldAdd(parent.containerId, duplicate);
+      } else {
+        builder.setFields([...builder.fields, duplicate]);
+      }
     },
     [builder]
   );
@@ -389,6 +405,27 @@ export default function CollectionBuilderEditPage({
       if (!over || active.id === over.id) return;
       const activeIdStr = String(active.id);
       const overIdStr = String(over.id);
+
+      // Why: PR I -- nested fields use their own SortableContext per parent;
+      // their drag IDs are field ids (field_xxx), not row ids. When both
+      // ends are field ids in the same parent container, reorder within
+      // that container via lib/builder.reorderNestedFields. Q2: cross-
+      // parent moves are intentionally a no-op in PR I.
+      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
+        const activeParent = findParentContainerId(builder.fields, activeIdStr);
+        const overParent = findParentContainerId(builder.fields, overIdStr);
+        if (
+          activeParent &&
+          overParent &&
+          activeParent.containerId === overParent.containerId
+        ) {
+          builder.setFields(prev =>
+            reorderNestedFields(prev, activeIdStr, overIdStr)
+          );
+        }
+        return;
+      }
+
       if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
         return;
       }
@@ -460,9 +497,12 @@ export default function CollectionBuilderEditPage({
   // Render
   // ----------------------------------------------------------------
 
+  // Why: PR I -- nested children live in parent.fields[]; the shallow
+  // .find() only sees top-level fields. findFieldById walks the tree
+  // so clicking a nested row resolves to the right field.
   const editingField =
     active.kind === "edit"
-      ? builder.fields.find(f => f.id === active.fieldId)
+      ? (findFieldById(builder.fields, active.fieldId) ?? null)
       : null;
 
   return (
@@ -488,6 +528,17 @@ export default function CollectionBuilderEditPage({
             onEditField={fieldId => setActive({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={handleDuplicateField}
+            // Why: PR I -- clicking +Add inside a parent in the field list
+            // opens FieldPickerModal scoped to that parent. Reuses the
+            // existing parent-aware picker flow (the same setActive shape
+            // the offcanvas sheet's +Add was using).
+            onAddInsideParent={parentId =>
+              setActive({
+                kind: "picker",
+                insertAt: 0,
+                parentFieldId: parentId,
+              })
+            }
             onReorder={() => {
               // Reorder is driven by handleRowDragEnd above. This callback
               // exists for parents that need notification but our state
@@ -520,9 +571,12 @@ export default function CollectionBuilderEditPage({
           // a group/repeater.
           title={
             active.parentFieldId
-              ? `Add field to ${
-                  builder.fields.find(f => f.id === active.parentFieldId)
-                    ?.name ?? "parent"
+              ? // Why: PR I -- parentFieldId can point to a nested parent
+                // (repeater inside repeater). findFieldById walks the tree
+                // instead of only checking top-level.
+                `Add field to ${
+                  findFieldById(builder.fields, active.parentFieldId)?.name ??
+                  "parent"
                 }`
               : undefined
           }
@@ -559,8 +613,10 @@ export default function CollectionBuilderEditPage({
           field={active.draft}
           siblingFields={
             active.parentFieldId
-              ? (builder.fields.find(f => f.id === active.parentFieldId)
-                  ?.fields ?? [])
+              ? // Why: PR I -- parentFieldId can be nested; findFieldById
+                // walks the tree to locate the parent at any depth.
+                (findFieldById(builder.fields, active.parentFieldId)?.fields ??
+                [])
               : builder.fields
           }
           readOnly={isLocked}
@@ -570,10 +626,13 @@ export default function CollectionBuilderEditPage({
                 // counts as nested if EITHER parentFieldId itself is a
                 // repeating container OR parentFieldId already lives
                 // inside one. The helper only walks ancestors, so we
-                // OR with a direct type-check on the parent.
+                // OR with a direct type-check on the parent. PR I:
+                // findFieldById replaces the shallow .find() so nested
+                // parents resolve correctly.
                 (() => {
-                  const parent = builder.fields.find(
-                    f => f.id === active.parentFieldId
+                  const parent = findFieldById(
+                    builder.fields,
+                    active.parentFieldId
                   );
                   if (!parent) return false;
                   const parentIsRepeating =
@@ -608,7 +667,22 @@ export default function CollectionBuilderEditPage({
           open
           mode="edit"
           field={editingField}
-          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
+          siblingFields={(() => {
+            // Why: PR I -- when editing a nested field, siblings are the
+            // parent's children (minus self), not all top-level fields.
+            // Falls back to top-level when the field has no parent.
+            const parent = findParentContainerId(
+              builder.fields,
+              editingField.id
+            );
+            if (!parent) {
+              return builder.fields.filter(f => f.id !== editingField.id);
+            }
+            const container = findFieldById(builder.fields, parent.containerId);
+            return (container?.fields ?? []).filter(
+              f => f.id !== editingField.id
+            );
+          })()}
           readOnly={isLocked}
           isInsideRepeatingAncestor={isInsideRepeatingAncestor(
             editingField.id,
@@ -623,15 +697,9 @@ export default function CollectionBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
-          // PR D: parent-aware "+ Add field" inside group/repeater
-          // editors. Switches the overlay to picker with parentFieldId.
-          onAddNestedField={parentId =>
-            setActive({
-              kind: "picker",
-              insertAt: 0,
-              parentFieldId: parentId,
-            })
-          }
+          // Why: PR I dropped onAddNestedField -- the +Add affordance for
+          // nested children moved out of the offcanvas sheet and into
+          // the field list via BuilderFieldList's onAddInsideParent.
         />
       )}
 

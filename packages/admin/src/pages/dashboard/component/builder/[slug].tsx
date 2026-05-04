@@ -48,6 +48,9 @@ import {
   convertToBuilderField,
   convertToFieldDefinition,
   DEFAULT_SYSTEM_FIELDS,
+  findFieldById,
+  findParentContainerId,
+  reorderNestedFields,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
@@ -295,15 +298,27 @@ export default function ComponentBuilderEditPage({
   // as the collections / singles page handlers.
   const handleDuplicateField = useCallback(
     (fieldId: string) => {
-      const source = builder.fields.find(f => f.id === fieldId);
+      // Why: PR I -- duplicate is now reachable from nested rows in the
+      // field list. Walk the tree to locate source and its parent (if
+      // any), then append the duplicate either to the parent's children
+      // or to top-level. takenNames scopes to siblings.
+      const source = findFieldById(builder.fields, fieldId);
       if (!source) return;
-      const takenNames = builder.fields.map(f => f.name);
+      const parent = findParentContainerId(builder.fields, fieldId);
+      const siblings = parent
+        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
+        : builder.fields;
+      const takenNames = siblings.map(f => f.name);
       const duplicate: BuilderField = {
         ...source,
         id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
         name: nextDuplicateName(source.name, takenNames),
       };
-      builder.setFields([...builder.fields, duplicate]);
+      if (parent) {
+        builder.handleNestedFieldAdd(parent.containerId, duplicate);
+      } else {
+        builder.setFields([...builder.fields, duplicate]);
+      }
     },
     [builder]
   );
@@ -319,6 +334,25 @@ export default function ComponentBuilderEditPage({
       if (!over || active.id === over.id) return;
       const activeIdStr = String(active.id);
       const overIdStr = String(over.id);
+
+      // Why: PR I -- nested fields use field ids in their per-parent
+      // SortableContext. Within-parent reorder via reorderNestedFields.
+      // Cross-parent moves intentionally a no-op (Q2).
+      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
+        const activeParent = findParentContainerId(builder.fields, activeIdStr);
+        const overParent = findParentContainerId(builder.fields, overIdStr);
+        if (
+          activeParent &&
+          overParent &&
+          activeParent.containerId === overParent.containerId
+        ) {
+          builder.setFields(prev =>
+            reorderNestedFields(prev, activeIdStr, overIdStr)
+          );
+        }
+        return;
+      }
+
       if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
         return;
       }
@@ -386,9 +420,11 @@ export default function ComponentBuilderEditPage({
 
   // ---------------------------- Render --------------------------------------
 
+  // Why: PR I -- nested children live in parent.fields[]; the shallow
+  // .find() only sees top-level fields. findFieldById walks the tree.
   const editingField =
     active.kind === "edit"
-      ? builder.fields.find(f => f.id === active.fieldId)
+      ? (findFieldById(builder.fields, active.fieldId) ?? null)
       : null;
 
   return (
@@ -414,6 +450,14 @@ export default function ComponentBuilderEditPage({
             onEditField={fieldId => setActive({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={handleDuplicateField}
+            // Why: PR I -- nested +Add opens picker scoped to parent.
+            onAddInsideParent={parentId =>
+              setActive({
+                kind: "picker",
+                insertAt: 0,
+                parentFieldId: parentId,
+              })
+            }
             onReorder={() => {
               // Reorder is driven by handleRowDragEnd above.
             }}
@@ -441,9 +485,10 @@ export default function ComponentBuilderEditPage({
           // PR D: title scopes the picker to the parent for nested adds.
           title={
             active.parentFieldId
-              ? `Add field to ${
-                  builder.fields.find(f => f.id === active.parentFieldId)
-                    ?.name ?? "parent"
+              ? // Why: PR I -- parentFieldId can point to a nested parent.
+                `Add field to ${
+                  findFieldById(builder.fields, active.parentFieldId)?.name ??
+                  "parent"
                 }`
               : undefined
           }
@@ -474,17 +519,20 @@ export default function ComponentBuilderEditPage({
           field={active.draft}
           siblingFields={
             active.parentFieldId
-              ? (builder.fields.find(f => f.id === active.parentFieldId)
-                  ?.fields ?? [])
+              ? // Why: PR I -- parentFieldId can be nested.
+                (findFieldById(builder.fields, active.parentFieldId)?.fields ??
+                [])
               : builder.fields
           }
           readOnly={isLocked}
           isInsideRepeatingAncestor={
             active.parentFieldId
-              ? // Why: same logic as the other 2 builder pages.
+              ? // Why: same logic as the other 2 builder pages. PR I:
+                // findFieldById replaces shallow .find().
                 (() => {
-                  const parent = builder.fields.find(
-                    f => f.id === active.parentFieldId
+                  const parent = findFieldById(
+                    builder.fields,
+                    active.parentFieldId
                   );
                   if (!parent) return false;
                   const parentIsRepeating =
@@ -515,7 +563,21 @@ export default function ComponentBuilderEditPage({
           open
           mode="edit"
           field={editingField}
-          siblingFields={builder.fields.filter(f => f.id !== editingField.id)}
+          siblingFields={(() => {
+            // Why: PR I -- when editing a nested field, siblings are the
+            // parent's children (minus self), not all top-level fields.
+            const parent = findParentContainerId(
+              builder.fields,
+              editingField.id
+            );
+            if (!parent) {
+              return builder.fields.filter(f => f.id !== editingField.id);
+            }
+            const container = findFieldById(builder.fields, parent.containerId);
+            return (container?.fields ?? []).filter(
+              f => f.id !== editingField.id
+            );
+          })()}
           readOnly={isLocked}
           isInsideRepeatingAncestor={isInsideRepeatingAncestor(
             editingField.id,
@@ -530,14 +592,8 @@ export default function ComponentBuilderEditPage({
             builder.handleFieldDelete(editingField.id);
             setActive({ kind: "none" });
           }}
-          // PR D: parent-aware "+ Add field" inside group/repeater editors.
-          onAddNestedField={parentId =>
-            setActive({
-              kind: "picker",
-              insertAt: 0,
-              parentFieldId: parentId,
-            })
-          }
+          // Why: PR I dropped onAddNestedField -- the +Add affordance for
+          // nested children moved into BuilderFieldList.
         />
       )}
 
