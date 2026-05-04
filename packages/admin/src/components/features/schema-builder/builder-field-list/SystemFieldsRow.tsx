@@ -46,11 +46,11 @@ export function SystemFieldsRow({ systemFields, onSetVisible }: Props) {
 
       {/* PR G: dashed bordered box containing all 5 chips + alert-style
           Hide button positioned top-right inside the box. */}
-      <div className="relative border border-dashed border-border bg-muted/20 rounded-md px-3 pt-3 pb-2">
+      <div className="relative border border-dashed border-border bg-white rounded-md p-3">
         <button
           type="button"
           onClick={handleHide}
-          className="absolute top-2 right-2 text-[10px] text-muted-foreground hover:text-foreground hover-subtle-row px-1.5 py-0.5 rounded-sm"
+          className="absolute top-1/2 -translate-y-1/2 right-2 text-[10px] text-muted-foreground hover:text-foreground hover-subtle-row px-1.5 py-0.5 rounded-sm cursor-pointer"
           title="Hide system fields. Re-enable from Settings."
         >
           Hide
