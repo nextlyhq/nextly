@@ -169,14 +169,12 @@ export function TypeSpecificEditor({
   }
 
   if (field.type === "upload") {
+    // PR H feedback 2.2: trimmed to working knobs only. Removed
+    // relationTo, allowEdit, isSortable, displayPreview (all dead at
+    // runtime). allowCreate now stored under field.admin.allowCreate
+    // to match UploadFieldAdminOptions and UploadInput's read path.
     return (
       <UploadEditor
-        relationTo={field.relationTo}
-        onRelationToChange={
-          readOnly
-            ? noop
-            : (r: string | string[] | undefined) => patch({ relationTo: r })
-        }
         hasMany={field.hasMany}
         onHasManyChange={
           readOnly ? noop : (v: boolean) => patch({ hasMany: v })
@@ -189,21 +187,9 @@ export function TypeSpecificEditor({
         onMaxFileSizeChange={
           readOnly ? noop : (s: number | undefined) => patch({ maxFileSize: s })
         }
-        allowCreate={field.allowCreate}
+        allowCreate={field.admin?.allowCreate}
         onAllowCreateChange={
-          readOnly ? noop : (v: boolean) => patch({ allowCreate: v })
-        }
-        allowEdit={field.allowEdit}
-        onAllowEditChange={
-          readOnly ? noop : (v: boolean) => patch({ allowEdit: v })
-        }
-        isSortable={field.isSortable}
-        onIsSortableChange={
-          readOnly ? noop : (v: boolean) => patch({ isSortable: v })
-        }
-        displayPreview={field.displayPreview}
-        onDisplayPreviewChange={
-          readOnly ? noop : (v: boolean) => patch({ displayPreview: v })
+          readOnly ? noop : (v: boolean) => patchAdmin({ allowCreate: v })
         }
       />
     );

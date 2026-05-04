@@ -3,6 +3,13 @@
 // across per-type field editors. Brainstorm 2026-05-04 locked the
 // look: border-border + bg-muted/20 + small Info icon + muted text,
 // no amber/yellow/red.
+//
+// Why not reuse @revnixhq/ui's Alert: the shared Alert's `info`
+// variant uses bg-primary/5 + text-primary (a bluish tint matching the
+// framework's primary color). That's literally the same look as the
+// "Tip" boxes Mobeen called AI-ish. Mobeen explicitly asked for
+// muted grey, not tinted, so a thinner local component is the right
+// fit here.
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
