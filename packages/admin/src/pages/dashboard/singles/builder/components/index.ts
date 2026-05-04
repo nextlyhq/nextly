@@ -6,9 +6,3 @@
  */
 
 export { DragOverlayContent } from "./DragOverlayContent";
-export {
-  SingleSettings,
-  type SingleSettingsData,
-  type SingleSettingsProps,
-  type SingleAdminConfig,
-} from "./SingleSettings";
