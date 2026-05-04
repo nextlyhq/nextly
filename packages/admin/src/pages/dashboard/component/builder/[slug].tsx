@@ -430,6 +430,14 @@ export default function ComponentBuilderEditPage({
             onEditField={fieldId => setActive({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={handleDuplicateField}
+            // Why: PR I -- nested +Add opens picker scoped to parent.
+            onAddInsideParent={parentId =>
+              setActive({
+                kind: "picker",
+                insertAt: 0,
+                parentFieldId: parentId,
+              })
+            }
             onReorder={() => {
               // Reorder is driven by handleRowDragEnd above.
             }}

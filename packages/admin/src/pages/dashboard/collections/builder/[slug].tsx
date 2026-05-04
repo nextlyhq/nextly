@@ -506,6 +506,17 @@ export default function CollectionBuilderEditPage({
             onEditField={fieldId => setActive({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={handleDuplicateField}
+            // Why: PR I -- clicking +Add inside a parent in the field list
+            // opens FieldPickerModal scoped to that parent. Reuses the
+            // existing parent-aware picker flow (the same setActive shape
+            // the offcanvas sheet's +Add was using).
+            onAddInsideParent={parentId =>
+              setActive({
+                kind: "picker",
+                insertAt: 0,
+                parentFieldId: parentId,
+              })
+            }
             onReorder={() => {
               // Reorder is driven by handleRowDragEnd above. This callback
               // exists for parents that need notification but our state

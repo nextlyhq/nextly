@@ -25,6 +25,7 @@ import {
 } from "@admin/lib/builder/reflow";
 
 import { EmptyState } from "./builder-field-list/EmptyState";
+import { NestedFieldGroup } from "./builder-field-list/NestedFieldGroup";
 import { SortableRow } from "./builder-field-list/SortableRow";
 import { SystemFieldsRow } from "./builder-field-list/SystemFieldsRow";
 import type { BuilderField } from "./types";
@@ -38,6 +39,11 @@ type Props = {
   onDuplicateField: (id: string) => void;
   /** Reorder callback — wired by the parent's DndContext.onDragEnd. */
   onReorder: (orderedIds: readonly string[]) => void;
+  /**
+   * PR I: called when the user clicks "+ Add field inside <parent>" in
+   * a nested area. The page opens FieldPickerModal scoped to parentId.
+   */
+  onAddInsideParent: (parentId: string) => void;
   /** Lock all editing affordances for code-first / locked collections. */
   readOnly?: boolean;
 };
@@ -50,6 +56,7 @@ export function BuilderFieldList({
   onEditField,
   onDeleteField,
   onDuplicateField,
+  onAddInsideParent,
   readOnly = false,
 }: Props) {
   const systemFields = fields.filter(f => f.isSystem);
@@ -58,7 +65,15 @@ export function BuilderFieldList({
   const rows = packIntoRows<RowItem>(
     userFields.map(f => ({
       id: f.id,
-      width: parseWidth(f.admin?.width),
+      // Why: PR I -- container fields (repeater/group) always render on
+      // their own full-width row in the field list so their nested
+      // NestedFieldGroup has horizontal room. The user's stored width
+      // is still honored at content-edit time; this override only shapes
+      // the builder visualization.
+      width:
+        f.type === "repeater" || f.type === "group"
+          ? 100
+          : parseWidth(f.admin?.width),
       _field: f,
     }))
   );
@@ -87,17 +102,40 @@ export function BuilderFieldList({
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-2">
-              {rows.map((row, idx) => (
-                <SortableRow
-                  key={`row-${idx}`}
-                  rowId={`row-${idx}`}
-                  fields={row.map(r => r._field)}
-                  readOnly={readOnly}
-                  onEditField={onEditField}
-                  onDeleteField={onDeleteField}
-                  onDuplicateField={onDuplicateField}
-                />
-              ))}
+              {rows.map((row, idx) => {
+                // Why: PR I -- repeater/group fields are forced to their
+                // own full-width row above (see width override). When the
+                // row contains a single container, mount NestedFieldGroup
+                // directly underneath for ACF-style visual nesting.
+                // Other rows render normally (just SortableRow's cards).
+                const rowFields = row.map(r => r._field);
+                const onlyField = rowFields.length === 1 ? rowFields[0] : null;
+                const isContainer =
+                  onlyField !== null &&
+                  (onlyField.type === "repeater" || onlyField.type === "group");
+                return (
+                  <div key={`row-${idx}`}>
+                    <SortableRow
+                      rowId={`row-${idx}`}
+                      fields={rowFields}
+                      readOnly={readOnly}
+                      onEditField={onEditField}
+                      onDeleteField={onDeleteField}
+                      onDuplicateField={onDuplicateField}
+                    />
+                    {isContainer && onlyField && (
+                      <NestedFieldGroup
+                        parentField={onlyField}
+                        readOnly={readOnly}
+                        onEditField={onEditField}
+                        onDeleteField={onDeleteField}
+                        onDuplicateField={onDuplicateField}
+                        onAddInsideParent={onAddInsideParent}
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </SortableContext>
         )}
