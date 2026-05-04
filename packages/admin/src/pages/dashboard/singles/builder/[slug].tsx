@@ -44,6 +44,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
   findFieldById,
   findParentContainerId,
+  reorderNestedFields,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
@@ -341,6 +342,25 @@ export default function SingleBuilderEditPage({
       if (!over || active.id === over.id) return;
       const activeIdStr = String(active.id);
       const overIdStr = String(over.id);
+
+      // Why: PR I -- nested fields use field ids in their per-parent
+      // SortableContext. Within-parent reorder via reorderNestedFields.
+      // Cross-parent moves intentionally a no-op (Q2).
+      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
+        const activeParent = findParentContainerId(builder.fields, activeIdStr);
+        const overParent = findParentContainerId(builder.fields, overIdStr);
+        if (
+          activeParent &&
+          overParent &&
+          activeParent.containerId === overParent.containerId
+        ) {
+          builder.setFields(prev =>
+            reorderNestedFields(prev, activeIdStr, overIdStr)
+          );
+        }
+        return;
+      }
+
       if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
         return;
       }

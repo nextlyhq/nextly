@@ -54,6 +54,7 @@ import {
   DEFAULT_SYSTEM_FIELDS,
   findFieldById,
   findParentContainerId,
+  reorderNestedFields,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
@@ -404,6 +405,27 @@ export default function CollectionBuilderEditPage({
       if (!over || active.id === over.id) return;
       const activeIdStr = String(active.id);
       const overIdStr = String(over.id);
+
+      // Why: PR I -- nested fields use their own SortableContext per parent;
+      // their drag IDs are field ids (field_xxx), not row ids. When both
+      // ends are field ids in the same parent container, reorder within
+      // that container via lib/builder.reorderNestedFields. Q2: cross-
+      // parent moves are intentionally a no-op in PR I.
+      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
+        const activeParent = findParentContainerId(builder.fields, activeIdStr);
+        const overParent = findParentContainerId(builder.fields, overIdStr);
+        if (
+          activeParent &&
+          overParent &&
+          activeParent.containerId === overParent.containerId
+        ) {
+          builder.setFields(prev =>
+            reorderNestedFields(prev, activeIdStr, overIdStr)
+          );
+        }
+        return;
+      }
+
       if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
         return;
       }
