@@ -45,13 +45,22 @@ export interface ActionBarProps {
   isSubmitting?: boolean;
   /** Whether form has validation errors. */
   isInvalid?: boolean;
-  /** Form id this bar's submit buttons drive. */
+  /** Form id used as a fallback for the single Save button when drafts
+   *  are disabled. Save Draft / Publish always go through onClick so the
+   *  status payload is attached. */
   formId?: string;
 
   /** Preview availability + handler. */
   isPreviewAvailable?: boolean;
   onPreview?: () => void;
   previewLabel?: string;
+
+  /** Save Draft handler (PR 7). Routed through useEntryForm.handleSubmit
+   *  with status='draft'. Required when hasStatus is true. */
+  onSaveDraft?: () => void;
+  /** Publish handler (PR 7). Routed through useEntryForm.handleSubmit
+   *  with status='published'. Required when hasStatus is true. */
+  onPublish?: () => void;
 
   /** Cancel / Discard handler — moved into the More menu. */
   onCancel?: () => void;
@@ -93,6 +102,8 @@ export function ActionBar({
   isPreviewAvailable = false,
   onPreview,
   previewLabel = "Preview",
+  onSaveDraft,
+  onPublish,
   onCancel,
   onDelete,
   isRailCollapsed = false,
@@ -132,11 +143,11 @@ export function ActionBar({
         {hasStatus ? (
           <>
             <Button
-              type="submit"
-              form={formId}
+              type="button"
               variant="outline"
               size="sm"
               disabled={isSubmitting || isInvalid}
+              onClick={onSaveDraft}
               data-status="draft"
             >
               {isSubmitting ? (
@@ -147,10 +158,10 @@ export function ActionBar({
               Save Draft
             </Button>
             <Button
-              type="submit"
-              form={formId}
+              type="button"
               size="sm"
               disabled={isSubmitting || isInvalid}
+              onClick={onPublish}
               data-status="published"
             >
               {isSubmitting ? (

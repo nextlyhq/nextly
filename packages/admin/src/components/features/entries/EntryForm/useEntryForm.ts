@@ -126,8 +126,14 @@ export interface UseEntryFormOptions {
 export interface UseEntryFormReturn {
   /** React Hook Form instance */
   form: UseFormReturn<Record<string, unknown>>;
-  /** Handle form submission */
-  handleSubmit: (e?: React.BaseSyntheticEvent) => Promise<void>;
+  /** Handle form submission. Optional `status` writes the canonical
+   *  Draft/Published value into the mutation payload (Q-D2=A — Save Draft
+   *  vs Publish split). Omit it for collections that don't have drafts
+   *  enabled — the server keeps whatever status it had. */
+  handleSubmit: (
+    e?: React.BaseSyntheticEvent,
+    status?: "draft" | "published"
+  ) => Promise<void>;
   /** Handle entry deletion (edit mode only) */
   handleDelete: () => void;
   /** Handle form cancellation */
@@ -417,12 +423,15 @@ export function useEntryForm({
   // Reason: defaultValues and form.reset are intentionally excluded — React Query
   // refetches produce new object references even for identical data, and including
   // the full object would reset the form mid-edit, discarding unsaved changes.
+  // Reset the form when the user opens a different entry. defaultValues is
+  // useMemo'd on (fields, entry), so it only changes when entry's identity
+  // changes — keeps this effect from firing on every keystroke. `form` is
+  // a stable RHF ref.
   useEffect(() => {
     if (entry && mode === "edit") {
       form.reset(defaultValues);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry?.id, entry?.updatedAt, mode]);
+  }, [entry, mode, defaultValues, form]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
@@ -446,16 +455,19 @@ export function useEntryForm({
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
 
-  // Submit handler
+  // Submit handler. The optional `status` arg lets ActionBar's Save Draft /
+  // Publish buttons each write the canonical value without inventing a
+  // separate mutation surface — the server treats `status` as a normal
+  // field, the same way the schema-side feature wired it up.
   const handleSubmit = useCallback(
-    async (e?: React.BaseSyntheticEvent) => {
+    async (e?: React.BaseSyntheticEvent, status?: "draft" | "published") => {
       e?.preventDefault();
 
       await form.handleSubmit(async rawData => {
         // Type assertion needed because fallback schema produces Record<string, unknown>
         // but mutations expect Record<string, EntryValue>. The actual runtime data
         // conforms to EntryValue types.
-        const data = rawData;
+        const data = status ? { ...rawData, status } : rawData;
         try {
           if (mode === "create") {
             const result = await createMutation.mutateAsync(
@@ -511,7 +523,9 @@ export function useEntryForm({
   return {
     form,
     handleSubmit,
-    handleDelete: () => { void handleDelete(); },
+    handleDelete: () => {
+      void handleDelete();
+    },
     handleCancel,
     isSubmitting: createMutation.isPending || updateMutation.isPending,
     isDeleting: deleteMutation.isPending,

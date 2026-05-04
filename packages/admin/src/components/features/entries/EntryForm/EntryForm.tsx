@@ -307,6 +307,12 @@ export function EntryForm({
                   isPreviewAvailable={isPreviewAvailable}
                   onPreview={openPreview}
                   previewLabel={previewLabel}
+                  onSaveDraft={() => {
+                    void handleSubmit(undefined, "draft");
+                  }}
+                  onPublish={() => {
+                    void handleSubmit(undefined, "published");
+                  }}
                   onCancel={handleCancel}
                   onDelete={handleDelete}
                   isRailCollapsed={railCollapsed}
