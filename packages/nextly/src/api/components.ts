@@ -147,9 +147,6 @@ export const POST = withErrorHandler(async (request: Request) => {
     throw NextlyError.authRequired();
   }
 
-  // For now, we accept any Authorization header as authenticated
-  // In production, you would verify the JWT/session token here
-
   const registry = await getComponentRegistry();
   const body = await request.json();
 

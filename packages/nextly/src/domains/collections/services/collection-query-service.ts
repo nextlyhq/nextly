@@ -1293,8 +1293,6 @@ export class CollectionQueryService extends BaseService {
         return undefined;
       }
 
-      // For nested fields, we'd need JSON operations - for now just use top-level
-
       switch (op) {
         case "=":
           return eq(schemaColumn, value);

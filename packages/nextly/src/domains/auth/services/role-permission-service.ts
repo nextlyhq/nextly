@@ -52,7 +52,6 @@ export class RolePermissionService extends BaseService {
     const permName = perm.name || `${perm.resource}:${perm.action}`;
     const permSlug = perm.slug || `${perm.resource}-${perm.action}`;
 
-    // For now, inline the permission creation logic
     let permissionId: string;
 
     const existing = await (

@@ -224,7 +224,6 @@ export function submissionsCollection(
         },
       ],
 
-      // Placeholder for email notifications - will be implemented in Phase 4
       afterChange: [
         (context: HookContext) => {
           const { data } = context;

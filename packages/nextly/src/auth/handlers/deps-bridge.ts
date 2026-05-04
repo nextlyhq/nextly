@@ -30,7 +30,7 @@ export function buildAuthRouterDeps(
   return {
     secret: env.NEXTLY_SECRET_RESOLVED || "",
     isProduction: env.NODE_ENV === "production",
-    accessTokenTTL: 900, // 15 minutes 
+    accessTokenTTL: 900, // 15 minutes
     refreshTokenTTL: 7 * 24 * 60 * 60, // 7 days
     maxLoginAttempts: 5,
     lockoutDurationSeconds: 15 * 60, // 15 minutes

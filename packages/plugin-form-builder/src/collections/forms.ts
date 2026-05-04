@@ -392,8 +392,6 @@ export function formsCollection(
         (context: HookContext) => {
           const { data } = context;
           if (data) {
-            // Placeholder: submission count will be implemented in Phase 4
-            // when the FormSubmissionService is available
             (data as Record<string, unknown>).submissionCount = 0;
           }
           return data;

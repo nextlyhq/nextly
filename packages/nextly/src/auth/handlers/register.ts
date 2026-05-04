@@ -201,8 +201,6 @@ export async function handleRegister(
           requestId,
           logContext: err.logContext,
         });
-        // email to the existing user once email subsystem template support
-        // lands (spec §19 follow-up).
         await stallResponse(startTime, deps.loginStallTimeMs);
         // Same silent-success shape as the no-reveal success branch
         // (spec §13.2). Anti-enumeration requires byte-equal responses.

@@ -1,12 +1,12 @@
 /**
- * Form Preview (STUB)
+ * Form Preview
  *
  * Renders a preview of how the form will appear to end users.
- * Shows the form layout with actual input fields (non-functional).
+ * Shows the form layout with input fields rendered in a disabled
+ * (read-only) state so submissions cannot be made from the preview.
  *
  * @module admin/components/builder/FormPreview
  * @since 0.1.0
- *
  */
 
 "use client";
