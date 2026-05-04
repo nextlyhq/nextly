@@ -67,6 +67,8 @@ export const ROUTES = {
   SETTINGS_API_KEYS: "/admin/settings/api-keys",
   SETTINGS_API_KEYS_CREATE: "/admin/settings/api-keys/create",
   SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
+  SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
+  SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",
 
   // Plugin routes
   PLUGINS: "/admin/plugins",
