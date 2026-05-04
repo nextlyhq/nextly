@@ -91,6 +91,7 @@ import {
   registerDashboardServices,
   registerEmailServices,
   registerMediaServices,
+  registerMetaServices,
   registerSingleServices,
   registerUserServices,
   type RegistrationContext,
@@ -387,6 +388,7 @@ export async function registerServices(
   registerAuthServices(ctx);
   registerCollectionServices(ctx);
   registerMediaServices(ctx);
+  registerMetaServices(ctx);
   registerSingleServices(ctx);
 
   // ----------------------------------------

@@ -13,6 +13,7 @@ import { Alert, AlertDescription, AlertTitle, Button } from "@revnixhq/ui";
 import type React from "react";
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -56,6 +57,12 @@ const DashboardPage: React.FC = () => {
           <div className="space-y-2">
             <WelcomeHeader />
           </div>
+
+          {/* Seed demo content card — visible only when the project ships
+              a seed route and the meta flags aren't set. Hides itself
+              entirely when not applicable, so blank-template projects and
+              already-seeded/skipped projects render nothing here. */}
+          <SeedDemoContentCard />
 
           {/* Widgets are intentionally omitted per user request to focus on resource organization */}
           {/* <ContentStatsGrid /> */}
