@@ -39,35 +39,20 @@ export function PermissionMatrix({
     <div className="flex flex-col">
       {/* Tabs and Search Row */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center justify-between mb-4 px-6">
-          <TabsList className="bg-transparent h-auto p-0 border-none space-x-2 auto-cols-auto">
-            <TabsTrigger
-              value="collection-types"
-              className="rounded-none  border border-primary/5 border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
-            >
-              Collection Types
-            </TabsTrigger>
-            <TabsTrigger
-              value="single-types"
-              className="rounded-none  border border-primary/5 border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
-            >
-              Single Types
-            </TabsTrigger>
-            <TabsTrigger
-              value="settings"
-              className="rounded-none  border border-primary/5 border-transparent px-4 py-2 text-sm font-medium !mb-0 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:border-primary data-[state=inactive]:text-muted-foreground hover-unified hover:border-primary/25 transition-colors"
-            >
-              Settings
-            </TabsTrigger>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-4 px-6">
+          <TabsList>
+            <TabsTrigger value="collection-types">Collection Types</TabsTrigger>
+            <TabsTrigger value="single-types">Single Types</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
 
           {/* Search Bar and Action Buttons */}
-          <div className="flex items-center gap-3">
-            <div className="relative w-[220px]">
+          <div className="flex flex-1 lg:flex-none items-center gap-3 lg:justify-end min-w-0">
+            <div className="relative flex-1 lg:w-64 lg:flex-none min-w-0">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search..."
-                className="pl-9"
+                className="pl-9 w-full"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 disabled={disabled}
@@ -82,7 +67,6 @@ export function PermissionMatrix({
               onClick={() => onChange(permissions.map(p => p.id))}
               disabled={disabled || value.length === permissions.length}
               aria-label="Select all permissions"
-              className="text-primary border-primary/5 bg-primary/5 hover-unified transition-colors"
             >
               Select All
             </Button>
@@ -94,7 +78,6 @@ export function PermissionMatrix({
               onClick={() => onChange([])}
               disabled={disabled || value.length === 0}
               aria-label="Clear all permissions"
-              className="text-muted-foreground border-primary/5 hover-unified hover:text-foreground transition-colors"
             >
               Clear All
             </Button>
