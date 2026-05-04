@@ -181,31 +181,19 @@ export function EntryForm({
     onCancel,
   });
 
-  // Get all fields and split them based on admin.position
+  // Get all fields. Title and slug are extracted as system fields rendered in
+  // their own header card (this PR keeps the existing title/slug special-case;
+  // PR 6 of the redesign moves them into the new pinned-headline + rail-slug
+  // layout). Per Q-D1=B in the redesign spec, the rail is system-content only:
+  // no user-defined fields may use `admin.position: 'sidebar'`, and any
+  // legacy `seoField` name match is dropped — components (including ones
+  // named "seo") render inline like every other field.
   const allFields = getCollectionFields(collection);
-
-  // Extract slug and seo specifically for the sidebar tabs (Phase 3 requirements)
   const slugField = allFields.find(f => f.name === "slug");
-  const seoField = allFields.find(
-    f =>
-      f.name === "seo" ||
-      (f.type === "group" && f.name?.toLowerCase().includes("seo"))
-  );
   const titleField = allFields.find(f => f.name === "title");
 
   const mainFields = allFields.filter(
-    f =>
-      f.admin?.position !== "sidebar" &&
-      f.name !== "slug" &&
-      f.name !== "title" &&
-      f !== seoField
-  );
-
-  const sidebarFields = allFields.filter(
-    field =>
-      field.admin?.position === "sidebar" &&
-      field.name !== "slug" &&
-      field !== seoField
+    f => f.name !== "slug" && f.name !== "title"
   );
 
   // Get form errors for summary display
@@ -228,7 +216,9 @@ export function EntryForm({
 
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
-    onSave: () => { void handleSubmit(); },
+    onSave: () => {
+      void handleSubmit();
+    },
     onCancel: handleCancel,
     isDirty,
     isSubmitting,
@@ -336,8 +326,6 @@ export function EntryForm({
                 <EntryFormSidebar
                   mode={mode}
                   entry={entry}
-                  fields={sidebarFields}
-                  seoField={seoField}
                   actions={
                     <EntryFormActions
                       mode={mode}
