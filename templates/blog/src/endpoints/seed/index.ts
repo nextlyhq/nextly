@@ -22,6 +22,34 @@ import path from "path";
 
 import type { Nextly } from "@revnixhq/nextly";
 
+import { runPhaseA } from "./phases/phase-a";
+import { runPhaseB } from "./phases/phase-b";
+import { BLOG_SCHEMA_MANIFEST } from "./schema-manifest";
+
+/**
+ * Structured summary of what the seed produced. Returned to the
+ * /admin/api/seed POST handler so the dashboard card can render
+ * "3 Roles · 12 Posts · 14/14 Media" chips on success.
+ */
+export interface SeedSummary {
+  rolesCreated: number;
+  usersCreated: number;
+  categoriesCreated: number;
+  tagsCreated: number;
+  postsCreated: number;
+  mediaUploaded: number;
+  mediaSkipped: number;
+  collectionsRegistered: number;
+  singlesRegistered: number;
+  permissionsSynced: number;
+}
+
+export interface SeedResult {
+  message: string;
+  summary: SeedSummary;
+  warnings: string[];
+}
+
 // Role definitions for the three content roles the blog template seeds.
 // Inlined (rather than imported from a sibling file) because the CLI
 // only copies `seed-data.json` and `media/` from the template's seed/
@@ -117,8 +145,11 @@ async function pickPermissionIdsForRoles(
   return out;
 }
 
-async function seedRoles(nextly: Nextly): Promise<Record<string, string>> {
+async function seedRoles(
+  nextly: Nextly
+): Promise<{ idsBySlug: Record<string, string>; created: number }> {
   const roleIdBySlug: Record<string, string> = {};
+  let created = 0;
 
   // First pass: find any existing roles by listing.
   try {
@@ -155,7 +186,7 @@ async function seedRoles(nextly: Nextly): Promise<Record<string, string>> {
       continue;
     }
     try {
-      const created = await nextly.roles.create({
+      const createdRole = await nextly.roles.create({
         data: {
           name: role.name,
           slug: role.slug,
@@ -166,7 +197,8 @@ async function seedRoles(nextly: Nextly): Promise<Record<string, string>> {
       });
       // Phase 4 (Task 14): roles.create now returns `{ message, item }`,
       // so the created role lives on `.item` (was returned bare previously).
-      roleIdBySlug[role.slug] = created.item.id as string;
+      roleIdBySlug[role.slug] = createdRole.item.id as string;
+      created++;
       console.log(
         `  Seeded role: ${role.slug} (${permissionIds.length} permissions)`
       );
@@ -179,7 +211,7 @@ async function seedRoles(nextly: Nextly): Promise<Record<string, string>> {
     }
   }
 
-  return roleIdBySlug;
+  return { idsBySlug: roleIdBySlug, created };
 }
 
 // Approach is replaced by the CLI during scaffolding
@@ -407,32 +439,30 @@ async function uploadMediaFile(
 }
 
 /**
- * Check if a collection already has entries (for idempotency).
- */
-async function collectionHasEntries(
-  nextly: Nextly,
-  collection: string
-): Promise<boolean> {
-  try {
-    const result = await nextly.find({
-      collection,
-      limit: 1,
-    });
-    // Phase 4 (Task 14): canonical envelope; total lives at meta.total
-    // (was top-level totalDocs).
-    return result.meta.total > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Main seed function. Invoked from the auth-gated POST route at
  * `src/app/admin/api/seed/route.ts`. Receives a Nextly instance the
  * route has already initialised with `{ config }` and a verified
  * super-admin session.
  */
-export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
+export async function seed({
+  nextly,
+}: {
+  nextly: Nextly;
+}): Promise<SeedResult> {
+  const summary: SeedSummary = {
+    rolesCreated: 0,
+    usersCreated: 0,
+    categoriesCreated: 0,
+    tagsCreated: 0,
+    postsCreated: 0,
+    mediaUploaded: 0,
+    mediaSkipped: 0,
+    collectionsRegistered: 0,
+    singlesRegistered: 0,
+    permissionsSynced: 0,
+  };
+  const warnings: string[] = [];
+
   // Both `seed-data.json` and `media/` ship colocated with this file.
   // We read them at runtime (not via import) so the same code path
   // works in dev (where Next.js doesn't bundle filesystem reads) and
@@ -445,27 +475,38 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
     "seed-data.json"
   );
   if (!fs.existsSync(seedDataPath)) {
-    console.log("  No seed-data.json found, skipping seed.");
-    return;
+    return {
+      message: "No seed-data.json found — nothing to seed.",
+      summary,
+      warnings,
+    };
   }
 
   const seedData: SeedData = JSON.parse(fs.readFileSync(seedDataPath, "utf-8"));
   const seedMedia = seedData.seedMedia;
 
-  const hasExistingPosts = await collectionHasEntries(nextly, "posts");
-  if (hasExistingPosts) {
-    console.log("  Content already exists, skipping seed.");
-    return;
-  }
+  // ===== Phase A — Schema seed (visual approach only) =====
+  // Code-first projects skip this entirely (their schemas were registered
+  // from nextly.config.ts at boot). For visual projects this creates the
+  // posts/categories/tags collections and the singles before any content
+  // is written.
+  const phaseA = await runPhaseA(nextly, BLOG_SCHEMA_MANIFEST, {
+    approach: APPROACH === "visual" ? "visual" : "codefirst",
+  });
+  summary.collectionsRegistered = phaseA.registeredCollections.length;
+  summary.singlesRegistered = phaseA.registeredSingles.length;
+  warnings.push(...phaseA.warnings);
 
-  if (APPROACH === "visual") {
-    console.log("  ⚠ Visual approach: schema seeding not yet implemented.");
-    console.log(
-      "    Create your collections (posts, authors, categories) in the Admin Panel"
-    );
-    console.log("    before the blog frontend will display content.");
-    console.log("    For auto-setup, use the code-first approach instead.");
-  }
+  // ===== Phase B — Permission sync =====
+  // Generate CRUD permission rows for the just-registered resources and
+  // wire them to the super-admin role. No-op for code-first projects
+  // (collections list is empty so permSeeder isn't invoked).
+  const phaseB = await runPhaseB(nextly, {
+    collections: phaseA.registeredCollections,
+    singles: phaseA.registeredSingles,
+  });
+  summary.permissionsSynced = phaseB.permissionsSynced;
+  warnings.push(...phaseB.warnings);
 
   // Step 1: Upload media up front so content records can reference IDs directly.
   // Per-file failures are captured into `outcomes` for an end-of-run summary.
@@ -507,7 +548,9 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
 
   // Step 2a: Seed roles first so user creation can assign them.
   console.log("  Seeding roles...");
-  const roleIdBySlug = await seedRoles(nextly);
+  const rolesResult = await seedRoles(nextly);
+  const roleIdBySlug = rolesResult.idsBySlug;
+  summary.rolesCreated = rolesResult.created;
 
   // Step 2b: Create content entries, linking media IDs where we have them.
   console.log("  Creating users...");
@@ -545,7 +588,7 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
         }
       }
     } else {
-      const created = await nextly.users.create({
+      const createdUser = await nextly.users.create({
         email: user.email,
         password: user.password,
         data: {
@@ -558,7 +601,8 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
       });
       // Phase 4 (Task 14): users.create now returns `{ message, item }`,
       // so the created user lives on `.item`.
-      userId = created.item.id as string;
+      userId = createdUser.item.id as string;
+      summary.usersCreated++;
     }
     userIdMap[user.slug] = userId;
   }
@@ -566,67 +610,106 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
   console.log("  Creating categories...");
   const categoryIdMap: Record<string, string> = {};
   for (const category of seedData.categories) {
-    const created = await nextly.create({
-      collection: "categories",
-      data: {
-        title: category.name,
-        name: category.name,
-        slug: category.slug,
-        description: category.description,
-      },
-    });
-    // Phase 4 (Task 14): nextly.create now returns `{ message, item }`,
-    // so the created category lives on `.item`.
-    categoryIdMap[category.slug] = created.item.id as string;
+    try {
+      const existing = await nextly.find({
+        collection: "categories",
+        where: { slug: { equals: category.slug } },
+        limit: 1,
+      });
+      if (existing.meta.total > 0) {
+        categoryIdMap[category.slug] = existing.items[0].id as string;
+        continue;
+      }
+      const createdCategory = await nextly.create({
+        collection: "categories",
+        data: {
+          title: category.name,
+          name: category.name,
+          slug: category.slug,
+          description: category.description,
+        },
+      });
+      categoryIdMap[category.slug] = createdCategory.item.id as string;
+      summary.categoriesCreated++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`category "${category.slug}": ${msg}`);
+    }
   }
 
   console.log("  Creating tags...");
   const tagIdMap: Record<string, string> = {};
   for (const tag of seedData.tags ?? []) {
-    const created = await nextly.create({
-      collection: "tags",
-      data: {
-        title: tag.name,
-        name: tag.name,
-        slug: tag.slug,
-        description: tag.description,
-      },
-    });
-    // Phase 4 (Task 14): nextly.create now returns `{ message, item }`,
-    // so the created tag lives on `.item`.
-    tagIdMap[tag.slug] = created.item.id as string;
+    try {
+      const existing = await nextly.find({
+        collection: "tags",
+        where: { slug: { equals: tag.slug } },
+        limit: 1,
+      });
+      if (existing.meta.total > 0) {
+        tagIdMap[tag.slug] = existing.items[0].id as string;
+        continue;
+      }
+      const createdTag = await nextly.create({
+        collection: "tags",
+        data: {
+          title: tag.name,
+          name: tag.name,
+          slug: tag.slug,
+          description: tag.description,
+        },
+      });
+      tagIdMap[tag.slug] = createdTag.item.id as string;
+      summary.tagsCreated++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`tag "${tag.slug}": ${msg}`);
+    }
   }
 
   console.log("  Creating posts...");
   for (const post of seedData.posts) {
-    const authorId = userIdMap[post.author];
-    const categoryIds = post.categories
-      .map(slug => categoryIdMap[slug])
-      .filter(Boolean);
-    const tagIds = (post.tags ?? [])
-      .map(slug => tagIdMap[slug])
-      .filter(Boolean);
-    const featuredImageId = post.featuredImage
-      ? mediaIdByFilename.get(post.featuredImage)
-      : undefined;
+    try {
+      const existing = await nextly.find({
+        collection: "posts",
+        where: { slug: { equals: post.slug } },
+        limit: 1,
+      });
+      if (existing.meta.total > 0) continue;
 
-    await nextly.create({
-      collection: "posts",
-      data: {
-        title: post.title,
-        slug: post.slug,
-        excerpt: post.excerpt,
-        content: post.content,
-        author: authorId || undefined,
-        categories: categoryIds.length > 0 ? categoryIds : undefined,
-        tags: tagIds.length > 0 ? tagIds : undefined,
-        featured: post.featured ?? false,
-        seo: post.seo,
-        publishedAt: post.publishedAt,
-        status: post.status,
-        ...(featuredImageId ? { featuredImage: featuredImageId } : {}),
-      },
-    });
+      const authorId = userIdMap[post.author];
+      const categoryIds = post.categories
+        .map(slug => categoryIdMap[slug])
+        .filter(Boolean);
+      const tagIds = (post.tags ?? [])
+        .map(slug => tagIdMap[slug])
+        .filter(Boolean);
+      const featuredImageId = post.featuredImage
+        ? mediaIdByFilename.get(post.featuredImage)
+        : undefined;
+
+      await nextly.create({
+        collection: "posts",
+        data: {
+          title: post.title,
+          slug: post.slug,
+          excerpt: post.excerpt,
+          content: post.content,
+          author: authorId || undefined,
+          categories: categoryIds.length > 0 ? categoryIds : undefined,
+          tags: tagIds.length > 0 ? tagIds : undefined,
+          featured: post.featured ?? false,
+          seo: post.seo,
+          publishedAt: post.publishedAt,
+          status: post.status,
+          ...(featuredImageId ? { featuredImage: featuredImageId } : {}),
+        },
+      });
+      summary.postsCreated++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`post "${post.slug}": ${msg}`);
+    }
   }
 
   console.log("  Updating site settings...");
@@ -750,35 +833,32 @@ export async function seed({ nextly }: { nextly: Nextly }): Promise<void> {
     );
   }
 
-  // Step 3: End-of-run summary
+  // Step 3: Roll up media outcomes into the summary + warnings.
   const uploaded = outcomes.filter(o => "id" in o).length;
   const missed = outcomes.filter(
     (o): o is Extract<UploadOutcome, { miss: string }> => "miss" in o
   );
-  const total = outcomes.length;
+  summary.mediaUploaded = uploaded;
+  summary.mediaSkipped = missed.length;
 
-  // `authors` was renamed to `users` in the users-as-authors migration
-  // (Task 17). Old field name lingered here and threw
-  //   TypeError: Cannot read properties of undefined (reading 'length')
-  // which was swallowed by the silent errorLog inside seedAll and surfaced
-  // only as the opaque "Seeding failed with 1 error(s)".
+  for (const m of missed) {
+    const detail = m.detail ? `: ${m.detail}` : "";
+    warnings.push(`media "${m.miss}": ${m.reason}${detail}`);
+  }
+
+  // Console echo of the structured summary for server-side observability.
+  // The dashboard SeedDemoContentCard renders the same data as stat chips.
   console.log(
-    `  Demo content loaded: ${seedData.posts.length} posts, ${seedData.users.length} users, ${seedData.categories.length} categories`
+    `  Demo content loaded: ${summary.postsCreated} posts, ${summary.usersCreated} users, ${summary.categoriesCreated} categories, ${summary.tagsCreated} tags. ` +
+      `Media: ${uploaded}/${outcomes.length} uploaded.`
   );
 
-  if (total === 0) {
-    console.log("  Media: no media declared in seed-data.json.");
-  } else if (missed.length === 0) {
-    console.log(`  Media: ${uploaded}/${total} files seeded.`);
-  } else {
-    console.log(`  Media: ${uploaded}/${total} files seeded.`);
-    console.log("  Skipped:");
-    for (const m of missed) {
-      const detail = m.detail ? `: ${m.detail}` : "";
-      console.log(`    - ${m.miss} (${m.reason}${detail})`);
-    }
-    console.log(
-      "  Content was still seeded; affected posts/authors will render without images."
-    );
-  }
+  return {
+    message:
+      warnings.length === 0
+        ? "Demo content seeded."
+        : `Demo content seeded with ${warnings.length} warning${warnings.length === 1 ? "" : "s"}.`,
+    summary,
+    warnings,
+  };
 }
