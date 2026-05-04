@@ -19,7 +19,7 @@ Before opening a bug, please:
 2. Confirm you're on the latest version of the affected package.
 3. Use the [Bug Report template](https://github.com/nextlyhq/nextly/issues/new?template=bug_report.yml) — it asks the questions we need to triage quickly.
 
-The single biggest factor in how fast a bug gets fixed is **a minimal reproduction**. Issues without one are likely to be closed. The fastest way to start one: `pnpm create nextly-app@latest`, push the failing scenario to a public repo, and link it in the bug report.
+The single biggest factor in how fast a bug gets fixed is **a minimal reproduction**. Issues without one are likely to be closed. The fastest way to start one: `pnpm create-nextly-app@latest`, push the failing scenario to a public repo, and link it in the bug report.
 
 ## Reporting security issues
 
