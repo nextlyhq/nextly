@@ -21,7 +21,7 @@ export const AVAILABLE_TEMPLATES: readonly TemplateManifest[] = [
     collections: [],
     singles: [],
     hasDemoData: false,
-    hasFrontendPages: false,
+    hasFrontendPages: true,
     recommendedDatabase: "any",
     release: "alpha",
   },
