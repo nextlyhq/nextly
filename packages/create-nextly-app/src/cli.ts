@@ -32,9 +32,8 @@ program
   .option("-t, --template <template>", "Project template (blank, blog)")
   .option(
     "-a, --approach <approach>",
-    "Schema approach (code-first, visual, both)"
+    "Schema approach (code-first, visual)"
   )
-  .option("--demo-data", "Include demo content with sample posts and images")
   .option("-d, --database <db>", "Database type (sqlite, postgresql, mysql)")
   .option("-b, --branch <branch>", "Git branch for template download", "main")
   .option(
@@ -52,7 +51,7 @@ program
 Examples:
   $ npx @revnixhq/create-nextly-app my-project
   $ npx @revnixhq/create-nextly-app my-project -y
-  $ npx @revnixhq/create-nextly-app my-blog -t blog -a code-first --demo-data
+  $ npx @revnixhq/create-nextly-app my-blog -t blog -a code-first
   $ npx @revnixhq/create-nextly-app my-project --database postgresql
   $ npx @revnixhq/create-nextly-app .
   `
@@ -64,7 +63,6 @@ Examples:
         yes?: boolean;
         template?: string;
         approach?: string;
-        demoData?: boolean;
         database?: string;
         branch?: string;
         localTemplate?: string;
@@ -94,7 +92,7 @@ Examples:
         }
 
         // Validate --approach flag
-        const validApproaches = ["code-first", "visual", "both"];
+        const validApproaches = ["code-first", "visual"];
         if (options.approach && !validApproaches.includes(options.approach)) {
           console.error(
             `Error: Approach '${options.approach}' is not valid. Use: ${validApproaches.join(", ")}`
@@ -105,7 +103,6 @@ Examples:
         telemetry.capture("scaffold_started", {
           flags: {
             yes: Boolean(options.yes),
-            demoData: Boolean(options.demoData),
             skipInstall: Boolean(options.skipInstall),
             useYalc: Boolean(options.useYalc),
           },
@@ -116,7 +113,6 @@ Examples:
           defaults: options.yes,
           projectType,
           approach: options.approach as ProjectApproach | undefined,
-          demoData: options.demoData,
           database: options.database as DatabaseType | undefined,
           branch: options.branch,
           localTemplatePath: options.localTemplate,

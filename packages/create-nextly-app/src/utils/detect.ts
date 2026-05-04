@@ -4,12 +4,28 @@ import fs from "fs-extra";
 
 import type { PackageManager, ProjectInfo } from "../types";
 
+import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
+
 /**
  * Detect the package manager used in the project.
+ *
+ * Reads `process.env.npm_config_user_agent` first — set by every PM when
+ * running a `create-*` command, so it works in fresh-scaffold contexts
+ * where the target directory has no lockfile yet (the common case for
+ * new Nextly projects). Falls back to lockfile detection in cwd when
+ * the env var is missing (e.g., somebody invoked the bin directly via
+ * `node bin/create-nextly-app.js`).
+ *
+ * The previous lockfile-only implementation always fell back to "npm"
+ * for fresh scaffolds, so the final "next steps" output told everyone
+ * to run `npm run dev` regardless of which PM they actually used.
  */
 export async function detectPackageManager(
   cwd: string
 ): Promise<PackageManager> {
+  const fromUa = detectPmFromUserAgent(process.env.npm_config_user_agent);
+  if (fromUa) return fromUa;
+
   if (await fs.pathExists(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm";
   if (await fs.pathExists(path.join(cwd, "yarn.lock"))) return "yarn";
   if (await fs.pathExists(path.join(cwd, "bun.lockb"))) return "bun";

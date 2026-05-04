@@ -21,12 +21,10 @@ import {
 } from "./lib/download-template";
 import {
   templateHasApproaches,
-  templateHasDemoData,
   getDefaultApproach,
 } from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
-import { DEMO_DATA_LABELS } from "./prompts/demo-data";
 import { isExistingNextProject } from "./prompts/project-name";
 import {
   getTemplatePromptOptions,
@@ -52,7 +50,7 @@ import { copyTemplate } from "./utils/template";
  * Interactive prompt order:
  * 1. Project name (or detect existing project)
  * 2. Template selection (blank, blog, etc.)
- * 3. Schema approach (code-first, visual, both) - only for content templates
+ * 3. Schema approach (code-first, visual) — only for content templates
  * 4. Demo content (yes/no) - only for content templates
  * 5. Database selection (sqlite, postgresql, mysql)
  * 6. Database connection string (only for postgresql/mysql)
@@ -187,32 +185,29 @@ export async function createNextly(
     approach: approach ?? null,
   });
 
-  // --- Step 4: Demo content (only for content templates with demo data) ---
-
-  let demoData = false;
-
-  if (templateHasDemoData(projectType)) {
-    // Content template selected - ask about demo content
-    if (options.demoData !== undefined) {
-      demoData = options.demoData;
-    } else if (defaults) {
-      demoData = false;
-    } else {
-      const includeDemoData = await p.confirm({
-        message: "Include demo content?",
-        active: DEMO_DATA_LABELS.active,
-        inactive: DEMO_DATA_LABELS.inactive,
-        initialValue: true,
-      });
-
-      if (p.isCancel(includeDemoData)) {
-        p.cancel("Cancelled.");
-        return;
-      }
-
-      demoData = includeDemoData;
-    }
+  // Cross-promotion note: the two approaches aren't mutually exclusive —
+  // a code-first project can grow UI-defined collections later via the
+  // visual schema builder, and vice versa. Surface that here so users
+  // don't feel locked in by their initial pick.
+  if (approach === "code-first") {
+    p.note(
+      "You can extend this project later with the Visual Schema Builder\n" +
+        "in the admin UI. UI-created collections coexist with code ones.",
+      "Tip"
+    );
+  } else if (approach === "visual") {
+    p.note(
+      "You can mix in code-first later by exporting your schema from\n" +
+        "/admin/schema-builder. UI and code-defined collections coexist.",
+      "Tip"
+    );
   }
+
+  // --- Step 4 (removed): demo-content prompt ---
+  // Seeding moved off the CLI in Sub-task A; the admin dashboard's
+  // SeedDemoContentCard prompts the user instead. The --demo-data
+  // CLI flag still parses (for backwards compatibility) but is now
+  // a no-op.
 
   // --- Step 5: Database selection ---
 
@@ -328,7 +323,6 @@ export async function createNextly(
           databaseUrl,
           useYalc,
           approach,
-          demoData,
           templateSource,
         });
       } else {
@@ -340,7 +334,6 @@ export async function createNextly(
           databaseUrl,
           useYalc,
           approach,
-          demoData,
           templateSource,
         });
         cwd = targetDir;
@@ -498,11 +491,6 @@ export async function createNextly(
   lines.push(
     `  Visit ${pc.cyan("http://localhost:3000/admin/setup")} to create your admin account.`
   );
-  if (projectType === "blog" && demoData) {
-    lines.push(
-      `  Then visit ${pc.cyan("http://localhost:3000/welcome")} to seed demo content.`
-    );
-  }
   lines.push("");
 
   // Storage note
@@ -519,7 +507,6 @@ export async function createNextly(
     template: projectType,
     database: databaseType,
     approach: approach ?? null,
-    demo_data: demoData,
   });
 
   p.outro(`Docs: ${pc.cyan("https://nextlyhq.com/docs")}`);
