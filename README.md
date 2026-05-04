@@ -53,7 +53,7 @@ Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your 
 ## Quickstart
 
 ```bash
-pnpm create nextly-app@latest
+pnpm create-nextly-app@latest
 ```
 
 That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.
