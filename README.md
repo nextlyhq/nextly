@@ -28,16 +28,16 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@revnixhq/nextly"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/nextly?style=flat-square&label=npm&color=cb3837" /></a>
   <a href="https://github.com/nextlyhq/nextly/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/nextlyhq/nextly/ci.yml?branch=main&style=flat-square&label=CI" /></a>
-  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
   <a href="https://github.com/nextlyhq/nextly/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/nextlyhq/nextly?style=flat-square&color=yellow" /></a>
 </p>
 
 <br/>
 
-Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST + GraphQL API and a customizable admin dashboard out of the box. No SaaS, no proprietary cloud — your data, your stack.
+Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST and Direct API plus a customizable admin dashboard out of the box. No SaaS, no proprietary cloud — your data, your stack.
 
 - Define collections in TypeScript with the [**code-first config**](https://nextlyhq.com/docs/configuration/collections), or build them visually in the [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/builder)
-- Auto-generated [**REST**](https://nextlyhq.com/docs/api-reference/rest-api) & [**GraphQL**](https://nextlyhq.com/docs/api-reference/direct-api) APIs with full TypeScript types
+- Auto-generated [**REST API**](https://nextlyhq.com/docs/api-reference/rest-api) plus a [**Direct API**](https://nextlyhq.com/docs/api-reference/direct-api) for in-process Node.js access — both fully typed
 - Granular [**Roles & Permissions**](https://nextlyhq.com/docs/guides/authentication) and field-level access control out of the box
 - First-class [**PostgreSQL**](https://nextlyhq.com/docs/database/postgres), [**MySQL**](https://nextlyhq.com/docs/database/mysql), and [**SQLite**](https://nextlyhq.com/docs/database/sqlite) support via pluggable adapters
 - Built-in [**Media Library**](https://nextlyhq.com/docs/guides/media-storage) with **S3**, **Vercel Blob**, and **UploadThing** storage adapters
@@ -142,4 +142,4 @@ See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the f
 
 ## License
 
-[MIT](./LICENSE) — free to use, modify, and distribute.
+[MIT](./LICENSE.md) — free to use, modify, and distribute.
