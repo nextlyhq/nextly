@@ -369,10 +369,8 @@ export interface CopyTemplateOptions {
   database: DatabaseConfig;
   databaseUrl?: string;
   useYalc?: boolean;
-  /** Schema approach for content templates (code-first, visual, both) */
+  /** Schema approach for content templates (code-first, visual) */
   approach?: ProjectApproach;
-  /** Include demo content seed files */
-  demoData?: boolean;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
 }
@@ -401,7 +399,6 @@ export async function copyTemplate(
     databaseUrl,
     useYalc = false,
     approach,
-    demoData = false,
     templateSource,
   } = options;
 
@@ -490,9 +487,9 @@ export async function copyTemplate(
     }
 
     // The approach configs import from "./shared" (see templates/blog/
-    // configs/codefirst.config.ts and both.config.ts). Copy shared.ts
-    // alongside the chosen config so the import resolves at runtime.
-    // visual.config.ts has no fields of its own but still harmless to copy.
+    // configs/codefirst.config.ts). Copy shared.ts alongside the chosen
+    // config so the import resolves at runtime. visual.config.ts has no
+    // fields of its own but still harmless to copy.
     const sharedSrc = path.join(configsDir, "shared.ts");
     if (await fs.pathExists(sharedSrc)) {
       await fs.copy(sharedSrc, path.join(targetDir, "shared.ts"), {
@@ -501,20 +498,10 @@ export async function copyTemplate(
     }
   }
 
-  // Step 4: Task 24 phase 3 — seed code, seed-data.json, and media now
-  // live under the template's `src/endpoints/seed/` directory and get
-  // copied with the rest of `src/` in the regular template copy step.
-  // The CLI no longer plants a `nextly.seed.ts` at the project root or
-  // a sibling `seed/` directory; nothing to do here when --no-demo-data
-  // is set, since the seed function only runs when the admin clicks
-  // "Seed demo content" on /welcome.
-  if (demoData) {
-    // No-op intentionally: src/endpoints/seed is part of the template
-    // tree and was already copied by the recursive template copy. Left
-    // as a hook so a future template that ships demo data outside
-    // src/ can reintroduce the per-file copy logic without changing
-    // surrounding control flow.
-  }
+  // (Demo seed: src/endpoints/seed/ ships with the template tree and is
+  // already copied above. The user triggers seeding from the admin
+  // dashboard's SeedDemoContentCard after running /admin/setup — the
+  // CLI no longer asks about it.)
 
   // Step 5: Remove base template's page.tsx if blog template has (frontend) route group
   // Both can't coexist since (frontend)/page.tsx also serves the / route
