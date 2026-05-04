@@ -46,4 +46,27 @@ describe("pluralizeName", () => {
   it("handles whitespace-only input as empty", () => {
     expect(pluralizeName("   ")).toBe("");
   });
+
+  describe("threshold (PR G feedback 2)", () => {
+    it("returns empty string for 1-character input", () => {
+      expect(pluralizeName("J")).toBe("");
+    });
+
+    it("returns empty string for 2-character input", () => {
+      expect(pluralizeName("Jo")).toBe("");
+    });
+
+    it("pluralizes once 3 characters are present", () => {
+      expect(pluralizeName("Job")).toBe("Jobs");
+    });
+
+    it("trims whitespace before counting characters", () => {
+      // "J  " is 3 chars total but only 1 non-whitespace char -- below threshold.
+      expect(pluralizeName("J  ")).toBe("");
+      // "  J  " same -- below threshold.
+      expect(pluralizeName("  J  ")).toBe("");
+      // "Job " is 4 chars, trims to "Job" (3) -- pluralizes.
+      expect(pluralizeName("Job ")).toBe("Jobs");
+    });
+  });
 });
