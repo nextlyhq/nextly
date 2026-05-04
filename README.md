@@ -40,7 +40,7 @@
 
 Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST and Direct API plus a customizable admin dashboard out of the box. No SaaS, no proprietary cloud, your data, your stack.
 
-- Define collections in TypeScript with the [**code-first config**](https://nextlyhq.com/docs/configuration/collections), or build them visually in the [**Visual Schema Builder**](https://nextlyhq.com/docs/admin/builder)
+- Define collections in TypeScript with the [**code-first approach**](https://nextlyhq.com/docs/configuration/collections), or build them visually in the [**Admin UI Builder**](https://nextlyhq.com/docs/admin/builder)
 - Auto-generated [**REST API**](https://nextlyhq.com/docs/api-reference/rest-api) plus a [**Direct API**](https://nextlyhq.com/docs/api-reference/direct-api) for in-process Node.js access — both fully typed
 - Granular [**Roles & Permissions**](https://nextlyhq.com/docs/guides/authentication) and field-level access control out of the box
 - First-class [**PostgreSQL**](https://nextlyhq.com/docs/database/postgres), [**MySQL**](https://nextlyhq.com/docs/database/mysql), and [**SQLite**](https://nextlyhq.com/docs/database/sqlite) support via pluggable adapters
@@ -53,7 +53,7 @@ Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your 
 ## Quickstart
 
 ```bash
-pnpm create nextly-app@latest
+pnpm create-nextly-app@latest
 ```
 
 That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.

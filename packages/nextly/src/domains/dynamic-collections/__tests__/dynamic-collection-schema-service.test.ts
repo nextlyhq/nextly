@@ -287,3 +287,23 @@ describe("DynamicCollectionSchemaService.detectFieldRename — direct unit", () 
     expect(result?.to.name).toBe("compensation");
   });
 });
+
+describe("DynamicCollectionSchemaService.generateMigrationSQL — empty fields", () => {
+  it.each(["postgresql", "sqlite", "mysql"] as const)(
+    "produces valid SQL with no dangling comma when fields=[] (%s)",
+    dialect => {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const sql = service.generateMigrationSQL("dc_ww", []);
+
+      // Must not contain the ,, pattern that triggers a SQL syntax error.
+      expect(sql).not.toMatch(/,\s*,/);
+
+      // Must contain id, title, slug, created_at, updated_at — no extras.
+      expect(sql).toContain("id");
+      expect(sql).toContain("title");
+      expect(sql).toContain("slug");
+      expect(sql).toContain("created_at");
+      expect(sql).toContain("updated_at");
+    }
+  );
+});
