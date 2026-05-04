@@ -118,3 +118,107 @@ describe("SelectOptionsEditor -- PR E3 admin knobs", () => {
     });
   });
 });
+
+describe("SelectOptionsEditor -- empty state (PR E4)", () => {
+  it("renders the quiet inline helper when options is empty", () => {
+    render(
+      <SelectOptionsEditor
+        options={[]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/no options yet/i)).toBeInTheDocument();
+    // Helper mentions both affordances (Add and Import) by name so the
+    // user knows where to click without us repeating the buttons.
+    expect(screen.getByText(/add or import above/i)).toBeInTheDocument();
+  });
+
+  it("does NOT render the loud 'Add first option' button anymore", () => {
+    render(
+      <SelectOptionsEditor
+        options={[]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(
+      screen.queryByRole("button", { name: /add first option/i })
+    ).toBeNull();
+  });
+
+  it("hides the empty-state helper as soon as options exist", () => {
+    render(
+      <SelectOptionsEditor
+        options={[{ id: "opt_1", label: "Draft", value: "draft" }]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/no options yet/i)).toBeNull();
+  });
+});
+
+describe("SelectOptionsEditor -- Import modal Tabs (PR E4)", () => {
+  async function openImportModal() {
+    const user = userEvent.setup();
+    const utils = render(
+      <SelectOptionsEditor
+        options={[]}
+        onOptionsChange={vi.fn()}
+        fieldType="select"
+        onIsClearableChange={vi.fn()}
+        onPlaceholderChange={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /^import$/i }));
+    return { user, ...utils };
+  }
+
+  it("renders CSV and JSON tabs in the Import modal", async () => {
+    await openImportModal();
+    expect(screen.getByRole("tab", { name: /^csv$/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^json$/i })).toBeInTheDocument();
+  });
+
+  it("defaults to the CSV tab", async () => {
+    await openImportModal();
+    expect(screen.getByRole("tab", { name: /^csv$/i })).toHaveAttribute(
+      "data-state",
+      "active"
+    );
+  });
+
+  it("switches to the JSON tab when clicked", async () => {
+    const { user } = await openImportModal();
+    await user.click(screen.getByRole("tab", { name: /^json$/i }));
+    expect(screen.getByRole("tab", { name: /^json$/i })).toHaveAttribute(
+      "data-state",
+      "active"
+    );
+  });
+
+  it("shows a single-line CSV helper instead of a multi-line code panel", async () => {
+    await openImportModal();
+    // The new helper is a short sentence, not a <pre> block.
+    expect(screen.getByText(/one line per option/i)).toBeInTheDocument();
+    // The old loud "CSV Format:" header should be gone.
+    expect(screen.queryByText(/^CSV Format:$/)).toBeNull();
+  });
+
+  it("shows the JSON helper after switching to the JSON tab", async () => {
+    const { user } = await openImportModal();
+    await user.click(screen.getByRole("tab", { name: /^json$/i }));
+    // Why: the helper text wraps `{label, value}` in a <code> tag, so
+    // getByText with a regex spanning text+code+text can't match across
+    // the element boundary. Match the leading text node only -- "Array
+    // of" is unique to the JSON tab (CSV uses "One line per option").
+    expect(screen.getByText(/array of/i)).toBeInTheDocument();
+  });
+});
