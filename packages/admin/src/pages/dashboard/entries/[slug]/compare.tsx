@@ -10,6 +10,7 @@
 
 import { Alert, AlertDescription, AlertTitle, Skeleton } from "@revnixhq/ui";
 
+import { DocumentTabs } from "@admin/components/features/entries/DocumentTabs";
 import { EntryCompare } from "@admin/components/features/entries/EntryCompare";
 import { AlertCircle, ArrowLeftRight } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -126,11 +127,17 @@ export default function CompareEntryPage({ params }: ComparePageProps) {
         />
       </div>
 
+      {/* Document tabs (Q-D6=c) — Compare is reachable from internal links and
+          rides under the API tab so users still feel they're on the same document. */}
+      <DocumentTabs scope="collection" slug={slug} />
+
       {/* Page header */}
       <div className="mb-8">
         <div className="flex items-center gap-3">
           <ArrowLeftRight className="h-6 w-6 text-muted-foreground/70" />
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">Compare Entries</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+            Compare Entries
+          </h1>
         </div>
         <p className="text-sm font-normal text-primary/50 mt-1">
           Compare two entries from the <strong>{collectionLabel}</strong>{" "}

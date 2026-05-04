@@ -23,6 +23,8 @@ import { useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
 
+import { DocumentTabs } from "../DocumentTabs";
+
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -274,6 +276,14 @@ export function EntryForm({
             {/* Main Content */}
             <div className="flex-1 lg:p-8 pt-6">
               <div className="mb-6">{headerContent}</div>
+              {/* Document tabs (Q-D6=c). Edit + API + Versions(Soon) + LivePreview(Soon). */}
+              <div className="-mx-8 mb-6">
+                <DocumentTabs
+                  scope="collection"
+                  slug={collection.name}
+                  entryId={entry?.id}
+                />
+              </div>
               <EntryFormHeader
                 collectionSlug={collection.name}
                 singularLabel={singularLabel}
