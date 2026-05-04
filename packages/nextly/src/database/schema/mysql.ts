@@ -824,3 +824,17 @@ export { emailTemplatesMysql as emailTemplates } from "../../schemas/email-templ
 
 // F8 PR 5: see postgres.ts re-export comment.
 export { nextlyMigrationJournalMysql as nextlyMigrationJournal } from "../../schemas/migration-journal/mysql";
+
+// nextly_meta — runtime key/value flags table.
+// Used for state that doesn't belong in collection schemas. First consumer:
+// seed.completedAt / seed.skippedAt for the dashboard SeedDemoContentCard.
+// See migration 20260504_000000_nextly_meta.sql.
+export const nextlyMeta = mysqlTable(
+  "nextly_meta",
+  {
+    key: varchar("key", { length: 191 }).primaryKey(),
+    value: json("value"),
+    updatedAt: datetime("updated_at").notNull().default(new Date()),
+  },
+  t => [index("nextly_meta_updated_at_idx").on(t.updatedAt)]
+);
