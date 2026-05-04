@@ -40,8 +40,8 @@ import {
   type BuilderSettingsValues,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
-import { PageContainer } from "@admin/components/layout/page-container";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
@@ -468,14 +468,14 @@ export default function CollectionBuilderEditPage({
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <PageContainer className="flex-1">
-         <BuilderToolbar
-        config={COLLECTION_BUILDER_CONFIG}
-        name={settings.singularName || slug}
-        locked={isLocked}
-        unsavedCount={unsavedCount}
-        onOpenSettings={() => setActive({ kind: "settings" })}
-        onSave={() => void handleSave()}
-      />
+        <BuilderToolbar
+          config={COLLECTION_BUILDER_CONFIG}
+          name={settings.singularName || slug}
+          locked={isLocked}
+          unsavedCount={unsavedCount}
+          onOpenSettings={() => setActive({ kind: "settings" })}
+          onSave={() => void handleSave()}
+        />
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}

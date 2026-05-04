@@ -15,8 +15,8 @@ import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import { toast } from "@admin/components/ui";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
 import { toSnakeName } from "@admin/lib/builder";

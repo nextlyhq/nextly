@@ -18,8 +18,8 @@ import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import { toast } from "@admin/components/ui";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateComponent } from "@admin/hooks/queries/useComponents";
 import { toSnakeName } from "@admin/lib/builder";
