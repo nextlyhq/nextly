@@ -46,6 +46,7 @@
   // Runtime env vars referenced from package source (not build-time inputs).
   // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
   "globalPassThroughEnv": [
+    "npm_config_user_agent", // create-nextly-app reads this to detect the invoking PM
     "BLOB_READ_WRITE_TOKEN", // @revnixhq/storage-vercel-blob runtime config
     "S3_BUCKET",
     "S3_ENDPOINT",

@@ -3,7 +3,7 @@
  */
 
 import fs from "fs-extra";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { detectPackageManager, detectProject } from "../utils/detect";
 
@@ -18,11 +18,25 @@ vi.mock("fs-extra", () => ({
 const mockPathExists = vi.mocked(fs.pathExists);
 const mockReadJson = vi.mocked(fs.readJson);
 
+// detectPackageManager reads process.env.npm_config_user_agent first;
+// the test runner (vitest invoked via pnpm) sets it, which would mask
+// the lockfile-fallback path under test. Each lockfile test clears it
+// in its own setup.
+const originalUserAgent = process.env.npm_config_user_agent;
+
 describe("detectPackageManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: no lock files exist
     mockPathExists.mockResolvedValue(false);
+    // Wipe the UA so the lockfile-fallback path is exercised.
+    delete process.env.npm_config_user_agent;
+  });
+
+  afterEach(() => {
+    if (originalUserAgent !== undefined) {
+      process.env.npm_config_user_agent = originalUserAgent;
+    }
   });
 
   it("should detect pnpm from pnpm-lock.yaml", async () => {
@@ -71,11 +85,44 @@ describe("detectPackageManager", () => {
     const result = await detectPackageManager("/test/project");
     expect(result).toBe("pnpm");
   });
+
+  it("prefers npm_config_user_agent over lockfile detection", async () => {
+    // pnpm-lock.yaml exists in cwd, but UA says yarn — UA wins.
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v22.10.0";
+    mockPathExists.mockImplementation(async path => {
+      return String(path).endsWith("pnpm-lock.yaml");
+    });
+    expect(await detectPackageManager("/test/project")).toBe("yarn");
+  });
+
+  it("falls back to lockfile when user-agent is not a known PM", async () => {
+    process.env.npm_config_user_agent = "unknown-tool/1.0";
+    mockPathExists.mockImplementation(async path => {
+      return String(path).endsWith("yarn.lock");
+    });
+    expect(await detectPackageManager("/test/project")).toBe("yarn");
+  });
+
+  it("falls back to npm when neither user-agent nor lockfile match", async () => {
+    process.env.npm_config_user_agent = "unknown-tool/1.0";
+    mockPathExists.mockResolvedValue(false);
+    expect(await detectPackageManager("/test/project")).toBe("npm");
+  });
 });
 
 describe("detectProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // detectProject calls detectPackageManager internally; wipe the UA
+    // so the assertions about packageManager come from lockfile, not
+    // the test runner's pnpm UA.
+    delete process.env.npm_config_user_agent;
+  });
+
+  afterEach(() => {
+    if (originalUserAgent !== undefined) {
+      process.env.npm_config_user_agent = originalUserAgent;
+    }
   });
 
   it("should detect a valid Next.js App Router project", async () => {
