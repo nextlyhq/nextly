@@ -53,6 +53,8 @@ export function RelationshipEditor({
   onIsSortableChange,
   filterOptions,
   onFilterOptionsChange,
+  appearance,
+  onAppearanceChange,
 }: RelationshipEditorProps) {
   const [isCollectionPickerOpen, setIsCollectionPickerOpen] = useState(false);
   const [collectionSearch, setCollectionSearch] = useState("");
@@ -357,6 +359,44 @@ export function RelationshipEditor({
         <Label className="text-xs font-medium text-muted-foreground">
           Admin Options
         </Label>
+
+        {/* PR E3: Appearance picker shape. "select" = inline picker
+            (default, current behavior); "drawer" = side-drawer overlay
+            better for searching long lists. Stored as
+            field.admin.appearance. */}
+        {onAppearanceChange && (
+          <div className="space-y-2">
+            <FormLabelWithTooltip
+              className="text-xs font-medium"
+              label="Appearance"
+              description="How the picker is displayed: inline select or side drawer"
+            />
+            <div className="inline-flex divide-x divide-border rounded-sm border border-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => onAppearanceChange("select")}
+                className={`px-3 py-1 text-xs ${
+                  (appearance ?? "select") === "select"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Select
+              </button>
+              <button
+                type="button"
+                onClick={() => onAppearanceChange("drawer")}
+                className={`px-3 py-1 text-xs ${
+                  appearance === "drawer"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Drawer
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Allow Create */}
         <div className="flex items-center justify-between">

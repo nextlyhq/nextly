@@ -157,6 +157,13 @@ export function TypeSpecificEditor({
             : (f: RelationshipFilter | undefined) =>
                 patch({ relationshipFilter: f })
         }
+        // PR E3: picker shape.
+        appearance={field.admin?.appearance}
+        onAppearanceChange={
+          readOnly
+            ? noop
+            : (a: "drawer" | "select") => patchAdmin({ appearance: a })
+        }
       />
     );
   }
