@@ -45,7 +45,9 @@ export interface ListCollectionsOptions {
   page?: number;
   limit?: number;
   search?: string;
-  sortBy?: "slug" | "createdAt" | "updatedAt";
+  // "name" is the admin/API alias for "slug" (the API exposes the slug as
+  // `name` to consumers). Both values order on the same physical column.
+  sortBy?: "name" | "slug" | "createdAt" | "updatedAt";
   sortOrder?: "asc" | "desc";
   includeSchema?: boolean;
   source?: "code" | "ui" | "built-in";
@@ -213,6 +215,8 @@ export class DynamicCollectionRegistryService extends BaseService {
     const orderFn = sortOrder === "asc" ? asc : desc;
     let orderByClause;
     switch (sortBy) {
+      // "name" is the admin/API alias for "slug" — both sort on the slug column.
+      case "name":
       case "slug":
         orderByClause = orderFn(this.dynamicCollections.slug);
         break;

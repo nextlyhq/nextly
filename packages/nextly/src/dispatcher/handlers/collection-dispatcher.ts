@@ -166,7 +166,12 @@ const COLLECTIONS_METHODS: Record<
         page: toNumber(p.page),
         limit: toNumber(p.limit),
         search: p.search,
-        sortBy: p.sortBy as "slug" | "createdAt" | "updatedAt" | undefined,
+        sortBy: p.sortBy as
+          | "name"
+          | "slug"
+          | "createdAt"
+          | "updatedAt"
+          | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on

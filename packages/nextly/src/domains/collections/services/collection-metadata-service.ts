@@ -374,7 +374,8 @@ export class CollectionMetadataService extends BaseService {
     page?: number;
     limit?: number;
     search?: string;
-    sortBy?: "slug" | "createdAt" | "updatedAt";
+    // "name" is the admin/API alias for "slug" — both sort on the slug column.
+    sortBy?: "name" | "slug" | "createdAt" | "updatedAt";
     sortOrder?: "asc" | "desc";
     includeSchema?: boolean;
   }): Promise<MetadataServiceResult> {
