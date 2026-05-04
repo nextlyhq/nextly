@@ -33,10 +33,9 @@ const FIELD_SHAPE_KEYS: ReadonlyArray<keyof BuilderField> = [
   "allowEdit",
   "isSortable",
   "relationshipFilter",
-  // Upload
+  // Upload (PR H feedback 2.2 dropped displayPreview -- dead config)
   "mimeTypes",
   "maxFileSize",
-  "displayPreview",
   // Array / Group
   "labels",
   "initCollapsed",

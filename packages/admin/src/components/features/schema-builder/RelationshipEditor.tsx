@@ -32,6 +32,7 @@ import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 import { useCollections, useSingles } from "@admin/hooks/queries";
 
+import { EditorAlert } from "./EditorAlert";
 import type { RelationshipEditorProps, RelationshipFilter } from "./types";
 
 // ============================================================
@@ -504,17 +505,12 @@ export function RelationshipEditor({
         )}
       </div>
 
-      {/* Info Box */}
       {selectedCollections.length === 0 && (
-        <div className="flex items-start gap-2 p-3 rounded-none bg-amber-500/10  border border-primary/5 border-amber-500/20">
-          <Icons.AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-          <div className="text-xs text-amber-600 dark:text-amber-400">
-            <p className="font-medium">No target collection selected</p>
-            <p className="mt-0.5">
-              Select at least one collection for this relationship field.
-            </p>
-          </div>
-        </div>
+        // PR H feedback 2.2: subtle EditorAlert replaces the loud
+        // amber AlertTriangle panel.
+        <EditorAlert>
+          Pick a collection above to set the relationship target.
+        </EditorAlert>
       )}
     </div>
   );

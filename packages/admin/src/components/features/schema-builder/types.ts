@@ -159,6 +159,15 @@ export interface BuilderFieldAdmin {
    * PR E3: matches Payload's RelationshipAdmin.appearance.
    */
   appearance?: "drawer" | "select";
+  /**
+   * Upload fields only -- whether the user can upload new files
+   * inline. Defaults to true. PR H feedback 2.2: matches the
+   * framework's UploadFieldAdminOptions.allowCreate (which is where
+   * the runtime UploadInput already reads from). Editor previously
+   * stored this at top-level field.allowCreate which mismatched the
+   * runtime path; storing here closes the gap.
+   */
+  allowCreate?: boolean;
 }
 
 // ============================================================
@@ -375,10 +384,6 @@ export interface BuilderField extends FieldConfig {
    * Maximum file size in bytes for upload fields
    */
   maxFileSize?: number;
-  /**
-   * Display thumbnail preview for upload fields
-   */
-  displayPreview?: boolean;
   // ============================================================
   // Array Field Properties
   // ============================================================
@@ -775,13 +780,15 @@ export function convertFromBytes(bytes: number): {
 }
 
 /**
- * Props for the UploadEditor component
+ * Props for the UploadEditor component.
+ *
+ * PR H feedback 2.2: trimmed to only the knobs that work end-to-end
+ * (have a runtime consumer in UploadInput.tsx + MediaPickerDialog).
+ * Removed: relationTo (Media Collection picker -- the runtime ignores
+ * it), allowEdit (never read), isSortable (never read), displayPreview
+ * (never read).
  */
 export interface UploadEditorProps {
-  /** Current target collection(s) for uploads */
-  relationTo?: string | string[];
-  /** Callback when relationTo changes */
-  onRelationToChange: (relationTo: string | string[] | undefined) => void;
   /** Whether multiple uploads are allowed */
   hasMany?: boolean;
   /** Callback when hasMany changes */
@@ -798,18 +805,6 @@ export interface UploadEditorProps {
   allowCreate?: boolean;
   /** Callback when allowCreate changes */
   onAllowCreateChange?: (allowCreate: boolean) => void;
-  /** Allow editing file metadata from the field */
-  allowEdit?: boolean;
-  /** Callback when allowEdit changes */
-  onAllowEditChange?: (allowEdit: boolean) => void;
-  /** Allow reordering (when hasMany) */
-  isSortable?: boolean;
-  /** Callback when isSortable changes */
-  onIsSortableChange?: (isSortable: boolean) => void;
-  /** Display thumbnail preview */
-  displayPreview?: boolean;
-  /** Callback when displayPreview changes */
-  onDisplayPreviewChange?: (displayPreview: boolean) => void;
 }
 
 // ============================================================
