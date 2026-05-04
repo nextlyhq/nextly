@@ -33,7 +33,10 @@ import {
 import type React from "react";
 import { useState, useCallback, useEffect, useMemo } from "react";
 
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import {
+  SettingsLayout,
+  SettingsTableToolbar,
+} from "@admin/components/features/settings";
 import {
   AlertTriangle,
   ChevronDown,
@@ -676,7 +679,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={false}
-              className="bg-background text-foreground border-primary/5"
+              className="w-full bg-background text-foreground border-input"
             />
           </div>
         </div>
@@ -703,7 +706,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={true}
-              className="bg-background text-foreground border-primary/5"
+              className="w-full bg-background text-foreground border-input"
             />
           </div>
         </div>
@@ -714,19 +717,17 @@ function EmailTemplateTable() {
 
   return (
     <div className="space-y-4">
-      {/* Search toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+      <SettingsTableToolbar
+        search={
           <SearchBar
             value={search}
             onChange={setSearch}
             placeholder="Search templates by name, slug, or subject..."
             isLoading={isLoading}
-            className="flex-1 max-w-sm bg-white text-black border-primary/5"
+            className="w-full bg-background text-foreground border-input"
           />
-        </div>
-
-        <div className="flex items-center gap-2">
+        }
+        columns={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="md" className="bg-background">
@@ -748,8 +749,8 @@ function EmailTemplateTable() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
+        }
+      />
 
       {/* Table */}
       <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
