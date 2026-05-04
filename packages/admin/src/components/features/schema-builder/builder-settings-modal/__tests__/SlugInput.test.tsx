@@ -38,7 +38,9 @@ describe("SlugInput", () => {
   it("renders the slug value with a dim 'Slug:' label in read mode", () => {
     render(<Controlled initial="blog_post" />);
     expect(screen.getByText("blog_post")).toBeInTheDocument();
-    expect(screen.getByText(/^Slug:/)).toBeInTheDocument();
+    // Why: PR G dropped the redundant "Slug:" prefix per feedback 2.
+    // The Label above already says "Slug" so the prefix was duplicate.
+    expect(screen.queryByText(/^Slug:/)).toBeNull();
   });
 
   it("renders a pencil icon edit button (no 'AUTO' badge, no 'Edit' text)", () => {
