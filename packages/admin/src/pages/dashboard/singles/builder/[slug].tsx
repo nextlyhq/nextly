@@ -8,8 +8,8 @@
  *   overlays (settings modal / picker / editor sheet / hooks sheet) mounted
  *   lazily based on a single ActiveOverlay union.
  *
- * Singles do not run the schema-change preview (per-kind audit § 2). Save
- * goes straight through useUpdateSingle. Locked code-first Singles render
+ * Singles run the same preview → SchemaChangeDialog → apply pipeline as
+ * Collections. Locked code-first Singles render
  * in readOnly mode (cross-cutting code-first preservation requirement).
  */
 
@@ -27,11 +27,14 @@ import {
   BuilderToolbar,
   FieldEditorSheet,
   FieldPickerModal,
+  SafeChangeConfirmDialog,
+  SchemaChangeDialog,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
+import { useRestart } from "@admin/context/RestartContext";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import {
@@ -43,6 +46,12 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import type {
+  FieldResolution,
+  SchemaPreviewResponse,
+  SchemaRenameResolution,
+} from "@admin/services/schemaApi";
+import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
 
@@ -96,7 +105,15 @@ export default function SingleBuilderEditPage({
     readonly BuilderField[] | null
   >(null);
 
+  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
+    null
+  );
+  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
+  const [showSafeDialog, setShowSafeDialog] = useState(false);
+  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
+
   const { mutate: updateSingle, isPending: isSaving } = useUpdateSingle();
+  const { startRestart, stopRestart } = useRestart();
 
   // Initialize builder + settings from the loaded Single.
   useEffect(() => {
@@ -145,59 +162,140 @@ export default function SingleBuilderEditPage({
     );
   }, [builder.fields, originalFields]);
 
-  const handleSave = useCallback(() => {
-    if (!slug || !settings) {
-      toast.error("Single slug is missing");
-      return;
-    }
-
+  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
     const userFields = builder.fields.filter(
       f => !f.isSystem && f.name !== "title" && f.name !== "slug"
     );
     const validation = builder.validateFields(userFields);
     if (!validation.valid) {
       toast.error(validation.errorMessage);
+      return null;
+    }
+    return userFields.map(convertToFieldDefinition);
+  }, [builder]);
+
+  const applySchemaChanges = useCallback(
+    async (
+      fieldDefinitions: FieldDefinition[],
+      schemaVersion: number,
+      resolutions: Record<string, FieldResolution>,
+      renameResolutions: SchemaRenameResolution[]
+    ) => {
+      if (!slug) return;
+      setIsApplyingSchema(true);
+      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
+      startRestart();
+      try {
+        const result = await singleApi.applySchemaChanges(
+          slug,
+          fieldDefinitions,
+          schemaVersion,
+          resolutions,
+          renameResolutions
+        );
+        if (result.success) {
+          const label = settings?.singularName?.trim() || slug;
+          const summarySuffix =
+            result.toastSummary && result.toastSummary !== "no changes"
+              ? `. ${result.toastSummary}`
+              : "";
+          stopRestart(true, `${label} schema updated${summarySuffix}`);
+          setShowSchemaDialog(false);
+          setPreviewData(null);
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
+        } else {
+          stopRestart(
+            false,
+            result.message || "Failed to apply schema changes"
+          );
+        }
+      } catch (err) {
+        const errorObj = err as { message?: string };
+        stopRestart(
+          false,
+          errorObj?.message || "An error occurred while applying changes"
+        );
+      } finally {
+        setIsApplyingSchema(false);
+        if (typeof window !== "undefined")
+          window.__nextlySchemaApplying = false;
+      }
+    },
+    [slug, startRestart, stopRestart, settings?.singularName, builder.fields]
+  );
+
+  // No-schema-change path: persist labels/settings only.
+  const saveSettingsOnly = useCallback(
+    (fieldDefinitions: FieldDefinition[]) => {
+      if (!slug || !settings) return;
+      updateSingle(
+        {
+          slug,
+          updates: {
+            label: settings.singularName,
+            description: settings.description,
+            fields: fieldDefinitions as unknown as ApiSingle["fields"],
+            admin: {
+              icon: settings.icon,
+              group: settings.adminGroup,
+              ...(settings.order !== undefined
+                ? { order: settings.order }
+                : {}),
+            },
+            ...(settings.status === true ? { status: true } : {}),
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success("Single updated");
+            setOriginalFields(builder.fields.filter(f => !f.isSystem));
+          },
+          onError: err => {
+            const errorObj = err as { message?: string };
+            toast.error(
+              errorObj?.message ||
+                "An unexpected error occurred while updating the Single."
+            );
+          },
+        }
+      );
+    },
+    [slug, settings, updateSingle, builder.fields]
+  );
+
+  const handleSave = useCallback(async () => {
+    if (!slug || !settings) {
+      toast.error("Single slug is missing");
       return;
     }
 
-    const fieldDefinitions = userFields.map(convertToFieldDefinition);
+    const fieldDefinitions = getValidatedFields();
+    if (!fieldDefinitions) return;
 
-    updateSingle(
-      {
+    try {
+      const preview = await singleApi.previewSchemaChanges(
         slug,
-        updates: {
-          label: settings.singularName,
-          description: settings.description,
-          fields: fieldDefinitions as unknown as ApiSingle["fields"],
-          admin: {
-            icon: settings.icon,
-            group: settings.adminGroup,
-            ...(settings.order !== undefined ? { order: settings.order } : {}),
-          },
-          // Status pass-through; the typed Partial<ApiSingle> doesn't
-          // include status yet, so cast at the boundary.
-          ...(settings.status === true ? { status: true } : {}),
-          // Why: hooks payload removed in PR D -- the Singles page
-          // never hydrated `hooks` state from `single.hooks`, so this
-          // spread always sent `undefined`. Hooks for Singles are still
-          // configurable code-first via nextly.config.ts.
-        },
-      },
-      {
-        onSuccess: () => {
-          toast.success("Single updated");
-          setOriginalFields(builder.fields.filter(f => !f.isSystem));
-        },
-        onError: err => {
-          const errorObj = err as { message?: string };
-          toast.error(
-            errorObj?.message ||
-              "An unexpected error occurred while updating the Single."
-          );
-        },
+        fieldDefinitions
+      );
+
+      if (!preview.hasChanges) {
+        saveSettingsOnly(fieldDefinitions);
+        return;
       }
-    );
-  }, [builder, settings, slug, updateSingle]);
+
+      if (preview.classification === "safe") {
+        setPreviewData(preview);
+        setShowSafeDialog(true);
+        return;
+      }
+
+      setPreviewData(preview);
+      setShowSchemaDialog(true);
+    } catch (err) {
+      const errorObj = err as { message?: string };
+      toast.error(errorObj?.message || "Failed to preview schema changes");
+    }
+  }, [slug, settings, getValidatedFields, saveSettingsOnly]);
 
   // Why: PR D feedback -- duplicate icon on each field card. Same shape
   // as the collections page handler.
@@ -305,7 +403,7 @@ export default function SingleBuilderEditPage({
         locked={isLocked}
         unsavedCount={unsavedCount}
         onOpenSettings={() => setActive({ kind: "settings" })}
-        onSave={() => handleSave()}
+        onSave={() => void handleSave()}
       />
 
       <DndContext
@@ -452,7 +550,54 @@ export default function SingleBuilderEditPage({
 
       {/* Hooks UI removed in PR D (feedback Section 2). */}
 
-      {isSaving && (
+      {previewData && previewData.classification === "safe" && (
+        <SafeChangeConfirmDialog
+          open={showSafeDialog}
+          onOpenChange={setShowSafeDialog}
+          collectionName={slug}
+          changes={previewData.changes}
+          onConfirm={() => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applySchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                {},
+                []
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {previewData && previewData.classification !== "safe" && (
+        <SchemaChangeDialog
+          open={showSchemaDialog}
+          onOpenChange={setShowSchemaDialog}
+          collectionName={slug}
+          hasDestructiveChanges={previewData.hasDestructiveChanges}
+          classification={previewData.classification}
+          changes={previewData.changes}
+          renamed={previewData.renamed}
+          warnings={previewData.warnings}
+          interactiveFields={previewData.interactiveFields}
+          onConfirm={(resolutions, renameResolutions) => {
+            const fieldDefs = getValidatedFields();
+            if (fieldDefs) {
+              void applySchemaChanges(
+                fieldDefs,
+                previewData.schemaVersion,
+                resolutions,
+                renameResolutions
+              );
+            }
+          }}
+          isApplying={isApplyingSchema}
+        />
+      )}
+
+      {(isSaving || isApplyingSchema) && (
         <div aria-live="polite" className="sr-only">
           Saving Single changes…
         </div>

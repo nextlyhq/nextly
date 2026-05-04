@@ -46,7 +46,7 @@ import {
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type { DesiredCollection, DesiredSchema, DesiredSingle } from "../../domains/schema/pipeline/types";
+import type { DesiredSchema, DesiredSingle } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -764,14 +764,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const db = adapter.getDrizzle();
 
       const desired: DesiredSchema = {
-        collections: {
+        collections: {},
+        singles: {
           [slug]: {
             slug,
             tableName,
-            fields: fields as DesiredCollection["fields"],
+            fields: fields as DesiredSingle["fields"],
           },
         },
-        singles: {},
         components: {},
       };
 
