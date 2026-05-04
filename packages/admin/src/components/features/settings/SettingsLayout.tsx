@@ -38,6 +38,28 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
       };
     }
     if (pathname.includes("email-providers")) {
+      if (pathname.includes("/create")) {
+        return {
+          title: "New Email Provider",
+          description: "Configure a new email delivery provider",
+          crumb: "New Email Provider",
+          parentCrumb: {
+            label: "Email Providers",
+            href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
+          },
+        };
+      }
+      if (pathname.includes("/edit/")) {
+        return {
+          title: "Edit Email Provider",
+          description: "Update the email provider configuration",
+          crumb: "Edit Email Provider",
+          parentCrumb: {
+            label: "Email Providers",
+            href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
+          },
+        };
+      }
       return {
         title: "Email Providers",
         description: "Configure your SMTP and email delivery services",
@@ -84,14 +106,22 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
       {/* Breadcrumbs */}
       <div className="mb-6">
         <Breadcrumbs
-        items={[
-          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-          { label: "Settings", href: ROUTES.SETTINGS },
-          ...(pageInfo.crumb && pageInfo.crumb !== "General"
-            ? [{ label: pageInfo.crumb }]
-            : []),
-        ]}
-      />
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Settings", href: ROUTES.SETTINGS },
+            ...("parentCrumb" in pageInfo && pageInfo.parentCrumb
+              ? [
+                  {
+                    label: pageInfo.parentCrumb.label,
+                    href: pageInfo.parentCrumb.href,
+                  },
+                ]
+              : []),
+            ...(pageInfo.crumb && pageInfo.crumb !== "General"
+              ? [{ label: pageInfo.crumb }]
+              : []),
+          ]}
+        />
       </div>
 
       {/* Page Header */}
