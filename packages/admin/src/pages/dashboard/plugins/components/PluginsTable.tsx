@@ -263,7 +263,7 @@ export default function PluginsTable() {
                 size="md"
                 className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
               >
-                <Columns className="mr-2 h-4 w-4" />
+                <Columns className="h-4 w-4" />
                 Columns
               </Button>
             </DropdownMenuTrigger>

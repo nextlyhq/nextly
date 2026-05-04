@@ -511,7 +511,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                   }}
                   className={isLocked ? "opacity-50" : ""}
                 >
-                  <Pencil className="h-4 w-4 mr-2" />
+                  <Pencil className="h-4 w-4" />
                   Edit
                   {isLocked && (
                     <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
@@ -523,7 +523,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                     handleViewDocument(single);
                   }}
                 >
-                  <FileEdit className="h-4 w-4 mr-2" />
+                  <FileEdit className="h-4 w-4" />
                   View Document
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -535,7 +535,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                   disabled={isLocked}
                   className={`text-destructive focus:text-destructive ${isLocked ? "opacity-50" : ""}`}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="h-4 w-4" />
                   Delete
                   {isLocked && (
                     <Lock className="h-3 w-3 ml-auto text-muted-foreground" />
@@ -672,7 +672,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                   size="md"
                   className="relative bg-background text-foreground border-primary/5 hover:bg-accent/10"
                 >
-                  <Filter className="mr-2 h-4 w-4" />
+                  <Filter className="h-4 w-4" />
                   Filter
                   {(sourceFilter !== "all" || migrationFilter !== "all") && (
                     <span className="absolute -top-1 -right-1 flex h-3 w-3 rounded-none bg-primary" />
@@ -748,7 +748,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
                   size="md"
                   className="bg-background text-foreground border-primary/5 hover:bg-accent/10"
                 >
-                  <Icons.Columns className="mr-2 h-4 w-4" />
+                  <Icons.Columns className="h-4 w-4" />
                   Columns
                 </Button>
               </DropdownMenuTrigger>

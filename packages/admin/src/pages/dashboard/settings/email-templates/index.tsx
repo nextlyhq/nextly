@@ -216,12 +216,12 @@ function EmailLayoutSection() {
             >
               {isSaving ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                   Saving Configuration...
                 </>
               ) : (
                 <>
-                  <Save className="mr-2 h-4 w-4" />
+                  <Save className="h-4 w-4" />
                   Save Changes
                 </>
               )}
@@ -281,7 +281,7 @@ function TemplateDeleteDialog({
           >
             {isLoading ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
                 Deleting...
               </>
             ) : (
@@ -730,7 +730,7 @@ function EmailTemplateTable() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="md" className="bg-background">
-                <Columns className="mr-2 h-4 w-4" />
+                <Columns className="h-4 w-4" />
                 Columns
               </Button>
             </DropdownMenuTrigger>
@@ -806,7 +806,7 @@ const EmailTemplatesPage: React.FC = () => {
             <Button
               onClick={() => navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE)}
             >
-              <Plus className="mr-2 h-4 w-4" />
+              <Plus className="h-4 w-4" />
               Create Template
             </Button>
           }

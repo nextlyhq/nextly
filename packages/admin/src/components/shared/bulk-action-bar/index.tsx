@@ -177,7 +177,7 @@ export function BulkActionBar({
                 size="md"
                 disabled={isAssigningRole || isAnyActionLoading}
               >
-                <Shield className="mr-2 h-4 w-4" />
+                <Shield className="h-4 w-4" />
                 Assign Role
               </Button>
             </DropdownMenuTrigger>
@@ -204,7 +204,7 @@ export function BulkActionBar({
             title={!canDelete ? deleteDisabledReason : undefined}
             aria-label={`Delete ${selectedCount} selected item${selectedCount === 1 ? "" : "s"}`}
           >
-            <Trash2 className="mr-2 h-4 w-4" />
+            <Trash2 className="h-4 w-4" />
             Delete
           </Button>
 
@@ -216,7 +216,7 @@ export function BulkActionBar({
                 size="md"
                 disabled={isTogglingStatus || isAnyActionLoading}
               >
-                <ToggleLeft className="mr-2 h-4 w-4" />
+                <ToggleLeft className="h-4 w-4" />
                 Status
               </Button>
             </DropdownMenuTrigger>
@@ -248,7 +248,7 @@ export function BulkActionBar({
                 disabled={isAssigningRole || isAnyActionLoading}
                 className="min-h-[44px] min-w-[44px]"
               >
-                <Shield className="mr-2 h-4 w-4" />
+                <Shield className="h-4 w-4" />
                 Assign Role
               </Button>
             </DropdownMenuTrigger>
@@ -284,7 +284,7 @@ export function BulkActionBar({
                 className="text-destructive"
                 aria-label={`Delete ${selectedCount} selected item${selectedCount === 1 ? "" : "s"}`}
               >
-                <Trash2 className="mr-2 h-4 w-4" />
+                <Trash2 className="h-4 w-4" />
                 Delete
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -292,7 +292,7 @@ export function BulkActionBar({
                 disabled={isTogglingStatus}
                 aria-label={`Enable ${selectedCount} selected account${selectedCount === 1 ? "" : "s"}`}
               >
-                <ToggleLeft className="mr-2 h-4 w-4" />
+                <ToggleLeft className="h-4 w-4" />
                 Enable Accounts
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -300,7 +300,7 @@ export function BulkActionBar({
                 disabled={isTogglingStatus}
                 aria-label={`Disable ${selectedCount} selected account${selectedCount === 1 ? "" : "s"}`}
               >
-                <X className="mr-2 h-4 w-4" />
+                <X className="h-4 w-4" />
                 Disable Accounts
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -309,7 +309,7 @@ export function BulkActionBar({
 
         {/* Clear button (right-aligned) */}
         <Button variant="ghost" size="md" onClick={onClear} className="ml-auto">
-          <X className="mr-2 h-4 w-4" />
+          <X className="h-4 w-4" />
           Clear
         </Button>
       </div>

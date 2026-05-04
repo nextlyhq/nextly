@@ -121,7 +121,7 @@ export function ActionCommands({ onSelect }: ActionCommandsProps) {
             disabled={command.disabled}
             onSelect={() => onSelect(() => router.push(command.href))}
           >
-            <Icon className="mr-2 h-4 w-4" aria-hidden="true" />
+            <Icon className="h-4 w-4" aria-hidden="true" />
             <span>{command.label}</span>
             {command.shortcut && (
               <CommandShortcut>{command.shortcut}</CommandShortcut>

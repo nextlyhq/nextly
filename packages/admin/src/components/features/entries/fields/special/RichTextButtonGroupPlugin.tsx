@@ -336,7 +336,7 @@ export function RichTextButtonGroupPlugin({
                 className="flex-1"
                 onClick={() => setAlignment("left")}
               >
-                <AlignLeft className="h-4 w-4 mr-2" />
+                <AlignLeft className="h-4 w-4" />
                 Left
               </Button>
               <Button
@@ -346,7 +346,7 @@ export function RichTextButtonGroupPlugin({
                 className="flex-1"
                 onClick={() => setAlignment("center")}
               >
-                <AlignCenter className="h-4 w-4 mr-2" />
+                <AlignCenter className="h-4 w-4" />
                 Center
               </Button>
               <Button
@@ -356,7 +356,7 @@ export function RichTextButtonGroupPlugin({
                 className="flex-1"
                 onClick={() => setAlignment("right")}
               >
-                <AlignRight className="h-4 w-4 mr-2" />
+                <AlignRight className="h-4 w-4" />
                 Right
               </Button>
             </div>

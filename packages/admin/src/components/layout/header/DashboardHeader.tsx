@@ -1,5 +1,5 @@
 import { NotificationBell } from "@admin/components/features/notifications";
-import { Github, HelpCircle } from "@admin/components/icons";
+import { Discord, Github, HelpCircle } from "@admin/components/icons";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
 import { cn } from "@admin/lib/utils";
@@ -36,6 +36,15 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
         >
           <Github className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
           <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
+        </a>
+<a
+          href="https://discord.gg/KjDVzh3Gm"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+          title="Discord Community"
+        >
+          <Discord className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
         </a>
 
         <a

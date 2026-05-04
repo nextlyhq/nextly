@@ -398,7 +398,7 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
                 className="w-full"
                 disabled={disabled}
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="h-4 w-4" />
                 Add {singularLabel}
               </Button>
             )}
