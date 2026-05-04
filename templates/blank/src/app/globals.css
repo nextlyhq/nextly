@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+/**
+ * Blank-template global styles.
+ *
+ * Overrides templates/base/src/app/globals.css so the branded landing
+ * page renders with its supporting decorations: a subtle 56px grid
+ * backdrop, the corner brackets, the pulsing "Localhost / Development"
+ * dot, and a hover-invert helper for the secondary button.
+ *
+ * Tailwind base tokens still apply — these rules are additive.
+ */
+
+:root {
+  --background: #f9f9f9;
+  --foreground: #0f172a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0f172a;
+    --foreground: #f9f9f9;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  }
+}
+
+.corner-bracket {
+  width: 28px;
+  height: 28px;
+  border-color: var(--foreground);
+  pointer-events: none;
+}
+
+.pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  background: hsl(142.1 76.2% 36.3%);
+  border-radius: 50%;
+  box-shadow: 0 0 8px hsl(142.1 76.2% 36.3%);
+  animation: nextly-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes nextly-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+}
+
+/* Inverse-on-hover helper used by the secondary button.
+ * Pairs with `hover:bg-current` on the parent so the button flips from
+ * outlined to filled on hover. */
+.hover-invert {
+  transition: color 0.25s;
+}
+.group:hover .hover-invert,
+a:hover .hover-invert {
+  color: var(--background);
+}
+
+.font-display {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+}
