@@ -41,7 +41,7 @@ export async function handleVerifyEmail(
     });
   }
 
-  // Success body is `{ message: "Email verified.", email }` per spec section 7.6.
+  // Success body is `{ message: "Email verified.", email }` per spec §7.6.
   // Returning the just-verified email is safe. The caller owned the
   // unguessable token, so they already know which address it covers.
   return respondAction("Email verified.", { email: result.email });
@@ -77,9 +77,9 @@ export async function handleResendVerification(
   // Always returns success to prevent enumeration
   await deps.resendVerificationEmail(email);
 
-  // Silent generic message per spec section 7.6. We deliberately do NOT
-  // echo the email back (spec section 13.8) and the body is byte-identical
-  // whether or not the address is registered (spec section 13.3
+  // Silent generic message per spec §7.6. We deliberately do NOT
+  // echo the email back (spec §13.8) and the body is byte-identical
+  // whether or not the address is registered (spec §13.3
   // anti-enumeration).
   return respondAction("Verification email sent.");
 }

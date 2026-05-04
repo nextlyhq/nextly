@@ -53,7 +53,7 @@ export async function handleSetupStatus(
   deps: Pick<SetupHandlerDeps, "getUserCount">
 ): Promise<Response> {
   const count = await deps.getUserCount();
-  // Emit `{ isSetup, requiresInitialUser }` per spec section 7.7. Both
+  // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both
   // fields are derived from the user count: `isSetup` is true once a user
   // exists, `requiresInitialUser` is the inverse so the admin client can
   // drive the bootstrap-form redirect guard without reinterpreting the
@@ -154,7 +154,7 @@ export async function handleSetup(
   ];
 
   // Action message is "Setup complete." plus the freshly-issued user +
-  // tokens (spec section 7.6). Tokens still travel as HttpOnly cookies;
+  // tokens (spec §7.6). Tokens still travel as HttpOnly cookies;
   // surfacing them in the body matches login-handler shape so SDK
   // consumers can pick them up uniformly.
   return respondAction(

@@ -487,7 +487,7 @@ export class MediaService {
         } catch (error) {
           // NextlyError thrown from below the boundary preserves canonical
           // code + publicMessage. Anything else maps to INTERNAL_ERROR; the
-          // operator log carries full detail (no public leak per spec section 13.8).
+          // operator log carries full detail (no public leak per spec §13.8).
           if (NextlyError.is(error)) {
             return {
               kind: "failure",

@@ -9,7 +9,7 @@
  * is rewritten to the newer pattern, dispatchers translate at the
  * boundary: success branches hand bare data to respondX; failures throw
  * a canonical NextlyError so the dispatcher's error path emits the
- * spec section 5.1 error envelope.
+ * spec §5.1 error envelope.
  *
  * What these helpers are NOT: a backward-compat shim for client code.
  * Nothing here lets old admin clients keep working with old wire
@@ -125,8 +125,8 @@ export function offsetPaginationToMeta(args: {
  *
  * The legacy `message` rides through `logContext.legacyMessage` so
  * operator logs still carry the original service text. The wire response
- * sees only the canonical NextlyError publicMessage (per spec section
- * 13.8: no driver text, no identifier echo, no value leaking).
+ * sees only the canonical NextlyError publicMessage (per spec §13.8:
+ * no driver text, no identifier echo, no value leaking).
  *
  * Status-to-NextlyError mapping:
  *   400: NextlyError.validation (with publicData.errors[])

@@ -20,7 +20,7 @@ import type { ErrorResponse } from "./index";
  *
  * Status-to-code mapping:
  * - 401 + code `TOKEN_EXPIRED` -> `TOKEN_EXPIRED` so clients can refresh
- *   silently (per spec section 13.6 the public message is the generic
+ *   silently (per spec §13.6 the public message is the generic
  *   "Authentication required." regardless).
  * - 401 (other) -> `AUTH_REQUIRED`.
  * - 403 -> `FORBIDDEN`.

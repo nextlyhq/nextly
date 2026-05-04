@@ -61,7 +61,7 @@ export async function handleLogout(
     ...LEGACY_COOKIE_NAMES.map(name => serializeClearCookie(name, "/admin")),
   ];
 
-  // Silent success body is just `{ message }` per spec section 7.6.
+  // Silent success body is just `{ message }` per spec §7.6.
   // Cleared cookies still travel via the headers param.
   return respondAction(
     "Logged out.",

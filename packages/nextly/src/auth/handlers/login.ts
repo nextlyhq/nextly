@@ -72,7 +72,7 @@ export interface LoginHandlerDeps {
  * internal) is returned as a NextlyError with the same wire format that
  * withErrorHandler produces: application/problem+json with code, message,
  * and requestId. Account-state codes collapse into
- * AUTH_INVALID_CREDENTIALS per spec section 13.1.
+ * AUTH_INVALID_CREDENTIALS per spec §13.1.
  */
 function buildLoginErrorResponse(
   err: NextlyError,
@@ -123,7 +123,7 @@ export async function handleLogin(
 
     // verifyCredentials throws NextlyError on every failure path.
     // Account-state checks (locked / unverified / inactive) collapse to
-    // AUTH_INVALID_CREDENTIALS per spec section 13.1 (always 401, no
+    // AUTH_INVALID_CREDENTIALS per spec §13.1 (always 401, no
     // separate 429 leg).
     const verifiedUser = await verifyCredentials(
       { email: body.email, password: body.password },
@@ -187,7 +187,7 @@ export async function handleLogin(
     await stallResponse(startTime, deps.loginStallTimeMs);
 
     // Emit `{ message, user, accessToken, refreshToken, expiresAt }`
-    // directly per spec section 7.6. Tokens are still issued as HttpOnly
+    // directly per spec §7.6. Tokens are still issued as HttpOnly
     // cookies for browser-based clients; surfacing them in the body too
     // lets non-browser SDK consumers (mobile, CLI) drive Authorization
     // headers without losing server-authored toast text.

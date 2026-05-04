@@ -173,7 +173,7 @@ export async function handleRefresh(
     setRefreshTokenCookie(newRawToken, deps.refreshTokenTTL, deps.isProduction),
   ];
 
-  // Silent rotation per spec section 7.6, no `message`. Body surfaces the
+  // Silent rotation per spec §7.6, no `message`. Body surfaces the
   // freshly-rotated tokens so non-cookie clients (mobile / SDK) can replace
   // their stored values; browser clients keep using the HttpOnly cookies.
   return respondData(

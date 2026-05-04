@@ -9,7 +9,7 @@
  *
  * Every handler returns a Response built via the respondX helpers in
  * `../../api/response-shapes.ts`. The dispatcher passes the Response
- * through unchanged. See spec section 5.1 for the canonical shape
+ * through unchanged. See spec §5.1 for the canonical shape
  * contract.
  *
  * Bulk operations (`bulkDeleteEntries`, `bulkUpdateEntries`,

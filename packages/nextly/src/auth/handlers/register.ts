@@ -163,7 +163,7 @@ export async function handleRegister(
       if (deps.revealRegistrationConflict) {
         await stallResponse(startTime, deps.loginStallTimeMs);
         // Reveal-on success path uses the canonical "Account created."
-        // action message and a 201 status (spec section 7.6).
+        // action message and a 201 status (spec §7.6).
         return respondAction(
           "Account created.",
           { user: { id: user.id, email: user.email, name: user.name } },
@@ -205,7 +205,7 @@ export async function handleRegister(
         // lands (spec §19 follow-up).
         await stallResponse(startTime, deps.loginStallTimeMs);
         // Same silent-success shape as the no-reveal success branch
-        // (spec section 13.2). Anti-enumeration requires byte-equal responses.
+        // (spec §13.2). Anti-enumeration requires byte-equal responses.
         return respondAction(
           SILENT_SUCCESS_MESSAGE,
           {},

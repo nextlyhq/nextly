@@ -32,8 +32,8 @@ export interface ForgotPasswordHandlerDeps {
   ) => Promise<{ token?: string }>;
 }
 
-// Canonical generic forgot-password message per spec section 7.6. Must
-// not echo the user-supplied email back (spec section 13.8) and must be
+// Canonical generic forgot-password message per spec §7.6. Must
+// not echo the user-supplied email back (spec §13.8) and must be
 // byte-identical regardless of whether the email is registered (spec
 // section 13.3 anti-enumeration).
 const SILENT_MESSAGE =
@@ -193,7 +193,7 @@ export async function handleForgotPassword(
     }
 
     await stallResponse(startTime, deps.loginStallTimeMs);
-    // Silent success body is just `{ message }` per spec section 7.6.
+    // Silent success body is just `{ message }` per spec §7.6.
     return respondAction(
       SILENT_MESSAGE,
       {},

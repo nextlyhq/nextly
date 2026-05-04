@@ -149,7 +149,7 @@ export const POST = withErrorHandler(
       } else if (Buffer.isBuffer(file.file)) {
         buffer = file.file;
       } else {
-        // Generic public message per spec section 13.8. The actual
+        // Generic public message per spec §13.8. The actual
         // discriminator (string | Buffer) goes to the operator log via
         // logContext below if anyone wires it up later. The wire stays
         // generic.

@@ -101,7 +101,7 @@ export async function handleChangePassword(
 
   const clearCookies = [clearAccessTokenCookie(), clearRefreshTokenCookie()];
 
-  // Success body is `{ message: "Password changed." }` per spec section 7.6.
+  // Success body is `{ message: "Password changed." }` per spec §7.6.
   // Cleared cookies (forcing re-login on every device) ride the headers.
   return respondAction(
     "Password changed.",

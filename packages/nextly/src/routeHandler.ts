@@ -56,7 +56,7 @@ import {
 } from "./api/image-sizes";
 import { readOrGenerateRequestId } from "./api/request-id";
 // Phase 4 Task 12: direct branches (admin-meta, sidebar-groups) emit
-// canonical respondX wire shapes (spec section 5.1) instead of the
+// canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";

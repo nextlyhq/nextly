@@ -2,7 +2,7 @@
  * Regression tests for auth-handler response shapes.
  *
  * One test per handler asserts the canonical respondX wire shape against
- * the spec section 7.6 / 7.7 table:
+ * the spec §7.6 / 7.7 table:
  *
  *   - login            -> respondAction("Logged in.", { user, accessToken, ... })
  *   - logout           -> respondAction("Logged out.")

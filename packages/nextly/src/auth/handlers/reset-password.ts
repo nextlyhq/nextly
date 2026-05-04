@@ -135,7 +135,7 @@ export async function handleResetPassword(
       }
     }
 
-    // Success body is just `{ message: "Password reset." }` per spec section 7.6.
+    // Success body is just `{ message: "Password reset." }` per spec §7.6.
     return respondAction(
       "Password reset.",
       {},

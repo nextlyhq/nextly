@@ -28,7 +28,7 @@ export async function handleSession(
   const result = await getSession(request, deps.secret);
 
   if (result.authenticated) {
-    // Bare `{ user, accessToken }` per spec section 7.6. The access token
+    // Bare `{ user, accessToken }` per spec §7.6. The access token
     // already verified successfully (it's how we got here), so reading it
     // back from the cookie is safe. We surface it in the body so
     // non-cookie SDK consumers (mobile, CLI) can pull the live token
