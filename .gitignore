@@ -97,9 +97,8 @@ e2e/auth-e2e/playwright-report/
 e2e/auth-e2e/test-results/
 
 # Superpowers brainstorm session artifacts (any location).
-# Catches the dot-prefixed root variant, plus any nested superpowers/ folder
-# that the tooling drops into docs/ or elsewhere.
-.superpowers/
+# Matches a `superpowers/` folder anywhere in the tree, including the
+# `docs/superpowers/` variant the tooling drops into the docs folder.
 **/superpowers/
 
 # Template testing scaffolds (created during E2E testing, never committed)
