@@ -67,6 +67,28 @@ export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
       };
     }
     if (pathname.includes("email-templates")) {
+      if (pathname.includes("/create")) {
+        return {
+          title: "New Email Template",
+          description: "Create a new email template for your application",
+          crumb: "New Email Template",
+          parentCrumb: {
+            label: "Email Templates",
+            href: ROUTES.SETTINGS_EMAIL_TEMPLATES,
+          },
+        };
+      }
+      if (pathname.includes("/edit/")) {
+        return {
+          title: "Edit Email Template",
+          description: "Update the email template content and settings",
+          crumb: "Edit Email Template",
+          parentCrumb: {
+            label: "Email Templates",
+            href: ROUTES.SETTINGS_EMAIL_TEMPLATES,
+          },
+        };
+      }
       return {
         title: "Email Templates",
         description: "Manage and customize system email content",
