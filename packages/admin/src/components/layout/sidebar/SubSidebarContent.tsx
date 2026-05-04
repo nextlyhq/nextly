@@ -159,7 +159,7 @@ export function SubSidebarContent({
                     className="justify-start px-3"
                   >
                     <Link href={href}>
-                      <IconComponent className="h-4 w-4 mr-2" />
+                      <IconComponent className="h-4 w-4" />
                       <span>{displayName}</span>
                     </Link>
                   </SidebarMenuButton>
@@ -194,7 +194,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.USERS}>
-                    <Users className="h-4 w-4 mr-2" />
+                    <Users className="h-4 w-4" />
                     <span>Users</span>
                   </Link>
                 </SidebarMenuButton>
@@ -208,7 +208,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.USERS_FIELDS}>
-                    <List className="h-4 w-4 mr-2" />
+                    <List className="h-4 w-4" />
                     <span>User Fields</span>
                   </Link>
                 </SidebarMenuButton>
@@ -222,7 +222,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.SECURITY_ROLES}>
-                    <ShieldAlert className="h-4 w-4 mr-2" />
+                    <ShieldAlert className="h-4 w-4" />
                     <span>Roles</span>
                   </Link>
                 </SidebarMenuButton>
@@ -254,7 +254,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.SETTINGS}>
-                    <Settings className="h-4 w-4 mr-2" />
+                    <Settings className="h-4 w-4" />
                     <span>General</span>
                   </Link>
                 </SidebarMenuButton>
@@ -268,7 +268,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.SETTINGS_API_KEYS}>
-                    <Key className="h-4 w-4 mr-2" />
+                    <Key className="h-4 w-4" />
                     <span>API Keys</span>
                   </Link>
                 </SidebarMenuButton>
@@ -282,7 +282,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
-                    <Image className="h-4 w-4 mr-2" />
+                    <Image className="h-4 w-4" />
                     <span>Image Sizes</span>
                   </Link>
                 </SidebarMenuButton>
@@ -308,7 +308,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS}>
-                    <Mail className="h-4 w-4 mr-2" />
+                    <Mail className="h-4 w-4" />
                     <span>Providers</span>
                   </Link>
                 </SidebarMenuButton>
@@ -322,7 +322,7 @@ export function SubSidebarContent({
                   className="justify-start px-3"
                 >
                   <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
-                    <FileText className="h-4 w-4 mr-2" />
+                    <FileText className="h-4 w-4" />
                     <span>Templates</span>
                   </Link>
                 </SidebarMenuButton>
@@ -350,7 +350,7 @@ export function SubSidebarContent({
                 className="justify-start px-3"
               >
                 <Link href={ROUTES.COLLECTIONS}>
-                  <Layers className="h-4 w-4 mr-2" />
+                  <Layers className="h-4 w-4" />
                   <span>Collections</span>
                 </Link>
               </SidebarMenuButton>
@@ -362,7 +362,7 @@ export function SubSidebarContent({
                 className="justify-start px-3"
               >
                 <Link href={ROUTES.SINGLES}>
-                  <FileText className="h-4 w-4 mr-2" />
+                  <FileText className="h-4 w-4" />
                   <span>Singles</span>
                 </Link>
               </SidebarMenuButton>
@@ -374,7 +374,7 @@ export function SubSidebarContent({
                 className="justify-start px-3"
               >
                 <Link href={ROUTES.COMPONENTS}>
-                  <Puzzle className="h-4 w-4 mr-2" />
+                  <Puzzle className="h-4 w-4" />
                   <span>Components</span>
                 </Link>
               </SidebarMenuButton>

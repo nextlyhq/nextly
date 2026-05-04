@@ -127,7 +127,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                 href={ROUTES.FORGOT_PASSWORD}
                 className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
+                <ArrowLeft className="h-4 w-4" />
                 Request New Link
               </Link>
             </div>
@@ -220,7 +220,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                           autoComplete="new-password"
                           placeholder="Create a strong password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button
@@ -256,7 +256,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                           autoComplete="new-password"
                           placeholder="Confirm your password…"
                           {...field}
-                          className="pr-10 h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
                         />
                       </FormControl>
                       <button

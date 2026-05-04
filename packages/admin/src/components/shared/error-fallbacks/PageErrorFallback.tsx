@@ -131,7 +131,7 @@ export function PageErrorFallback({
               size="md"
               className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold active:scale-95 transition-all duration-200"
             >
-              <RefreshCw className="mr-2 h-4 w-4" />
+              <RefreshCw className="h-4 w-4" />
               Reload page
             </Button>
 
@@ -143,7 +143,7 @@ export function PageErrorFallback({
                 size="md"
                 className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold border-primary/5 hover:bg-accent active:scale-95 transition-all duration-200"
               >
-                <RefreshCw className="mr-2 h-4 w-4" />
+                <RefreshCw className="h-4 w-4" />
                 Try again
               </Button>
             )}
@@ -156,7 +156,7 @@ export function PageErrorFallback({
                   size="md"
                   className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-none text-sm font-semibold text-muted-foreground hover:text-foreground active:scale-95 transition-all duration-200"
                 >
-                  <LayoutDashboard className="mr-2 h-4 w-4" />
+                  <LayoutDashboard className="h-4 w-4" />
                   Go home
                 </Button>
               </Link>

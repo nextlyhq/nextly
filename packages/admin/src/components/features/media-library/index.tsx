@@ -612,7 +612,7 @@ export function MediaLibrary({
                   size="md"
                   className="hover-unified bg-background text-foreground border-primary/5 hover:bg-accent/10 px-4 shrink-0"
                 >
-                  <Columns className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <Columns className="h-4 w-4 text-muted-foreground" />
                   Columns
                 </Button>
               </DropdownMenuTrigger>

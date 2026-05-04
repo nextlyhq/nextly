@@ -95,7 +95,7 @@ export function ForgotPassword() {
                 href={ROUTES.LOGIN}
                 className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
+                <ArrowLeft className="h-4 w-4" />
                 Back to Sign In
               </Link>
             </div>
@@ -156,7 +156,7 @@ export function ForgotPassword() {
                         spellCheck={false}
                         placeholder="Enter your email address…"
                         {...field}
-                        className="h-11 rounded-none border-primary/5 focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 dark:border-primary/5"
+                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
                       />
                     </FormControl>
                     <FormMessage />

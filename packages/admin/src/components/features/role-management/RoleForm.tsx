@@ -110,7 +110,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
                   {isLoading ? (
                     <>
                       <Loader2
-                        className="mr-2 h-4 w-4 animate-spin"
+                        className="h-4 w-4 animate-spin"
                         aria-hidden="true"
                       />
                       <span>{isEditMode ? "Updating..." : "Creating..."}</span>

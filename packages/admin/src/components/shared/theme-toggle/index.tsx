@@ -44,21 +44,21 @@ export function ThemeToggle(): React.ReactElement {
           onClick={() => setTheme("light")}
           className="cursor-pointer rounded-none"
         >
-          <Sun className="mr-2 h-4 w-4" />
+          <Sun className="h-4 w-4" />
           <span>Light</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => setTheme("dark")}
           className="cursor-pointer rounded-none"
         >
-          <Moon className="mr-2 h-4 w-4" />
+          <Moon className="h-4 w-4" />
           <span>Dark</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => setTheme("system")}
           className="cursor-pointer rounded-none"
         >
-          <Laptop className="mr-2 h-4 w-4" />
+          <Laptop className="h-4 w-4" />
           <span>System</span>
         </DropdownMenuItem>
       </DropdownMenuContent>

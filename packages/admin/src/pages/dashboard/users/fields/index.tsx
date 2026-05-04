@@ -202,7 +202,7 @@ function FieldDeleteDialog({
           >
             {isLoading ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
                 Deleting...
               </>
             ) : (
@@ -420,13 +420,13 @@ function SortableFieldRow({
           <DropdownMenuContent align="end" className="w-48">
             {isCode ? (
               <DropdownMenuItem onClick={() => onView(field)}>
-                <Eye className="h-4 w-4 mr-2" />
+                <Eye className="h-4 w-4" />
                 View
               </DropdownMenuItem>
             ) : (
               <>
                 <DropdownMenuItem onClick={() => onEdit(field)}>
-                  <Edit className="h-4 w-4 mr-2" />
+                  <Edit className="h-4 w-4" />
                   Edit
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -434,7 +434,7 @@ function SortableFieldRow({
                   onClick={() => onDelete(field)}
                   className="text-destructive focus:text-destructive"
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="h-4 w-4" />
                   Delete
                 </DropdownMenuItem>
               </>
@@ -697,7 +697,7 @@ function UserFieldsTable() {
 
         <div className="flex items-center gap-2">
           <Button variant="outline" size="md" className="bg-background">
-            <Columns className="mr-2 h-4 w-4" />
+            <Columns className="h-4 w-4" />
             Columns
           </Button>
         </div>

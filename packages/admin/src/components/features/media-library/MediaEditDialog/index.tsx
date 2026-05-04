@@ -578,7 +578,7 @@ export function MediaEditDialog({
                   onClick={() => media && onDelete(media)}
                   className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
-                  <Trash2 className="mr-2 h-4 w-4" />
+                  <Trash2 className="h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
                     Delete
                   </span>
@@ -592,7 +592,7 @@ export function MediaEditDialog({
                   onClick={() => media && onCopyUrl(media.url)}
                   className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
-                  <Copy className="mr-2 h-4 w-4" />
+                  <Copy className="h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
                     Copy URL
                   </span>
@@ -606,7 +606,7 @@ export function MediaEditDialog({
                   onClick={() => media && onDownload(media)}
                   className="px-3 text-muted-foreground/70 hover:text-primary hover:bg-primary/5 transition-all duration-200"
                 >
-                  <Download className="mr-2 h-4 w-4" />
+                  <Download className="h-4 w-4" />
                   <span className="text-xs font-semibold tracking-tight">
                     Download
                   </span>
@@ -633,7 +633,7 @@ export function MediaEditDialog({
               >
                 {isPending ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="h-4 w-4 animate-spin" />
                     Saving...
                   </>
                 ) : (

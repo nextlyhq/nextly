@@ -129,7 +129,7 @@ export function EntryFormHeader({
                 entryId={entry.id}
                 trigger={
                   <DropdownMenuItem onSelect={e => e.preventDefault()}>
-                    <Code className="mr-2 h-4 w-4" />
+                    <Code className="h-4 w-4" />
                     Show JSON
                   </DropdownMenuItem>
                 }
@@ -141,7 +141,7 @@ export function EntryFormHeader({
                     onClick={onDelete}
                     className="text-destructive focus:text-destructive"
                   >
-                    <Trash2 className="mr-2 h-4 w-4" />
+                    <Trash2 className="h-4 w-4" />
                     Delete
                   </DropdownMenuItem>
                 </>
