@@ -227,15 +227,7 @@ export function submissionsCollection(
       // Placeholder for email notifications - will be implemented in Phase 4
       afterChange: [
         (context: HookContext) => {
-          const { data, operation } = context;
-          // Only send notifications on create (new submissions)
-          if (operation === "create") {
-            // TODO: Phase 4 - Send email notification if enabled
-            // 1. Fetch form configuration
-            // 2. Check if notifications are enabled
-            // 3. Use beforeEmail hook if configured
-            // 4. Send notification emails
-          }
+          const { data } = context;
           return data;
         },
       ],

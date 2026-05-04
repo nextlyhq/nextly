@@ -394,7 +394,6 @@ export function formsCollection(
           if (data) {
             // Placeholder: submission count will be implemented in Phase 4
             // when the FormSubmissionService is available
-            // TODO: Query submissions collection to get actual count
             (data as Record<string, unknown>).submissionCount = 0;
           }
           return data;

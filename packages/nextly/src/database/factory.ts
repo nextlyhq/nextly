@@ -115,10 +115,6 @@ export async function createAdapter(
   // (especially Turbopack) cannot statically analyze which adapter packages
   // are needed. This prevents "Module not found" errors for adapters that
   // aren't installed. Only the selected adapter is loaded at runtime.
-  //
-  // TODO: Long-term, introduce a withNextly() config helper (like Payload's
-  // withPayload()) that detects installed adapters and configures
-  // serverExternalPackages automatically. See findings/task-9-adapter-resolution.md
   let moduleId: string;
   if (type === "postgresql") {
     moduleId = "@revnixhq/adapter-postgres";

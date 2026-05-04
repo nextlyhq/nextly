@@ -1294,7 +1294,6 @@ export class CollectionQueryService extends BaseService {
       }
 
       // For nested fields, we'd need JSON operations - for now just use top-level
-      // TODO: Add JSON path support for nested fields in future enhancement
 
       switch (op) {
         case "=":

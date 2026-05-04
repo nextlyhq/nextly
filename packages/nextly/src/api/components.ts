@@ -147,7 +147,6 @@ export const POST = withErrorHandler(async (request: Request) => {
     throw NextlyError.authRequired();
   }
 
-  // TODO: Validate the auth token and extract user ID
   // For now, we accept any Authorization header as authenticated
   // In production, you would verify the JWT/session token here
 

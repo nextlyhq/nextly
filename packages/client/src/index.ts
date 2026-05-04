@@ -62,7 +62,6 @@ export class NextlySDK {
    * ```
    */
   find(params: { collection: string }): Promise<unknown> {
-    // TODO: Implementation in Plan 7 (Local API & Client SDK)
     return Promise.reject(
       new Error(
         `Not implemented - placeholder for Plan 7. Collection: ${params.collection}`
@@ -77,7 +76,6 @@ export class NextlySDK {
    * @returns Promise resolving to the document or null
    */
   findByID(params: { collection: string; id: string }): Promise<unknown> {
-    // TODO: Implementation in Plan 7 (Local API & Client SDK)
     return Promise.reject(
       new Error(
         `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
@@ -95,7 +93,6 @@ export class NextlySDK {
     collection: string;
     data: Record<string, unknown>;
   }): Promise<unknown> {
-    // TODO: Implementation in Plan 7 (Local API & Client SDK)
     return Promise.reject(
       new Error(
         `Not implemented - placeholder for Plan 7. Collection: ${params.collection}`
@@ -114,7 +111,6 @@ export class NextlySDK {
     id: string;
     data: Record<string, unknown>;
   }): Promise<unknown> {
-    // TODO: Implementation in Plan 7 (Local API & Client SDK)
     return Promise.reject(
       new Error(
         `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`
@@ -129,7 +125,6 @@ export class NextlySDK {
    * @returns Promise resolving to the deletion result
    */
   delete(params: { collection: string; id: string }): Promise<unknown> {
-    // TODO: Implementation in Plan 7 (Local API & Client SDK)
     return Promise.reject(
       new Error(
         `Not implemented - placeholder for Plan 7. Collection: ${params.collection}, ID: ${params.id}`

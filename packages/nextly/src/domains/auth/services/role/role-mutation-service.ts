@@ -555,7 +555,6 @@ export class RoleMutationService extends BaseService {
           }
 
           // Handle permission updates
-          // TODO: Use RolePermissionService once it's created
           if (changes.permissionIds !== undefined) {
             // Delete all existing role-permission mappings
             await tx
@@ -579,7 +578,6 @@ export class RoleMutationService extends BaseService {
           }
 
           // Handle child role updates
-          // TODO: Use RoleInheritanceService once it's created
           if (changes.childRoleIds !== undefined) {
             // Delete all existing role inheritance relationships for this parent
             await tx

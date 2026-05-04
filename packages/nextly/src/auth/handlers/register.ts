@@ -200,8 +200,7 @@ export async function handleRegister(
           kind: "register-duplicate-swallowed",
           requestId,
           logContext: err.logContext,
-        });
-        // TODO: send the "someone tried to register your account" courtesy
+        });=
         // email to the existing user once email subsystem template support
         // lands (spec §19 follow-up).
         await stallResponse(startTime, deps.loginStallTimeMs);

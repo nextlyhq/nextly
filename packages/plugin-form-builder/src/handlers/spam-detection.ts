@@ -369,12 +369,6 @@ async function verifyRecaptcha(
   _data: Record<string, unknown>,
   _config: { secretKey?: string; scoreThreshold?: number }
 ): Promise<SpamCheckResult> {
-  // TODO: Implement reCAPTCHA v3 verification
-  // 1. Extract token from data (typically data['g-recaptcha-response'] or data['recaptchaToken'])
-  // 2. Call Google's siteverify API
-  // 3. Check score against threshold
-  // 4. Return result
-
   // Placeholder - always pass for now
   return { isSpam: false };
 }
