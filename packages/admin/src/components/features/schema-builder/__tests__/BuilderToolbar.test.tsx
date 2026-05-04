@@ -26,7 +26,7 @@ const componentConfig: BuilderConfig = {
 };
 
 describe("BuilderToolbar", () => {
-  it("renders breadcrumb, name, Settings, Save schema for collections", () => {
+  it("renders breadcrumb, name, Settings, Save for collections", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
@@ -41,9 +41,7 @@ describe("BuilderToolbar", () => {
     expect(
       screen.getByRole("button", { name: /settings/i })
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /save schema/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument();
   });
 
   it("does not render an unsaved badge (removed in PR D)", () => {
@@ -56,7 +54,7 @@ describe("BuilderToolbar", () => {
         onSave={vi.fn()}
       />
     );
-    // No "3 unsaved" text or "unsaved" word visible. The Save Schema
+    // No "3 unsaved" text or "unsaved" word visible. The Save
     // button being enabled is the only unsaved signal.
     expect(screen.queryByText(/unsaved/i)).toBeNull();
     expect(screen.queryByLabelText(/unsaved changes/i)).toBeNull();
@@ -109,7 +107,7 @@ describe("BuilderToolbar", () => {
     expect(sibling).toBeNull();
   });
 
-  it("disables Save schema when no unsaved changes", () => {
+  it("disables Save when no unsaved changes", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
@@ -119,10 +117,10 @@ describe("BuilderToolbar", () => {
         onSave={vi.fn()}
       />
     );
-    expect(screen.getByRole("button", { name: /save schema/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
-  it("disables Save schema and Settings when locked", () => {
+  it("disables Save and Settings when locked", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
@@ -133,11 +131,11 @@ describe("BuilderToolbar", () => {
         onSave={vi.fn()}
       />
     );
-    expect(screen.getByRole("button", { name: /save schema/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /settings/i })).toBeDisabled();
   });
 
-  it("invokes onSave when Save schema is clicked (and dirty)", async () => {
+  it("invokes onSave when Save is clicked (and dirty)", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
     render(
@@ -149,7 +147,7 @@ describe("BuilderToolbar", () => {
         onSave={onSave}
       />
     );
-    await user.click(screen.getByRole("button", { name: /save schema/i }));
+    await user.click(screen.getByRole("button", { name: /save/i }));
     expect(onSave).toHaveBeenCalledOnce();
   });
 });
