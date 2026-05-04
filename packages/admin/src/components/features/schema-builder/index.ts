@@ -10,8 +10,6 @@
 // Builder Components
 export { ArrayFieldEditor } from "./ArrayFieldEditor";
 export type { BreadcrumbItem } from "@admin/components/shared";
-export { FieldList } from "./FieldList";
-export { FieldEditor } from "./FieldEditor";
 export { ComponentFieldEditor } from "./ComponentFieldEditor";
 export { GroupFieldEditor } from "./GroupFieldEditor";
 export { HooksEditor, getPrebuiltHook } from "./HooksEditor";
