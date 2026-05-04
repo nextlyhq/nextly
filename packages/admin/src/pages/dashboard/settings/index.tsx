@@ -9,22 +9,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@revnixhq/ui";
-import {
-  Clock,
-  Calendar,
-  MapPin,
-  Save,
-  Sun,
-  Moon,
-  Monitor,
-  Palette,
-} from "lucide-react";
+import { Save, Sun, Moon, Monitor } from "lucide-react";
 import type React from "react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import {
+  SettingsLayout,
+  SettingsSection,
+  SettingsRow,
+} from "@admin/components/features/settings";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import {
@@ -33,7 +28,6 @@ import {
   FormField,
   FormItem,
   FormMessage,
-  useFormField,
 } from "@admin/components/ui/form";
 import { useTheme } from "@admin/context/providers/ThemeProvider";
 import {
@@ -144,82 +138,10 @@ const formSchema = z.object({
       "Logo URL must start with http:// or https://"
     )
     .optional(),
+  theme: z.enum(["light", "dark", "system"]).optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
-
-// ============================================================
-// Sub-components
-// ============================================================
-
-/** A single settings row: label+description on the left, control on the right */
-function SettingsRow({
-  label,
-  description,
-  icon,
-  children,
-}: {
-  label: string;
-  description: React.ReactNode;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  const { formItemId } = useFormField();
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 px-4 -mx-4 items-start transition-all duration-200 rounded-none focus-within:bg-primary/5 focus-within:ring-1 focus-within:ring-inset focus-within:ring-primary">
-      <div className="flex items-start gap-3">
-        {icon && (
-          <div className="mt-0.5 shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
-            {icon}
-          </div>
-        )}
-        <label
-          htmlFor={formItemId}
-          className="cursor-pointer group flex flex-col"
-        >
-          <p className="text-sm font-semibold text-foreground group-hover-unified">
-            {label}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-            {description}
-          </p>
-        </label>
-      </div>
-      <div className="w-full">{children}</div>
-    </div>
-  );
-}
-
-/** Card wrapper for a group of settings */
-function SettingsCard({
-  title,
-  description,
-  icon,
-  children,
-}: {
-  title: string;
-  description: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-none  border border-primary/5 bg-card overflow-hidden">
-      {/* Card header */}
-      <div className="flex items-center gap-4 px-6 py-5  border-b border-primary/5">
-        <div className="shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
-          {icon}
-        </div>
-        <div>
-          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-        </div>
-      </div>
-      {/* Card body rows */}
-      <div className="divide-y divide-border/60 px-6">{children}</div>
-    </div>
-  );
-}
 
 // ============================================================
 // Page
@@ -246,15 +168,38 @@ const THEME_OPTIONS = [
   },
 ];
 
+/**
+ * Apply a resolved theme ("light" | "dark") to all `.adminapp` containers
+ * and to the document root, mirroring what `ThemeSync` does in
+ * `ThemeProvider`. We touch both so the preview is visible regardless of
+ * which surface the active styles target.
+ */
+function applyPreviewTheme(theme: "light" | "dark" | "system") {
+  if (typeof document === "undefined") return;
+  const resolved =
+    theme === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : theme;
+
+  const isDark = resolved === "dark";
+  const containers = document.querySelectorAll(".adminapp");
+  containers.forEach(container => {
+    container.classList.toggle("dark", isDark);
+  });
+}
+
 const SettingsGeneralPage: React.FC = () => {
   const { data: settings, isLoading } = useGeneralSettings();
   const { mutate: updateSettings, isPending } = useUpdateGeneralSettings();
-  const { theme, setTheme } = useTheme();
-  // Ensure we show 'system' if no theme preference is explicitly set yet
-  const activeTheme =
-    theme === "light" || theme === "dark" || theme === "system"
-      ? theme
-      : "system";
+  const { theme: savedTheme, setTheme: persistTheme } = useTheme();
+  const initialThemeRef = useRef<string | undefined>(undefined);
+  // Tracks whether the user has changed the theme tile away from the saved
+  // value. Read by the unmount cleanup hook (form.formState.isDirty cannot
+  // be reliably read inside an effect cleanup because it relies on
+  // subscription proxies that update during render).
+  const themeDirtyRef = useRef(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -266,10 +211,13 @@ const SettingsGeneralPage: React.FC = () => {
       dateFormat: settings?.dateFormat ?? "",
       timeFormat: settings?.timeFormat ?? "",
       logoUrl: settings?.logoUrl ?? "",
+      theme: undefined,
     },
   });
 
-  // When settings data arrives or changes, update the form immediately
+  // When settings data arrives or changes, update the form immediately.
+  // Note: theme is intentionally excluded here — it is owned by next-themes,
+  // not the API payload. We initialize it in a separate effect below.
   useEffect(() => {
     if (settings) {
       form.reset({
@@ -280,9 +228,49 @@ const SettingsGeneralPage: React.FC = () => {
         dateFormat: settings.dateFormat ?? "",
         timeFormat: settings.timeFormat ?? "",
         logoUrl: settings.logoUrl ?? "",
+        theme: form.getValues("theme"),
       });
     }
   }, [settings, form]);
+
+  // Initialize the form's theme value once next-themes has resolved the
+  // saved theme. next-themes resolves async on mount so `savedTheme` may be
+  // `undefined` initially.
+  useEffect(() => {
+    if (savedTheme && initialThemeRef.current === undefined) {
+      initialThemeRef.current = savedTheme;
+      form.setValue("theme", savedTheme as "light" | "dark" | "system", {
+        shouldDirty: false,
+      });
+    }
+  }, [savedTheme, form]);
+
+  const previewTheme = (form.watch("theme") ?? savedTheme ?? "system") as
+    | "light"
+    | "dark"
+    | "system";
+
+  const setPreviewTheme = (next: "light" | "dark" | "system") => {
+    form.setValue("theme", next, { shouldDirty: true });
+    themeDirtyRef.current = next !== initialThemeRef.current;
+  };
+
+  // Apply the preview to all `.adminapp` containers whenever previewTheme
+  // changes. This is the "live preview" — it does NOT touch localStorage.
+  useEffect(() => {
+    applyPreviewTheme(previewTheme);
+  }, [previewTheme]);
+
+  // On unmount, if the user has previewed a different theme without saving,
+  // restore the saved theme's class so navigating away from /admin/settings
+  // visually reverts.
+  useEffect(() => {
+    return () => {
+      if (initialThemeRef.current === undefined) return;
+      if (!themeDirtyRef.current) return;
+      applyPreviewTheme(initialThemeRef.current as "light" | "dark" | "system");
+    };
+  }, []);
 
   function onSubmit(values: FormValues) {
     const timezoneToSave = values.timezone?.trim() ? values.timezone : null;
@@ -306,6 +294,16 @@ const SettingsGeneralPage: React.FC = () => {
       },
       {
         onSuccess: () => {
+          // Persist the theme to localStorage via next-themes only after the
+          // API call succeeds.
+          if (values.theme) {
+            persistTheme(values.theme);
+            initialThemeRef.current = values.theme;
+          }
+          themeDirtyRef.current = false;
+          // Reset the form to make it "clean" again so the unmount cleanup
+          // does not trigger a snap-back.
+          form.reset(values);
           toast.success("Settings saved", {
             description: "General settings have been updated.",
           });
@@ -343,133 +341,8 @@ const SettingsGeneralPage: React.FC = () => {
               <GeneralSettingsSkeleton />
             ) : (
               <div className="space-y-5">
-                {/* ── Section 1: Application Identity ── */}
-                {/* <SettingsCard
-                title="Application Identity"
-                description="Configure how your application presents itself to users."
-                icon={<AppWindow className="h-5 w-5" />}
-              >
-                <FormField
-                  control={form.control}
-                  name="applicationName"
-                  render={({ field }) => (
-                    <FormItem className="m-0">
-                      <SettingsRow
-                        label="Application Name"
-                        description="Shown in the browser tab and throughout the admin panel."
-                        icon={<AppWindow className="h-4 w-4" />}
-                      >
-                        <FormControl>
-                          <Input
-                            placeholder="Enter application name"
-                            disabled={isLoading}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage className="mt-1.5" />
-                      </SettingsRow>
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="siteUrl"
-                  render={({ field }) => (
-                    <FormItem className="m-0">
-                      <SettingsRow
-                        label="Site URL"
-                        description="The primary URL where your site is hosted. Used in email links and notifications."
-                        icon={<Globe className="h-4 w-4" />}
-                      >
-                        <FormControl>
-                          <Input
-                            placeholder="https://example.com"
-                            disabled={isLoading}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage className="mt-1.5" />
-                      </SettingsRow>
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="adminEmail"
-                  render={({ field }) => (
-                    <FormItem className="m-0">
-                      <SettingsRow
-                        label="Admin Email"
-                        description="The primary email address for administrative notifications."
-                        icon={<Mail className="h-4 w-4" />}
-                      >
-                        <FormControl>
-                          <Input
-                            placeholder="admin@example.com"
-                            disabled={isLoading}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage className="mt-1.5" />
-                      </SettingsRow>
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="logoUrl"
-                  render={({ field }) => (
-                    <FormItem className="m-0">
-                      <SettingsRow
-                        label="Logo URL"
-                        description={
-                          <>
-                            URL of the logo image shown in the admin sidebar and
-                            authentication pages. Overrides the logo set in{" "}
-                            <code className="text-xs font-mono bg-primary/5 px-1 py-0.5 rounded-none">
-                              nextly.config.ts
-                            </code>
-                            .
-                          </>
-                        }
-                        icon={<Image className="h-4 w-4" />}
-                      >
-                        <FormControl>
-                          <Input
-                            placeholder="https://example.com/logo.svg"
-                            disabled={isLoading}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage className="mt-1.5" />
-                      </SettingsRow>
-                    </FormItem>
-                  )}
-                />
-              </SettingsCard> */}
-
-                {/* ── Section 2: Locale & Formatting ── */}
-                <SettingsCard
-                  title="Locale & Formatting"
-                  description="Control time zone, date, and time format preferences for your site."
-                  icon={<Clock className="h-5 w-5" />}
-                >
-                  {/* <div className="py-4 px-4 -mx-4 flex justify-end"> */}
-                  {/* <Button
-                    type="button"
-                    variant="outline"
-                    onClick={resetLocaleFormatting}
-                    disabled={isLoading || isPending}
-                    className="flex items-center gap-2"
-                  >
-                    <RotateCcw className="h-4 w-4" />
-                    Reset Locale Defaults
-                  </Button>
-                </div> */}
-
+                {/* ── Section: Locale & Formatting ── */}
+                <SettingsSection label="Locale & Formatting">
                   <FormField
                     control={form.control}
                     name="timezone"
@@ -477,27 +350,26 @@ const SettingsGeneralPage: React.FC = () => {
                       <FormItem className="m-0">
                         <SettingsRow
                           label="Timezone"
-                          description="The default timezone used across your site for dates and times."
-                          icon={<MapPin className="h-4 w-4" />}
+                          description="Time zone used across the admin and email notifications."
                         >
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                            disabled={isLoading}
-                          >
-                            <FormControl>
+                          <FormControl>
+                            <Select
+                              onValueChange={field.onChange}
+                              value={field.value ?? ""}
+                              disabled={isLoading}
+                            >
                               <SelectTrigger>
-                                <SelectValue placeholder="Select timezone" />
+                                <SelectValue placeholder="Select a timezone" />
                               </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {TIMEZONE_OPTIONS.map(opt => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                              <SelectContent>
+                                {TIMEZONE_OPTIONS.map(opt => (
+                                  <SelectItem key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </FormControl>
                           <FormMessage className="mt-1.5" />
                         </SettingsRow>
                       </FormItem>
@@ -511,27 +383,26 @@ const SettingsGeneralPage: React.FC = () => {
                       <FormItem className="m-0">
                         <SettingsRow
                           label="Date Format"
-                          description="How dates are displayed throughout the admin and in exported data."
-                          icon={<Calendar className="h-4 w-4" />}
+                          description="How dates appear in lists and detail pages."
                         >
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                            disabled={isLoading}
-                          >
-                            <FormControl>
+                          <FormControl>
+                            <Select
+                              onValueChange={field.onChange}
+                              value={field.value ?? ""}
+                              disabled={isLoading}
+                            >
                               <SelectTrigger>
-                                <SelectValue placeholder="Select date format" />
+                                <SelectValue placeholder="Select a date format" />
                               </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {DATE_FORMAT_OPTIONS.map(opt => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                              <SelectContent>
+                                {DATE_FORMAT_OPTIONS.map(opt => (
+                                  <SelectItem key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </FormControl>
                           <FormMessage className="mt-1.5" />
                         </SettingsRow>
                       </FormItem>
@@ -545,89 +416,63 @@ const SettingsGeneralPage: React.FC = () => {
                       <FormItem className="m-0">
                         <SettingsRow
                           label="Time Format"
-                          description="Choose between 12-hour (AM/PM) and 24-hour time display."
-                          icon={<Clock className="h-4 w-4" />}
+                          description="12-hour vs 24-hour clock."
                         >
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                            disabled={isLoading}
-                          >
-                            <FormControl>
+                          <FormControl>
+                            <Select
+                              onValueChange={field.onChange}
+                              value={field.value ?? ""}
+                              disabled={isLoading}
+                            >
                               <SelectTrigger>
-                                <SelectValue placeholder="Select time format" />
+                                <SelectValue placeholder="Select a time format" />
                               </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {TIME_FORMAT_OPTIONS.map(opt => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                              <SelectContent>
+                                {TIME_FORMAT_OPTIONS.map(opt => (
+                                  <SelectItem key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </FormControl>
                           <FormMessage className="mt-1.5" />
                         </SettingsRow>
                       </FormItem>
                     )}
                   />
-                </SettingsCard>
+                </SettingsSection>
 
-                {/* ── Section 3: Appearance ── */}
-                <SettingsCard
-                  title="Appearance"
-                  description="Choose how the admin panel looks and feels."
-                  icon={<Palette className="h-5 w-5" />}
-                >
-                  <div className="py-5">
-                    <div className="flex items-start gap-3 mb-5">
-                      <div className="mt-0.5 shrink-0 flex items-center justify-center w-9 h-9 rounded-none bg-primary-50 text-primary-500 dark:bg-primary-500/10 dark:text-primary-400">
-                        <Monitor className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">
-                          Theme
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-                          Choose how the admin panel looks. System follows your
-                          device&apos;s dark/light mode preference.
-                        </p>
-                      </div>
-                    </div>
+                {/* ── Section: Appearance ── */}
+                <SettingsSection label="Appearance">
+                  <SettingsRow
+                    label="Theme"
+                    description="Choose how the admin panel looks. System follows your device's dark/light mode."
+                  >
                     <div className="grid grid-cols-3 gap-3">
                       {THEME_OPTIONS.map(
                         ({ value, label, icon: Icon, description }) => {
-                          const isActive = activeTheme === value;
+                          const isActive = previewTheme === value;
                           return (
                             <button
                               key={value}
                               type="button"
-                              onClick={() => setTheme(value)}
+                              onClick={() => setPreviewTheme(value)}
                               className={[
-                                "group relative flex flex-col items-center gap-2.5 rounded-none  border border-primary/5 p-4 text-center transition-all duration-200 cursor-pointer",
+                                "group relative flex flex-col items-center gap-2.5 rounded-md border p-4 text-center transition-all duration-200 cursor-pointer",
                                 isActive
-                                  ? "border-primary bg-primary/5 text-primary dark:bg-primary/5"
-                                  : "border-primary/5 bg-background hover:border-primary/40 hover-unified text-muted-foreground hover:text-foreground",
+                                  ? "border-foreground bg-primary/5"
+                                  : "border-input bg-background hover:border-foreground/40 text-muted-foreground hover:text-foreground",
                               ].join(" ")}
                             >
-                              <div
-                                className={[
-                                  "flex items-center justify-center w-10 h-10 rounded-none transition-colors",
-                                  isActive
-                                    ? "bg-primary/5 text-primary dark:bg-primary/20"
-                                    : "bg-primary/5 text-muted-foreground group-hover-unified",
-                                ].join(" ")}
-                              >
-                                <Icon className="h-5 w-5" />
-                              </div>
+                              <Icon className="h-5 w-5" />
                               <div>
                                 <p
-                                  className={[
-                                    "text-sm font-semibold leading-tight",
+                                  className={
                                     isActive
-                                      ? "text-primary"
-                                      : "text-foreground",
-                                  ].join(" ")}
+                                      ? "text-sm font-semibold text-foreground"
+                                      : "text-sm font-semibold"
+                                  }
                                 >
                                   {label}
                                 </p>
@@ -635,18 +480,13 @@ const SettingsGeneralPage: React.FC = () => {
                                   {description}
                                 </p>
                               </div>
-                              {isActive && (
-                                <span className="absolute top-2.5 right-2.5 flex h-2.5 w-2.5 items-center justify-center">
-                                  <span className="h-2 w-2 rounded-none bg-primary" />
-                                </span>
-                              )}
                             </button>
                           );
                         }
                       )}
                     </div>
-                  </div>
-                </SettingsCard>
+                  </SettingsRow>
+                </SettingsSection>
               </div>
             )}
           </SettingsLayout>
