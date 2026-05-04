@@ -189,9 +189,10 @@ describe("BuilderFieldList", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders TWO '+ Add field' buttons (top + bottom) when fields exist", () => {
-    // Why: PR D feedback Section 5 -- mirror the top button after the
-    // last row so users can add without scrolling back to the top.
+  it("renders ONE '+ Add field' button (centered+bordered box, bottom only) when fields exist", () => {
+    // Why: PR H feedback 2.2 -- dropped the top header button; the
+    // bottom centered/bordered affordance is the single + Add field
+    // location now. Replaces the two-button arrangement from PR D.
     render(
       withDndContext(
         <BuilderFieldList
@@ -207,12 +208,13 @@ describe("BuilderFieldList", () => {
     const addButtons = screen.getAllByRole("button", {
       name: /\+ add field/i,
     });
-    expect(addButtons).toHaveLength(2);
+    expect(addButtons).toHaveLength(1);
   });
 
-  it("does not render the bottom '+ Add field' on the empty state", () => {
-    // Empty state already has its own "Add your first field" CTA -- a
-    // bottom duplicate would be redundant and visually noisy.
+  it("does not render any '+ Add field' button on the empty state", () => {
+    // Why: PR H feedback 2.2 -- both the top header button and the
+    // bottom centered/bordered box are gone on the empty state. The
+    // EmptyState component owns the "Add your first field" CTA there.
     render(
       withDndContext(
         <BuilderFieldList
@@ -225,11 +227,10 @@ describe("BuilderFieldList", () => {
         />
       )
     );
-    // The single "+ Add field" button at the top of the user-fields
-    // section is fine; the bottom one is suppressed.
-    const addButtons = screen.getAllByRole("button", {
-      name: /\+ add field/i,
-    });
-    expect(addButtons).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /\+ add field/i })).toBeNull();
+    // The empty-state CTA is still there.
+    expect(
+      screen.getByRole("button", { name: /add your first field/i })
+    ).toBeInTheDocument();
   });
 });

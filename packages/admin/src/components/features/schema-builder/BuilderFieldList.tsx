@@ -68,19 +68,11 @@ export function BuilderFieldList({
       <SystemFieldsContainer systemFields={systemFields} />
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Your fields
-          </div>
-          {!readOnly && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onAddAt(userFields.length)}
-            >
-              + Add field
-            </Button>
-          )}
+        {/* PR H feedback 2.2: top header dropped its "+ Add field"
+            button. The sole + Add affordance is the centered/bordered
+            box at the bottom. */}
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Your fields
         </div>
 
         {userFields.length === 0 ? (
@@ -111,19 +103,16 @@ export function BuilderFieldList({
         )}
 
         {!readOnly && userFields.length > 0 && (
-          // Why: a second "+ Add field" affordance below the last row
-          // matches the natural reading order -- after seeing all fields,
-          // the user can add another without scrolling back to the top.
-          // Hidden on the empty state because the empty-state CTA already
-          // serves that purpose. Feedback Section 5 last item.
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onAddAt(userFields.length)}
-            className="self-start mt-2"
-          >
-            + Add field
-          </Button>
+          // Why: PR H feedback 2.2 -- always show the "+ Add field"
+          // affordance as a centered button inside a dashed bordered
+          // box (matches the empty state's visual treatment). The
+          // top header's button was removed since this one is now the
+          // single, prominent affordance.
+          <div className="border border-dashed border-border rounded-md p-6 text-center mt-2">
+            <Button onClick={() => onAddAt(userFields.length)}>
+              + Add field
+            </Button>
+          </div>
         )}
       </div>
     </div>
