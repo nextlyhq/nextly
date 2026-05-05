@@ -7,7 +7,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 A collection is a content type that stores multiple entries — blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/api/[slug]`, and appears in the admin panel with list and edit views.
 
-> **Source of truth:** the `CollectionConfig` interface and `defineCollection()` helper live in `packages/nextly/src/collections/config/define-collection.ts`. Hooks and access-control types are imported from `packages/nextly/src/shared/types/access.ts` and `@nextly/hooks/types`.
+> **Source of truth:** the `CollectionConfig` interface and `defineCollection()` helper live in `packages/nextly/src/collections/config/define-collection.ts`. Hooks and access-control types are imported from `packages/nextly/src/shared/types/access.ts` and `packages/nextly/src/hooks/types.ts`.
 
 <Tabs items={["Code-first", "Visual Schema Builder"]}>
 <Tab value="Code-first">
