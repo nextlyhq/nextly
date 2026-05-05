@@ -6,7 +6,7 @@
  * Unified with EntryTable skeleton pattern for consistency across all tables.
  */
 
-import * as React from "react";
+import type * as React from "react";
 
 import { Skeleton } from "./skeleton";
 import {
