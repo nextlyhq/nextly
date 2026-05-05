@@ -111,7 +111,7 @@ export function RepeaterFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Layers className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Array Configuration</Label>
+        <Label className="text-xs font-medium">Repeater Configuration</Label>
       </div>
 
       {/* Row Labels Section */}
