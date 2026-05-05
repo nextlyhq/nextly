@@ -20,12 +20,22 @@ export function StatChip({
     <span
       className={cn(
         "inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.15em] rounded-none",
+        // Warning chips use a dashed hairline + muted-foreground tone
+        // instead of the previous amber flood. Subtle enough to scan
+        // past at a glance, distinct enough to find the partial-success
+        // signal without colour blast. Matches the brutalist edge.
         tone === "neutral"
           ? "bg-primary/[0.04] border border-primary/[0.08] text-foreground"
-          : "bg-amber-50 border border-amber-500/20 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
+          : "bg-primary/[0.04] border border-dashed border-primary/[0.18] text-muted-foreground"
       )}
     >
-      <strong className="text-foreground">{count}</strong>
+      <strong
+        className={
+          tone === "warning" ? "text-foreground/80" : "text-foreground"
+        }
+      >
+        {count}
+      </strong>
       <span className="font-bold opacity-70">{label}</span>
     </span>
   );

@@ -21,20 +21,25 @@ const COPY: Record<
     sub: "Do not refresh",
     toneClass: "text-primary/80",
   },
+  // Success / error eyebrows stay tonally neutral — the accent bar
+  // carries the color signal. Coloring the eyebrow text too produces
+  // a "generic semantic colors everywhere" look that reads AI-ish.
+  // Restraint: tone matches the brutalist OnboardingChecklist where
+  // status colors live in tiny accents (icon, hairline) only.
   success: {
     primary: "Seed complete",
     sub: "Auto-hides in 5s",
-    toneClass: "text-success",
+    toneClass: "text-primary/80",
   },
   "success-partial": {
     primary: "Seed complete",
     sub: "",
-    toneClass: "text-success",
+    toneClass: "text-primary/80",
   },
   error: {
     primary: "Seed failed",
     sub: "No partial data was written",
-    toneClass: "text-destructive",
+    toneClass: "text-primary/80",
   },
 };
 
