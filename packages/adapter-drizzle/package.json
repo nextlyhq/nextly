@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/adapter-drizzle",
-  "version": "0.0.140",
+  "version": "0.0.141",
   "description": "Shared Drizzle ORM adapter logic for Nextly database adapters",
   "license": "MIT",
   "type": "module",

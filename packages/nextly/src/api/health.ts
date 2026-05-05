@@ -70,7 +70,7 @@ const HEALTH_CACHE_CONTROL = `public, max-age=${HEALTH_CHECK_CACHE_SECONDS}, sta
  * @example
  * ```bash
  * curl http://localhost:3000/api/health
- * # => {"ok":true,"version":"0.0.140","uptime":123,"timestamp":"...","database":{...}}
+ * # => {"ok":true,"version":"0.0.141","uptime":123,"timestamp":"...","database":{...}}
  * ```
  */
 export const GET = withErrorHandler(async (_request: Request) => {

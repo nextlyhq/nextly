@@ -41,7 +41,7 @@ Runtime checks that handled both legacy and canonical names now treat legacy nam
 - `AUTH_SECRET` and `NEXTAUTH_SECRET` env var fallbacks are gone. Set `NEXTLY_SECRET` (32+ characters in production) directly. The runtime no longer reads or warns about the legacy var names.
 - `NEXTLY_SECRET_RESOLVED` indirection on the env interface is gone. Consumers read `env.NEXTLY_SECRET` directly. (~13 internal call sites updated.)
 
-## 0.0.140
+## 0.0.141
 
 ### Minor Changes — BREAKING
 

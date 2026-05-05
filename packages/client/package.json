@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/client",
-  "version": "0.0.140",
+  "version": "0.0.141",
   "description": "Nextly - REST API SDK for browser-based applications",
   "license": "MIT",
   "type": "module",
