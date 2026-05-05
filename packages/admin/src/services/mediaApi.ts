@@ -277,7 +277,7 @@ export async function deleteMedia(mediaId: string): Promise<void> {
 }
 
 /**
- * Bulk delete multiple media files (Phase 4.5).
+ * Bulk delete multiple media files.
  *
  * Hits `DELETE /api/media/bulk` (server `media-bulk.ts` DELETE handler).
  * Single round-trip; server runs per-id deletes concurrently with full

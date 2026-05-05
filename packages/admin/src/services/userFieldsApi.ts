@@ -95,12 +95,9 @@ export interface UserFieldsMeta extends PaginationMeta {
 // ============================================================
 
 /**
- * List all user field definitions.
- *
- * Phase 4 (Task 19): the user-fields dispatcher emits
- * `respondData({ fields, total, adminConfig })`, a structured-data shape
- * that combines the field list with the admin-config siblings. We type
- * the fetcher with that bare shape and project the inner object the
+ * List all user field definitions. The dispatcher returns
+ * `{ fields, total, adminConfig }` — a combined shape with the field
+ * list and its admin-config siblings; we project to the inner object
  * existing callers expect.
  */
 export async function listFields(): Promise<{
@@ -117,8 +114,6 @@ export async function listFields(): Promise<{
 
 /**
  * Get a single user field definition by ID.
- *
- * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export async function getField(id: string): Promise<UserFieldDefinitionRecord> {
   return fetcher<UserFieldDefinitionRecord>(`/user-fields/${id}`, {}, true);
@@ -126,10 +121,6 @@ export async function getField(id: string): Promise<UserFieldDefinitionRecord> {
 
 /**
  * Create a new user field definition.
- *
- * Phase 4 (Task 19): server returns
- * `MutationResponse<UserFieldDefinitionRecord>`; project `item` for the
- * bare-record public signature.
  */
 export async function createField(
   data: CreateUserFieldPayload
@@ -145,9 +136,6 @@ export async function createField(
 /**
  * Update an existing user field definition.
  * Only UI-sourced fields can be updated (code-sourced fields return 422).
- *
- * Phase 4 (Task 19): server returns
- * `MutationResponse<UserFieldDefinitionRecord>`; project `item`.
  */
 export async function updateField(
   id: string,
@@ -164,10 +152,7 @@ export async function updateField(
 /**
  * Delete a user field definition.
  * Only UI-sourced fields can be deleted (code-sourced fields return 422).
- *
- * Phase 4 (Task 19): the dispatcher emits
- * `respondAction("User field deleted.", { fieldId })` because the service
- * returns void; we discard the body since the caller expects void.
+ * Caller expects void; we discard the response body.
  */
 export async function deleteField(id: string): Promise<void> {
   await fetcher<ActionResponse<{ fieldId: string }>>(
@@ -178,13 +163,9 @@ export async function deleteField(id: string): Promise<void> {
 }
 
 /**
- * Reorder user field definitions.
- * Sends the full ordered array of field IDs; the backend updates sortOrder accordingly.
- *
- * Phase 4 (Task 19): the dispatcher emits
- * `respondAction("User fields reordered.", { fields })`. We project to
- * the legacy `{ data: UserFieldDefinitionRecord[] }` shape so existing
- * callers keep working.
+ * Reorder user field definitions. Sends the full ordered array of
+ * field IDs; the backend updates sortOrder accordingly. Returns the
+ * legacy `{ data }` projection that existing callers consume.
  */
 export async function reorderFields(
   fieldIds: string[]

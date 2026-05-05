@@ -26,8 +26,8 @@ describe("entryApi filtering serialization", () => {
 
     const params = new URLSearchParams(query);
     expect(params.get("page")).toBe("2");
-    // Phase 4 (Task 19): query-string param renamed pageSize -> limit
-    // (canonical name in spec §5.1 PaginationMeta).
+    // The wire param is `limit` (canonical name in spec §5.1
+    // PaginationMeta), not the admin-internal `pageSize`.
     expect(params.get("limit")).toBe("25");
     expect(params.get("sortBy")).toBe("updatedAt");
     expect(params.get("sortOrder")).toBe("desc");
