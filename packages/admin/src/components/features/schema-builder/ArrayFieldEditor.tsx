@@ -32,7 +32,7 @@ import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 
 import { EditorAlert } from "./EditorAlert";
-import type { ArrayFieldEditorProps, ArrayFieldLabels } from "./types";
+import type { RepeaterFieldEditorProps, RepeaterFieldLabels } from "./types";
 
 // ============================================================
 // ArrayFieldEditor Component
@@ -48,7 +48,7 @@ export function ArrayFieldEditor({
   rowLabelField,
   onRowLabelFieldChange,
   nestedFields = [],
-}: ArrayFieldEditorProps) {
+}: RepeaterFieldEditorProps) {
   // Get fields that can be used as row labels (text-like fields with names)
   const labelableFields = useMemo(() => {
     return nestedFields.filter(
@@ -63,7 +63,7 @@ export function ArrayFieldEditor({
   // Handle singular label change
   const handleSingularChange = useCallback(
     (singular: string) => {
-      const newLabels: ArrayFieldLabels = {
+      const newLabels: RepeaterFieldLabels = {
         ...labels,
         singular: singular || undefined,
       };
@@ -80,7 +80,7 @@ export function ArrayFieldEditor({
   // Handle plural label change
   const handlePluralChange = useCallback(
     (plural: string) => {
-      const newLabels: ArrayFieldLabels = {
+      const newLabels: RepeaterFieldLabels = {
         ...labels,
         plural: plural || undefined,
       };

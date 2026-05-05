@@ -294,9 +294,9 @@ export interface RelationshipFilter {
 }
 
 /**
- * Labels for array field rows (singular/plural)
+ * Labels for repeater field rows (singular/plural)
  */
-export interface ArrayFieldLabels {
+export interface RepeaterFieldLabels {
   /** Singular label for a single row (e.g., "Item", "Question", "Slide") */
   singular?: string;
   /** Plural label for multiple rows (e.g., "Items", "Questions", "Slides") */
@@ -385,14 +385,14 @@ export interface BuilderField extends FieldConfig {
    */
   maxFileSize?: number;
   // ============================================================
-  // Array Field Properties
+  // Repeater Field Properties
   // ============================================================
   /**
-   * Row labels for array fields (singular/plural)
+   * Row labels for repeater fields (singular/plural)
    */
-  labels?: ArrayFieldLabels;
+  labels?: RepeaterFieldLabels;
   /**
-   * Whether array rows should be initially collapsed
+   * Whether repeater rows should be initially collapsed
    */
   initCollapsed?: boolean;
   /**
@@ -853,17 +853,17 @@ export interface RelationshipEditorProps {
 }
 
 // ============================================================
-// Array Field Types
+// Repeater Field Types
 // ============================================================
 
 /**
- * Props for the ArrayFieldEditor component
+ * Props for the RepeaterFieldEditor component
  */
-export interface ArrayFieldEditorProps {
+export interface RepeaterFieldEditorProps {
   /** Row labels (singular/plural) */
-  labels?: ArrayFieldLabels;
+  labels?: RepeaterFieldLabels;
   /** Callback when labels change */
-  onLabelsChange: (labels: ArrayFieldLabels | undefined) => void;
+  onLabelsChange: (labels: RepeaterFieldLabels | undefined) => void;
   /** Whether rows are initially collapsed */
   initCollapsed?: boolean;
   /** Callback when initCollapsed changes */
