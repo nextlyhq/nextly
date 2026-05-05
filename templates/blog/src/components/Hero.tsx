@@ -14,21 +14,28 @@ interface HeroProps {
 
 export function Hero({ title, subtitle }: HeroProps) {
   return (
-    <section className="py-14 text-center sm:py-20">
-      <h1
-        className="mx-auto max-w-3xl text-3xl font-bold tracking-tight sm:text-5xl"
-        style={{ color: "var(--color-fg)" }}
-      >
-        {title}
-      </h1>
-      {subtitle && (
-        <p
-          className="mx-auto mt-4 max-w-2xl text-base sm:text-lg"
-          style={{ color: "var(--color-fg-muted)" }}
+    <section
+      className="py-24 text-center md:py-32 w-full"
+      style={{
+        background: "var(--color-bg-surface)",
+      }}
+    >
+      <div className="mx-auto w-full px-6">
+        <h1
+          className="mx-auto max-w-4xl text-5xl font-extrabold leading-tight tracking-tightest-premium sm:text-6xl md:text-7xl"
+          style={{ color: "var(--color-fg)" }}
         >
-          {subtitle}
-        </p>
-      )}
+          {title}
+        </h1>
+        {subtitle && (
+          <p
+            className="mx-auto mt-8 max-w-2xl text-lg font-medium leading-relaxed sm:text-xl"
+            style={{ color: "var(--color-fg-muted)" }}
+          >
+            {subtitle}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

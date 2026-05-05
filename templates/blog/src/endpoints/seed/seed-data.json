@@ -110,7 +110,7 @@
       },
       "publishedAt": "2026-04-10T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-nextly-cms.svg",
+      "featuredImage": "build-blog-with-nextly.webp",
       "content": {
         "root": {
           "type": "root",
@@ -165,7 +165,7 @@
       "tags": ["react", "nextjs", "performance"],
       "publishedAt": "2026-04-05T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-server-components.svg",
+      "featuredImage": "understanding-server-components.webp",
       "content": {
         "root": {
           "type": "root",
@@ -206,7 +206,7 @@
       "tags": ["typescript"],
       "publishedAt": "2026-03-28T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-typescript-tips.svg",
+      "featuredImage": "typescript-tips-i-wish-i-know-earlier.webp",
       "content": {
         "root": {
           "type": "root",
@@ -247,7 +247,7 @@
       "tags": ["css", "react"],
       "publishedAt": "2026-03-20T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-tailwind-guide.svg",
+      "featuredImage": "tailwindcss-a-prictical-guide.webp",
       "content": {
         "root": {
           "type": "root",
@@ -288,7 +288,7 @@
       "tags": ["nextjs"],
       "publishedAt": "2026-03-15T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-open-source.svg",
+      "featuredImage": "why-open-source-is-the-feature.webp",
       "content": {
         "root": {
           "type": "root",
@@ -329,7 +329,7 @@
       "tags": ["postgres", "performance"],
       "publishedAt": "2026-03-10T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-postgres-scale.svg",
+      "featuredImage": "postgres-at-scale-small-decission-that-compound.webp",
       "content": {
         "root": {
           "type": "root",
@@ -381,7 +381,7 @@
       "tags": ["testing", "typescript"],
       "publishedAt": "2026-03-02T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-testing-strategies.svg",
+      "featuredImage": "testing-strategies-that-dont-suck.webp",
       "content": {
         "root": {
           "type": "root",
@@ -422,7 +422,7 @@
       "tags": ["css"],
       "publishedAt": "2026-02-24T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-css-modern.svg",
+      "featuredImage": "modern-css-container-quries.webp",
       "content": {
         "root": {
           "type": "root",
@@ -468,7 +468,7 @@
       "tags": ["seo", "nextjs"],
       "publishedAt": "2026-02-18T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-seo-essentials.svg",
+      "featuredImage": "seo-essentials-for-nextjs-apps.webp",
       "content": {
         "root": {
           "type": "root",
@@ -511,7 +511,7 @@
       "tags": ["postgres"],
       "publishedAt": "2026-02-12T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-database-migrations.svg",
+      "featuredImage": "database-migration-without-darama.webp",
       "content": {
         "root": {
           "type": "root",
@@ -595,7 +595,7 @@
       "tags": [],
       "publishedAt": "2026-01-28T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-shipping-culture.svg",
+      "featuredImage": "shipping-culture-small-commit-fast-review.webp",
       "content": {
         "root": {
           "type": "root",
@@ -681,7 +681,7 @@
       "tags": [],
       "publishedAt": "2026-01-12T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-remote-work.svg",
+      "featuredImage": "remote-work-your-years-in.webp",
       "content": {
         "root": {
           "type": "root",
@@ -727,7 +727,7 @@
       "tags": [],
       "publishedAt": "2026-01-05T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-async-writing.svg",
+      "featuredImage": "writing-at-wrok-the-under-practiced-skill.webp",
       "content": {
         "root": {
           "type": "root",
@@ -770,7 +770,7 @@
       "tags": ["testing"],
       "publishedAt": "2025-12-28T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-debugging.svg",
+      "featuredImage": "debugging-a-process-not-a-skill.webp",
       "content": {
         "root": {
           "type": "root",

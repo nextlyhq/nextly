@@ -23,24 +23,24 @@ export function PostTOC({ toc }: PostTOCProps) {
   return (
     <details
       open
-      className="mb-8 rounded-lg border p-4"
+      className="mb-12 rounded-lg border p-6"
       style={{
         borderColor: "var(--color-border)",
-        background: "var(--color-bg-surface)",
+        background: "var(--color-bg)",
       }}
     >
       <summary
-        className="cursor-pointer text-xs font-semibold uppercase tracking-widest"
+        className="cursor-pointer text-[10px] font-bold uppercase tracking-[0.2em] transition-opacity hover:opacity-70"
         style={{ color: "var(--color-fg-muted)" }}
       >
         On this page
       </summary>
-      <ol className="mt-3 flex flex-col gap-1.5 list-none">
+      <ol className="mt-6 flex flex-col gap-2.5 list-none">
         {toc.map(entry => (
           <li key={entry.id} className={entry.level === 3 ? "ml-4" : ""}>
             <a
               href={`#${entry.id}`}
-              className="text-sm transition-colors hover:opacity-80"
+              className="text-sm font-medium transition-all hover:pl-1"
               style={{ color: "var(--color-fg)" }}
             >
               {entry.text}

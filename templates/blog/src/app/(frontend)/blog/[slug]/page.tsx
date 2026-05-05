@@ -183,12 +183,12 @@ export default async function PostPage({
     <>
       <ReadingProgressBar />
 
-      <article className="mx-auto max-w-3xl">
+      <article className="mx-auto max-w-2xl py-20 md:py-32">
         <JsonLd data={[articleSchema, breadcrumbSchema]} />
 
         {/* Category badges */}
         {post.categories && post.categories.length > 0 && (
-          <div className="mb-4 flex flex-wrap gap-2">
+          <div className="mb-6 flex flex-wrap justify-center gap-3">
             {post.categories.map(cat => (
               <CategoryBadge key={cat.slug} name={cat.name} slug={cat.slug} />
             ))}
@@ -197,7 +197,7 @@ export default async function PostPage({
 
         {/* Title */}
         <h1
-          className="mb-4 text-3xl font-bold leading-tight tracking-tight sm:text-4xl"
+          className="mb-8 text-center text-4xl font-bold leading-[1.1] tracking-tighter-premium sm:text-5xl md:text-6xl"
           style={{ color: "var(--color-fg)" }}
         >
           {post.title}
@@ -205,26 +205,28 @@ export default async function PostPage({
 
         {/* Meta row */}
         <div
-          className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+          className="mb-12 flex flex-wrap items-center justify-center gap-4 text-[10px] font-bold uppercase tracking-widest"
           style={{ color: "var(--color-fg-muted)" }}
         >
           {post.author && (
             <Link
               href={`/authors/${post.author.slug}`}
-              className="font-medium transition-colors"
+              className="transition-opacity hover:opacity-70"
               style={{ color: "var(--color-fg)" }}
             >
               {post.author.name}
             </Link>
           )}
-          {post.author && formattedDate && <span aria-hidden="true">·</span>}
+          {post.author && formattedDate && (
+            <span className="opacity-30">/</span>
+          )}
           {formattedDate && (
             <time dateTime={post.publishedAt ?? undefined}>
               {formattedDate}
             </time>
           )}
           {post.readingTime && formattedDate && (
-            <span aria-hidden="true">·</span>
+            <span className="opacity-30">/</span>
           )}
           {post.readingTime ? <span>{post.readingTime} min read</span> : null}
         </div>
@@ -236,7 +238,10 @@ export default async function PostPage({
 
         {/* Featured image */}
         {post.featuredImage?.url && (
-          <div className="mb-8 overflow-hidden rounded-xl">
+          <div
+            className="mb-16 overflow-hidden rounded-none border"
+            style={{ borderColor: "var(--color-border)" }}
+          >
             <Image
               src={post.featuredImage.url}
               alt={post.featuredImage.altText || post.title}
@@ -281,10 +286,10 @@ export default async function PostPage({
             style={{ borderColor: "var(--color-border)" }}
           >
             <h2
-              className="mb-8 text-xs font-semibold uppercase tracking-widest"
-              style={{ color: "var(--color-fg-muted)" }}
+              className="mb-8 text-xl font-bold tracking-tight"
+              style={{ color: "var(--color-fg)" }}
             >
-              Related reading
+              Related Perspectives
             </h2>
             <PostGrid posts={relatedPosts} />
           </section>

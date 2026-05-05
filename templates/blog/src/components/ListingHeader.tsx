@@ -41,24 +41,24 @@ export function ListingHeader({
   stats,
 }: ListingHeaderProps) {
   return (
-    <header className="mb-8">
+    <header className="mb-12 md:mb-16">
       {label && (
         <div
-          className="mb-2 text-xs font-semibold uppercase tracking-widest"
+          className="mb-4 text-[10px] font-bold uppercase tracking-[0.2em]"
           style={{ color: "var(--color-accent)" }}
         >
           {label}
         </div>
       )}
       <h1
-        className="text-3xl font-bold tracking-tight sm:text-4xl"
+        className="text-3xl font-bold tracking-tightest-premium sm:text-5xl"
         style={{ color: "var(--color-fg)" }}
       >
         {title}
       </h1>
       {description && (
         <p
-          className="mt-3 max-w-2xl text-base"
+          className="mt-6 max-w-2xl text-base leading-relaxed sm:text-lg"
           style={{ color: "var(--color-fg-muted)" }}
         >
           {description}
@@ -66,16 +66,16 @@ export function ListingHeader({
       )}
       {stats && stats.length > 0 && (
         <div
-          className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"
+          className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-bold uppercase tracking-widest"
           style={{ color: "var(--color-fg-muted)" }}
         >
           {stats.map((stat, i) => (
-            <span key={`${stat.text}-${i}`} className="flex items-center gap-2">
-              {i > 0 && <span aria-hidden="true">·</span>}
+            <span key={`${stat.text}-${i}`} className="flex items-center gap-4">
+              {i > 0 && <span className="opacity-30">/</span>}
               {stat.href ? (
                 <Link
                   href={stat.href}
-                  className="transition-colors hover:opacity-80"
+                  className="transition-opacity hover:opacity-70"
                   style={{ color: "var(--color-accent)" }}
                 >
                   {stat.text}
@@ -88,7 +88,7 @@ export function ListingHeader({
         </div>
       )}
       <div
-        className="mt-6 h-px"
+        className="mt-10 h-px"
         style={{ background: "var(--color-border)" }}
       />
     </header>

@@ -1,39 +1,36 @@
 @import "tailwindcss";
 
 /* ================================================================
-   Design tokens
+   The Antigravity Standard - Design Tokens
    ----------------------------------------------------------------
-   Modern-tech aesthetic: neutral grays + one accent color, subtle
-   borders, generous whitespace. Light and dark modes are explicit -
-   the theme toggle (src/components/ThemeToggle.tsx) sets
-   data-theme="light" or "dark" on <html>, and
-   templates/blog/src/app/layout.tsx runs an inline script before
-   React hydrates to prevent a flash of the wrong theme on load.
+   A "weightless," premium aesthetic using neutral grays, 1px crisp
+   borders, and fluid typography. Strictly professional.
    =============================================================== */
 
 :root,
 [data-theme="light"] {
-  --color-bg: #fafafa;
+  --color-bg: #f9fafb;
   --color-bg-surface: #ffffff;
-  --color-fg: #0a0a0a;
-  --color-fg-muted: #52525b;
-  --color-border: #e4e4e7;
-  --color-accent: #0a7ea4;
+  --color-fg: #1e293b;
+  --color-fg-muted: #64748b;
+  --color-border: #e2e8f0;
+  --color-accent: #0f172a;
   --color-accent-fg: #ffffff;
-  --color-tag-bg: #ededed;
-  --color-tag-fg: #3f3f46;
+  --color-tag-bg: #f1f5f9;
+  --color-tag-fg: #475569;
+  --radius-base: 4px;
 }
 
 [data-theme="dark"] {
-  --color-bg: #0a0a0a;
-  --color-bg-surface: #18181b;
-  --color-fg: #fafafa;
-  --color-fg-muted: #a1a1aa;
-  --color-border: #27272a;
+  --color-bg: #0f172a;
+  --color-bg-surface: #1e293b;
+  --color-fg: #f8fafc;
+  --color-fg-muted: #94a3b8;
+  --color-border: #334155;
   --color-accent: #38bdf8;
-  --color-accent-fg: #0a0a0a;
-  --color-tag-bg: #27272a;
-  --color-tag-fg: #d4d4d8;
+  --color-accent-fg: #0f172a;
+  --color-tag-bg: #1e293b;
+  --color-tag-fg: #cbd5e1;
 }
 
 @theme inline {
@@ -46,35 +43,60 @@
   --color-accent-foreground: var(--color-accent-fg);
   --color-tag-bg: var(--color-tag-bg);
   --color-tag-fg: var(--color-tag-fg);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
+  --radius-xl: 0px;
+  --radius-lg: 0px;
+  --radius-md: 0px;
+  --radius-sm: 0px;
 }
 
 body {
   background: var(--color-bg);
   color: var(--color-fg);
-  font-family:
-    var(--font-sans),
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Helvetica,
-    Arial,
-    sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html {
   scroll-behavior: smooth;
+  font-size: 16px; /* Base for rem */
+}
+
+/* Fluid Typography */
+h1 {
+  font-size: clamp(2.25rem, 5vw, 3.75rem);
+}
+h2 {
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+}
+h3 {
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+}
+
+.tracking-tighter-premium {
+  letter-spacing: -0.02em;
+}
+.tracking-tightest-premium {
+  letter-spacing: -0.05em;
 }
 
 /* ================================================================
-   Accessibility baseline
+   Accessibility & Micro-interactions
    =============================================================== */
 
 *:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.antigravity-press {
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.antigravity-press:active {
+  transform: scale(0.95) translateY(1px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -91,12 +113,12 @@ html {
 }
 
 /* ================================================================
-   Prose styles for rich text content (RichTextRenderer)
-   ----------------------------------------------------------------
-   Applied via the `prose` utility class on the article body. Tweaked
-   to match the modern-tech aesthetic: tight tracking on headings,
-   generous leading on paragraphs, accent-colored inline links.
+   Prose styles for rich text content
    =============================================================== */
+
+.prose-blog {
+  font-size: 1.0625rem; /* 17px for optimal readability */
+}
 
 .prose-blog h1,
 .prose-blog h2,
@@ -105,77 +127,82 @@ html {
   color: var(--color-fg);
   font-weight: 700;
   letter-spacing: -0.02em;
-  line-height: 1.2;
-  margin-top: 2em;
-  margin-bottom: 0.6em;
-}
-
-.prose-blog h2 {
-  font-size: 1.5rem;
-}
-.prose-blog h3 {
-  font-size: 1.25rem;
+  line-height: 1.1;
+  margin-top: 2.5em;
+  margin-bottom: 0.8em;
 }
 
 .prose-blog p {
+  margin: 1.5em 0;
+  line-height: 1.8;
   color: var(--color-fg);
-  line-height: 1.75;
-  margin: 0.9em 0;
 }
 
 .prose-blog a {
   color: var(--color-accent);
   text-decoration: underline;
-  text-underline-offset: 3px;
+  text-underline-offset: 4px;
   text-decoration-thickness: 1px;
+  transition: opacity 0.2s;
 }
 
 .prose-blog a:hover {
-  text-decoration-thickness: 2px;
+  opacity: 0.7;
+}
+
+.prose-blog h2 {
+  font-size: 2em;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 2em 0 1em;
+  line-height: 1.2;
+}
+
+.prose-blog h3 {
+  font-size: 1.5em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 1.5em 0 0.75em;
+  line-height: 1.3;
 }
 
 .prose-blog code {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0.125em 0.375em;
-  font-family:
-    var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9em;
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  color: var(--color-accent);
 }
 
 .prose-blog pre {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 1rem 1.25rem;
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
   overflow-x: auto;
-  margin: 1.25em 0;
-}
-
-.prose-blog pre code {
-  background: transparent;
-  border: none;
-  padding: 0;
-  font-size: 0.875em;
-  line-height: 1.6;
+  margin: 2.5em 0;
 }
 
 .prose-blog blockquote {
-  border-left: 3px solid var(--color-accent);
-  padding-left: 1rem;
-  margin: 1.5em 0;
+  border-left: 2px solid var(--color-fg);
+  padding: 0.5rem 0 0.5rem 1.5rem;
+  margin: 2.5em 0;
   color: var(--color-fg-muted);
-  font-style: italic;
+  font-style: normal;
+  font-size: 1.25em;
+  line-height: 1.6;
 }
 
 .prose-blog ul,
 .prose-blog ol {
   padding-left: 1.5rem;
-  margin: 0.9em 0;
+  margin: 1.5em 0;
 }
 
 .prose-blog li {
-  margin: 0.3em 0;
+  margin: 0.75em 0;
+  line-height: 1.7;
   color: var(--color-fg);
 }

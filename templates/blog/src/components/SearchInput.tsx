@@ -93,14 +93,14 @@ export function SearchInput() {
   }, [debouncedQuery, pagefind]);
 
   return (
-    <div>
+    <div className="max-w-2xl mx-auto">
       <input
         type="search"
         autoFocus
         value={query}
         onChange={e => setQuery(e.target.value)}
         placeholder="Search posts..."
-        className="w-full rounded-lg border px-4 py-3 text-base"
+        className="w-full rounded-none border px-5 py-4 text-lg transition-colors focus:border-[color:var(--color-fg-muted)] focus:outline-none"
         style={{
           borderColor: "var(--color-border)",
           background: "var(--color-bg-surface)",
@@ -110,29 +110,32 @@ export function SearchInput() {
       />
 
       {loadError && (
-        <p
-          className="mt-4 rounded-md border border-dashed p-4 text-sm"
+        <div
+          className="mt-6 rounded-none border border-dashed p-6 text-sm leading-relaxed"
           style={{
             borderColor: "var(--color-border)",
             color: "var(--color-fg-muted)",
           }}
         >
           {loadError}
-        </p>
+        </div>
       )}
 
       {!loadError && debouncedQuery && results.length === 0 && (
-        <p className="mt-6 text-sm" style={{ color: "var(--color-fg-muted)" }}>
+        <p
+          className="mt-10 text-center text-sm font-medium"
+          style={{ color: "var(--color-fg-muted)" }}
+        >
           No results for &quot;{debouncedQuery}&quot;.
         </p>
       )}
 
       {results.length > 0 && (
-        <ul className="mt-6 flex flex-col gap-4">
+        <ul className="mt-10 flex flex-col gap-6">
           {results.map(r => (
             <li
               key={r.url}
-              className="rounded-lg border p-4"
+              className="group rounded-none border p-6 transition-all hover:border-[color:var(--color-fg-muted)]"
               style={{
                 borderColor: "var(--color-border)",
                 background: "var(--color-bg-surface)",
@@ -140,18 +143,24 @@ export function SearchInput() {
             >
               <a
                 href={r.url}
-                className="text-base font-semibold"
+                className="text-xl font-bold tracking-tightest-premium"
                 style={{ color: "var(--color-fg)" }}
               >
                 {r.meta?.title || r.url}
               </a>
               {r.excerpt && (
                 <p
-                  className="mt-1 text-sm"
+                  className="mt-3 text-sm leading-relaxed"
                   style={{ color: "var(--color-fg-muted)" }}
                   dangerouslySetInnerHTML={{ __html: r.excerpt }}
                 />
               )}
+              <div
+                className="mt-4 text-[10px] font-bold uppercase tracking-widest opacity-0 transition-opacity group-hover:opacity-100"
+                style={{ color: "var(--color-accent)" }}
+              >
+                Read more →
+              </div>
             </li>
           ))}
         </ul>

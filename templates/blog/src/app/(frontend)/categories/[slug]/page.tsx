@@ -103,27 +103,28 @@ export default async function CategoryPage({
   return (
     <>
       <JsonLd data={[collectionSchema, breadcrumbSchema]} />
-
-      <ListingHeader
-        label="Category"
-        title={category.name}
-        description={category.description ?? undefined}
-        stats={[
-          {
-            text: `${posts.meta.total} ${posts.meta.total === 1 ? "post" : "posts"}`,
-          },
-          { text: "RSS", href: `/categories/${slug}/feed.xml` },
-        ]}
-      />
-
-      <PostGrid posts={posts.items} />
-
-      <div className="mt-12">
-        <Pagination
-          currentPage={currentPage}
-          totalPages={posts.meta.totalPages}
-          basePath={`/categories/${slug}`}
+      <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">
+        <ListingHeader
+          label="Category"
+          title={category.name}
+          description={category.description ?? undefined}
+          stats={[
+            {
+              text: `${posts.meta.total} ${posts.meta.total === 1 ? "post" : "posts"}`,
+            },
+            { text: "RSS", href: `/categories/${slug}/feed.xml` },
+          ]}
         />
+
+        <PostGrid posts={posts.items} />
+
+        <div className="mt-12">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={posts.meta.totalPages}
+            basePath={`/categories/${slug}`}
+          />
+        </div>
       </div>
     </>
   );

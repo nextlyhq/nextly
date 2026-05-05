@@ -35,15 +35,63 @@ export function PostCard({ post }: PostCardProps) {
 
   return (
     <article
-      className="group flex h-full flex-col overflow-hidden rounded-xl border transition-colors"
+      className="group flex h-full flex-col overflow-hidden rounded-none border transition-all duration-300 hover:border-[color:var(--color-fg-muted)]"
       style={{
         borderColor: "var(--color-border)",
         background: "var(--color-bg-surface)",
       }}
     >
+      {/* Meta Top Row */}
+      <div
+        className="flex items-center justify-between px-6 py-4 border-b"
+        style={{ borderColor: "var(--color-border)" }}
+      >
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+          <svg
+            className="w-3 h-3"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+            ></path>
+          </svg>
+          {formattedDate && (
+            <time dateTime={publishedAt ?? undefined}>{formattedDate}</time>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+          <svg
+            className="w-3.5 h-3.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+            ></path>
+          </svg>
+          {readingTime ? (
+            <span>{readingTime} min read</span>
+          ) : (
+            <span>5 min read</span>
+          )}
+        </div>
+      </div>
+
       <Link
         href={`/blog/${slug}`}
-        className="relative block overflow-hidden"
+        className="relative block aspect-video overflow-hidden border-b"
+        style={{ borderColor: "var(--color-border)" }}
         aria-label={title}
       >
         {featuredImage?.url ? (
@@ -53,37 +101,29 @@ export function PostCard({ post }: PostCardProps) {
             width={720}
             height={405}
             sizes="(min-width: 1024px) 320px, (min-width: 640px) 50vw, 100vw"
-            className="aspect-video w-full object-cover motion-safe:transition-transform motion-safe:duration-300 motion-safe:group-hover:scale-[1.02]"
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
           />
         ) : (
           <div
-            className="flex aspect-video w-full items-center justify-center text-sm"
+            className="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-widest"
             style={{
               background: "var(--color-bg)",
               color: "var(--color-fg-muted)",
             }}
           >
-            No image
+            No preview
           </div>
         )}
       </Link>
 
-      <div className="flex flex-1 flex-col p-5">
-        {categories && categories.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {categories.slice(0, 2).map(cat => (
-              <CategoryBadge key={cat.slug} name={cat.name} slug={cat.slug} />
-            ))}
-          </div>
-        )}
-
+      <div className="flex flex-1 flex-col p-6">
         <h2
-          className="mb-2 text-lg font-semibold leading-snug tracking-tight"
+          className="mb-4 text-lg font-bold leading-tight tracking-tightest-premium"
           style={{ color: "var(--color-fg)" }}
         >
           <Link
             href={`/blog/${slug}`}
-            className="transition-colors group-hover:opacity-90"
+            className="transition-opacity hover:opacity-70"
           >
             {title}
           </Link>
@@ -91,32 +131,48 @@ export function PostCard({ post }: PostCardProps) {
 
         {excerpt && (
           <p
-            className="mb-4 line-clamp-2 text-sm"
+            className="mb-6 line-clamp-3 text-sm leading-relaxed"
             style={{ color: "var(--color-fg-muted)" }}
           >
             {excerpt}
           </p>
         )}
 
-        <div
-          className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
-          style={{ color: "var(--color-fg-muted)" }}
-        >
-          {author && (
-            <Link
-              href={`/authors/${author.slug}`}
-              className="font-medium transition-colors"
+        <div className="mt-auto">
+          {categories && categories.length > 0 && (
+            <div className="mb-8 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              {categories.map(cat => (
+                <span key={cat.slug}>#{cat.name.replace(/\s+/g, "")}</span>
+              ))}
+            </div>
+          )}
+
+          <Link
+            href={`/blog/${slug}`}
+            className="flex items-center gap-4 group/link"
+          >
+            <span
+              className="text-[10px] font-bold uppercase tracking-widest"
               style={{ color: "var(--color-fg)" }}
             >
-              {author.name}
-            </Link>
-          )}
-          {author && formattedDate && <span aria-hidden="true">·</span>}
-          {formattedDate && (
-            <time dateTime={publishedAt ?? undefined}>{formattedDate}</time>
-          )}
-          {readingTime && formattedDate && <span aria-hidden="true">·</span>}
-          {readingTime ? <span>{readingTime} min read</span> : null}
+              Read Perspectives
+            </span>
+            <div className="h-px flex-1 bg-slate-200 transition-colors group-hover/link:bg-slate-400" />
+            <svg
+              className="w-4 h-4 text-slate-400 transition-transform group-hover/link:translate-x-1"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M14 5l7 7m0 0l-7 7m7-7H3"
+              ></path>
+            </svg>
+          </Link>
         </div>
       </div>
     </article>

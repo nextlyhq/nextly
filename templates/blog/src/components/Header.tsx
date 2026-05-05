@@ -34,24 +34,24 @@ export function Header({ siteName, logo, navigation }: HeaderProps) {
 
   return (
     <header
-      className="sticky top-0 z-40 border-b backdrop-blur"
+      className="sticky top-0 z-40 border-b backdrop-blur-md"
       style={{
         borderColor: "var(--color-border)",
-        background: "color-mix(in srgb, var(--color-bg) 90%, transparent)",
+        background: "color-mix(in srgb, var(--color-bg) 80%, transparent)",
       }}
     >
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-6">
+      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-4 px-6 md:h-16">
         <Logo siteName={siteName} logo={logo} />
 
         {/* Desktop nav */}
-        <nav className="hidden items-center gap-6 md:flex" aria-label="Primary">
+        <nav className="hidden items-center gap-8 md:flex" aria-label="Primary">
           {navigation.headerLinks.map(link => (
             <Link
               key={link.href}
               href={link.href}
               target={link.openInNewTab ? "_blank" : undefined}
               rel={link.openInNewTab ? "noopener noreferrer" : undefined}
-              className="text-sm font-medium transition-colors hover:opacity-100"
+              className="text-xs font-medium uppercase tracking-widest transition-opacity hover:opacity-70"
               style={{ color: "var(--color-fg-muted)" }}
             >
               {link.label}
