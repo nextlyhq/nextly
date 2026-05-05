@@ -56,9 +56,9 @@ function isUploadField(field: FieldDefinition): boolean {
 }
 
 /**
- * Checks if a field is an array field (repeater with nested fields).
+ * Checks if a field is a repeater or group field (container with nested rows).
  */
-function isArrayField(field: FieldDefinition): boolean {
+function isRepeaterOrGroupField(field: FieldDefinition): boolean {
   return field.type === "repeater" || field.type === "group";
 }
 
@@ -70,7 +70,7 @@ function isGroupField(field: FieldDefinition): boolean {
 }
 
 /**
- * Gets nested fields from an array or group field.
+ * Gets nested fields from a repeater or group field.
  */
 function getNestedFields(field: FieldDefinition): FieldDefinition[] {
   if (field.fields && Array.isArray(field.fields)) {
@@ -81,7 +81,7 @@ function getNestedFields(field: FieldDefinition): FieldDefinition[] {
 
 /**
  * Safely parses JSON data if it's a string, otherwise returns as-is.
- * Handles cases where array/group field data hasn't been deserialized yet.
+ * Handles cases where repeater/group field data hasn't been deserialized yet.
  */
 function parseJsonIfString(data: unknown): unknown {
   if (typeof data === "string") {
@@ -209,7 +209,7 @@ function getSystemEntityLabelField(targetName: string): string {
 
 /**
  * Recursively collects all media IDs from a data object based on field definitions.
- * Handles nested upload fields inside array and group fields.
+ * Handles nested upload fields inside repeater and group fields.
  *
  * @param data - The data object to extract media IDs from
  * @param fields - Field definitions
@@ -232,8 +232,8 @@ function collectAllMediaIds(
       // Upload field - collect its IDs
       const ids = normalizeToIdArray(data[fieldName]);
       mediaIds.push(...ids);
-    } else if (isArrayField(field)) {
-      // Array field - recurse into each row
+    } else if (isRepeaterOrGroupField(field)) {
+      // Repeater field - recurse into each row
       // Handle both parsed arrays and JSON strings (pre-deserialization)
       const nestedFields = getNestedFields(field);
       const rawArrayData = data[fieldName];
@@ -271,7 +271,7 @@ function collectAllMediaIds(
 
 /**
  * Recursively expands media IDs in a data object using the provided media lookup map.
- * Handles nested upload fields inside array and group fields.
+ * Handles nested upload fields inside repeater and group fields.
  *
  * @param data - The data object to expand
  * @param fields - Field definitions
@@ -312,8 +312,8 @@ function expandMediaInData(
         // Return single media object
         result[fieldName] = mediaMap.get(String(ids[0])) || null;
       }
-    } else if (isArrayField(field)) {
-      // Array field - recurse into each row
+    } else if (isRepeaterOrGroupField(field)) {
+      // Repeater field - recurse into each row
       // Handle both parsed arrays and JSON strings (pre-deserialization)
       const nestedFields = getNestedFields(field);
       const rawArrayData = result[fieldName];
@@ -715,7 +715,7 @@ export class CollectionRelationshipService extends BaseService {
     const hasMediaFields = fields.some(
       f =>
         isUploadField(f) ||
-        isArrayField(f) ||
+        isRepeaterOrGroupField(f) ||
         isGroupField(f) ||
         isRelationshipField(f)
     );
@@ -844,7 +844,7 @@ export class CollectionRelationshipService extends BaseService {
           }
         }
 
-        // Expand relationship fields nested inside repeater/array/group fields
+        // Expand relationship fields nested inside repeater/group fields
         for (const field of fields) {
           const fieldName = field.name;
           if (
@@ -1323,7 +1323,7 @@ export class CollectionRelationshipService extends BaseService {
       }
     }
 
-    // Expand relationship fields nested inside repeater/array/group fields
+    // Expand relationship fields nested inside repeater/group fields
     for (const field of fields) {
       const fieldName = field.name;
       if (
