@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { CategoryBadge } from "./CategoryBadge";
 
+import { formatPublishedDate } from "@/lib/format-date";
 import type { Post } from "@/lib/queries/types";
 
 /**
@@ -30,13 +31,7 @@ export function PostCard({ post }: PostCardProps) {
     readingTime,
   } = post;
 
-  const formattedDate = publishedAt
-    ? new Date(publishedAt).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
-    : null;
+  const formattedDate = formatPublishedDate(publishedAt);
 
   return (
     <article

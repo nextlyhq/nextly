@@ -22,6 +22,7 @@ import {
 } from "react-hook-form";
 
 import { Plus } from "@admin/components/icons";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { cn } from "@admin/lib/utils";
 
 import type { EntryData } from "../../EntryForm/useEntryForm";
@@ -278,10 +279,7 @@ export function RelationshipInput<
   });
 
   // Convert value to display items
-  const selectedItems = valueToSelectedItems(
-    value,
-    hasMany
-  );
+  const selectedItems = valueToSelectedItems(value, hasMany);
   const selectedIds = getSelectedIds(selectedItems);
 
   // Check if we can add more items
@@ -488,20 +486,38 @@ export function RelationshipInput<
       {/* Selected items */}
       {selectedItems.length > 0 && (
         <div className="space-y-2">
-          {selectedItems.map(item => (
-            <RelationshipCard
-              key={item.id}
-              item={item}
-              onRemove={() => handleRemove(item.id)}
-              onEdit={
-                allowEdit && !isDisabled
-                  ? () => setEditingItem(item)
-                  : undefined
-              }
-              disabled={isDisabled}
-              collectionSlug={isPolymorphicField ? item.relationTo : undefined}
-            />
-          ))}
+          {selectedItems.map(item => {
+            // The `users` core collection lives on its own admin pages
+            // (`/admin/users/edit/[id]`) — opening RelationshipQuickEdit
+            // for a user would hit `/admin/api/collections/users` (404,
+            // since users is not a dynamic collection). Navigate to the
+            // dedicated user edit page instead.
+            const targetCollection = isPolymorphicField
+              ? item.relationTo
+              : collections[0];
+            const isUserRelationship = targetCollection === "users";
+
+            const handleEdit = isUserRelationship
+              ? () => {
+                  window.location.href = buildRoute(ROUTES.USERS_EDIT, {
+                    id: String(item.id),
+                  });
+                }
+              : () => setEditingItem(item);
+
+            return (
+              <RelationshipCard
+                key={item.id}
+                item={item}
+                onRemove={() => handleRemove(item.id)}
+                onEdit={allowEdit && !isDisabled ? handleEdit : undefined}
+                disabled={isDisabled}
+                collectionSlug={
+                  isPolymorphicField ? item.relationTo : undefined
+                }
+              />
+            );
+          })}
         </div>
       )}
 
@@ -536,7 +552,20 @@ export function RelationshipInput<
                       type="button"
                       variant="outline"
                       size="icon"
-                      onClick={() => setIsCreateModalOpen(true)}
+                      onClick={() => {
+                        // Same rationale as the edit handler: the users
+                        // core collection has its own admin pages, so
+                        // route there instead of opening the dynamic-
+                        // collection create modal.
+                        const target = isPolymorphicField
+                          ? collections[0]
+                          : (field.relationTo as string);
+                        if (target === "users") {
+                          window.location.href = ROUTES.USERS_CREATE;
+                          return;
+                        }
+                        setIsCreateModalOpen(true);
+                      }}
                       aria-label={`Create new ${field.label || "item"}`}
                     >
                       <Plus className="h-4 w-4" />
