@@ -350,6 +350,8 @@ function convertTextFieldToZod(field: TextFieldConfig): z.ZodTypeAny {
   const maxLength = getValidation(field, "maxLength") as number | undefined;
   const minRows = getValidation(field, "minRows") as number | undefined;
   const maxRows = getValidation(field, "maxRows") as number | undefined;
+  const pattern = getValidation(field, "pattern") as string | undefined;
+  const patternMsg = getPatternMessage(field);
 
   if (field.hasMany) {
     // Multiple text values
@@ -365,6 +367,10 @@ function convertTextFieldToZod(field: TextFieldConfig): z.ZodTypeAny {
         maxLength,
         `Each item must be at most ${maxLength} characters`
       );
+    }
+    if (pattern) {
+      const re = compileRegexOrUndefined(pattern);
+      if (re) itemSchema = itemSchema.regex(re, patternMsg ?? "Invalid format");
     }
 
     let arraySchema = z.array(itemSchema);
@@ -392,6 +398,10 @@ function convertTextFieldToZod(field: TextFieldConfig): z.ZodTypeAny {
   if (maxLength) {
     schema = schema.max(maxLength, `Must be at most ${maxLength} characters`);
   }
+  if (pattern) {
+    const re = compileRegexOrUndefined(pattern);
+    if (re) schema = schema.regex(re, patternMsg ?? "Invalid format");
+  }
 
   return schema;
 }
@@ -400,6 +410,8 @@ function convertTextareaFieldToZod(field: TextareaFieldConfig): z.ZodTypeAny {
   // Get validation values from both flat and nested formats
   const minLength = getValidation(field, "minLength") as number | undefined;
   const maxLength = getValidation(field, "maxLength") as number | undefined;
+  const pattern = getValidation(field, "pattern") as string | undefined;
+  const patternMsg = getPatternMessage(field);
 
   let schema = z.string();
 
@@ -409,8 +421,49 @@ function convertTextareaFieldToZod(field: TextareaFieldConfig): z.ZodTypeAny {
   if (maxLength) {
     schema = schema.max(maxLength, `Must be at most ${maxLength} characters`);
   }
+  if (pattern) {
+    const re = compileRegexOrUndefined(pattern);
+    if (re) schema = schema.regex(re, patternMsg ?? "Invalid format");
+  }
 
   return schema;
+}
+
+/**
+ * Reads `validation.message` from a field config, falling back to a flat
+ * `field.message` for completeness. Used together with `validation.pattern`
+ * to give the user a friendly error instead of a generic "Invalid format".
+ */
+function getPatternMessage(
+  field: DataFieldConfig | ExtractedField
+): string | undefined {
+  const rec = field as unknown as Record<string, unknown>;
+  const validation = rec.validation as Record<string, unknown> | undefined;
+  const nested = validation?.message;
+  if (typeof nested === "string" && nested.trim().length > 0) return nested;
+  const flat = rec.message;
+  if (typeof flat === "string" && flat.trim().length > 0) return flat;
+  return undefined;
+}
+
+/**
+ * Safely compile a user-supplied regex. The pattern comes straight from the
+ * Builder which doesn't enforce regex validity at save time, so a malformed
+ * pattern would otherwise crash the Zod schema build. We log + drop in that
+ * case so the form can still render.
+ */
+function compileRegexOrUndefined(pattern: string): RegExp | undefined {
+  try {
+    return new RegExp(pattern);
+  } catch {
+    if (process.env.NODE_ENV === "development") {
+      console.warn(
+        "[field-validation] Ignoring invalid validation.pattern:",
+        pattern
+      );
+    }
+    return undefined;
+  }
 }
 
 function convertEmailFieldToZod(): z.ZodTypeAny {
