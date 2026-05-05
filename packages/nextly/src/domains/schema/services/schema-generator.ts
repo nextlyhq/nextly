@@ -530,7 +530,7 @@ export class SchemaGenerator {
 
       // Recursively handle nested fields
       if (isRepeaterField(field) || isGroupField(field)) {
-        // Array and group fields store as JSON
+        // Repeater and group fields store as JSON
         types.add(this.dialect === "postgresql" ? "jsonb" : "json");
       }
     }
@@ -878,7 +878,7 @@ export class SchemaGenerator {
         }
       }
     }
-    // Array, Group - store as JSON
+    // Repeater, Group - store as JSON
     else if (isRepeaterField(field) || isGroupField(field)) {
       columnType = types.jsonb;
     }

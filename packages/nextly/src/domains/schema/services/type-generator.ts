@@ -655,7 +655,7 @@ export class TypeGenerator {
     else if (isRelationshipField(field)) {
       tsType = this.buildRelationshipType(field, allCollections);
     }
-    // Array fields
+    // Repeater fields
     else if (isRepeaterField(field)) {
       tsType = this.buildArrayType(field, allCollections, allComponents);
     }
@@ -873,7 +873,7 @@ export class TypeGenerator {
   }
 
   /**
-   * Builds TypeScript type for array fields.
+   * Builds TypeScript type for repeater fields.
    */
   private buildArrayType(
     field: DataFieldConfig,

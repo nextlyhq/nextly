@@ -388,7 +388,7 @@ export class ZodGenerator {
     else if (isRelationshipField(field)) {
       zodSchema = this.buildRelationshipSchema(field);
     }
-    // Array fields
+    // Repeater fields
     else if (isRepeaterField(field)) {
       zodSchema = this.buildArraySchema(field);
     }
@@ -593,7 +593,7 @@ export class ZodGenerator {
   }
 
   /**
-   * Builds Zod schema for array fields (nested fields).
+   * Builds Zod schema for repeater fields (nested fields).
    */
   private buildArraySchema(field: DataFieldConfig): string {
     // Get nested fields
