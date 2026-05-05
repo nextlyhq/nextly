@@ -5,8 +5,6 @@ description: HTTP REST API for browser code, mobile apps, and third-party integr
 
 The REST API exposes the same operations as the [Direct API](/docs/api-reference/direct-api) over HTTP. Every collection, single, user, role, permission, media file, email template, API key, and more is reachable through standard HTTP methods. Use it whenever your code does **not** run in a trusted Node.js context — browser apps, mobile clients, third-party services.
 
-> **Note:** Direct API methods are currently named `findGlobal` / `updateGlobal` / `findGlobals`. They will be renamed to `findSingle` / `updateSingle` / `findSingles` in a future release. The REST surface already uses `/api/singles/...` everywhere — only the in-process method names lag.
-
 ## Setup
 
 Create a single Next.js catch-all route handler that delegates to Nextly. The dynamic handlers cover collections, singles, auth, dashboard, schema, email, RBAC, media, API keys, and the rest of the surface:
