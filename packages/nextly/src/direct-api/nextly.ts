@@ -118,8 +118,8 @@ import type {
   DuplicateArgs,
   FindArgs,
   FindByIDArgs,
-  FindGlobalArgs,
-  FindGlobalsArgs,
+  FindSingleArgs,
+  FindSinglesArgs,
   ForgotPasswordArgs,
   ListResult,
   LoginArgs,
@@ -130,7 +130,7 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
-  UpdateGlobalArgs,
+  UpdateSingleArgs,
   UserContext,
   VerifyEmailArgs,
   CheckAccessArgs,
@@ -532,22 +532,22 @@ export class Nextly implements NextlyContext {
   }
 
   /** Get a Single (global) document by slug. */
-  findGlobal<TSlug extends SingleSlug>(
-    args: FindGlobalArgs<TSlug>
+  findSingle<TSlug extends SingleSlug>(
+    args: FindSingleArgs<TSlug>
   ): Promise<DataFromSingleSlug<TSlug>> {
-    return singlesNs.findGlobal(this, args);
+    return singlesNs.findSingle(this, args);
   }
 
   /** Update a Single (global) document by slug. */
-  updateGlobal<TSlug extends SingleSlug>(
-    args: UpdateGlobalArgs<TSlug>
+  updateSingle<TSlug extends SingleSlug>(
+    args: UpdateSingleArgs<TSlug>
   ): Promise<DataFromSingleSlug<TSlug>> {
-    return singlesNs.updateGlobal(this, args);
+    return singlesNs.updateSingle(this, args);
   }
 
   /** Fetch the content of every registered Single. */
-  findGlobals(args: FindGlobalsArgs = {}): Promise<SingleListResult> {
-    return singlesNs.findGlobals(this, args);
+  findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+    return singlesNs.findSingles(this, args);
   }
 
   /** Verify credentials and return a signed session token. */
@@ -718,11 +718,11 @@ export const nextly = {
   duplicate: <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
     getNextly().duplicate(args),
 
-  findGlobal: <TSlug extends SingleSlug>(args: FindGlobalArgs<TSlug>) =>
-    getNextly().findGlobal(args),
-  updateGlobal: <TSlug extends SingleSlug>(args: UpdateGlobalArgs<TSlug>) =>
-    getNextly().updateGlobal(args),
-  findGlobals: (args?: FindGlobalsArgs) => getNextly().findGlobals(args ?? {}),
+  findSingle: <TSlug extends SingleSlug>(args: FindSingleArgs<TSlug>) =>
+    getNextly().findSingle(args),
+  updateSingle: <TSlug extends SingleSlug>(args: UpdateSingleArgs<TSlug>) =>
+    getNextly().updateSingle(args),
+  findSingles: (args?: FindSinglesArgs) => getNextly().findSingles(args ?? {}),
 
   login: (args: LoginArgs) => getNextly().login(args),
   logout: () => getNextly().logout(),

@@ -48,11 +48,11 @@ export type {
 } from "./collections";
 
 export type {
-  FindGlobalArgs,
-  UpdateGlobalArgs,
+  FindSingleArgs,
+  UpdateSingleArgs,
   SingleDefinition,
-  FindGlobalsArgs,
-  GlobalEntry,
+  FindSinglesArgs,
+  SingleEntry,
   SingleListResult,
 } from "./singles";
 

@@ -744,7 +744,7 @@ export async function performSinglesReconcile(
       const tableExists = await drizzleAdapter.tableExists(single.tableName);
       if (tableExists) {
         // Register in the live resolver so the very next query in this
-        // boot (e.g. the user's nextly.seed.ts calling updateGlobal) can
+        // boot (e.g. the user's nextly.seed.ts calling updateSingle) can
         // resolve the table without waiting for a restart.
         registerSingleTableInResolver(
           drizzleAdapter,

@@ -53,8 +53,8 @@ import type {
   FindEmailTemplatesArgs,
   FindFormBySlugArgs,
   FindFormsArgs,
-  FindGlobalArgs,
-  FindGlobalsArgs,
+  FindSingleArgs,
+  FindSinglesArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
   FindPermissionByIDArgs,
@@ -93,7 +93,7 @@ import type {
   UpdateEmailLayoutArgs,
   UpdateEmailProviderArgs,
   UpdateEmailTemplateArgs,
-  UpdateGlobalArgs,
+  UpdateSingleArgs,
   UpdateMediaArgs,
   UpdateRoleArgs,
   UpdateUserArgs,
@@ -119,7 +119,7 @@ import type { User } from "../services/users/user-service";
  * **Direct API Methods:**
  * - `find()`, `findByID()`, `create()`, `update()`, `delete()`
  * - `count()`, `bulkDelete()`, `duplicate()`
- * - `findGlobal()`, `updateGlobal()`
+ * - `findSingle()`, `updateSingle()`
  *
  * **Service Accessors:**
  * - `collections`, `users`, `media`, `storage`, `adapter`
@@ -258,38 +258,38 @@ export interface Nextly {
   ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
 
   /**
-   * Get a Single/Global document.
+   * Get a Single document.
    *
    * @example
    * ```typescript
-   * const settings = await nextly.findGlobal({
+   * const settings = await nextly.findSingle({
    *   slug: 'site-settings',
    * });
    * ```
    */
-  findGlobal: <TSlug extends SingleSlug>(
-    args: FindGlobalArgs<TSlug>
+  findSingle: <TSlug extends SingleSlug>(
+    args: FindSingleArgs<TSlug>
   ) => Promise<DataFromSingleSlug<TSlug>>;
 
   /**
-   * Update a Single/Global document.
+   * Update a Single document.
    *
    * @example
    * ```typescript
-   * const updated = await nextly.updateGlobal({
+   * const updated = await nextly.updateSingle({
    *   slug: 'site-settings',
    *   data: { siteName: 'My Site' },
    * });
    * ```
    */
-  updateGlobal: <TSlug extends SingleSlug>(
-    args: UpdateGlobalArgs<TSlug>
+  updateSingle: <TSlug extends SingleSlug>(
+    args: UpdateSingleArgs<TSlug>
   ) => Promise<DataFromSingleSlug<TSlug>>;
 
   /**
-   * List all registered Single/Global type definitions.
+   * List all registered Single type definitions.
    */
-  findGlobals: (args?: FindGlobalsArgs) => Promise<SingleListResult>;
+  findSingles: (args?: FindSinglesArgs) => Promise<SingleListResult>;
 
   // ==========================================================================
   // Authentication Methods

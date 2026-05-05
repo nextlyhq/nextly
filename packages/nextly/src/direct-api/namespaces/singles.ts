@@ -1,8 +1,8 @@
 /**
  * Direct API Singles Namespace
  *
- * Top-level single (global) entry operations — `findGlobal`, `updateGlobal`,
- * and `findGlobals` for listing the content of every registered single type.
+ * Top-level single entry operations — `findSingle`, `updateSingle`,
+ * and `findSingles` for listing the content of every registered single type.
  *
  * @packageDocumentation
  */
@@ -10,22 +10,22 @@
 import { transformRichTextFields } from "../../lib/field-transform";
 import type {
   DataFromSingleSlug,
-  FindGlobalArgs,
-  FindGlobalsArgs,
+  FindSingleArgs,
+  FindSinglesArgs,
   SingleListResult,
   SingleSlug,
-  UpdateGlobalArgs,
+  UpdateSingleArgs,
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
 import { createErrorFromSingleResult, mergeConfig } from "./helpers";
 
 /**
- * Retrieve the content of a single (global) by slug.
+ * Retrieve the content of a single by slug.
  */
-export async function findGlobal<TSlug extends SingleSlug>(
+export async function findSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
-  args: FindGlobalArgs<TSlug>
+  args: FindSingleArgs<TSlug>
 ): Promise<DataFromSingleSlug<TSlug>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
@@ -64,11 +64,11 @@ export async function findGlobal<TSlug extends SingleSlug>(
 }
 
 /**
- * Update the content of a single (global) by slug.
+ * Update the content of a single by slug.
  */
-export async function updateGlobal<TSlug extends SingleSlug>(
+export async function updateSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
-  args: UpdateGlobalArgs<TSlug>
+  args: UpdateSingleArgs<TSlug>
 ): Promise<DataFromSingleSlug<TSlug>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
@@ -91,9 +91,9 @@ export async function updateGlobal<TSlug extends SingleSlug>(
 /**
  * Fetch the actual content for every registered single type.
  */
-export async function findGlobals(
+export async function findSingles(
   ctx: NextlyContext,
-  args: FindGlobalsArgs = {}
+  args: FindSinglesArgs = {}
 ): Promise<SingleListResult> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
