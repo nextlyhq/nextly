@@ -300,6 +300,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         userService: getService("userService"),
         mediaService: getService("mediaService"),
         storage: getService("mediaStorage"),
+        meta: getService("metaService"),
 
         // Direct adapter access
         adapter: getService("adapter"),
@@ -405,6 +406,7 @@ export async function getCachedNextly(): Promise<Nextly> {
       userService: getService("userService"),
       mediaService: getService("mediaService"),
       storage: getService("mediaStorage"),
+      meta: getService("metaService"),
       adapter: getService("adapter"),
       shutdown: async () => {
         await shutdownServices();

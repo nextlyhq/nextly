@@ -521,6 +521,29 @@ export interface Nextly {
   userService: ServiceMap["userService"];
 
   /**
+   * Runtime key/value flags accessor.
+   *
+   * Backed by the `nextly_meta` table — a small KV store for runtime
+   * state that doesn't belong in collection schemas. First consumers
+   * are the dashboard `SeedDemoContentCard` flags
+   * (`seed.completedAt`, `seed.skippedAt`).
+   *
+   * Values are JSON round-tripped: callers pass and receive JS values;
+   * the service handles serialisation per-dialect.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly({ config });
+   *
+   * await nextly.meta.set("seed.completedAt", new Date().toISOString());
+   * const ts = await nextly.meta.get<string>("seed.completedAt");
+   * await nextly.meta.delete("seed.skippedAt");
+   * const all = await nextly.meta.getAll();
+   * ```
+   */
+  meta: ServiceMap["metaService"];
+
+  /**
    * Media API namespace - operations for media files and folders.
    *
    * Provides direct database operations for media management without HTTP overhead.

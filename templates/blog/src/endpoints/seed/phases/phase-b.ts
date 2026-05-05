@@ -14,7 +14,7 @@
  * seed against an already-permissioned project is a cheap no-op.
  */
 
-import type { Nextly } from "@revnixhq/nextly";
+import { container, type Nextly } from "@revnixhq/nextly";
 
 export interface PhaseBInput {
   collections: string[];
@@ -50,10 +50,11 @@ export async function runPhaseB(
     return result;
   }
 
-  const container = (
-    nextly as unknown as { container: { get: <T>(name: string) => T } }
-  ).container;
-
+  // `container` is exported from `@revnixhq/nextly` for templates that
+  // need to access internal services not on the public Nextly instance.
+  // `nextly` is required as a parameter so callers prove they ran
+  // getNextly({config}) first (services are populated by then).
+  void nextly;
   const permSeeder = container.get<PermissionSeedServiceLike>(
     "permissionSeedService"
   );

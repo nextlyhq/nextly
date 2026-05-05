@@ -45,6 +45,7 @@ import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import type { MetaService } from "../domains/meta";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ApiKeyService } from "../services/auth/api-key-service";
 import type { PermissionSeedService } from "../services/auth/permission-seed-service";
@@ -201,6 +202,7 @@ export interface ServiceMap {
   generalSettingsService: GeneralSettingsService;
   activityLogService: ActivityLogService;
   dashboardService: DashboardService;
+  metaService: MetaService;
 }
 
 // ============================================================
