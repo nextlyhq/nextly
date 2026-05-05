@@ -41,16 +41,18 @@ export function PostShareBar({ title, url }: PostShareBarProps) {
 
   return (
     <div
-      className="flex items-center gap-2"
+      className="flex items-center gap-3"
       style={{ color: "var(--color-fg-muted)" }}
     >
-      <span className="mr-1 text-xs uppercase tracking-widest">Share</span>
+      <span className="mr-1 text-[10px] font-bold uppercase tracking-[0.2em]">
+        Share
+      </span>
       <a
         href={twitterUrl}
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Share on Twitter"
-        className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
+        className="antigravity-press flex h-9 w-9 items-center justify-center rounded-full border transition-all hover:bg-[color:var(--color-fg)] hover:text-[color:var(--color-bg)]"
         style={{ borderColor: "var(--color-border)" }}
       >
         <XIcon />
@@ -60,7 +62,7 @@ export function PostShareBar({ title, url }: PostShareBarProps) {
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Share on LinkedIn"
-        className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
+        className="antigravity-press flex h-9 w-9 items-center justify-center rounded-full border transition-all hover:bg-[color:var(--color-fg)] hover:text-[color:var(--color-bg)]"
         style={{ borderColor: "var(--color-border)" }}
       >
         <LinkedInIcon />
@@ -69,11 +71,15 @@ export function PostShareBar({ title, url }: PostShareBarProps) {
         type="button"
         onClick={copyLink}
         aria-label={copied ? "Link copied" : "Copy link"}
-        className="flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-md border px-2 transition-colors"
+        className="antigravity-press flex h-9 min-w-9 items-center justify-center gap-2 rounded-full border px-3 transition-all hover:border-[color:var(--color-fg-muted)]"
         style={{ borderColor: "var(--color-border)" }}
       >
         {copied ? <CheckIcon /> : <LinkIcon />}
-        {copied && <span className="text-xs">Copied</span>}
+        {copied && (
+          <span className="text-[10px] font-bold uppercase tracking-widest">
+            Copied
+          </span>
+        )}
       </button>
     </div>
   );

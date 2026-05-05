@@ -28,12 +28,12 @@ export const dynamic = "force-static";
 
 export default function SearchPage() {
   return (
-    <>
+    <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">
       <ListingHeader
         title="Search"
         description="Find posts by keyword. Results update as you type."
       />
       <SearchInput />
-    </>
+    </div>
   );
 }

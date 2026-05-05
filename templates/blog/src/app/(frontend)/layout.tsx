@@ -14,16 +14,36 @@ import { Footer } from "@/components/Footer";
 import { Header } from "@/components/Header";
 import { getNavigation } from "@/lib/queries/navigation";
 import { getSiteSettings } from "@/lib/queries/site-settings";
+import { getAllCategories } from "@/lib/queries/categories";
 
 export default async function BlogFrontendLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [settings, navigation] = await Promise.all([
+  const [settings, navigation, categories] = await Promise.all([
     getSiteSettings(),
     getNavigation(),
+    getAllCategories(),
   ]);
+
+  // Remove the static 'Tags' and 'Categories' links
+  const filteredLinks = navigation.headerLinks.filter(
+    link =>
+      link.label.toLowerCase() !== "tags" &&
+      link.label.toLowerCase() !== "categories"
+  );
+
+  // Map actual categories into NavLink format
+  const categoryLinks = categories.map(cat => ({
+    label: cat.name,
+    href: `/categories/${cat.slug}`,
+  }));
+
+  const enhancedNavigation = {
+    ...navigation,
+    headerLinks: [...filteredLinks, ...categoryLinks],
+  };
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -43,17 +63,17 @@ export default async function BlogFrontendLayout({
       <Header
         siteName={settings.siteName}
         logo={settings.logo}
-        navigation={navigation}
+        navigation={enhancedNavigation}
       />
-      <main id="main-content" className="flex-1">
-        <div className="mx-auto max-w-5xl px-6 py-12">{children}</div>
+      <main id="main-content" className="flex-1 w-full">
+        {children}
       </main>
       <Footer
         siteName={settings.siteName}
         tagline={settings.tagline}
         logo={settings.logo}
         social={settings.social}
-        navigation={navigation}
+        navigation={enhancedNavigation}
       />
     </div>
   );

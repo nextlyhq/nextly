@@ -37,7 +37,7 @@ export default async function BlogPage({
   const { items, meta } = await getPosts({ page: currentPage, limit: 9 });
 
   return (
-    <>
+    <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">
       <ListingHeader
         title="All posts"
         description="Every published post, newest first."
@@ -58,6 +58,6 @@ export default async function BlogPage({
           basePath="/blog"
         />
       </div>
-    </>
+    </div>
   );
 }

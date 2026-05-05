@@ -25,12 +25,12 @@ export function TagCloud({ tags }: TagCloudProps) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+    <div className="flex flex-wrap items-center gap-3 sm:gap-4">
       {tags.map(({ item, postCount }) => (
         <Link
           key={item.slug}
           href={`/tags/${item.slug}`}
-          className={`inline-flex items-center gap-1.5 rounded-full border transition-colors hover:opacity-80 ${sizeClass(
+          className={`inline-flex items-center gap-2 rounded-sm border transition-all hover:border-[color:var(--color-fg-muted)] ${sizeClass(
             postCount
           )}`}
           style={{
@@ -39,10 +39,12 @@ export function TagCloud({ tags }: TagCloudProps) {
             color: "var(--color-fg)",
           }}
         >
-          {item.name}
+          <span className="font-bold uppercase tracking-widest">
+            {item.name}
+          </span>
           <span
-            className="text-xs font-normal"
-            style={{ color: "var(--color-fg-muted)" }}
+            className="text-[10px] opacity-40"
+            style={{ color: "var(--color-fg)" }}
           >
             {postCount}
           </span>

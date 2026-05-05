@@ -54,10 +54,10 @@ export function ThemeToggle() {
 
   return (
     <fieldset
-      className="inline-flex items-center gap-0.5 rounded-full border p-0.5"
+      className="inline-flex items-center gap-0.5 rounded-sm border p-0.5"
       style={{
         borderColor: "var(--color-border)",
-        background: "var(--color-bg-surface)",
+        background: "var(--color-bg)",
       }}
       aria-label="Theme"
     >
@@ -86,12 +86,15 @@ export function ThemeToggle() {
               className="peer sr-only"
             />
             <span
-              className="flex h-7 w-7 items-center justify-center rounded-full transition-colors peer-checked:text-[color:var(--color-accent-foreground)]"
+              className="flex h-7 w-7 items-center justify-center rounded-sm transition-all"
               style={{
-                background: selected ? "var(--color-fg)" : "transparent",
-                color: selected
+                background: selected
                   ? "var(--color-bg-surface)"
-                  : "var(--color-fg-muted)",
+                  : "transparent",
+                color: selected ? "var(--color-fg)" : "var(--color-fg-muted)",
+                border: selected
+                  ? "1px solid var(--color-border)"
+                  : "1px solid transparent",
               }}
             >
               <Icon />
@@ -135,8 +138,9 @@ function SystemIcon() {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" />
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
     </svg>
   );
 }

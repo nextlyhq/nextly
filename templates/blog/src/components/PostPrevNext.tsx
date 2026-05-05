@@ -23,25 +23,25 @@ export function PostPrevNext({ previous, next }: PostPrevNextProps) {
   return (
     <nav
       aria-label="Post navigation"
-      className="mt-12 grid gap-4 sm:grid-cols-2"
+      className="mt-16 grid gap-6 sm:grid-cols-2"
     >
       {previous ? (
         <Link
           href={`/blog/${previous.slug}`}
-          className="group flex flex-col gap-1 rounded-xl border p-4 transition-colors hover:opacity-90"
+          className="antigravity-press group flex flex-col gap-3 rounded-lg border p-6 transition-all hover:border-[color:var(--color-fg-muted)]"
           style={{
             borderColor: "var(--color-border)",
             background: "var(--color-bg-surface)",
           }}
         >
           <span
-            className="text-xs font-semibold uppercase tracking-widest"
+            className="text-[10px] font-bold uppercase tracking-[0.2em]"
             style={{ color: "var(--color-fg-muted)" }}
           >
             ← Previous
           </span>
           <span
-            className="text-sm font-medium leading-snug"
+            className="text-base font-bold leading-tight tracking-tight"
             style={{ color: "var(--color-fg)" }}
           >
             {previous.title}
@@ -54,20 +54,20 @@ export function PostPrevNext({ previous, next }: PostPrevNextProps) {
       {next ? (
         <Link
           href={`/blog/${next.slug}`}
-          className="group flex flex-col items-end gap-1 rounded-xl border p-4 text-right transition-colors hover:opacity-90"
+          className="antigravity-press group flex flex-col items-end gap-3 rounded-lg border p-6 text-right transition-all hover:border-[color:var(--color-fg-muted)]"
           style={{
             borderColor: "var(--color-border)",
             background: "var(--color-bg-surface)",
           }}
         >
           <span
-            className="text-xs font-semibold uppercase tracking-widest"
+            className="text-[10px] font-bold uppercase tracking-[0.2em]"
             style={{ color: "var(--color-fg-muted)" }}
           >
             Next →
           </span>
           <span
-            className="text-sm font-medium leading-snug"
+            className="text-base font-bold leading-tight tracking-tight"
             style={{ color: "var(--color-fg)" }}
           >
             {next.title}

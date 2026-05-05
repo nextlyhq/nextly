@@ -36,21 +36,33 @@ export function AuthorCard({ author, variant = "compact" }: AuthorCardProps) {
           <Image
             src={avatarUrl}
             alt={name}
-            width={96}
-            height={96}
+            width={120}
+            height={120}
             unoptimized
-            className="mb-4 rounded-full object-cover"
+            className="mb-6 rounded-full border-4 border-[color:var(--color-bg-surface)] object-cover shadow-sm"
           />
         ) : (
-          <div className="mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-neutral-200 text-2xl font-semibold text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
+          <div
+            className="mb-6 flex h-24 w-24 items-center justify-center rounded-full text-2xl font-bold"
+            style={{
+              background: "var(--color-tag-bg)",
+              color: "var(--color-tag-fg)",
+            }}
+          >
             {name.charAt(0)}
           </div>
         )}
-        <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
+        <h1
+          className="text-3xl font-bold tracking-tightest-premium"
+          style={{ color: "var(--color-fg)" }}
+        >
           {name}
         </h1>
         {bio && (
-          <p className="mt-2 max-w-md text-neutral-600 dark:text-neutral-400">
+          <p
+            className="mt-4 max-w-md text-base leading-relaxed"
+            style={{ color: "var(--color-fg-muted)" }}
+          >
             {bio}
           </p>
         )}
@@ -62,31 +74,53 @@ export function AuthorCard({ author, variant = "compact" }: AuthorCardProps) {
   return (
     <Link
       href={`/authors/${slug}`}
-      className="flex items-center gap-3 rounded-lg border border-neutral-200 p-4 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900"
+      className="group flex items-center gap-4 rounded-lg border p-5 transition-all hover:border-[color:var(--color-fg-muted)]"
+      style={{
+        borderColor: "var(--color-border)",
+        background: "var(--color-bg-surface)",
+      }}
     >
       {avatarUrl ? (
         <Image
           src={avatarUrl}
           alt={name}
-          width={48}
-          height={48}
+          width={56}
+          height={56}
           unoptimized
-          className="rounded-full object-cover"
+          className="rounded-full object-cover grayscale transition-all group-hover:grayscale-0"
         />
       ) : (
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-neutral-200 text-lg font-semibold text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
+        <div
+          className="flex h-14 w-14 items-center justify-center rounded-full text-lg font-bold"
+          style={{
+            background: "var(--color-tag-bg)",
+            color: "var(--color-tag-fg)",
+          }}
+        >
           {name.charAt(0)}
         </div>
       )}
-      <div>
-        <p className="font-medium text-neutral-900 dark:text-neutral-100">
+      <div className="flex-1">
+        <p
+          className="font-bold tracking-tight"
+          style={{ color: "var(--color-fg)" }}
+        >
           {name}
         </p>
         {bio && (
-          <p className="line-clamp-1 text-sm text-neutral-500 dark:text-neutral-400">
+          <p
+            className="mt-1 line-clamp-1 text-sm leading-relaxed"
+            style={{ color: "var(--color-fg-muted)" }}
+          >
             {bio}
           </p>
         )}
+      </div>
+      <div
+        className="text-xs font-bold uppercase tracking-widest opacity-0 transition-opacity group-hover:opacity-100"
+        style={{ color: "var(--color-accent)" }}
+      >
+        Profile →
       </div>
     </Link>
   );

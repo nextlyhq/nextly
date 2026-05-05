@@ -15,7 +15,7 @@ export function CategoryBadge({ name, slug }: CategoryBadgeProps) {
   return (
     <Link
       href={`/categories/${slug}`}
-      className="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium transition-opacity hover:opacity-80"
+      className="inline-block rounded-sm px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest transition-opacity hover:opacity-70"
       style={{
         background: "var(--color-tag-bg)",
         color: "var(--color-tag-fg)",

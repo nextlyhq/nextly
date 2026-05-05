@@ -36,12 +36,12 @@ export default async function CategoriesIndexPage() {
   });
 
   return (
-    <>
+    <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">
       <ListingHeader
         title="Categories"
         description="Posts grouped by topic. Each category has a dedicated feed and archive page."
       />
       <CategoryCardGrid categories={sorted} />
-    </>
+    </div>
   );
 }

@@ -58,17 +58,15 @@ export default async function HomePage() {
   // sections don't incur database work.
   const [featured, latest, categories] = await Promise.all([
     homepage.showFeaturedPost ? getFeaturedPost() : Promise.resolve(null),
-    homepage.showLatestPosts
-      ? getLatestPosts(homepage.latestPostsCount ?? 3)
-      : Promise.resolve([]),
+    homepage.showLatestPosts ? getLatestPosts(10) : Promise.resolve([]),
     homepage.showCategoryStrip ? getAllCategories() : Promise.resolve([]),
   ]);
 
   // Filter featured out of "latest" to avoid duplicating it in both
   // sections (a common editorial mistake).
   const latestFiltered = featured
-    ? latest.filter(p => p.slug !== featured.slug)
-    : latest;
+    ? latest.filter(p => p.slug !== featured.slug).slice(0, 3)
+    : latest.slice(0, 3);
 
   const websiteSchema: Record<string, unknown> = {
     "@context": "https://schema.org",
@@ -92,27 +90,53 @@ export default async function HomePage() {
       )}
 
       {homepage.showLatestPosts && latestFiltered.length > 0 && (
-        <section className="mb-16">
-          <div className="mb-6 flex items-baseline justify-between">
-            <h2
-              className="text-xs font-semibold uppercase tracking-widest"
-              style={{ color: "var(--color-fg-muted)" }}
-            >
-              {homepage.latestSectionTitle}
-            </h2>
-            <Link
-              href="/blog"
-              className="text-sm font-medium transition-colors"
-              style={{ color: "var(--color-accent)" }}
-            >
-              View all →
-            </Link>
+        <section
+          className="w-full border-b"
+          style={{
+            borderColor: "var(--color-border)",
+            background: "var(--color-bg-surface)",
+          }}
+        >
+          <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">
+            <div className="mb-12 flex items-center justify-between">
+              <h2
+                className="text-3xl font-bold tracking-tight"
+                style={{ color: "var(--color-fg)" }}
+              >
+                {homepage.latestSectionTitle}
+              </h2>
+              <Link
+                href="/blog"
+                className="group flex items-center gap-2 text-xs font-bold uppercase tracking-widest transition-opacity hover:opacity-70"
+                style={{ color: "var(--color-accent)" }}
+              >
+                View all
+                <svg
+                  className="w-4 h-4 transition-transform group-hover:translate-x-1"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.5"
+                    d="M14 5l7 7m0 0l-7 7m7-7H3"
+                  ></path>
+                </svg>
+              </Link>
+            </div>
+            <PostGrid posts={latestFiltered} />
           </div>
-          <PostGrid posts={latestFiltered} />
         </section>
       )}
 
-      {homepage.showCategoryStrip && <CategoryStrip categories={categories} />}
+      {homepage.showCategoryStrip && (
+        <section className="mb-24">
+          <CategoryStrip categories={categories} />
+        </section>
+      )}
 
       {homepage.showNewsletterCta && (
         <NewsletterCta

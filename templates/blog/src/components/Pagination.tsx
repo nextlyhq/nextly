@@ -49,20 +49,32 @@ export function Pagination({
   return (
     <nav
       aria-label="Pagination"
-      className="flex flex-wrap items-center justify-center gap-1"
+      className="flex flex-wrap items-center justify-center gap-2"
     >
       {/* Previous button */}
       {currentPage > 1 ? (
         <Link
           href={getPageUrl(currentPage - 1)}
-          className="rounded-md px-3 py-2 text-sm font-medium text-neutral-600 transition-colors hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+          className="antigravity-press rounded-sm border px-4 py-2 text-[10px] font-bold uppercase tracking-widest transition-all hover:border-[color:var(--color-fg-muted)]"
+          style={{
+            borderColor: "var(--color-border)",
+            background: "var(--color-bg-surface)",
+            color: "var(--color-fg)",
+          }}
           aria-label="Previous page"
         >
-          Previous
+          Prev
         </Link>
       ) : (
-        <span className="rounded-md px-3 py-2 text-sm font-medium text-neutral-300 dark:text-neutral-700">
-          Previous
+        <span
+          className="rounded-sm border px-4 py-2 text-[10px] font-bold uppercase tracking-widest opacity-30"
+          style={{
+            borderColor: "var(--color-border)",
+            background: "var(--color-bg-surface)",
+            color: "var(--color-fg)",
+          }}
+        >
+          Prev
         </span>
       )}
 
@@ -71,11 +83,23 @@ export function Pagination({
         <Link
           key={page}
           href={getPageUrl(page)}
-          className={`min-w-[2.25rem] rounded-md px-3 py-2 text-center text-sm font-medium transition-colors ${
+          className={`antigravity-press flex h-9 w-9 items-center justify-center rounded-sm border text-[10px] font-bold uppercase transition-all ${
             page === currentPage
-              ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-              : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+              ? "shadow-sm"
+              : "hover:border-[color:var(--color-fg-muted)]"
           }`}
+          style={{
+            borderColor:
+              page === currentPage ? "var(--color-fg)" : "var(--color-border)",
+            background:
+              page === currentPage
+                ? "var(--color-fg)"
+                : "var(--color-bg-surface)",
+            color:
+              page === currentPage
+                ? "var(--color-bg-surface)"
+                : "var(--color-fg)",
+          }}
           aria-current={page === currentPage ? "page" : undefined}
           aria-label={`Page ${page}`}
         >
@@ -87,13 +111,25 @@ export function Pagination({
       {currentPage < totalPages ? (
         <Link
           href={getPageUrl(currentPage + 1)}
-          className="rounded-md px-3 py-2 text-sm font-medium text-neutral-600 transition-colors hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+          className="antigravity-press rounded-sm border px-4 py-2 text-[10px] font-bold uppercase tracking-widest transition-all hover:border-[color:var(--color-fg-muted)]"
+          style={{
+            borderColor: "var(--color-border)",
+            background: "var(--color-bg-surface)",
+            color: "var(--color-fg)",
+          }}
           aria-label="Next page"
         >
           Next
         </Link>
       ) : (
-        <span className="rounded-md px-3 py-2 text-sm font-medium text-neutral-300 dark:text-neutral-700">
+        <span
+          className="rounded-sm border px-4 py-2 text-[10px] font-bold uppercase tracking-widest opacity-30"
+          style={{
+            borderColor: "var(--color-border)",
+            background: "var(--color-bg-surface)",
+            color: "var(--color-fg)",
+          }}
+        >
           Next
         </span>
       )}

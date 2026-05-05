@@ -57,19 +57,19 @@ export function Footer({
 
   return (
     <footer className="border-t" style={{ borderColor: "var(--color-border)" }}>
-      <div className="mx-auto max-w-5xl px-6 py-12">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1.3fr]">
+      <div className="mx-auto max-w-7xl px-6 py-16 md:py-24">
+        <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1.5fr]">
           {/* Col 1: About */}
-          <div>
+          <div className="flex flex-col items-start">
             <Logo siteName={siteName} logo={logo} />
             <p
-              className="mt-3 max-w-xs text-sm leading-relaxed"
+              className="mt-6 max-w-xs text-sm leading-relaxed"
               style={{ color: "var(--color-fg-muted)" }}
             >
               {tagline}
             </p>
             {socialLinks.length > 0 && (
-              <div className="mt-4 flex gap-2">
+              <div className="mt-8 flex gap-3">
                 {socialLinks.map(link => (
                   <a
                     key={link.label}
@@ -77,7 +77,7 @@ export function Footer({
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={link.label}
-                    className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
+                    className="antigravity-press flex h-9 w-9 items-center justify-center rounded-full border transition-all hover:bg-[color:var(--color-fg)] hover:text-[color:var(--color-bg)]"
                     style={{
                       borderColor: "var(--color-border)",
                       color: "var(--color-fg-muted)",
@@ -93,17 +93,17 @@ export function Footer({
           {/* Col 2: Read (from Navigation single) */}
           <div>
             <h3
-              className="text-sm font-semibold tracking-tight"
+              className="text-sm font-bold tracking-tight"
               style={{ color: "var(--color-fg)" }}
             >
               Read
             </h3>
-            <ul className="mt-3 space-y-2">
+            <ul className="mt-6 space-y-3">
               {navigation.footerReadLinks.map(link => (
                 <li key={link.href}>
                   <Link
                     href={link.href}
-                    className="text-sm transition-colors"
+                    className="text-sm transition-opacity hover:opacity-70"
                     style={{ color: "var(--color-fg-muted)" }}
                   >
                     {link.label}
@@ -116,16 +116,16 @@ export function Footer({
           {/* Col 3: Subscribe */}
           <div>
             <h3
-              className="text-sm font-semibold tracking-tight"
+              className="text-sm font-bold tracking-tight"
               style={{ color: "var(--color-fg)" }}
             >
               Subscribe
             </h3>
             <p
-              className="mt-3 mb-3 text-sm"
+              className="mt-6 mb-6 text-sm leading-relaxed"
               style={{ color: "var(--color-fg-muted)" }}
             >
-              Get new posts by email. No spam.
+              Join our newsletter for weekly updates on tech and design.
             </p>
             <NewsletterCta variant="footer" />
           </div>

@@ -20,19 +20,19 @@ export function CategoryCardGrid({ categories }: CategoryCardGridProps) {
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <div className="grid gap-6 sm:grid-cols-2">
       {categories.map(({ item, postCount }) => (
         <Link
           key={item.slug}
           href={`/categories/${item.slug}`}
-          className="group flex flex-col gap-3 rounded-xl border p-5 transition-colors hover:opacity-95"
+          className="group flex flex-col gap-4 rounded-xl border p-8 transition-all hover:border-[color:var(--color-fg-muted)]"
           style={{
             borderColor: "var(--color-border)",
             background: "var(--color-bg-surface)",
           }}
         >
           <h3
-            className="text-xl font-semibold tracking-tight"
+            className="text-2xl font-bold tracking-tightest-premium"
             style={{ color: "var(--color-fg)" }}
           >
             {item.name}
@@ -46,13 +46,21 @@ export function CategoryCardGrid({ categories }: CategoryCardGridProps) {
             </p>
           )}
           <div
-            className="mt-auto border-t pt-3 text-xs"
+            className="mt-auto flex items-center justify-between border-t pt-6 text-[10px] font-bold uppercase tracking-widest"
             style={{
               borderColor: "var(--color-border)",
               color: "var(--color-fg-muted)",
             }}
           >
-            {postCount} {postCount === 1 ? "post" : "posts"}
+            <span>
+              {postCount} {postCount === 1 ? "post" : "posts"}
+            </span>
+            <span
+              className="opacity-0 transition-opacity group-hover:opacity-100"
+              style={{ color: "var(--color-accent)" }}
+            >
+              Explore →
+            </span>
           </div>
         </Link>
       ))}

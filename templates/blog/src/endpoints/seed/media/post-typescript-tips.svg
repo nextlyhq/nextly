@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#06b6d4"/>
-  <text x="600" y="300" text-anchor="middle" fill="white" font-family="system-ui" font-size="48" font-weight="bold">TypeScript</text>
-  <text x="600" y="360" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="system-ui" font-size="24">Blog Template Demo</text>
-</svg>
