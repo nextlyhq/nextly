@@ -1,13 +1,17 @@
 ---
 title: Email
-description: Configure email providers (SMTP, Resend, SendLayer) for password resets, verification, and notifications.
+description: Configure email providers (Resend, SMTP, SendLayer), send programmatically via the Direct API, and test locally with Mailpit.
 ---
 
-Nextly's email system supports three providers -- SMTP, Resend, and SendLayer -- with template management, variable interpolation, and a shared layout (header/footer). Email is used for password resets, email verification, and welcome messages.
+Nextly's email system supports three providers -- Resend, SMTP, and SendLayer -- with database-managed templates, variable interpolation, and a shared header/footer layout. Email is used for password resets, email verification, welcome messages, and any custom notifications you send via the Direct API.
 
-## Provider Configuration
+For local development, Nextly ships a **Mailpit** profile in `docker-compose.yml` so you can test email flows without sending anything over the internet -- see [Local email testing with Mailpit](#local-email-testing-with-mailpit) below.
 
-Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (configured through the admin UI at Settings > Email Providers) always take priority over code-defined config.
+## Provider configuration
+
+Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (configured in the admin UI at **Settings -> Email Providers**) take priority over code-defined config.
+
+> **Note:** `email.providerConfig` is **required** when the `email` block is set. If you only want database-managed providers, you can omit the `email` block entirely.
 
 ### Resend
 
@@ -62,9 +66,9 @@ export default defineConfig({
 });
 ```
 
-### Conditional Provider Selection
+### Conditional provider selection
 
-The playground app shows a practical pattern -- use Resend when the API key is available, fall back to SMTP otherwise:
+The playground app shows a useful pattern -- prefer Resend when its API key is set, fall back to SMTP otherwise:
 
 ```typescript
 // nextly.config.ts
@@ -93,61 +97,61 @@ export default defineConfig({
 });
 ```
 
-## Email Config Options
+## Email config options
 
-| Option              | Type     | Default                  | Description                                    |
-|---------------------|----------|--------------------------|------------------------------------------------|
-| `providerConfig`    | object   | required                 | Provider-specific configuration                |
-| `from`              | `string` | required                 | Default sender address                         |
-| `baseUrl`           | `string` | `NEXTAUTH_URL` env var   | Base URL for links in emails                   |
-| `resetPasswordPath` | `string` | `'/admin/reset-password'`| Path for password reset links                  |
-| `verifyEmailPath`   | `string` | `'/admin/verify-email'`  | Path for email verification links              |
+| Option              | Type     | Default                      | Description                                |
+|---------------------|----------|------------------------------|--------------------------------------------|
+| `providerConfig`    | object   | required                     | Provider-specific configuration.           |
+| `from`              | `string` | required                     | Default sender address.                    |
+| `baseUrl`           | `string` | `NEXT_PUBLIC_APP_URL` env    | Base URL for links in emails.              |
+| `resetPasswordPath` | `string` | `'/admin/reset-password'`    | Path for password-reset links.             |
+| `verifyEmailPath`   | `string` | `'/admin/verify-email'`      | Path for email-verification links.         |
 
-## Provider Resolution Order
+## Provider resolution order
 
 When sending an email, Nextly resolves the provider in this order:
 
-1. **Specific provider ID** -- if the call passes a `providerId`
-2. **Database default provider** -- the provider marked as default in admin Settings
-3. **Code-first config** -- the `providerConfig` from `defineConfig()`
-4. **Error** -- if none configured
+1. **Specific provider ID** -- if the call passes a `providerId`.
+2. **Database default provider** -- the provider marked as default in admin Settings.
+3. **Code-first config** -- the `providerConfig` from `defineConfig()`.
+4. **Error** -- if none of the above resolve.
 
-This means you can set up a code-first provider for development and configure a production provider through the admin UI without changing code.
+This lets you wire a code-first provider for development and configure a production provider through the admin UI without changing code.
 
-## Built-In Email Templates
+## Built-in email templates
 
 Nextly automatically creates three email templates on first startup:
 
 | Template             | Slug                  | Purpose                              |
 |----------------------|-----------------------|--------------------------------------|
-| Welcome              | `welcome`             | Sent after user registration         |
-| Password Reset       | `password-reset`      | Contains the reset link              |
-| Email Verification   | `email-verification`  | Contains the verification link       |
+| Welcome              | `welcome`             | Sent after user registration.        |
+| Password Reset       | `password-reset`      | Contains the reset link.             |
+| Email Verification   | `email-verification`  | Contains the verification link.      |
 
-Templates are stored in the database and can be edited through the admin UI (Settings > Email Templates). They support `{{variable}}` placeholder syntax with HTML escaping.
+Templates are stored in the database and edited through the admin UI (**Settings -> Email Templates**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
-### Template Variables
+### Template variables
 
-Templates receive context-appropriate variables:
+Templates receive context-appropriate variables.
 
 **Password Reset:**
-- `{{resetLink}}` -- full password reset URL
-- `{{userName}}` -- user's name or email
-- `{{userEmail}}` -- user's email
-- `{{appName}}` -- application name
-- `{{expiresIn}}` -- token expiry duration
-- `{{year}}` -- current year
+- `{{resetLink}}` -- full password reset URL.
+- `{{userName}}` -- user's name or email.
+- `{{userEmail}}` -- user's email.
+- `{{appName}}` -- application name.
+- `{{expiresIn}}` -- token expiry duration.
+- `{{year}}` -- current year.
 
 **Email Verification:**
-- `{{verifyLink}}` -- full verification URL
-- `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{expiresIn}}`, `{{year}}`
+- `{{verifyLink}}` -- full verification URL.
+- `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{expiresIn}}`, `{{year}}`.
 
 **Welcome:**
-- `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{year}}`
+- `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{year}}`.
 
-### Shared Layout (Header/Footer)
+### Shared header / footer layout
 
-Templates can opt into a shared layout via the `useLayout` flag (enabled by default). The layout uses reserved slugs `_email-header` and `_email-footer`, and the final email is composed as:
+Templates can opt into a shared layout via the `useLayout` flag (enabled by default). The layout uses reserved slugs `_email-header` and `_email-footer`. The final email is composed as:
 
 ```
 header HTML + template body + footer HTML
@@ -155,7 +159,7 @@ header HTML + template body + footer HTML
 
 Layout templates also support `{{variable}}` interpolation, so common variables like `{{year}}` and `{{appName}}` work in headers and footers.
 
-## Code-First Template Overrides
+## Code-first template overrides
 
 You can override the built-in email templates in `defineConfig()` without touching the database:
 
@@ -187,59 +191,123 @@ export default defineConfig({
 });
 ```
 
-Template resolution order: **database template** (if active) > **code-first override** > **error**.
+Resolution order for templates: **database template** (if active) > **code-first override** > **error**.
 
-## Sending Emails Programmatically
+## Sending emails programmatically
 
-The `EmailService` provides methods for sending emails from your application code:
+The Direct API exposes `nextly.email.send()` and `nextly.email.sendWithTemplate()`.
 
-### Using Templates
+### Using a template
 
 ```typescript
-// Send via a named template
-await emailService.sendWithTemplate("password-reset", "user@example.com", {
-  resetLink: "https://example.com/admin/reset-password?token=abc123",
-  userName: "Jane",
-  appName: "My App",
+import { nextly } from "@/nextly";
+
+await nextly.email.sendWithTemplate({
+  template: "password-reset",
+  to: "user@example.com",
+  variables: {
+    resetLink: "https://example.com/admin/reset-password?token=abc123",
+    userName: "Jane",
+    appName: "My App",
+  },
 });
 ```
 
-### Sending Raw Emails
+### Sending raw
 
 ```typescript
-// Send without a template
-await emailService.send({
+await nextly.email.send({
   to: "user@example.com",
   subject: "Your order has shipped",
   html: "<p>Your order #1234 is on its way!</p>",
 });
 ```
 
-### Auth Flow Convenience Methods
+Both calls return `{ success: boolean; messageId?: string }`.
 
-The `AuthService` handles email sending for auth flows automatically when an `EmailService` is configured:
+### Auth flow auto-sends
 
-- `generatePasswordResetToken(email)` -- generates a token and sends the reset email
-- `generateEmailVerificationToken(email)` -- generates a token and sends the verification email
-- `sendWelcomeEmail(to, user)` -- sends the welcome template
+The `AuthService` handles email sending for auth flows automatically when an email service is configured:
 
-If no email service is configured, tokens are returned in the API response as a development fallback (with a console warning).
+- `generatePasswordResetToken(email)` -- generates a token and sends the reset email.
+- `generateEmailVerificationToken(email)` -- generates a token and sends the verification email.
+- `sendWelcomeEmail(to, user)` -- sends the welcome template.
 
-## Environment Variables
+If no email service is configured, tokens are returned in the API response as a development-only fallback (with a console warning). In production, configure a real provider so password resets and email verification work.
+
+## Local email testing with Mailpit
+
+For local development, the Nextly repo's `docker-compose.yml` ships a `with-mailpit` profile that runs [Mailpit](https://github.com/axllent/mailpit) -- an SMTP server and web UI for catching outgoing email locally.
+
+### Start Mailpit
+
+```bash
+docker compose --profile with-mailpit up -d mailpit
+```
+
+This starts the `axllent/mailpit:latest` container with:
+
+- **SMTP** on host port `1025`.
+- **Web UI** on host port `8025`.
+- No authentication (Mailpit is dev-only).
+
+### Configure Nextly to use it
+
+Point your SMTP env vars at the local Mailpit instance. Empty `SMTP_USER` / `SMTP_PASS` is fine -- Mailpit accepts any credentials.
+
+```bash
+# .env.local
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=dev@nextly.local
+```
+
+Then either let `getStorageFromEnv()`-style auto-detection pick up SMTP, or wire it explicitly in `nextly.config.ts`:
+
+```typescript
+// nextly.config.ts
+import { defineConfig } from "@nextlyhq/nextly/config";
+
+export default defineConfig({
+  email: {
+    providerConfig: {
+      provider: "smtp",
+      host: process.env.SMTP_HOST!,
+      port: Number(process.env.SMTP_PORT) || 1025,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER || "",
+        pass: process.env.SMTP_PASS || "",
+      },
+    },
+    from: process.env.SMTP_FROM || "dev@nextly.local",
+  },
+});
+```
+
+### Inspect captured email
+
+Open `http://localhost:8025` in your browser. Every email Nextly sends locally lands in the Mailpit inbox -- password resets, verification links, welcome emails, and anything you fire via `nextly.email.send()`. The web UI lets you preview HTML, view raw source, and inspect headers.
+
+The container is dev-only and gated behind a Compose profile, so it does **not** auto-start with `docker compose up`.
+
+## Environment variables
 
 | Variable           | Provider   | Description                      |
 |--------------------|------------|----------------------------------|
-| `RESEND_API_KEY`   | Resend     | API key from Resend dashboard    |
-| `SENDLAYER_API_KEY`| SendLayer  | API key (Bearer token)           |
-| `SMTP_HOST`        | SMTP       | Server hostname                  |
-| `SMTP_PORT`        | SMTP       | Server port (587 for TLS)        |
-| `SMTP_USER`        | SMTP       | Authentication username          |
-| `SMTP_PASS`        | SMTP       | Authentication password          |
-| `SMTP_FROM`        | Any        | Default sender address           |
+| `RESEND_API_KEY`   | Resend     | API key from the Resend dashboard. |
+| `SENDLAYER_API_KEY`| SendLayer  | API key (Bearer token).          |
+| `SMTP_HOST`        | SMTP       | Server hostname.                 |
+| `SMTP_PORT`        | SMTP       | Server port (587 for TLS, 1025 for Mailpit). |
+| `SMTP_USER`        | SMTP       | Authentication username (empty for Mailpit). |
+| `SMTP_PASS`        | SMTP       | Authentication password (empty for Mailpit). |
+| `SMTP_FROM`        | Any        | Default sender address.          |
 
-## Next Steps
+## Next steps
 
-- [Authentication](/docs/guides/authentication) -- understand how auth flows trigger emails
-- [Deployment](/docs/guides/deployment) -- production email provider setup
-- [Environment Variables](/docs/configuration/environment) -- SMTP and email environment variables
-- [Configuration Reference](/docs/configuration/nextly-config) -- full `defineConfig()` email options
+- [Authentication](/docs/guides/authentication) -- understand how the auth flows trigger emails.
+- [Deployment](/docs/guides/deployment) -- production email-provider setup.
+- [Environment variables](/docs/configuration/environment) -- full env-var reference.
+- [Configuration reference](/docs/configuration/nextly-config) -- full `defineConfig()` email options.

@@ -1,6 +1,6 @@
 ---
 title: Production migrations
-description: Ship database schema changes to production safely with the Nextly migration CLI. Vercel + GitHub Actions, Vercel build step, and other-platform patterns.
+description: Ship database schema changes to production safely with the Nextly migration CLI. Forward-only model, GitHub Actions, Vercel build step, and other-platform patterns.
 ---
 
 Nextly's schema-evolution model splits responsibilities cleanly between development and production:
@@ -14,13 +14,22 @@ Nextly's schema-evolution model splits responsibilities cleanly between developm
 
 | Command | Purpose |
 |---|---|
-| `nextly migrate:create --name=<slug>` | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git. |
+| `nextly migrate:create [name]` | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git. |
 | `nextly migrate:check` | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database. |
 | `nextly migrate` | Applies pending `.sql` files to the target database. Run from CI or your laptop. |
-| `nextly migrate:status` | Shows applied / pending / failed migrations + their checksums and durations. |
+| `nextly migrate:status` | Shows applied / pending / failed migrations with their checksums and durations. |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 
+Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
+
 There is no `migrate:rollback` or `migrate:down`. Forward-only is by design: rollback for live production data is intrinsically lossy. To undo an applied change, write a NEW corrective migration that reverses it.
+
+### Per-command flags
+
+- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations).
+- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--non-interactive`, `--accept-renames`.
+- `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
+- `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 
 ---
 
@@ -75,11 +84,11 @@ jobs:
 
 If step 2 or 3 fails, step 4 doesn't run.
 
-**Setting `NEXTLY_APPLIED_BY`** is optional but recommended. It populates the `applied_by` column in `nextly_migrations` so post-incident debugging can answer "which CI job applied this row?"
+**Setting `NEXTLY_APPLIED_BY`** is optional but recommended. It populates the `applied_by` column in `nextly_migrations` so post-incident debugging can answer "which CI job applied this row?" When unset, the runtime falls back to `GITHUB_ACTOR` -> `USER` -> hostname.
 
 ## Pattern 2: Migration in Vercel's build step (simplest)
 
-Add `nextly migrate` to your `package.json`'s `build` script. Vercel runs it during every deploy.
+The default scaffold ships this `build` script in `package.json`:
 
 ```json
 {
@@ -89,12 +98,12 @@ Add `nextly migrate` to your `package.json`'s `build` script. Vercel runs it dur
 }
 ```
 
-Configure `DATABASE_URL` as a Vercel environment variable (available at build time).
+Configure `DATABASE_URL` as a Vercel environment variable (available at build time). Every Vercel deploy applies pending migrations before compiling Next.js.
 
 **Trade-offs:**
 
 - Zero CI setup. Push to GitHub, Vercel does everything.
-- Multiple Vercel deploys can race if you push twice in rapid succession (e.g. preview + production, or two PRs merging close together). Nextly's filename UNIQUE constraint catches double-insert; the second build will exit non-zero.
+- Multiple Vercel deploys can race if you push twice in rapid succession (e.g. preview + production, or two PRs merging close together). Nextly's `filename` UNIQUE constraint catches double-insert; the second build will exit non-zero.
 - The Vercel build machine needs prod DB access from its IP range (check with your DB host).
 
 ## Pattern 3: Manual deploys (laptop)
@@ -143,7 +152,7 @@ Specific examples:
 2. Reads the `nextly_migrations` table to see which `.sql` files have been applied.
 3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
-5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL; see [database support](../database/support.mdx) for MySQL caveats).
+5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL; see [database support](/docs/database/support) for MySQL caveats).
 6. Records each applied file in `nextly_migrations` with `applied_at`, `applied_by`, `duration_ms`, `sha256`.
 
 | Exit code | Meaning |
@@ -167,6 +176,14 @@ Runs five integrity checks; first failure exits non-zero with a specific code:
 
 Run it in your PR CI to catch mistakes before they reach production.
 
+## Environment variables
+
+| Variable                     | Where used | Purpose                                                                 |
+|------------------------------|------------|-------------------------------------------------------------------------|
+| `DATABASE_URL`               | All commands | Target database. Required (except SQLite, which falls back to `file:./data/nextly.db`). |
+| `NEXTLY_APPLIED_BY`          | `migrate`  | Recorded in `nextly_migrations.applied_by`. Falls back to `GITHUB_ACTOR` -> `USER` -> hostname. |
+| `NEXTLY_ACCEPT_DATA_LOSS=1`  | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations. |
+
 ## What you should never do
 
 - **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with an ESLint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
@@ -182,4 +199,14 @@ If `nextly migrate` fails partway through:
 3. Either fix the SQL (revert + regenerate via `migrate:create`) or fix the underlying database state.
 4. Re-run `nextly migrate`. The retry path deletes the prior `failed` row inside the same transaction, so the unique-filename constraint doesn't block re-application.
 
-For MySQL specifically, partial state is possible because MySQL DDL auto-commits per statement. Manual cleanup may be needed; see [MySQL caveats](../database/support.mdx) for the recovery playbook.
+For MySQL specifically, partial state is possible because MySQL DDL auto-commits per statement. Manual cleanup may be needed; see [MySQL caveats](/docs/database/support) for the recovery playbook.
+
+## Recovery via corrective migrations
+
+The forward-only model means you don't roll back -- you write a new migration that fixes the previous one. Examples:
+
+- Accidentally added a `NOT NULL` column without a default and the deploy failed -> write a new migration that backfills the column then re-applies the constraint.
+- Renamed a column too aggressively and broke a downstream service -> write a new migration that adds the old column name back as a copy until consumers are updated.
+- Need to drop a table you added in a recent migration -> write a new migration with `DROP TABLE`.
+
+The audit trail in `nextly_migrations` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
