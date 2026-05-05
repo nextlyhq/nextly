@@ -1,26 +1,26 @@
 ---
 title: Branding
-description: Customize the admin panel logo, colors, favicon, and Builder visibility.
+description: Customize the admin panel logo, favicon, brand colors, and Visual Schema Builder visibility.
 ---
 
-The `admin.branding` key in `nextly.config.ts` controls the visual identity of your admin panel. You can replace the default Nextly logo, set custom brand colors, add a favicon, and control whether the Schema Builder section is visible.
+The `admin.branding` key in `nextly.config.ts` controls the visual identity of the admin panel. You can replace the default logo, set a custom favicon, override the primary and accent brand colors, and toggle the Visual Schema Builder's visibility.
 
-## Full Example
+## Full example
 
 ```typescript title="nextly.config.ts"
-import { defineConfig } from '@nextlyhq/nextly';
+import { defineConfig } from "nextly";
 
 export default defineConfig({
   admin: {
     branding: {
-      logoUrl: '/logo.svg',
-      logoUrlLight: '/logo-light.svg',
-      logoUrlDark: '/logo-dark.svg',
-      logoText: 'My App',
-      favicon: '/favicon.ico',
+      logoUrl: "/logo.svg",
+      logoUrlLight: "/logo-light.svg",
+      logoUrlDark: "/logo-dark.svg",
+      logoText: "Acme CMS",
+      favicon: "/favicon.ico",
       colors: {
-        primary: '#6366f1',
-        accent: '#f59e0b',
+        primary: "#6366f1",
+        accent: "#f59e0b",
       },
       showBuilder: true,
     },
@@ -28,121 +28,125 @@ export default defineConfig({
 });
 ```
 
-## Logo Configuration
+## Logo
 
-You can provide a single logo or separate logos for light and dark modes.
+You can ship a single logo for both light and dark modes, or a separate logo per mode.
 
 | Option | Type | Description |
 |---|---|---|
-| `logoUrl` | `string` | Logo image URL. Used in both light and dark modes. Can be an absolute URL or a path from your Next.js `public` folder. |
+| `logoUrl` | `string` | Logo image URL used in both modes. Absolute URL or path under your Next.js `public/` directory. When set, takes priority over the per-mode variants. |
 | `logoUrlLight` | `string` | Logo for light mode. Used when `logoUrl` is not set. |
 | `logoUrlDark` | `string` | Logo for dark mode. Used when `logoUrl` is not set. |
-| `logoText` | `string` | Text shown in the sidebar header. Also used as the `alt` attribute on logo images. Defaults to `"Nextly"`. |
+| `logoText` | `string` | Text shown in the sidebar header. Doubles as the `alt` attribute on the logo image. Default: `"Nextly"`. |
 
-When `logoUrl` is set, it takes priority over the light/dark variants. When neither `logoUrl` nor the light/dark variants are set, the sidebar displays `logoText` as plain text.
+If neither `logoUrl` nor the per-mode variants are set, the sidebar falls back to a default Nextly mark and shows `logoText` next to it.
 
 ```typescript title="nextly.config.ts"
 // Single logo for both modes
 admin: {
   branding: {
-    logoUrl: '/logo.svg',
-    logoText: 'Acme CMS',
+    logoUrl: "/logo.svg",
+    logoText: "Acme CMS",
   },
-}
+},
 ```
 
 ```typescript title="nextly.config.ts"
-// Separate logos for light and dark modes
+// Separate logos per mode
 admin: {
   branding: {
-    logoUrlLight: '/logo-light.svg',
-    logoUrlDark: '/logo-dark.svg',
-    logoText: 'Acme CMS',
+    logoUrlLight: "/logo-light.svg",
+    logoUrlDark: "/logo-dark.svg",
+    logoText: "Acme CMS",
   },
-}
+},
 ```
 
-## Color Scheme
+The mode-aware variants are wired up in `packages/admin/src/components/shared/ThemeAwareLogo.tsx`, which switches between `logoUrlLight` and `logoUrlDark` based on the resolved theme. `logoUrl` always wins when set.
 
-The `colors` object accepts 6-digit hex values. Foreground colors for text and icons are calculated automatically to meet WCAG AA contrast requirements.
+## Favicon
 
-| Option | Type | Description |
-|---|---|---|
-| `primary` | `string` | Primary brand color (hex). Replaces the default blue. Used for buttons, active states, links, and field accents. |
-| `accent` | `string` | Accent brand color (hex). Replaces the default cyan. Used for secondary highlights. |
+`favicon` injects a custom favicon into every admin page (the `<link rel="icon">` element is replaced at runtime).
+
+```typescript title="nextly.config.ts"
+admin: {
+  branding: {
+    favicon: "/favicon.ico",
+  },
+},
+```
+
+The path can be absolute or a path under your Next.js `public/` folder. Common formats: `.ico`, `.png`, `.svg`. If `favicon` is unset, the admin uses a default inline SVG that follows the user's `prefers-color-scheme`. Browsers do not reliably react to JS-driven theme toggles for favicons, so the in-app dark/light switch will not change the favicon on the fly.
+
+## Brand colors
 
 ```typescript title="nextly.config.ts"
 admin: {
   branding: {
     colors: {
-      primary: '#6366f1',   // Indigo
-      accent: '#f59e0b',    // Amber
+      primary: "#6366f1",  // indigo
+      accent: "#f59e0b",   // amber
     },
   },
-}
+},
 ```
 
-The colors are converted to HSL on the server and injected as CSS custom properties into the admin panel, so the change is applied globally without any client-side JavaScript overhead.
+`branding.colors` accepts two 6-digit hex tokens that the admin actually consumes:
 
-## Favicon
+| Token | Type | Used for |
+|---|---|---|
+| `primary` | hex string | Primary brand color (replaces the default blue): buttons, active states, links, focus rings, field accents. |
+| `accent` | hex string | Accent brand color (replaces the default cyan): secondary highlights. |
 
-Set a custom favicon for the admin panel browser tab.
+Foreground colors for text and icons over each background are calculated automatically to meet WCAG AA contrast — you do not configure them. Both tokens are converted to HSL on the server and injected as CSS custom properties (`--primary`, `--primary-foreground`, `--accent`, `--accent-foreground`) so the change applies globally without runtime JS work. Invalid hex values are silently dropped; only `#rrggbb` is recognised.
 
-```typescript title="nextly.config.ts"
-admin: {
-  branding: {
-    favicon: '/favicon.ico',
-  },
-}
-```
+If your `nextly.config.ts` is imported by your app's `layout.tsx`, you can render the generated CSS yourself with `getBrandingCss(config.admin?.branding)` from `nextly/config` to avoid a flash of default colors before the admin's runtime fetch.
 
-The path can be absolute or relative to your Next.js `public` folder. Common formats: `.ico`, `.png`, `.svg`.
+## Schema Builder visibility
 
-## Schema Builder Visibility
-
-The `showBuilder` option controls whether the Schema Builder section (Collections Builder, Singles Builder, Components Builder) appears in the admin sidebar.
+`showBuilder` toggles the Builders top-level icon (Collections Builder, Singles Builder, Components Builder) in the admin sidebar.
 
 | Value | Behavior |
 |---|---|
-| `true` | Schema Builder is always visible |
-| `false` | Schema Builder is always hidden |
-| Not set (default) | Visible in development (`NODE_ENV !== "production"`), hidden in production |
+| `true` | Builders icon is always visible. |
+| `false` | Builders icon is always hidden. |
+| Not set (default) | Visible when `process.env.NODE_ENV !== "production"`, hidden in production. |
 
 ```typescript title="nextly.config.ts"
-// Always show the Schema Builder, even in production
+// Force visible, even in production
 admin: {
   branding: {
     showBuilder: true,
   },
-}
+},
 ```
 
 ```typescript title="nextly.config.ts"
-// Always hide the Schema Builder, even in development
+// Force hidden, even in development
 admin: {
   branding: {
     showBuilder: false,
   },
-}
+},
 ```
 
-This is evaluated at runtime via the `/api/admin-meta` response. Users still need the `manage-settings` permission to access Schema Builder pages regardless of this toggle.
+The toggle is evaluated server-side and shipped via the `/api/admin-meta` response, so changes take effect on the next admin reload. Hiding the Builders entry does not lock down the underlying routes — direct visits to `/admin/collections/builder` etc. still work for users with permission. Treat `showBuilder: false` as "hide from the sidebar in production", not as an authorization control.
 
-## Branding Options Reference
+## Branding options reference
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `logoUrl` | `string` | - | Logo image URL (both modes) |
-| `logoUrlLight` | `string` | - | Logo for light mode |
-| `logoUrlDark` | `string` | - | Logo for dark mode |
-| `logoText` | `string` | `"Nextly"` | Sidebar header text / logo alt text |
-| `favicon` | `string` | - | Custom favicon URL |
-| `colors.primary` | `string` | - | Primary brand color (6-digit hex) |
-| `colors.accent` | `string` | - | Accent brand color (6-digit hex) |
-| `showBuilder` | `boolean` | Per `NODE_ENV` | Toggle Schema Builder section visibility |
+| `logoUrl` | `string` | — | Logo image URL (used in both modes when set) |
+| `logoUrlLight` | `string` | — | Logo for light mode |
+| `logoUrlDark` | `string` | — | Logo for dark mode |
+| `logoText` | `string` | `"Nextly"` | Sidebar header text and logo `alt` attribute |
+| `favicon` | `string` | — | Custom favicon URL |
+| `colors.primary` | `string` (hex) | — | Primary brand color |
+| `colors.accent` | `string` (hex) | — | Accent brand color |
+| `showBuilder` | `boolean` | per `NODE_ENV` | Toggle the Builders sidebar entry |
 
-## Next Steps
+## Next steps
 
-- [Customization](/docs/admin/customization) -- Plugin overrides and sidebar configuration
-- [Admin Panel Overview](/docs/admin) -- Full navigation and feature guide
-- [Schema Builder](/docs/admin/builder) -- What the Schema Builder does and how to use it
+- [Customization](/docs/admin/customization) — sidebar config, plugin overrides, navigation permissions
+- [Admin Panel Overview](/docs/admin) — full navigation and feature guide
+- [Visual Schema Builder](/docs/admin/builder) — what it does and how to use it
