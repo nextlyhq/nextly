@@ -694,6 +694,14 @@ export const dynamicCollections = sqliteTable(
       .notNull()
       .default(true),
 
+    // Why: opt-in Draft/Published lifecycle. When true, the runtime injects a
+    // `status` system column on the data table and the admin Save Draft /
+    // Publish split lights up. Default false keeps existing collections
+    // untouched. Mirrors the declaration in
+    // schemas/dynamic-collections/sqlite.ts so the runtime and canonical
+    // descriptors agree on the columns the table actually has.
+    status: integer("status", { mode: "boolean" }).default(false).notNull(),
+
     // Admin UI configuration (JSON)
     admin: text("admin", { mode: "json" }).$type<{
       group?: string;

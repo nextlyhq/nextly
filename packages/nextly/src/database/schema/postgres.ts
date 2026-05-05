@@ -662,6 +662,14 @@ export const dynamicCollections = pgTable(
     fields: jsonb("fields").notNull().$type<any[]>(),
     timestamps: boolean("timestamps").notNull().default(true),
 
+    // Why: opt-in Draft/Published lifecycle. When true, the runtime injects a
+    // `status` system column on the data table and the admin Save Draft /
+    // Publish split lights up. Default false keeps existing collections
+    // untouched. Mirrors the declaration in
+    // schemas/dynamic-collections/postgres.ts so the runtime and canonical
+    // descriptors agree on the columns the table actually has.
+    status: boolean("status").default(false).notNull(),
+
     // Admin UI configuration (JSON)
     admin: jsonb("admin").$type<{
       group?: string;
