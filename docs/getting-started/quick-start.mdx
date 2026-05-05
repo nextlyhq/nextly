@@ -5,11 +5,11 @@ description: Create a blog with posts and categories using Nextly. Define conten
 
 This guide walks you through building a blog with posts and categories. You will define a content model, run migrations, create content in the admin panel, and query it in a Next.js page.
 
-**Prerequisites:** Complete the [Installation](/docs/getting-started/installation) steps first.
+**Prerequisites:** Complete the [Installation](/docs/getting-started/installation) steps first, including creating the super admin at `/admin/setup`.
 
 ## 1. Define Your Collections
 
-<Tabs items={["Code-First", "Builder (Visual)"]}>
+<Tabs items={["Code-First", "Visual Schema Builder"]}>
 <Tab value="Code-First">
 
 Open `nextly.config.ts` and define a `posts` collection and a `categories` collection:
@@ -23,7 +23,7 @@ import {
   select,
   relationship,
   date,
-} from "@nextlyhq/nextly/config";
+} from "nextly/config";
 
 const posts = defineCollection({
   slug: "posts",
@@ -59,19 +59,19 @@ export default defineConfig({
   singles: [],
 
   typescript: {
-    outputFile: "./src/types/nextly-types.ts",
+    outputFile: "./src/types/generated/nextly-types.ts",
   },
 });
 ```
 
-After saving, run the CLI to sync your schema to the database:
+In development, Nextly auto-syncs schema changes when you save `nextly.config.ts`. For production, run:
 
 ```bash
-npx @nextlyhq/nextly migrate
+pnpm nextly migrate
 ```
 
 </Tab>
-<Tab value="Builder (Visual)">
+<Tab value="Visual Schema Builder">
 
 1. Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admin)
 2. Navigate to **Collections** in the sidebar
@@ -88,7 +88,7 @@ npx @nextlyhq/nextly migrate
    - `name` -- Text, required
    - `slug` -- Text, required, unique
 
-The Schema Builder creates the database tables automatically. No migration step needed.
+The Visual Schema Builder creates the database tables automatically. No migration step needed in development.
 
 </Tab>
 </Tabs>
@@ -110,10 +110,10 @@ Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admi
 Use the Direct API to fetch posts in a Server Component. The Direct API runs on the server -- no HTTP requests, no REST endpoints needed.
 
 ```typescript title="src/app/blog/page.tsx"
-import { nextly } from "@nextlyhq/nextly";
+import { nextly } from "nextly";
 
 export default async function BlogPage() {
-  const { docs: posts } = await nextly.find({
+  const { items: posts } = await nextly.find({
     collection: "posts",
     where: {
       status: { equals: "published" },
@@ -139,7 +139,7 @@ export default async function BlogPage() {
 ### Fetch a Single Post
 
 ```typescript title="src/app/blog/[slug]/page.tsx"
-import { nextly } from "@nextlyhq/nextly";
+import { nextly } from "nextly";
 import { notFound } from "next/navigation";
 
 export default async function PostPage({
@@ -149,7 +149,7 @@ export default async function PostPage({
 }) {
   const { slug } = await params;
 
-  const { docs } = await nextly.find({
+  const { items } = await nextly.find({
     collection: "posts",
     where: {
       slug: { equals: slug },
@@ -158,7 +158,7 @@ export default async function PostPage({
     limit: 1,
   });
 
-  const post = docs[0];
+  const post = items[0];
   if (!post) notFound();
 
   return (
@@ -170,15 +170,15 @@ export default async function PostPage({
 }
 ```
 
-## 4. Add a Single (formerly Global)
+## 4. Add a Single
 
 Singles are perfect for site-wide settings. Add a blog settings single to your config:
 
-<Tabs items={["Code-First", "Builder (Visual)"]}>
+<Tabs items={["Code-First", "Visual Schema Builder"]}>
 <Tab value="Code-First">
 
 ```typescript title="nextly.config.ts"
-import { defineSingle, text, number } from "@nextlyhq/nextly/config";
+import { defineSingle, text, number } from "nextly/config";
 
 const blogSettings = defineSingle({
   slug: "blog-settings",
@@ -197,10 +197,10 @@ export default defineConfig({
 });
 ```
 
-Run `npx @nextlyhq/nextly migrate` to sync the schema.
+In development, save `nextly.config.ts` and the schema syncs automatically. For production, run `pnpm nextly migrate`.
 
 </Tab>
-<Tab value="Builder (Visual)">
+<Tab value="Visual Schema Builder">
 
 1. In the admin panel, go to **Singles**
 2. Click **Create Single**
@@ -214,7 +214,7 @@ Run `npx @nextlyhq/nextly migrate` to sync the schema.
 Query the single in your layout:
 
 ```typescript title="src/app/blog/layout.tsx"
-import { nextly } from "@nextlyhq/nextly";
+import { nextly } from "nextly";
 
 export default async function BlogLayout({
   children,
@@ -237,6 +237,8 @@ export default async function BlogLayout({
 }
 ```
 
+> **Note:** The Direct API single methods are currently named `findGlobal` / `updateGlobal` / `findGlobals`. They will be renamed to `findSingle` / `updateSingle` / `findSingles` in a future release. Update your imports when that change ships.
+
 ## What You Built
 
 In 5 minutes, you have:
@@ -248,7 +250,7 @@ In 5 minutes, you have:
 
 ## Next Steps
 
-- [Project Structure](/docs/getting-started/project-structure) -- Understand how the project is organized
+- [Project Structure](/docs/getting-started/project-structure) -- Understand how the project is organised
 - [Fields](/docs/configuration/fields) -- Explore all available field types
 - [Direct API](/docs/api-reference/direct-api) -- Full API reference for querying content
 - [Media Storage](/docs/guides/media-storage) -- Set up image and file uploads

@@ -7,7 +7,7 @@ A Nextly project follows the standard Next.js App Router structure with a few ad
 
 ## Directory Overview
 
-Here is the typical structure of a Nextly project:
+Here is the structure of a project scaffolded with `create-nextly-app` (Blank template, with `src/` directory):
 
 ```
 my-nextly-app/
@@ -16,33 +16,40 @@ my-nextly-app/
 │   │   ├── admin/
 │   │   │   ├── [[...params]]/
 │   │   │   │   ├── page.tsx          # Admin panel UI (client component)
-│   │   │   │   └── layout.tsx        # Admin layout with branding CSS
+│   │   │   │   └── layout.tsx        # Admin layout — injects branding CSS
 │   │   │   └── api/
 │   │   │       └── [[...params]]/
 │   │   │           └── route.ts      # Admin API catch-all handler
 │   │   ├── api/
 │   │   │   ├── health/
 │   │   │   │   └── route.ts          # Health check endpoint
-│   │   │   └── media/
-│   │   │       └── [[...path]]/
-│   │   │           └── route.ts      # Media upload/management API
+│   │   │   ├── media/
+│   │   │   │   └── [[...path]]/
+│   │   │   │       └── route.ts      # Media upload + serving
+│   │   │   ├── media-folders/
+│   │   │   │   └── route.ts          # Media folder management
+│   │   │   └── [[...params]]/
+│   │   │       └── route.ts          # REST API catch-all
 │   │   ├── layout.tsx                # Root layout
 │   │   ├── page.tsx                  # Home page
-│   │   └── globals.css               # Global styles
-│   ├── db/
-│   │   ├── schemas/
-│   │   │   └── dynamic/              # Auto-generated schemas for Builder collections
-│   │   └── migrations/               # Database migration files
-│   ├── types/
-│   │   └── nextly-types.ts           # Auto-generated TypeScript types
-│   └── hooks/
-│       └── example-hooks.ts          # Database lifecycle hooks
-├── nextly.config.ts                  # Nextly configuration (collections, singles, plugins)
+│   │   ├── globals.css               # Global styles
+│   │   └── favicon.ico
+│   └── types/
+│       └── generated/
+│           └── nextly-types.ts       # Auto-generated TypeScript types
+├── public/
+│   └── uploads/                      # Default local-disk media storage
+├── nextly.config.ts                  # Nextly configuration
 ├── next.config.ts                    # Next.js configuration
-├── .env                              # Environment variables
+├── eslint.config.mjs
+├── postcss.config.mjs
+├── tsconfig.json
 ├── package.json
-└── tsconfig.json
+├── .env                              # Environment variables (gitignored)
+└── .env.example                      # Environment template
 ```
+
+The Blog template adds a few more folders -- `src/collections/`, `src/globals/`, `src/components/`, `src/access/`, `src/actions/`, `src/lib/`, plus a `(frontend)` route group for the public-facing blog pages. See [Templates → Blog](/docs/templates/blog) for the blog-specific layout.
 
 ## Key Files
 
@@ -51,7 +58,7 @@ my-nextly-app/
 The central configuration file. This is where you define code-first collections, singles, plugins, storage adapters, email configuration, and admin branding. It lives at the project root.
 
 ```typescript title="nextly.config.ts"
-import { defineConfig } from "@nextlyhq/nextly/config";
+import { defineConfig } from "nextly/config";
 
 export default defineConfig({
   collections: [/* your collections */],
@@ -69,12 +76,7 @@ export default defineConfig({
   },
 
   typescript: {
-    outputFile: "./src/types/nextly-types.ts",
-  },
-
-  db: {
-    schemasDir: "./src/db/schemas/collections",
-    migrationsDir: "./src/db/migrations",
+    outputFile: "./src/types/generated/nextly-types.ts",
   },
 });
 ```
@@ -90,9 +92,15 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: [
-    "@nextlyhq/nextly",
+    "nextly",
     "@nextlyhq/adapter-drizzle",
+    "@nextlyhq/adapter-postgres",
+    "@nextlyhq/adapter-mysql",
+    "@nextlyhq/adapter-sqlite",
+    "drizzle-orm",
+    "drizzle-kit",
     "pg",
+    "mysql2",
     "better-sqlite3",
     "bcryptjs",
     "sharp",
@@ -103,19 +111,20 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
+The Blank template ships with all dialect adapters listed; remove the ones you aren't using to keep the dev server tree clean.
+
 ### `.env`
 
-Environment variables for database connection, authentication, and storage. See [Environment Variables](/docs/configuration/environment) for the full list.
+Environment variables for database connection and authentication. The CLI generates a complete `.env` with secure defaults; the essentials are:
 
-The essential variables are:
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DB_DIALECT` | Yes | Database type (`postgresql`, `mysql`, `sqlite`) |
+| `DATABASE_URL` | Yes (PG/MySQL) | Database connection string. SQLite falls back to `file:./data/nextly.db` |
+| `NEXTLY_SECRET` | Yes (production) | Secret for JWT signing and session encryption. Min 32 chars; the CLI auto-generates a base64 value |
+| `NEXT_PUBLIC_APP_URL` | Yes (production) | Public URL of your app, used by metadata and the admin |
 
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | Database connection string |
-| `DB_DIALECT` | Database type (`postgresql`, `mysql`, `sqlite`) |
-| `AUTH_SECRET` | Secret for JWT/session encryption (min 32 chars) |
-| `NEXTAUTH_URL` | Public URL of your app |
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob token (if using Vercel storage) |
+Storage env vars are only needed when you opt in to a cloud adapter -- the default is local disk under `public/uploads/`. See [Environment Variables](/docs/configuration/environment) for the full list.
 
 ## Key Directories
 
@@ -123,34 +132,38 @@ The essential variables are:
 
 The admin panel lives here as a standard Next.js route. The catch-all `[[...params]]` pattern lets Nextly handle all admin panel routing internally.
 
-- **`page.tsx`** -- Renders the admin panel UI. This is a client component that imports `RootLayout` from `@nextlyhq/admin`.
-- **`layout.tsx`** -- Injects branding CSS (custom colors, logos) from your `nextly.config.ts`.
-- **`api/[[...params]]/route.ts`** -- The API backend for the admin panel. Handles all CRUD operations for collections, singles, users, roles, and permissions.
+- **`page.tsx`** -- Renders the admin panel UI. This is a client component that imports `RootLayout`, `QueryProvider`, and `ErrorBoundary` from `@nextlyhq/admin`.
+- **`layout.tsx`** -- Reads `admin.branding` from `nextly.config.ts` and injects the generated CSS so logos and colors apply on every admin page.
+- **`api/[[...params]]/route.ts`** -- The admin API. Handles all CRUD operations for collections, singles, users, roles, permissions, and media.
 
-### `src/app/api/media/`
+### `src/app/api/`
 
-Media upload and management routes. The catch-all pattern handles file uploads, listing, updating metadata, and folder management. This route reads storage configuration from `nextly.config.ts`.
+Public REST API routes. The catch-all `[[...params]]/route.ts` dispatches every endpoint Nextly ships -- collections, singles, auth, image sizes, email -- through one handler that reads your config. Health, media, and media-folders are split into their own routes for clarity. See [REST API](/docs/api-reference/rest-api) for every endpoint.
 
-### `src/db/schemas/dynamic/`
+### `public/uploads/`
 
-When you create collections using the Schema Builder (visual approach), Nextly generates Drizzle schema files in this directory. These schemas are registered at startup so the admin API can query them. Code-first collections do not use this directory -- their schemas are generated from `nextly.config.ts` during migrations.
+Default media store when no storage adapter is configured in `nextly.config.ts`. Files uploaded through the admin's media library land here and are served directly by Next.js. To switch to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
 
-### `src/types/`
+### `src/types/generated/`
 
-Auto-generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. Run `npx @nextlyhq/nextly generate:types` to regenerate.
+Auto-generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. In development the types are regenerated automatically when you save `nextly.config.ts`; in production run:
 
-### `src/hooks/`
+```bash
+pnpm nextly generate:types
+```
 
-Database lifecycle hooks let you run custom logic before or after CRUD operations. For example, you can auto-generate slugs, send notifications, or validate data. See [Hooks](/docs/configuration) for details.
+### Schema files (Visual Schema Builder)
 
-## Code-First vs Builder: Where Content Is Defined
+When you create collections through the Visual Schema Builder, Nextly writes the generated TypeScript schema files alongside your project under the directory configured in `nextly.config.ts` -- by default `./src/db/schemas/`. Those files are regular `defineCollection()` exports you can commit to version control. Code-first collections live in `nextly.config.ts` (or wherever you import them from); the two approaches coexist freely.
+
+## Code-First vs Visual Schema Builder: Where Content Is Defined
 
 | Approach | Where collections are defined | Schema location |
 | --- | --- | --- |
-| **Code-First** | `nextly.config.ts` | Generated during `npx @nextlyhq/nextly migrate` |
-| **Builder (Visual)** | Admin panel at `/admin` | `src/db/schemas/dynamic/` (auto-generated) |
+| **Code-First** | `nextly.config.ts` (or files you import from it) | Generated during `pnpm nextly migrate` (production) or auto-synced on save (dev) |
+| **Visual Schema Builder** | Admin panel at `/admin/collections/builder` | TypeScript files written to disk under `./src/db/schemas/` |
 
-Both approaches produce the same result: database tables, admin UI, and API endpoints. You can mix them -- define some collections in config and create others through the Schema Builder.
+Both approaches produce the same result: database tables, admin UI, REST endpoints, and Direct API access. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
 
 ## Next Steps
 
