@@ -3,7 +3,6 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@revnixhq/ui";
 import React from "react";
 
-
 import * as Icons from "@admin/components/icons";
 import { Bookmark, Globe, type LucideIcon } from "@admin/components/icons";
 import {
@@ -32,7 +31,7 @@ const PINNED_SINGLES_STORAGE_KEY = "nextly:sidebar:pinned-singles";
 /**
  * DynamicSingleNav Component
  *
- * Renders each Single (Global) entity directly in the sidebar for easy access.
+ * Renders each Single entity directly in the sidebar for easy access.
  * Each item links directly to its content editing page.
  */
 export function DynamicSingleNav({

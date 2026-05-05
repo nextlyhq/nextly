@@ -82,7 +82,7 @@ export { useBulkDeleteEntries, useBulkUpdateEntries } from "./useBulkEntries";
 // Re-export entry keys from entryApi for query key management
 export { entryKeys } from "@admin/services/entryApi";
 
-// Single (Global) query and mutation hooks
+// Single query and mutation hooks
 export {
   singleKeys, // Query key factory for stable caching
   useSingle,
