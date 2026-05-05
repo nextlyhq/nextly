@@ -4,20 +4,20 @@
  * Renders the label for each row in an array field.
  * Supports custom label components and smart label extraction from row data.
  *
- * @module components/entries/fields/structured/ArrayRowLabel
+ * @module components/entries/fields/structured/RepeaterRowLabel
  * @since 1.0.0
  */
 
 import type {
   RepeaterFieldConfig,
-  ArrayRowLabelProps,
+  RepeaterRowLabelProps,
 } from "@revnixhq/nextly/config";
 
 // ============================================================
 // Types
 // ============================================================
 
-export interface ArrayRowLabelComponentProps {
+export interface RepeaterRowLabelComponentProps {
   /**
    * Zero-based index of this row in the array.
    */
@@ -55,7 +55,7 @@ const TITLE_FIELD_NAMES = [
 // ============================================================
 
 /**
- * ArrayRowLabel renders the label for each row in an array field.
+ * RepeaterRowLabel renders the label for each row in an array field.
  *
  * Label Resolution Priority:
  * 1. Custom RowLabel component from field.admin.components.RowLabel
@@ -64,13 +64,13 @@ const TITLE_FIELD_NAMES = [
  *
  * @example Default behavior
  * ```tsx
- * <ArrayRowLabel index={0} field={faqField} data={{ question: "What is...?" }} />
+ * <RepeaterRowLabel index={0} field={faqField} data={{ question: "What is...?" }} />
  * // Renders: "Question 1" (using labels.singular)
  * ```
  *
  * @example With title field in data
  * ```tsx
- * <ArrayRowLabel index={0} field={slidesField} data={{ title: "Hero Slide" }} />
+ * <RepeaterRowLabel index={0} field={slidesField} data={{ title: "Hero Slide" }} />
  * // Renders: "Hero Slide"
  * ```
  *
@@ -84,16 +84,16 @@ const TITLE_FIELD_NAMES = [
  * }
  * ```
  */
-export function ArrayRowLabel({
+export function RepeaterRowLabel({
   index,
   field,
   data,
-}: ArrayRowLabelComponentProps) {
+}: RepeaterRowLabelComponentProps) {
   // 1. Check for custom RowLabel component
   const CustomRowLabel = field.admin?.components?.RowLabel;
   if (CustomRowLabel) {
-    // Build props matching ArrayRowLabelProps interface
-    const labelProps: ArrayRowLabelProps = {
+    // Build props matching RepeaterRowLabelProps interface
+    const labelProps: RepeaterRowLabelProps = {
       data,
       index,
       path: field.name ? `${field.name}.${index}` : String(index),

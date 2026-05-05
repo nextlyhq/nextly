@@ -6,7 +6,7 @@
  * A repeater field component for managing arrays of structured data.
  * Supports add, remove, and drag-and-drop reordering of items.
  *
- * @module components/entries/fields/structured/ArrayInput
+ * @module components/entries/fields/structured/RepeaterInput
  * @since 1.0.0
  */
 
@@ -46,13 +46,13 @@ import {
 import { Plus, ChevronDown, ChevronRight } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import { ArrayRow, type RenderFieldFunction } from "./ArrayRow";
+import { RepeaterRow, type RenderFieldFunction } from "./RepeaterRow";
 
 // ============================================================
 // Types
 // ============================================================
 
-export interface ArrayInputProps<
+export interface RepeaterInputProps<
   TFieldValues extends FieldValues = FieldValues,
 > {
   /**
@@ -177,7 +177,7 @@ function createDefaultRowValues(
 // ============================================================
 
 /**
- * ArrayInput provides a repeater field for managing arrays of structured data.
+ * RepeaterInput provides a repeater field for managing arrays of structured data.
  *
  * Features:
  * - Add/remove rows with min/max constraints
@@ -190,7 +190,7 @@ function createDefaultRowValues(
  * @example Basic usage
  * ```tsx
  * <FieldWrapper field={socialLinksField} error={errors.socialLinks?.message}>
- *   <ArrayInput
+ *   <RepeaterInput
  *     name="socialLinks"
  *     field={socialLinksField}
  *     control={control}
@@ -200,7 +200,7 @@ function createDefaultRowValues(
  *
  * @example With custom field rendering
  * ```tsx
- * <ArrayInput
+ * <RepeaterInput
  *   name="faq"
  *   field={faqField}
  *   control={control}
@@ -213,11 +213,11 @@ function createDefaultRowValues(
  * @example With FormProvider (no control prop needed)
  * ```tsx
  * <FormProvider {...methods}>
- *   <ArrayInput name="items" field={itemsField} />
+ *   <RepeaterInput name="items" field={itemsField} />
  * </FormProvider>
  * ```
  */
-export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
+export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   name,
   field,
   control: controlProp,
@@ -225,14 +225,14 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
   readOnly = false,
   className,
   renderField,
-}: ArrayInputProps<TFieldValues>) {
+}: RepeaterInputProps<TFieldValues>) {
   // Get control from context if not provided
   const formContext = useFormContext<TFieldValues>();
   const control = controlProp ?? formContext?.control;
 
   if (!control) {
     throw new Error(
-      "ArrayInput requires either a `control` prop or to be wrapped in a FormProvider."
+      "RepeaterInput requires either a `control` prop or to be wrapped in a FormProvider."
     );
   }
 
@@ -360,7 +360,7 @@ export function ArrayInput<TFieldValues extends FieldValues = FieldValues>({
               >
                 <div className="space-y-3">
                   {items.map((item, index) => (
-                    <ArrayRow
+                    <RepeaterRow
                       key={item.id}
                       id={item.id}
                       index={index}

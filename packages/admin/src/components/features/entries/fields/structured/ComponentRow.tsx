@@ -6,7 +6,7 @@
  * A sortable, collapsible row within a repeatable component field.
  * Supports drag-and-drop reordering via @dnd-kit.
  *
- * Similar to ArrayRow but adapted for component instances with
+ * Similar to RepeaterRow but adapted for component instances with
  * component type badges and component-specific field rendering.
  *
  * @module components/entries/fields/structured/ComponentRow

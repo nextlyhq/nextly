@@ -6,7 +6,7 @@
  * A sortable, collapsible row within an array field.
  * Supports drag-and-drop reordering via @dnd-kit.
  *
- * @module components/entries/fields/structured/ArrayRow
+ * @module components/entries/fields/structured/RepeaterRow
  * @since 1.0.0
  */
 
@@ -34,7 +34,7 @@ import {
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import { ArrayRowLabel } from "./ArrayRowLabel";
+import { RepeaterRowLabel } from "./RepeaterRowLabel";
 
 // ============================================================
 // Types
@@ -56,7 +56,9 @@ export type RenderFieldFunction<
   }
 ) => ReactNode;
 
-export interface ArrayRowProps<TFieldValues extends FieldValues = FieldValues> {
+export interface RepeaterRowProps<
+  TFieldValues extends FieldValues = FieldValues,
+> {
   /**
    * Unique identifier for this row (from useFieldArray).
    * Used as the sortable ID for drag-and-drop.
@@ -120,7 +122,7 @@ export interface ArrayRowProps<TFieldValues extends FieldValues = FieldValues> {
 // ============================================================
 
 /**
- * ArrayRow renders a single row within an array field.
+ * RepeaterRow renders a single row within an array field.
  *
  * Features:
  * - Drag handle for reordering via @dnd-kit
@@ -131,7 +133,7 @@ export interface ArrayRowProps<TFieldValues extends FieldValues = FieldValues> {
  *
  * @example
  * ```tsx
- * <ArrayRow
+ * <RepeaterRow
  *   id={item.id}
  *   index={0}
  *   field={repeaterFieldConfig}
@@ -143,7 +145,7 @@ export interface ArrayRowProps<TFieldValues extends FieldValues = FieldValues> {
  * />
  * ```
  */
-export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
+export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   id,
   index,
   field,
@@ -155,7 +157,7 @@ export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   renderField,
-}: ArrayRowProps<TFieldValues>) {
+}: RepeaterRowProps<TFieldValues>) {
   // Collapsible state - respect initCollapsed from field config
   const [isOpen, setIsOpen] = useState(!field.admin?.initCollapsed);
 
@@ -235,7 +237,7 @@ export function ArrayRow<TFieldValues extends FieldValues = FieldValues>({
                 ) : (
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
-                <ArrayRowLabel index={index} field={field} data={data} />
+                <RepeaterRowLabel index={index} field={field} data={data} />
               </button>
             </CollapsibleTrigger>
 

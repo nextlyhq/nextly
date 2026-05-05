@@ -1,24 +1,24 @@
 /**
  * Structured Field Components
  *
- * Components for complex, structured field types like arrays,
+ * Components for complex, structured field types like repeaters,
  * groups, and blocks.
  *
  * @module components/entries/fields/structured
  * @since 1.0.0
  */
 
-// Array field components
-export { ArrayInput, type ArrayInputProps } from "./ArrayInput";
+// Repeater field components
+export { RepeaterInput, type RepeaterInputProps } from "./RepeaterInput";
 export {
-  ArrayRow,
-  type ArrayRowProps,
+  RepeaterRow,
+  type RepeaterRowProps,
   type RenderFieldFunction,
-} from "./ArrayRow";
+} from "./RepeaterRow";
 export {
-  ArrayRowLabel,
-  type ArrayRowLabelComponentProps,
-} from "./ArrayRowLabel";
+  RepeaterRowLabel,
+  type RepeaterRowLabelComponentProps,
+} from "./RepeaterRowLabel";
 
 // Group field component
 export { GroupInput, type GroupInputProps } from "./GroupInput";

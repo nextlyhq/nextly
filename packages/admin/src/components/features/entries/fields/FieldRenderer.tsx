@@ -49,10 +49,10 @@ import { DateInput } from "./selection/DateInput";
 import { RadioInput } from "./selection/RadioInput";
 import { SelectInput } from "./selection/SelectInput";
 import { ToggleInput } from "./selection/ToggleInput";
-import { ArrayInput } from "./structured/ArrayInput";
 import { ComponentInput } from "./structured/ComponentInput";
 import { GroupInput } from "./structured/GroupInput";
 import { JsonInput } from "./structured/JsonInput";
+import { RepeaterInput } from "./structured/RepeaterInput";
 import { EmailInput } from "./text/EmailInput";
 import { PasswordInput } from "./text/PasswordInput";
 import { TextareaInput } from "./text/TextareaInput";
@@ -459,7 +459,7 @@ export function FieldRenderer({
       // =========================================
       case "repeater":
         return (
-          <ArrayInput
+          <RepeaterInput
             {...commonProps}
             name={fieldPath}
             field={field as RepeaterFieldConfig}
