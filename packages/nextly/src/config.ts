@@ -112,7 +112,7 @@ export {
   isRadioField,
   isUploadField,
   isRelationshipField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isComponentField,

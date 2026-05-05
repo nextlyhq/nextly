@@ -29,7 +29,7 @@ import {
   isRadioField,
   isUploadField,
   isRelationshipField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isChipsField,
@@ -389,7 +389,7 @@ export class ZodGenerator {
       zodSchema = this.buildRelationshipSchema(field);
     }
     // Array fields
-    else if (isArrayField(field)) {
+    else if (isRepeaterField(field)) {
       zodSchema = this.buildArraySchema(field);
     }
     // Group fields
@@ -690,7 +690,7 @@ export class ZodGenerator {
         zodSchema = this.buildUploadSchema(field);
       } else if (isRelationshipField(field)) {
         zodSchema = this.buildRelationshipSchema(field);
-      } else if (isArrayField(field)) {
+      } else if (isRepeaterField(field)) {
         zodSchema = this.buildArraySchema(field);
       } else if (isGroupField(field)) {
         zodSchema = this.buildGroupSchema(field);

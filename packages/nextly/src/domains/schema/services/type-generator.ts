@@ -32,7 +32,7 @@ import {
   isRadioField,
   isUploadField,
   isRelationshipField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isComponentField,
@@ -656,7 +656,7 @@ export class TypeGenerator {
       tsType = this.buildRelationshipType(field, allCollections);
     }
     // Array fields
-    else if (isArrayField(field)) {
+    else if (isRepeaterField(field)) {
       tsType = this.buildArrayType(field, allCollections, allComponents);
     }
     // Group fields

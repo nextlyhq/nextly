@@ -25,7 +25,7 @@ import {
   isRadioField,
   isUploadField,
   isRelationshipField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isChipsField,
@@ -529,7 +529,7 @@ export class SchemaGenerator {
       }
 
       // Recursively handle nested fields
-      if (isArrayField(field) || isGroupField(field)) {
+      if (isRepeaterField(field) || isGroupField(field)) {
         // Array and group fields store as JSON
         types.add(this.dialect === "postgresql" ? "jsonb" : "json");
       }
@@ -587,7 +587,7 @@ export class SchemaGenerator {
       }
       return "varchar";
     }
-    if (isArrayField(field) || isGroupField(field)) {
+    if (isRepeaterField(field) || isGroupField(field)) {
       return this.dialect === "postgresql" ? "jsonb" : "json";
     }
     if (isJSONField(field)) {
@@ -879,7 +879,7 @@ export class SchemaGenerator {
       }
     }
     // Array, Group - store as JSON
-    else if (isArrayField(field) || isGroupField(field)) {
+    else if (isRepeaterField(field) || isGroupField(field)) {
       columnType = types.jsonb;
     }
     // JSON field
