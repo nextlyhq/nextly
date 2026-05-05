@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * verify that the Direct API throws when imported
- * with a browser-shaped global.
+ * Verify that the Direct API throws when imported with a browser-
+ * shaped global.
  *
  * Wired into CI alongside `pnpm check-types` / `pnpm test`. Exits 0 on
  * the throw (expected), non-zero if the import succeeds (regression).

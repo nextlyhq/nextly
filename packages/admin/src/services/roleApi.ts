@@ -17,7 +17,7 @@ import type {
 import type { ApiRoleWithRelations } from "../types/role";
 
 // The role-permissions sub-resource is a non-CRUD read. The dispatcher
-// emits `respondData({ permissions })` (named field per spec section 5.1
+// emits `respondData({ permissions })` (named field per spec §5.1
 // rule 3 so the shape can grow without breaking the contract), so the
 // wire body is `{ permissions: [...] }`, not a bare array.
 const fetchRolePermissionIds = async (roleId: string): Promise<string[]> => {
@@ -159,7 +159,7 @@ export const getRoleById = async (roleId: string): Promise<Role> => {
  *
  * `/roles/:id` returns the bare role doc via respondDoc.
  * `/roles/:id/parents` returns `{ roles: string[] }` via respondData
- * (named field per spec section 5.1 rule 3 so the shape can grow).
+ * (named field per spec §5.1 rule 3 so the shape can grow).
  */
 export const getRoleDetails = async (
   roleId: string

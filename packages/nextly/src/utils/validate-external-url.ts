@@ -1,10 +1,10 @@
 /**
  * SSRF-safe external URL validation + fetch.
  *
- * closes both. The previous webhook
- * URL validator only checked protocol; the email-attachment fetcher
- * validated nothing. Either let an attacker who controls a `url` field
- * probe internal services or exfiltrate cloud-metadata IAM credentials
+ * Closes the SSRF gap left by the previous webhook URL validator
+ * (protocol-only) and the email-attachment fetcher (no validation).
+ * Either let an attacker who controls a `url` field probe internal
+ * services or exfiltrate cloud-metadata IAM credentials
  * (`http://169.254.169.254/...`).
  *
  * `validateExternalUrl(url, opts)`:

@@ -72,7 +72,7 @@ async function fetchImageSizes(): Promise<ImageSize[]> {
   });
   if (!res.ok) return [];
   // /admin/api/image-sizes emits the canonical respondList envelope
-  // (spec section 5.1): `{ items, meta }`.
+  // (spec §5.1): `{ items, meta }`.
   const data = (await res.json()) as { items?: ImageSize[] };
   return data.items ?? [];
 }

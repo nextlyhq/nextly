@@ -76,10 +76,9 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           //    Vercel Blob (and similar adapters) store the full public
           //    URL as the media filename, so storagePath may already be
           //    a URL. Only call getPublicUrl for relative paths.
-          //    use safeFetch to reject URLs that
-          //    resolve to private/loopback/link-local/cloud-metadata
-          //    addresses — closes SSRF when an attacker controls the
-          //    `storagePath` field.
+          //    Use safeFetch to reject URLs that resolve to private/
+          //    loopback/link-local/cloud-metadata addresses — closes
+          //    SSRF when an attacker controls the `storagePath` field.
           const url = storagePath.startsWith("http")
             ? storagePath
             : storage.getPublicUrl(storagePath);

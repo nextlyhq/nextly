@@ -67,7 +67,7 @@ export interface EntryListProps {
 /**
  * Converts canonical ListResponse meta into the EntryTable's local
  * pagination shape. Handles the 1-indexed to 0-indexed page conversion
- * (canonical wire is 1-based per spec section 5.1; the table component
+ * (canonical wire is 1-based per spec §5.1; the table component
  * uses a 0-based React index internally).
  */
 function toTablePagination(
@@ -521,7 +521,9 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">{labels.plural}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">
+            {labels.plural}
+          </h1>
           {collection?.description && (
             <p className="text-sm font-normal text-primary/50 mt-1">
               {collection.description}

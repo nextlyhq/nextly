@@ -256,7 +256,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         //
         // Phase 4 (post-merge follow-up): both endpoints now return the
         // canonical paginated wire shape `{ items, meta }` via respondList
-        // (spec section 5.1). Pre-Phase-4 the fetcher peeled `data` so
+        // (spec §5.1). Pre-Phase-4 the fetcher peeled `data` so
         // these calls received bare arrays; the typed generic and the
         // map/Set construction below assumed that shape. After the
         // fetcher rewrite (Task 18), the canonical body flows through

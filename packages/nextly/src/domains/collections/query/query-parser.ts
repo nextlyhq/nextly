@@ -27,7 +27,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { WhereFilter } from "./query-operators";
 
 /**
- *  default caps for the REST query parser.
+ * Default caps for the REST query parser.
  *
  *   - `MAX_QUERY_DEPTH`      — deepest `and` / `or` nesting accepted.
  *   - `MAX_QUERY_CONDITIONS` — total leaf conditions (a single
@@ -309,9 +309,9 @@ export function parseWhereQuery(
   }
 
   const result = hasConditions ? where : undefined;
-  // refuse to return a parsed filter that exceeds
-  // the depth or condition cap. The validator throws so the caller's
-  // error handler turns it into a 422.
+  // Refuse to return a parsed filter that exceeds the depth or
+  // condition cap. The validator throws so the caller's error handler
+  // turns it into a 422.
   validateWhereFilter(result);
   return result;
 }

@@ -36,7 +36,7 @@ import {
 } from "@admin/components/ui/form";
 import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { UserFieldConfig} from "@admin/types/field-types";
+import type { UserFieldConfig } from "@admin/types/field-types";
 import { FieldType } from "@admin/types/field-types";
 
 // Define schema for user field form
@@ -117,7 +117,7 @@ export function UserFieldEditor({
       const data = await response.json();
 
       // Phase 4 (post-merge follow-up): /admin/api/roles emits
-      // `respondList({ items, meta })` (spec section 5.1). Pre-Phase-4
+      // `respondList({ items, meta })` (spec §5.1). Pre-Phase-4
       // the legacy wire was `{ success, data }`; the canonical envelope
       // dropped `success` (HTTP status carries it) and renamed the
       // payload field from `data` to `items`. Read `items` and gate on
@@ -174,7 +174,9 @@ export function UserFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={e => {
+          void handleSubmit(e);
+        }}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

@@ -1,6 +1,6 @@
-// hard runtime guard. The previous form was a
-// try/catch'd dynamic `await import("server-only")` that silently
-// allowed the module to load in client bundles. The audit recommended
+// Hard runtime guard. The previous form was a try/catch'd dynamic
+// `await import("server-only")` that silently allowed the module to
+// load in client bundles. The audit recommended
 // adding a static `import "server-only"` on top of the runtime
 // check, but `server-only` always throws unless imported under
 // React Server Components — including plain Node, which breaks

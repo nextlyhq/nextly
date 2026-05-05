@@ -133,9 +133,9 @@ export const SanitizationConfigSchema = z.object({
 });
 
 /**
- * request body / multipart size caps. Each field
- * accepts a byte count or a human-readable suffix (`"1mb"`, `"500kb"`).
- * String shorthand is parsed at runtime; the schema stays permissive.
+ * Request body / multipart size caps. Each field accepts a byte count
+ * or a human-readable suffix (`"1mb"`, `"500kb"`). String shorthand
+ * is parsed at runtime; the schema stays permissive.
  */
 export const SecurityLimitsConfigSchema = z.object({
   /** Max `application/json` body size. @default "1mb" */
@@ -169,10 +169,10 @@ export const SecurityLimitsConfigSchema = z.object({
  * ```
  */
 /**
- * per-IP rate limit on auth write endpoints
- * (`/auth/login`, `/auth/register`, `/auth/forgot-password`,
- * `/auth/reset-password`). Layered on top of the per-user lockout so
- * an attacker can't cycle usernames at full speed from one IP.
+ * Per-IP rate limit on auth write endpoints (`/auth/login`,
+ * `/auth/register`, `/auth/forgot-password`, `/auth/reset-password`).
+ * Layered on top of the per-user lockout so an attacker can't cycle
+ * usernames at full speed from one IP.
  *
  * The limiter shares one bucket across the four endpoints per IP so an
  * attacker can't reset their budget by switching paths. Set

@@ -53,7 +53,7 @@ import type {
 /**
  * Shared fetch wrapper for media API endpoints.
  *
- * The backend now returns canonical respondX bodies (spec section 5.1).
+ * The backend now returns canonical respondX bodies (spec §5.1).
  * This helper handles the network/error concerns; each call site decodes
  * the body into the right shape (bare doc, `{ items, meta }`, `{ message,
  * item }`, or `{ message, ...result }`) using the typed helpers below.
@@ -169,7 +169,7 @@ export async function uploadMedia(
   }
 
   if (result.status >= 200 && result.status < 300) {
-    // Canonical respondMutation wire shape (spec section 5.1):
+    // Canonical respondMutation wire shape (spec §5.1):
     // { message, item: Media }.
     try {
       const response = JSON.parse(result.responseText) as {
@@ -217,7 +217,7 @@ export async function fetchMedia(
     queryParams.set("folderId", params.folderId);
   }
 
-  // Canonical respondList wire shape (spec section 5.1):
+  // Canonical respondList wire shape (spec §5.1):
   // { items, meta: { total, page, limit, totalPages, hasNext, hasPrev } }.
   const result = await mediaFetchJson<{
     items?: Media[];

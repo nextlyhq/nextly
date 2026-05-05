@@ -101,10 +101,10 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns Upload result with URL and storage path
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
-    // hard-reject SVG and HTML uploads on Vercel
-    // Blob. The platform does not support per-object response headers
-    // (no Content-Disposition: attachment, no CSP), so an attacker who
-    // can persuade an admin to upload `evil.svg` (or `.html`) gets a
+    // Hard-reject SVG and HTML uploads on Vercel Blob. The platform
+    // does not support per-object response headers (no Content-
+    // Disposition: attachment, no CSP), so an attacker who can
+    // persuade an admin to upload `evil.svg` (or `.html`) gets a
     // stored XSS that fires on every viewer hit. S3 / R2 / similar
     // adapters can enforce attachment-disposition; Vercel Blob cannot.
     const mimeType = (options.contentType || options.mimeType || "")

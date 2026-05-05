@@ -164,7 +164,7 @@ export interface RateLimitConfig {
   keyGenerator?: (request: Request) => string;
 
   /**
-   * when true, the default keyGenerator parses
+   * When true, the default keyGenerator parses
    * `X-Forwarded-For` (filtered through `trustedProxyIps`). When false
    * (default), proxy headers are ignored — direct-internet deployments
    * fall back to a single `unknown` bucket. Wired from

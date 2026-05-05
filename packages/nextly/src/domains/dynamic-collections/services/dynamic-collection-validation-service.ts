@@ -4,15 +4,15 @@ import { z } from "zod";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 /**
- * cap admin-supplied regex pattern length. Long
- * patterns are both useless (almost no real-world validation needs
- * 200+ chars) and a vector for hiding catastrophic-backtracking
- * constructs that defeat static analyzers.
+ * Cap admin-supplied regex pattern length. Long patterns are both
+ * useless (almost no real-world validation needs 200+ chars) and a
+ * vector for hiding catastrophic-backtracking constructs that defeat
+ * static analyzers.
  */
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
 /**
- * characters that would break the surrounding
+ * Characters that would break the surrounding
  * `CHECK (col ~ '…')` constraint expression when embedded as raw text
  * after the existing single-quote escaping. The R3 update notes that
  * `replace(/'/g, "''")` alone is not sufficient — a regex containing

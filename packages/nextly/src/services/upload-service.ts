@@ -44,10 +44,10 @@
 import type { IStorageAdapter } from "../storage/types";
 import type { FileMetadata, UploadResult } from "../storage/types";
 
-// magic-byte detection (file-type) and SVG
-// sanitization (isomorphic-dompurify). Both are server-side; no
-// browser-bundle concerns since this module is only imported by the
-// upload route handler, which is server-only.
+// Magic-byte detection (file-type) and SVG sanitization
+// (isomorphic-dompurify). Both are server-side; no browser-bundle
+// concerns since this module is only imported by the upload route
+// handler, which is server-only.
 
 /**
  * Configuration options for the UploadService
@@ -157,9 +157,9 @@ const BLOCKED_MIME_TYPES = [
 ];
 
 /**
- * file extensions whose execution is potentially
- * dangerous when served from the same origin as the admin UI.
- * Rejected unconditionally regardless of the client-claimed MIME type.
+ * File extensions whose execution is potentially dangerous when
+ * served from the same origin as the admin UI. Rejected
+ * unconditionally regardless of the client-claimed MIME type.
  * SVG is intentionally NOT blocked here — it's allowed but sanitized
  * via DOMPurify before storage (see sanitizeSvgIfNeeded).
  */
@@ -306,10 +306,10 @@ export class UploadService {
     file: Buffer,
     options: UploadOptions
   ): Promise<UploadServiceResult<UploadedFile>> {
-    // filename + extension hygiene. Reject path
-    // separators and null bytes BEFORE anything else looks at the
-    // filename — defends against directory traversal and the classic
-    // "filename.jpg\0.html" trick.
+    // Filename + extension hygiene. Reject path separators and null
+    // bytes BEFORE anything else looks at the filename — defends
+    // against directory traversal and the classic "filename.jpg\0
+    // .html" trick.
     const filenameValidation = validateFilename(options.filename);
     if (!filenameValidation.valid) {
       return {
@@ -351,12 +351,12 @@ export class UploadService {
       };
     }
 
-    // magic-byte vs claimed-MIME mismatch.
-    // file-type sniffs the actual bytes; we reject when a client
-    // claims `image/jpeg` but the bytes are `text/html` (a classic
-    // polyglot / forged-extension trick). Some text-only formats
-    // (CSV, plain JSON, etc.) cannot be detected by signature —
-    // file-type returns null in that case and we let those through.
+    // Magic-byte vs claimed-MIME mismatch. file-type sniffs the
+    // actual bytes; we reject when a client claims `image/jpeg` but
+    // the bytes are `text/html` (a classic polyglot / forged-
+    // extension trick). Some text-only formats (CSV, plain JSON,
+    // etc.) cannot be detected by signature — file-type returns null
+    // in that case and we let those through.
     const magicByteCheck = await detectAndCompareMime(
       file,
       options.mimeType
@@ -370,9 +370,9 @@ export class UploadService {
       };
     }
 
-    // SVG sanitization. Allow SVG uploads but strip
-    // <script>, on*-handlers, and javascript: URLs from the markup
-    // before storage. Replaces the input buffer with the cleaned bytes.
+    // SVG sanitization. Allow SVG uploads but strip <script>,
+    // on*-handlers, and javascript: URLs from the markup before
+    // storage. Replaces the input buffer with the cleaned bytes.
     const sanitized = await sanitizeSvgIfNeeded(file, options.mimeType);
     if (sanitized) {
       file = sanitized;
@@ -709,7 +709,7 @@ export class UploadService {
 }
 
 // ============================================================
-// file-name / extension / magic-byte / SVG
+// File-name / extension / magic-byte / SVG validation helpers
 // ============================================================
 
 function getExtension(filename: string): string {

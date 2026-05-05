@@ -178,8 +178,9 @@ export const refreshTokens = mysqlTable(
   ]
 );
 
-// only by application convention — operators should revoke UPDATE /
-// DELETE GRANTs on this table in production for stricter integrity.
+// Append-only by application convention — operators should revoke
+// UPDATE / DELETE GRANTs on this table in production for stricter
+// integrity.
 export const auditLog = mysqlTable(
   "audit_log",
   {

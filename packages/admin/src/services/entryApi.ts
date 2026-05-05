@@ -11,7 +11,7 @@
  * // Use query keys for caching
  * const queryKey = entryKeys.list('posts', { page: 1, limit: 10 });
  *
- * // Fetch entries (canonical ListResponse shape per spec section 5.1)
+ * // Fetch entries (canonical ListResponse shape per spec §5.1)
  * const result = await entryApi.find('posts', { page: 1, limit: 10 });
  * console.log(result.items);          // Entry[]
  * console.log(result.meta.total);     // Total count

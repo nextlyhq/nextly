@@ -265,11 +265,10 @@ export interface SecurityConfig {
   sanitization?: SanitizationConfigInput;
 
   /**
-   * request body / multipart size caps. Each
-   * numeric field accepts either a byte count or a human-readable
-   * suffix (`"1mb"`, `"500kb"`). Defaults: json 1mb / multipart
-   * 50mb / fileSize 10mb / fileCount 10 / fieldCount 50 / fieldSize
-   * 100kb.
+   * Request body / multipart size caps. Each numeric field accepts
+   * either a byte count or a human-readable suffix (`"1mb"`,
+   * `"500kb"`). Defaults: json 1mb / multipart 50mb / fileSize 10mb /
+   * fileCount 10 / fieldCount 50 / fieldSize 100kb.
    */
   limits?: {
     json?: string | number;
@@ -281,9 +280,9 @@ export interface SecurityConfig {
   };
 
   /**
-   * per-IP rate limit on `/auth/login`,
-   * `/auth/register`, `/auth/forgot-password`, `/auth/reset-password`.
-   * One shared bucket per IP across all four endpoints so credential-
+   * Per-IP rate limit on `/auth/login`, `/auth/register`,
+   * `/auth/forgot-password`, `/auth/reset-password`. One shared
+   * bucket per IP across all four endpoints so credential-
    * stuffing from a single source can't cycle paths to refill its
    * budget. Layered on top of the per-user lockout, not in place of.
    *

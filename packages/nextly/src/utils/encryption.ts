@@ -39,9 +39,9 @@ const AUTH_TAG_LENGTH = 16; // 128-bit auth tag
 const SALT_LENGTH = 16; // 128-bit per-encryption salt
 
 /**
- * ciphertexts derived their key from this
- * fixed salt. `decrypt()` still uses it as the fallback when a legacy
- * 3-part ciphertext is presented; new ciphertexts use a random salt.
+ * Legacy 3-part ciphertexts derived their key from this fixed salt.
+ * `decrypt()` still uses it as the fallback when a legacy 3-part
+ * ciphertext is presented; new ciphertexts use a random salt.
  */
 const LEGACY_SALT = "nextly-encryption-salt";
 

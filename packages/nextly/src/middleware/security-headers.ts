@@ -47,8 +47,8 @@ export interface SecurityHeadersConfig {
    * Content-Security-Policy header value.
    * Set to `false` to disable.
    *
-   * the previous default `default-src 'none'; frame-
-   * ancestors 'none'` was a hard "block everything" — fine on a pure
+   * The previous default `default-src 'none'; frame-ancestors 'none'`
+   * was a hard "block everything" — fine on a pure
    * JSON response (CSP doesn't enforce on JSON) but instantly broke any
    * HTML response, including the admin SPA. The new default is
    * restrictive but lets a self-hosted Nextly admin UI run end-to-end:

@@ -139,7 +139,7 @@ export function createMockDataFetcher<TData extends Record<string, unknown>>(
     }
 
     // Apply pagination. TableParams uses 0-based admin-internal page index;
-    // the canonical wire meta is 1-based per spec section 5.1, so the meta
+    // the canonical wire meta is 1-based per spec §5.1, so the meta
     // we return shifts by 1.
     const total = filteredData.length;
     const totalPages = Math.ceil(total / pagination.pageSize);
