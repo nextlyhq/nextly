@@ -19,14 +19,11 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import type React from "react";
 
-import { DocumentTabs } from "@admin/components/features/entries/DocumentTabs";
 import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
-import { Code } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
-import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
@@ -50,21 +47,6 @@ interface SingleEditPageProps {
 // ============================================================================
 // Sub-components
 // ============================================================================
-
-/**
- * Breadcrumb navigation for the Single edit page.
- */
-function SingleBreadcrumbs({ singleLabel }: { singleLabel: string }) {
-  return (
-    <Breadcrumbs
-      items={[
-        { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-        { label: "Singles", href: ROUTES.SINGLES },
-        { label: singleLabel },
-      ]}
-    />
-  );
-}
 
 /**
  * Loading skeleton for the Single edit page.
@@ -305,28 +287,11 @@ export default function SingleEditPage({
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
           onCancel={handleCancel}
-          headerContent={
-            <>
-              <SingleBreadcrumbs singleLabel={singleLabel} />
-              {/* Document tabs (Q-D6=c). Singles render Edit + API only —
-                  Versions/Live Preview are suppressed by scope="single". */}
-              <div className="-mx-8 mt-4">
-                <DocumentTabs scope="single" slug={slug} />
-              </div>
-            </>
-          }
-          headerActions={
-            <Button
-              variant="outline"
-              onClick={() =>
-                navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))
-              }
-              className="flex-1 sm:flex-initial"
-            >
-              <Code className="h-4 w-4" />
-              API
-            </Button>
-          }
+          // Why: Task 5 PR 4b — singles' API URL pattern differs from
+          // collections, so the page route owns navigation. Breadcrumbs and
+          // DocumentTabs (Edit / API) are removed; the API view is reachable
+          // via the consolidated dropdown in the system header.
+          onViewApi={() => navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))}
         />
       </PageContainer>
     </QueryErrorBoundary>

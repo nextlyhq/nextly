@@ -74,6 +74,16 @@ export interface EntrySystemHeaderProps {
   /** View API response handler — opens a modal styled like Show JSON. */
   onViewApi?: () => void;
 
+  /**
+   * Whether to render the built-in Show JSON dropdown item (which uses
+   * `ShowJSONDialog` with the collection-entry API URL pattern). Singles
+   * have a different API URL shape and should pass `false`; the dropdown
+   * still gets View API via `onViewApi` if needed.
+   *
+   * @default true
+   */
+  showJson?: boolean;
+
   /** Rail collapsed state. */
   isRailCollapsed?: boolean;
   /** Rail toggle handler. */
@@ -96,6 +106,7 @@ export function EntrySystemHeader({
   onDelete,
   onDuplicate,
   onViewApi,
+  showJson = true,
   isRailCollapsed = false,
   onToggleRail,
 }: EntrySystemHeaderProps) {
@@ -234,7 +245,7 @@ export function EntrySystemHeader({
                 </DropdownMenuItem>
               </>
             )}
-            {showEditMenuItems && (
+            {showEditMenuItems && showJson && (
               <ShowJSONDialog
                 collectionSlug={collectionSlug}
                 entryId={entry.id}
