@@ -1,5 +1,5 @@
 /**
- * Direct API Singles/Globals Type Definitions
+ * Direct API Singles Type Definitions
  *
  * Argument and result types for single (global) CRUD, metadata listing,
  * and related operations.
@@ -10,19 +10,19 @@
 import type { DirectAPIConfig, PopulateOptions, SingleSlug } from "./shared";
 
 /**
- * Arguments for retrieving a single/global document.
+ * Arguments for retrieving a single document.
  *
  * @example
  * ```typescript
- * const settings = await nextly.findGlobal({
+ * const settings = await nextly.findSingle({
  *   slug: 'site-settings',
  *   depth: 1,
  * });
  * ```
  */
-export interface FindGlobalArgs<TSlug extends SingleSlug = SingleSlug>
+export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   extends DirectAPIConfig {
-  /** Single/global slug (required) */
+  /** Single slug (required) */
   slug: TSlug;
 
   /**
@@ -37,13 +37,13 @@ export interface FindGlobalArgs<TSlug extends SingleSlug = SingleSlug>
 }
 
 /**
- * Arguments for updating a single/global document.
+ * Arguments for updating a single document.
  *
  * @typeParam TSlug - The single slug literal type (auto-inferred from `slug`)
  *
  * @example
  * ```typescript
- * await nextly.updateGlobal({
+ * await nextly.updateSingle({
  *   slug: 'site-settings',
  *   data: {
  *     siteName: 'My Site',
@@ -52,9 +52,9 @@ export interface FindGlobalArgs<TSlug extends SingleSlug = SingleSlug>
  * });
  * ```
  */
-export interface UpdateGlobalArgs<TSlug extends SingleSlug = SingleSlug>
+export interface UpdateSingleArgs<TSlug extends SingleSlug = SingleSlug>
   extends DirectAPIConfig {
-  /** Single/global slug (required) */
+  /** Single slug (required) */
   slug: TSlug;
 
   /** Update data (required) */
@@ -69,10 +69,10 @@ export interface UpdateGlobalArgs<TSlug extends SingleSlug = SingleSlug>
 }
 
 /**
- * Single/Global definition metadata returned by the Direct API.
+ * Single definition metadata returned by the Direct API.
  *
  * This is the schema-level metadata about a registered Single type,
- * not the actual content. Use `findGlobal({ slug })` to fetch content.
+ * not the actual content. Use `findSingle({ slug })` to fetch content.
  */
 export interface SingleDefinition {
   /** Unique identifier */
@@ -124,17 +124,17 @@ export interface SingleDefinition {
  * @example
  * ```typescript
  * // Fetch content for all registered Singles
- * const result = await nextly.findGlobals();
+ * const result = await nextly.findSingles();
  * result.docs.forEach(({ slug, data }) => console.log(slug, data));
  *
  * // Filter by source
- * const codeSingles = await nextly.findGlobals({ source: 'code' });
+ * const codeSingles = await nextly.findSingles({ source: 'code' });
  *
  * // Search by name
- * const settingsSingles = await nextly.findGlobals({ search: 'settings' });
+ * const settingsSingles = await nextly.findSingles({ search: 'settings' });
  * ```
  */
-export interface FindGlobalsArgs extends DirectAPIConfig {
+export interface FindSinglesArgs extends DirectAPIConfig {
   /** Filter by source type */
   source?: "code" | "ui" | "built-in";
 
@@ -155,10 +155,10 @@ export interface FindGlobalsArgs extends DirectAPIConfig {
 }
 
 /**
- * A single entry returned by `findGlobals`, pairing the slug with the
+ * A single entry returned by `findSingles`, pairing the slug with the
  * actual document content of that Single type.
  */
-export interface GlobalEntry {
+export interface SingleEntry {
   /** The single slug (e.g., 'site-settings') */
   slug: string;
 
@@ -170,11 +170,11 @@ export interface GlobalEntry {
 }
 
 /**
- * Result of `findGlobals` — the actual content for each matching Single type.
+ * Result of `findSingles` — the actual content for each matching Single type.
  */
 export interface SingleListResult {
   /** Single entries with actual document content */
-  docs: GlobalEntry[];
+  docs: SingleEntry[];
 
   /** Total count of matching Singles (before pagination) */
   totalDocs: number;

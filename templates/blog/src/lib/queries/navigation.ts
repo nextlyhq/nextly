@@ -48,7 +48,7 @@ const DEFAULTS: Navigation = {
 export const getNavigation = cache(async (): Promise<Navigation> => {
   try {
     const nextly = await getNextly({ config: nextlyConfig });
-    const nav = await nextly.findGlobal({ slug: "navigation", depth: 0 });
+    const nav = await nextly.findSingle({ slug: "navigation", depth: 0 });
     if (!nav) return DEFAULTS;
     return {
       headerLinks:

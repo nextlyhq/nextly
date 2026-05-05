@@ -3,7 +3,7 @@
  *
  * Provides the `defineSingle()` function for creating code-first Single
  * configurations with full TypeScript support. This is the primary API for
- * defining Singles (global documents) in TypeScript files.
+ * defining Singles in TypeScript files.
  *
  * Singles are single-document entities for storing site-wide configuration
  * such as site settings, navigation menus, footers, and homepage configurations.
@@ -118,7 +118,7 @@ function toTitleCase(str: string): string {
  *   admin: {
  *     group: 'Settings',
  *     icon: 'Settings',
- *     description: 'Global site configuration',
+ *     description: 'Site configuration',
  *   },
  *   fields: [
  *     text({ name: 'siteName', required: true, label: 'Site Name' }),

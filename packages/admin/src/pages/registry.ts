@@ -175,7 +175,7 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: "update-roles",
   },
 
-  // Singles (Globals) routes (builder = schema management, edit = content)
+  // Singles routes (builder = schema management, edit = content)
   [ROUTES.SINGLES]: {
     component: SinglesPage,
     type: "private",

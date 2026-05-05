@@ -1,7 +1,7 @@
 /**
  * Single API Service
  *
- * API client for Single (Global) operations. Follows the same pattern as collectionApi.ts.
+ * API client for Single operations. Follows the same pattern as collectionApi.ts.
  *
  * This module provides two types of operations:
  * 1. **Schema/Metadata operations** - CRUD operations on Single definitions (fields, labels, etc.)

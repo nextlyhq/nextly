@@ -38,7 +38,7 @@ export const ROUTES = {
   SECURITY_ROLES_CREATE: "/admin/security/roles/create",
   SECURITY_ROLES_EDIT: "/admin/security/roles/edit/[id]",
 
-  // Singles (Globals) routes
+  // Singles routes
   SINGLES: "/admin/singles",
   // Pages route for content editing
   SINGLES_BUILDER: "/admin/singles/builder",

@@ -2,7 +2,7 @@
  * Single Config - Public Exports
  *
  * Re-exports all Single configuration types and functions.
- * Singles (also known as Globals) are single-document entities for storing
+ * Singles are single-document entities for storing
  * site-wide configuration such as site settings, navigation menus, and footers.
  *
  * @module singles/config

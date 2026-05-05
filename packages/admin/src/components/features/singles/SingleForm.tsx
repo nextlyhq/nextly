@@ -3,7 +3,7 @@
 /**
  * Single Form Component
  *
- * Form component for editing Single (Global) document data.
+ * Form component for editing Single document data.
  * Singles are single-document entities that always exist and cannot be deleted.
  * This component provides:
  * - Dynamic field rendering based on Single schema
@@ -233,7 +233,7 @@ function getDefaultValues(
 /**
  * SingleForm - Form for editing Single document data
  *
- * A complete form component for editing Single (Global) documents.
+ * A complete form component for editing Single documents.
  * Automatically generates form fields from Single schema, handles validation
  * with Zod, and manages update operations.
  *
@@ -344,7 +344,9 @@ export function SingleForm({
   // ---------------------------------------------------------------------------
 
   useEntryFormShortcuts({
-    onSave: () => { void handleSubmit(); },
+    onSave: () => {
+      void handleSubmit();
+    },
     onCancel: handleCancel,
     isDirty,
     isSubmitting,
