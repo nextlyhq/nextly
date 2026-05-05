@@ -1,48 +1,37 @@
 "use client";
 
-import type { FieldConfig } from "@revnixhq/nextly/config";
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
-import { useFormContext } from "react-hook-form";
+import { useState } from "react";
 
-import { Pencil } from "@admin/components/icons";
+import { Check, Copy } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
+import { cn } from "@admin/lib/utils";
 
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
-// ============================================================================
-// Types
-// ============================================================================
+// Why: Task 5 PR 4 simplifies the rail to a single panel. DocumentPanel now
+// shows Status (when the collection has hasStatus enabled and the entry has
+// been saved), the entry ID with a one-click copy button, and Created /
+// Updated timestamps. Slug moves to EntryMetaStrip below the system header.
 
 export interface DocumentPanelProps {
-  /** Form mode. Slug is editable in both create and edit; ID/timestamps
-   *  are only shown in edit mode (they don't exist before save). */
+  /** Form mode. ID/timestamps/status only render in edit mode. */
   mode: EntryFormMode;
-  /** Entry data with id and timestamps. */
+  /** Entry data with id, status, and timestamps. */
   entry?: EntryData | null;
-  /** Slug field config — when present, slug renders as the first row with
-   *  inline editing. Q-D5=iv in the redesign spec. */
-  slugField?: FieldConfig;
+  /** Whether the collection has the Draft/Published feature enabled. */
+  hasStatus: boolean;
 }
 
-// ============================================================================
-// Component
-// ============================================================================
-
-/**
- * Rail panel for system metadata: Slug, ID, Created, Updated. Slug is
- * inline-editable via the pencil icon (PR 6 of the redesign). ID and
- * timestamps are read-only and only render in edit mode.
- */
 export function DocumentPanel({
   mode,
   entry,
-  slugField,
+  hasStatus,
 }: DocumentPanelProps): React.ReactElement | null {
   const isCreate = mode === "create";
 
-  // Hide entirely if there's nothing to show: no slug field, and no entry yet.
-  if (!slugField && isCreate) return null;
+  // Hide entirely on create — there's nothing to show until the entry exists.
+  if (isCreate) return null;
 
   return (
     <div className="px-5 py-4 border-b border-primary/5">
@@ -50,111 +39,82 @@ export function DocumentPanel({
         Document
       </p>
       <dl className="space-y-2.5">
-        {slugField && <SlugRow slugField={slugField} />}
-        {!isCreate && <DocumentMetaRows entry={entry} />}
+        {hasStatus && (
+          <StatusRow
+            status={(entry?.status as string | undefined) ?? "draft"}
+          />
+        )}
+        <IdRow id={entry?.id} />
+        <TimestampRows entry={entry} />
       </dl>
     </div>
   );
 }
 
-// ============================================================================
-// Slug row (inline-editable)
-// ============================================================================
-
-function SlugRow({ slugField }: { slugField: FieldConfig }) {
-  const form = useFormContext();
-  const slugName = "name" in slugField ? (slugField.name as string) : "slug";
-  const liveValue = form.watch(slugName) as string | undefined;
-  const errorMsg = (
-    form.formState.errors[slugName] as { message?: string } | undefined
-  )?.message;
-
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<string>(liveValue ?? "");
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // Focus the input the moment we enter edit mode.
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
-
-  const startEdit = () => {
-    setDraft(liveValue ?? "");
-    setEditing(true);
-  };
-
-  const commit = () => {
-    form.setValue(slugName, draft, { shouldDirty: true, shouldValidate: true });
-    setEditing(false);
-  };
-
-  const cancel = () => {
-    setDraft(liveValue ?? "");
-    setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <div className="flex flex-col gap-1">
-        <div className="flex items-start justify-between gap-3">
-          <dt className="text-xs text-muted-foreground shrink-0">Slug</dt>
-          <input
-            ref={inputRef}
-            type="text"
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            onBlur={commit}
-            onKeyDown={e => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commit();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                cancel();
-              }
-            }}
-            className="text-xs font-mono text-foreground bg-background border border-primary/20 rounded px-1.5 py-0.5 min-w-0 w-full"
-            aria-label="Slug"
-            aria-invalid={!!errorMsg}
-          />
-        </div>
-        {errorMsg && (
-          <p className="text-[10px] text-red-600 ml-auto" role="alert">
-            {errorMsg}
-          </p>
-        )}
-      </div>
-    );
-  }
-
+function StatusRow({ status }: { status: string }) {
+  const isPublished = status === "published";
   return (
-    <div className="flex items-start justify-between gap-3 group">
-      <dt className="text-xs text-muted-foreground shrink-0">Slug</dt>
-      <dd className="flex items-center gap-1 min-w-0">
+    <div className="flex items-start justify-between gap-3">
+      <dt className="text-xs text-muted-foreground shrink-0">Status</dt>
+      <dd>
         <span
-          className="text-xs font-mono text-foreground truncate"
-          title={liveValue || ""}
+          className={cn(
+            "px-1.5 py-0.5 text-[10px] font-bold tracking-[0.1em] uppercase rounded",
+            // Why: neutral admin palette per Mobeen's "no AI-ish color scheme"
+            // — muted bg + foreground/muted-foreground.
+            isPublished
+              ? "bg-muted text-foreground"
+              : "bg-muted text-muted-foreground"
+          )}
         >
-          {liveValue || "—"}
+          {isPublished ? "Published" : "Draft"}
         </span>
-        <button
-          type="button"
-          onClick={startEdit}
-          className="opacity-0 group-hover:opacity-100 hover:bg-primary/5 rounded p-0.5 transition-opacity"
-          aria-label="Edit slug"
-        >
-          <Pencil className="h-3 w-3 text-muted-foreground" />
-        </button>
       </dd>
     </div>
   );
 }
 
-// ============================================================================
-// ID / Created / Updated rows (edit mode only)
-// ============================================================================
+function IdRow({ id }: { id?: string | null }) {
+  const [copied, setCopied] = useState(false);
 
-function DocumentMetaRows({ entry }: { entry?: EntryData | null }) {
+  const handleCopy = () => {
+    if (!id) return;
+    void navigator.clipboard.writeText(id).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-3 group">
+      <dt className="text-xs text-muted-foreground shrink-0">ID</dt>
+      <dd className="flex items-center gap-1 min-w-0">
+        <span
+          className="text-xs font-mono text-foreground truncate"
+          title={id ?? ""}
+        >
+          {id ?? "—"}
+        </span>
+        {id && (
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="opacity-0 group-hover:opacity-100 hover:bg-primary/5 rounded p-0.5 transition-opacity"
+            aria-label={copied ? "ID copied" : "Copy ID to clipboard"}
+          >
+            {copied ? (
+              <Check className="h-3 w-3 text-green-600" />
+            ) : (
+              <Copy className="h-3 w-3 text-muted-foreground" />
+            )}
+          </button>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+function TimestampRows({ entry }: { entry?: EntryData | null }) {
   const { formatDate } = useAdminDateFormatter();
 
   const createdAt =
@@ -173,33 +133,17 @@ function DocumentMetaRows({ entry }: { entry?: EntryData | null }) {
 
   return (
     <>
-      <Row label="ID" value={entry?.id ?? "—"} mono />
       <Row label="Created" value={formatRowDate(createdAt)} />
       <Row label="Updated" value={formatRowDate(updatedAt)} />
     </>
   );
 }
 
-function Row({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <dt className="text-xs text-muted-foreground shrink-0">{label}</dt>
-      <dd
-        className={
-          mono
-            ? "text-xs font-mono text-foreground truncate"
-            : "text-xs text-foreground"
-        }
-        title={value}
-      >
+      <dd className="text-xs text-foreground" title={value}>
         {value}
       </dd>
     </div>
