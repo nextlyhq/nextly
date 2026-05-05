@@ -369,8 +369,15 @@ function convertTextFieldToZod(field: TextFieldConfig): z.ZodTypeAny {
       );
     }
     if (pattern) {
-      const re = compileRegexOrUndefined(pattern);
-      if (re) itemSchema = itemSchema.regex(re, patternMsg ?? "Invalid format");
+      // hasMany items: when the parent field is optional, items can be empty
+      // strings without tripping the regex. Required items must match.
+      const required = isFieldRequired(field);
+      itemSchema = applyPattern(
+        itemSchema,
+        pattern,
+        patternMsg,
+        required
+      ) as z.ZodString;
     }
 
     let arraySchema = z.array(itemSchema);
@@ -391,16 +398,26 @@ function convertTextFieldToZod(field: TextFieldConfig): z.ZodTypeAny {
   }
 
   // Single text value
-  let schema = z.string();
+  let schema: z.ZodTypeAny = z.string();
   if (minLength) {
-    schema = schema.min(minLength, `Must be at least ${minLength} characters`);
+    schema = (schema as z.ZodString).min(
+      minLength,
+      `Must be at least ${minLength} characters`
+    );
   }
   if (maxLength) {
-    schema = schema.max(maxLength, `Must be at most ${maxLength} characters`);
+    schema = (schema as z.ZodString).max(
+      maxLength,
+      `Must be at most ${maxLength} characters`
+    );
   }
   if (pattern) {
-    const re = compileRegexOrUndefined(pattern);
-    if (re) schema = schema.regex(re, patternMsg ?? "Invalid format");
+    schema = applyPattern(
+      schema as z.ZodString,
+      pattern,
+      patternMsg,
+      isFieldRequired(field)
+    );
   }
 
   return schema;
@@ -413,20 +430,64 @@ function convertTextareaFieldToZod(field: TextareaFieldConfig): z.ZodTypeAny {
   const pattern = getValidation(field, "pattern") as string | undefined;
   const patternMsg = getPatternMessage(field);
 
-  let schema = z.string();
+  let schema: z.ZodTypeAny = z.string();
 
   if (minLength) {
-    schema = schema.min(minLength, `Must be at least ${minLength} characters`);
+    schema = (schema as z.ZodString).min(
+      minLength,
+      `Must be at least ${minLength} characters`
+    );
   }
   if (maxLength) {
-    schema = schema.max(maxLength, `Must be at most ${maxLength} characters`);
+    schema = (schema as z.ZodString).max(
+      maxLength,
+      `Must be at most ${maxLength} characters`
+    );
   }
   if (pattern) {
-    const re = compileRegexOrUndefined(pattern);
-    if (re) schema = schema.regex(re, patternMsg ?? "Invalid format");
+    schema = applyPattern(
+      schema as z.ZodString,
+      pattern,
+      patternMsg,
+      isFieldRequired(field)
+    );
   }
 
   return schema;
+}
+
+/**
+ * Whether a field is marked required, reading both flat (`field.required`)
+ * and nested (`field.validation.required`) shapes for compatibility with
+ * the Schema Builder and code-first configs.
+ */
+function isFieldRequired(field: DataFieldConfig | ExtractedField): boolean {
+  const rec = field as unknown as Record<string, unknown>;
+  const validation = rec.validation as Record<string, unknown> | undefined;
+  return Boolean(rec.required) || Boolean(validation?.required);
+}
+
+/**
+ * Apply a regex pattern to a Zod string schema. For required fields the
+ * regex runs unconditionally. For optional fields we explicitly allow the
+ * empty string to bypass the pattern — the contract is "if filled, must
+ * match", not "must always match." Without this gate, an optional field
+ * with `validation.pattern` rejects every empty submission, which is
+ * surprising and breaks ergonomic forms.
+ */
+function applyPattern(
+  schema: z.ZodString,
+  pattern: string,
+  message: string | undefined,
+  required: boolean
+): z.ZodTypeAny {
+  const re = compileRegexOrUndefined(pattern);
+  if (!re) return schema;
+  const msg = message ?? "Invalid format";
+  if (required) {
+    return schema.regex(re, msg);
+  }
+  return schema.refine(v => v === "" || re.test(v), { message: msg });
 }
 
 /**
@@ -476,19 +537,29 @@ function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
   // Get validation values from both flat and nested formats
   const minLength = getValidation(field, "minLength") as number | undefined;
   const maxLength = getValidation(field, "maxLength") as number | undefined;
+  const pattern = getValidation(field, "pattern") as string | undefined;
+  const patternMsg = getPatternMessage(field);
 
-  let schema = z.string();
+  let schema: z.ZodTypeAny = z.string();
 
   if (minLength) {
-    schema = schema.min(
+    schema = (schema as z.ZodString).min(
       minLength,
       `Password must be at least ${minLength} characters`
     );
   }
   if (maxLength) {
-    schema = schema.max(
+    schema = (schema as z.ZodString).max(
       maxLength,
       `Password must be at most ${maxLength} characters`
+    );
+  }
+  if (pattern) {
+    schema = applyPattern(
+      schema as z.ZodString,
+      pattern,
+      patternMsg,
+      isFieldRequired(field)
     );
   }
 
@@ -499,14 +570,30 @@ function convertCodeFieldToZod(field: CodeFieldConfig): z.ZodTypeAny {
   // Get validation values from both flat and nested formats
   const minLength = getValidation(field, "minLength") as number | undefined;
   const maxLength = getValidation(field, "maxLength") as number | undefined;
+  const pattern = getValidation(field, "pattern") as string | undefined;
+  const patternMsg = getPatternMessage(field);
 
-  let schema = z.string();
+  let schema: z.ZodTypeAny = z.string();
 
   if (minLength) {
-    schema = schema.min(minLength, `Must be at least ${minLength} characters`);
+    schema = (schema as z.ZodString).min(
+      minLength,
+      `Must be at least ${minLength} characters`
+    );
   }
   if (maxLength) {
-    schema = schema.max(maxLength, `Must be at most ${maxLength} characters`);
+    schema = (schema as z.ZodString).max(
+      maxLength,
+      `Must be at most ${maxLength} characters`
+    );
+  }
+  if (pattern) {
+    schema = applyPattern(
+      schema as z.ZodString,
+      pattern,
+      patternMsg,
+      isFieldRequired(field)
+    );
   }
 
   return schema;

@@ -12,6 +12,7 @@
 import type {
   BaseFieldConfig,
   FieldAdminOptions,
+  FieldValidation,
   RequestContext,
 } from "./base";
 
@@ -278,6 +279,14 @@ export interface CodeFieldConfig
    * Admin UI configuration options including language and editor settings.
    */
   admin?: CodeFieldAdminOptions;
+
+  /**
+   * Nested validation knobs. Mirrors the Schema Builder shape so code-first
+   * config and the Builder UI converge on one source of truth. Pattern
+   * validation (regex) on code fields runs through the same Zod pipeline as
+   * text and textarea.
+   */
+  validation?: FieldValidation;
 
   /**
    * Custom validation function.
