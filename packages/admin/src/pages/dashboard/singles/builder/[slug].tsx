@@ -287,7 +287,10 @@ export default function SingleBuilderEditPage({
         return;
       }
 
-      if (preview.classification === "safe") {
+      if (
+        preview.classification === "safe" &&
+        !(preview.renamed && preview.renamed.length > 0)
+      ) {
         setPreviewData(preview);
         setShowSafeDialog(true);
         return;
@@ -611,52 +614,56 @@ export default function SingleBuilderEditPage({
 
       {/* Hooks UI removed in PR D (feedback Section 2). */}
 
-      {previewData && previewData.classification === "safe" && (
-        <SafeChangeConfirmDialog
-          open={showSafeDialog}
-          onOpenChange={setShowSafeDialog}
-          collectionName={slug}
-          changes={previewData.changes}
-          onConfirm={() => {
-            const fieldDefs = getValidatedFields();
-            if (fieldDefs) {
-              void applySchemaChanges(
-                fieldDefs,
-                previewData.schemaVersion,
-                {},
-                []
-              );
-            }
-          }}
-          isApplying={isApplyingSchema}
-        />
-      )}
+      {previewData &&
+        previewData.classification === "safe" &&
+        !(previewData.renamed && previewData.renamed.length > 0) && (
+          <SafeChangeConfirmDialog
+            open={showSafeDialog}
+            onOpenChange={setShowSafeDialog}
+            collectionName={slug}
+            changes={previewData.changes}
+            onConfirm={() => {
+              const fieldDefs = getValidatedFields();
+              if (fieldDefs) {
+                void applySchemaChanges(
+                  fieldDefs,
+                  previewData.schemaVersion,
+                  {},
+                  []
+                );
+              }
+            }}
+            isApplying={isApplyingSchema}
+          />
+        )}
 
-      {previewData && previewData.classification !== "safe" && (
-        <SchemaChangeDialog
-          open={showSchemaDialog}
-          onOpenChange={setShowSchemaDialog}
-          collectionName={slug}
-          hasDestructiveChanges={previewData.hasDestructiveChanges}
-          classification={previewData.classification}
-          changes={previewData.changes}
-          renamed={previewData.renamed}
-          warnings={previewData.warnings}
-          interactiveFields={previewData.interactiveFields}
-          onConfirm={(resolutions, renameResolutions) => {
-            const fieldDefs = getValidatedFields();
-            if (fieldDefs) {
-              void applySchemaChanges(
-                fieldDefs,
-                previewData.schemaVersion,
-                resolutions,
-                renameResolutions
-              );
-            }
-          }}
-          isApplying={isApplyingSchema}
-        />
-      )}
+      {previewData &&
+        (previewData.classification !== "safe" ||
+          (previewData.renamed && previewData.renamed.length > 0)) && (
+          <SchemaChangeDialog
+            open={showSchemaDialog}
+            onOpenChange={setShowSchemaDialog}
+            collectionName={slug}
+            hasDestructiveChanges={previewData.hasDestructiveChanges}
+            classification={previewData.classification}
+            changes={previewData.changes}
+            renamed={previewData.renamed}
+            warnings={previewData.warnings}
+            interactiveFields={previewData.interactiveFields}
+            onConfirm={(resolutions, renameResolutions) => {
+              const fieldDefs = getValidatedFields();
+              if (fieldDefs) {
+                void applySchemaChanges(
+                  fieldDefs,
+                  previewData.schemaVersion,
+                  resolutions,
+                  renameResolutions
+                );
+              }
+            }}
+            isApplying={isApplyingSchema}
+          />
+        )}
 
       {(isSaving || isApplyingSchema) && (
         <div aria-live="polite" className="sr-only">
