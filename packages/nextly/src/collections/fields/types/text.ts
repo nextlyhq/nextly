@@ -12,6 +12,7 @@
 import type {
   BaseFieldConfig,
   FieldAdminOptions,
+  FieldValidation,
   RequestContext,
 } from "./base";
 
@@ -159,6 +160,27 @@ export interface TextFieldConfig
    * Admin UI configuration options.
    */
   admin?: TextFieldAdminOptions;
+
+  /**
+   * Nested validation knobs. Mirrors the shape the Schema Builder writes,
+   * so code-first config and the Visual Schema Builder converge on one
+   * source of truth. The renderer reads either the flat fields above
+   * (`minLength`, `maxLength`) or this nested object — newly written code
+   * should prefer this shape.
+   *
+   * @example
+   * ```typescript
+   * text({
+   *   name: "slug",
+   *   required: true,
+   *   validation: {
+   *     pattern: "^[a-z-]+$",
+   *     message: "Slug must be lowercase with hyphens only",
+   *   },
+   * })
+   * ```
+   */
+  validation?: FieldValidation;
 
   /**
    * Custom validation function.

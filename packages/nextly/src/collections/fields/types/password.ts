@@ -12,6 +12,7 @@
 import type {
   BaseFieldConfig,
   FieldAdminOptions,
+  FieldValidation,
   RequestContext,
 } from "./base";
 
@@ -158,6 +159,14 @@ export interface PasswordFieldConfig
    * Admin UI configuration options.
    */
   admin?: PasswordFieldAdminOptions;
+
+  /**
+   * Nested validation knobs. Mirrors the Schema Builder shape so code-first
+   * config and the Builder UI converge on one source of truth. Pattern
+   * validation (regex) on password fields runs through the same Zod
+   * pipeline as text and textarea.
+   */
+  validation?: FieldValidation;
 
   /**
    * Custom validation function.

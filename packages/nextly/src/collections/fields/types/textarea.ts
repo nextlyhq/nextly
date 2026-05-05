@@ -12,6 +12,7 @@
 import type {
   BaseFieldConfig,
   FieldAdminOptions,
+  FieldValidation,
   RequestContext,
 } from "./base";
 
@@ -138,6 +139,14 @@ export interface TextareaFieldConfig
    * Admin UI configuration options.
    */
   admin?: TextareaFieldAdminOptions;
+
+  /**
+   * Nested validation knobs. Mirrors the Schema Builder shape so code-first
+   * config and the Builder UI converge. The renderer reads either the flat
+   * `minLength` / `maxLength` above or this object — newly written code
+   * should prefer this nested form.
+   */
+  validation?: FieldValidation;
 
   /**
    * Custom validation function.

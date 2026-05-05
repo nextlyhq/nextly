@@ -12,6 +12,7 @@
 import type {
   BaseFieldConfig,
   FieldAdminOptions,
+  FieldValidation,
   RequestContext,
 } from "./base";
 
@@ -215,6 +216,12 @@ export interface NumberFieldConfig
    * Admin UI configuration options.
    */
   admin?: NumberFieldAdminOptions;
+
+  /**
+   * Nested validation knobs. Mirrors the Schema Builder shape so code-first
+   * config and the Builder UI converge on one source of truth.
+   */
+  validation?: FieldValidation;
 
   /**
    * Custom validation function.
