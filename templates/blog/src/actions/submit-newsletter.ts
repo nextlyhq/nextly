@@ -41,8 +41,6 @@ export async function submitNewsletter(
 
     // Look up the Newsletter form by slug. Missing form = seed didn't
     // run or the user removed it. Report a clear error.
-    // Phase 4 (Task 14): nextly.find returns canonical ListResult shape;
-    // read the page slice from `items` and the total count from `meta.total`.
     const forms = await nextly.find({
       collection: "forms",
       where: { slug: { equals: "newsletter" } },

@@ -60,10 +60,6 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
     await seed({ nextly });
-    // Phase 4 (Task 14): match the canonical respondAction wire shape
-    // (`{ message }`) instead of the legacy `{ success: true }` boolean
-    // envelope. Server-authored toast strings let the admin UI surface
-    // useful feedback without hard-coding copy on the client.
     return Response.json({ message: "Demo content seeded." });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

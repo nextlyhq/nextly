@@ -5,10 +5,8 @@
  *
  * Shown after the user finishes /admin/setup. Offers a single button
  * that POSTs to /admin/api/seed (auth-gated to super-admin) to load
- * demo blog content. Mirrors the Payload "Seed your database"
- * `BeforeDashboard` button — but lives in the template rather than
- * the admin shell so we don't need a core extension point yet
- * (tracked as a follow-up; see task 24 phase 3).
+ * demo blog content. Lives in the template rather than the admin
+ * shell so we don't need a core extension point.
  */
 
 import Link from "next/link";
@@ -19,8 +17,7 @@ type SeedStatus = "idle" | "running" | "success" | "error";
 export default function WelcomePage() {
   const [status, setStatus] = useState<SeedStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  // Phase 4 (Task 21): the seed route returns a canonical
-  // `respondAction`-shaped body (`{ message: "Demo content seeded." }`).
+  // The seed route returns `{ message: "Demo content seeded." }`.
   // Holding it in state lets the success UI surface the server-authored
   // copy instead of a hard-coded string.
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -44,9 +41,6 @@ export default function WelcomePage() {
         setStatus("error");
         return;
       }
-      // Phase 4 (Task 21): read `message` from the canonical envelope so
-      // the success copy is server-authored. Fall back to the previous
-      // hard-coded string if the field is somehow missing.
       const body = (await res.json().catch(() => null)) as {
         message?: string;
       } | null;
@@ -93,9 +87,6 @@ export default function WelcomePage() {
 
         {status === "success" && (
           <p className="mt-4 text-sm text-emerald-600">
-            {/* Phase 4 (Task 21): surface the server-authored message
-                from `respondAction` instead of a hard-coded string so
-                copy lives next to the handler that owns the action. */}
             {successMessage ?? "Demo content seeded."} Visit{" "}
             <Link href="/" className="underline">
               your site

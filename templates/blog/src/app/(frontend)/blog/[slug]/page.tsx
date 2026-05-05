@@ -1,7 +1,7 @@
 /**
  * Single Blog Post Page
  *
- * Full post rendering with the Task 17 post-detail treatment:
+ * Full post rendering:
  *   Reading progress bar (article-scoped)
  *   Category badge + title + meta row (author, date, reading time)
  *   Share bar (Twitter/X, LinkedIn, Copy link)

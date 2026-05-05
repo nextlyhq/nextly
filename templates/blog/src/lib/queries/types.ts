@@ -23,9 +23,8 @@ export interface Media {
 /**
  * Author: the public-facing identity a post is attributed to.
  *
- * Backed by the `users` collection under the hood - the template
- * migrated from a standalone `authors` collection to users-as-authors
- * in Task 17. Fields here are the subset of User we surface on the
+ * Backed by the `users` collection under the hood (users-as-authors
+ * pattern). Fields here are the subset of User we surface on the
  * frontend. Auth fields (email, password, roles) are intentionally
  * omitted: they are admin-only and must not leak through the Direct API.
  *

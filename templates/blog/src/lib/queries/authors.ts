@@ -1,11 +1,11 @@
 /**
  * Author query helpers.
  *
- * "Authors" are users in this template (users-as-authors pattern;
- * migrated in Task 17). These helpers go through `nextly.users` - the
- * dedicated user namespace backed by UserQueryService - because the
- * generic `nextly.find({ collection: "users" })` path routes through
- * the dynamic-collection registry and fails with
+ * "Authors" are users in this template (users-as-authors pattern).
+ * These helpers go through `nextly.users` — the dedicated user
+ * namespace backed by UserQueryService — because the generic
+ * `nextly.find({ collection: "users" })` path routes through the
+ * dynamic-collection registry and fails with
  *   NotFoundError: Schema for collection "users" not found in registry
  * since `users` is a static system table, not a dynamic collection.
  *
@@ -41,8 +41,6 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
   // (typically <50) so the full page fetch is cheap.
   const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.users.find({ limit: 1000 });
-  // Phase 4 (Task 14): users.find now returns canonical ListResult shape
-  // (`{ items, meta }`); read the page slice from `items` (was `docs`).
   const match = (result.items as unknown as Record<string, unknown>[]).find(
     d => (d.slug as string | undefined) === slug
   );
@@ -52,7 +50,6 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
 export async function getAllAuthorSlugs(): Promise<string[]> {
   const nextly = await getNextly({ config: nextlyConfig });
   const result = await nextly.users.find({ limit: 1000 });
-  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
   return (result.items as unknown as Record<string, unknown>[])
     .map(d => d.slug as string | undefined)
     .filter((s): s is string => typeof s === "string" && s.length > 0);
