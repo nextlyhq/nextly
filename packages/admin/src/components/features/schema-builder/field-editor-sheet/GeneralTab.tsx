@@ -123,9 +123,14 @@ export function GeneralTab({ field, readOnly = false, onChange }: Props) {
         <Textarea
           id="field-description"
           rows={2}
-          value={field.description ?? ""}
+          value={field.admin?.description ?? ""}
           disabled={readOnly}
-          onChange={e => set("description", e.target.value)}
+          onChange={e =>
+            onChange({
+              ...field,
+              admin: { ...field.admin, description: e.target.value },
+            })
+          }
         />
       </div>
 
