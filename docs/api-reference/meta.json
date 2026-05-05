@@ -1,4 +1,4 @@
 {
   "title": "API Reference",
-  "pages": ["direct-api", "rest-api", "client-sdk"]
+  "pages": ["direct-api", "rest-api"]
 }
