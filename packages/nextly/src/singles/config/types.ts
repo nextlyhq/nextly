@@ -307,6 +307,23 @@ export interface SingleConfig {
   label?: SingleLabel;
 
   /**
+   * Enable the Draft / Published lifecycle for this Single.
+   *
+   * When `true`, Nextly injects a `status` system column on the data table
+   * (NOT NULL, default `'draft'`) and the admin edit page shows separate
+   * Save Draft / Publish buttons. Public callers querying with
+   * `{ status: { equals: "published" } }` will only see published values;
+   * drafts remain admin-only.
+   *
+   * Mirrors the Schema Builder's Advanced tab "Status (Draft / Published)"
+   * toggle so code-first and Builder configurations converge on the same
+   * underlying behaviour.
+   *
+   * @default false
+   */
+  status?: boolean;
+
+  /**
    * Admin panel configuration options.
    * Controls how the Single appears in the Admin UI.
    */

@@ -236,6 +236,13 @@ export interface Collection {
   /** Whether the collection is locked from UI edits */
   locked?: boolean;
   /**
+   * Whether the collection has the Draft/Published status feature enabled.
+   * Backed by the `dynamic_collections.status` boolean column. When true,
+   * the data table carries a `status` system column and the admin's Save
+   * Draft / Publish split lights up.
+   */
+  status?: boolean;
+  /**
    * Legacy schema definition format.
    * New API returns `fields` directly at root level.
    */

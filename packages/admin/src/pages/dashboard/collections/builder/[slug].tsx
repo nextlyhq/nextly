@@ -186,9 +186,9 @@ export default function CollectionBuilderEditPage({
       order: (collection.admin as Record<string, unknown>)?.order as
         | number
         | undefined,
-      // collection.status is the Draft/Published flag from PR 1; default
-      // false for collections written before the column existed.
-      status: (collection as { status?: boolean }).status === true,
+      // collection.status is the Draft/Published flag; default false for
+      // collections written before the column existed.
+      status: collection.status === true,
     });
 
     if (collection.hooks && Array.isArray(collection.hooks)) {

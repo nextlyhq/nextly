@@ -14,6 +14,13 @@ export interface CollectionMetadata {
   labels: { singular: string; plural: string };
   fields: FieldDefinition[];
   timestamps?: boolean;
+  /**
+   * Whether the collection has the Draft/Published status feature enabled.
+   * Backed by the `dynamic_collections.status` boolean column. When true,
+   * the data table carries a `status` system column and the admin's Save
+   * Draft / Publish split lights up.
+   */
+  status?: boolean;
   admin?: {
     group?: string;
     icon?: string;
@@ -283,7 +290,7 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async getCollection(slug: string): Promise<unknown> {
-     
+
     const result = await (this.db as any)
       .select()
       .from(this.dynamicCollections)
@@ -294,7 +301,15 @@ export class DynamicCollectionRegistryService extends BaseService {
       throw new Error(`Collection "${slug}" not found`);
     }
 
-    return result[0];
+    const row = result[0] as Record<string, unknown>;
+    // Why: SQLite returns `status` as 0|1 even with `mode: "boolean"` in some
+    // driver/dialect combinations; postgres returns native boolean. Coerce
+    // here so the API contract is dialect-agnostic and the admin's
+    // `collection.status === true` gate works everywhere.
+    return {
+      ...row,
+      status: row.status === 1 || row.status === true,
+    };
   }
 
   async collectionExists(slug: string): Promise<boolean> {
