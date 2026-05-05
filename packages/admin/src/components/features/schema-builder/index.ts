@@ -8,7 +8,7 @@
  */
 
 // Builder Components
-export { ArrayFieldEditor } from "./ArrayFieldEditor";
+export { RepeaterFieldEditor } from "./RepeaterFieldEditor";
 export type { BreadcrumbItem } from "@admin/components/shared";
 export { ComponentFieldEditor } from "./ComponentFieldEditor";
 export { GroupFieldEditor } from "./GroupFieldEditor";

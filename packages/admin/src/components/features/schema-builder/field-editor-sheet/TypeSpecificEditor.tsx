@@ -12,7 +12,7 @@
 // renders (so devs can inspect) but every onChange callback becomes a
 // no-op so values can't change.
 import {
-  ArrayFieldEditor,
+  RepeaterFieldEditor,
   ComponentFieldEditor,
   GroupFieldEditor,
   RelationshipEditor,
@@ -207,7 +207,7 @@ export function TypeSpecificEditor({
       // Why: PR I -- onAddField dropped. nestedFields stays for the
       // row-label-field selector (it picks a labelable text/number/etc.
       // child by name).
-      <ArrayFieldEditor
+      <RepeaterFieldEditor
         labels={field.labels}
         onLabelsChange={
           readOnly

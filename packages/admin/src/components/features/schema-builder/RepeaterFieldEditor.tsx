@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ArrayFieldEditor Component
+ * RepeaterFieldEditor Component
  *
  * Editor for configuring array field settings.
  * Features:
@@ -13,7 +13,7 @@
  * Note: minRows/maxRows are configured in the Validation tab.
  * Nested fields are managed by clicking on them in the main FieldList.
  *
- * @module components/features/schema-builder/ArrayFieldEditor
+ * @module components/features/schema-builder/RepeaterFieldEditor
  */
 
 import {
@@ -35,10 +35,10 @@ import { EditorAlert } from "./EditorAlert";
 import type { RepeaterFieldEditorProps, RepeaterFieldLabels } from "./types";
 
 // ============================================================
-// ArrayFieldEditor Component
+// RepeaterFieldEditor Component
 // ============================================================
 
-export function ArrayFieldEditor({
+export function RepeaterFieldEditor({
   labels,
   onLabelsChange,
   initCollapsed,
