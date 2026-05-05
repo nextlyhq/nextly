@@ -13,7 +13,7 @@ jobs:
     name: Apply scope labels based on changed files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/labeler@v5
+      - uses: actions/labeler@v6
         with:
           configuration-path: .github/labeler.yml
           sync-labels: true
