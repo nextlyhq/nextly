@@ -1,336 +1,172 @@
 ---
 title: Deployment
-description: Deploy your Nextly application to Vercel, Docker, or any Node.js host with production-ready configuration.
+description: Deploy a Nextly application to Vercel (recommended) or self-host on Node.js. Production checklist, environment variables, and database migrations.
 ---
 
-Nextly applications are standard Next.js apps, so they can be deployed anywhere Next.js runs. This guide covers the key deployment targets and the production configuration checklist.
+A Nextly application is a standard Next.js app, so anywhere Next.js runs is fair game. This guide covers the two paths Nextly is built around:
 
-## Vercel (Recommended)
+- **Vercel** (recommended) -- the default target. Zero-config Next.js, first-class Vercel Blob storage, build-step migrations.
+- **Self-host** -- Node.js 20+ behind a process manager and reverse proxy. Linked out for the operator-side details rather than reproduced here.
 
-Vercel is the recommended platform for Nextly since it provides first-class Next.js support, and the Vercel Blob storage adapter integrates seamlessly.
+Whichever you choose, run database migrations on a CI/CD step (or your laptop) **before** the new app code takes traffic. The deployed app never touches schema -- see [Production migrations](/docs/guides/production-migrations) for why.
 
-### Steps
+## Production checklist (the short list)
 
-1. Push your project to GitHub, GitLab, or Bitbucket
-2. Import the repository in the [Vercel Dashboard](https://vercel.com/new)
-3. Set all required environment variables (see checklist below)
-4. Deploy
+Before you ship, set the following:
 
-Vercel automatically detects Next.js and configures the build pipeline. No custom build settings are needed.
+| Variable | Required | Purpose |
+|---|---|---|
+| `NODE_ENV` | yes | Set to `production`. |
+| `DB_DIALECT` | yes | `postgresql`, `mysql`, or `sqlite`. PostgreSQL recommended. |
+| `DATABASE_URL` | yes (Postgres / MySQL) | Database connection string. |
+| `NEXTLY_SECRET` | yes | JWT signing secret, **at least 32 characters**. Generate with `openssl rand -base64 32`. |
+| `NEXT_PUBLIC_APP_URL` | yes | The public URL of your deployment (used in client code and email links). |
+| `NEXTLY_ALLOWED_ORIGINS` | optional | Comma-separated additional CSRF origins (e.g. a separate frontend domain). |
 
-### Vercel-Specific Notes
+Plus storage env vars if you're using cloud storage (see [Media & Storage](/docs/guides/media-storage)) and email env vars if you're using a real provider (see [Email](/docs/guides/email)).
 
-- **Storage**: Use `@nextlyhq/storage-vercel-blob` with the `BLOB_READ_WRITE_TOKEN` from Vercel Dashboard > Storage > Blob
-- **Database**: Use a managed PostgreSQL service (Vercel Postgres, Neon, Supabase, PlanetScale for MySQL)
-- **Body size limit**: Vercel serverless functions have a 4.5MB body size limit. Enable `clientUploads: true` on your storage collections for larger files
-- **Environment variables**: Set them in Vercel Dashboard > Settings > Environment Variables (not in `.env` files)
+> **Note:** Boot-time validation refuses to start in production unless `NEXTLY_SECRET` is at least 32 characters and `NEXT_PUBLIC_APP_URL` is set.
+
+## Deploy to Vercel
+
+Vercel is the recommended platform for Nextly. Next.js detection is automatic, the Vercel Blob adapter is the easiest storage option, and the build step doubles as a migration runner.
+
+### 1. Push to GitHub and import
+
+1. Push the project to GitHub, GitLab, or Bitbucket.
+2. Open the [Vercel Dashboard](https://vercel.com/new), import the repository.
+3. Vercel detects Next.js and configures the build pipeline. Override only if you've customised the build script (see step 3 below).
+
+### 2. Configure environment variables
+
+In **Project Settings -> Environment Variables**, add everything from the production checklist above, plus storage and email variables you intend to use.
+
+Set them for **Production** and **Preview** environments separately if you want preview deployments to talk to a staging database.
+
+### 3. Build command
+
+A scaffolded Nextly project ships this `build` script in `package.json`:
+
+```json
+{
+  "scripts": {
+    "build": "nextly migrate && next build"
+  }
+}
+```
+
+The `nextly migrate` step runs against the database referenced by `DATABASE_URL` during the Vercel build, so pending migrations are applied as part of every deploy. Migrations are forward-only -- to undo, write a new corrective migration. See [Production migrations](/docs/guides/production-migrations) for the deeper trade-offs (build-time vs. CI-step migrations) and recovery patterns.
+
+If you'd rather run migrations in a separate CI job before the Vercel deploy promotes (recommended once you have multiple developers / preview deploys), wire it into a GitHub Actions workflow as described in the migrations guide and remove `nextly migrate` from `build`.
+
+### 4. Storage on Vercel
+
+The default zero-config local-disk adapter does **not** work on Vercel -- serverless function instances are ephemeral, so `./public/uploads/` is wiped on cold start. Pick one of:
+
+- **Vercel Blob** (easiest) -- install `@nextlyhq/storage-vercel-blob`, set `BLOB_READ_WRITE_TOKEN`. The auto-detection picks it up:
+
+  ```typescript
+  // nextly.config.ts
+  import { defineConfig } from "@nextlyhq/nextly/config";
+  import { getStorageFromEnv } from "@nextlyhq/nextly/storage";
+
+  export default defineConfig({
+    storage: await getStorageFromEnv(),
+  });
+  ```
+
+- **S3 / R2 / DigitalOcean Spaces / etc.** -- install `@nextlyhq/storage-s3`, set `S3_BUCKET` + `S3_REGION` + `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (and `S3_ENDPOINT` + `S3_FORCE_PATH_STYLE` for non-AWS providers).
+
+Vercel's serverless functions also have a 4.5MB request-body limit. Enable client-side direct uploads on storage collections that need to accept larger files:
 
 ```typescript
-// nextly.config.ts -- Vercel deployment
+// nextly.config.ts
 import { defineConfig } from "@nextlyhq/nextly/config";
 import { vercelBlobStorage } from "@nextlyhq/storage-vercel-blob";
 
 export default defineConfig({
-  storage: process.env.BLOB_READ_WRITE_TOKEN
-    ? [
-        vercelBlobStorage({
-          token: process.env.BLOB_READ_WRITE_TOKEN,
-          collections: {
-            media: {
-              clientUploads: true, // bypass 4.5MB serverless limit
-            },
-          },
-        }),
-      ]
-    : [],
+  storage: [
+    vercelBlobStorage({
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+      collections: {
+        media: {
+          clientUploads: true,
+        },
+      },
+    }),
+  ],
 });
 ```
 
-## Self-Hosted (Node.js)
+See [Media & Storage](/docs/guides/media-storage) for the full storage reference.
 
-Deploy to any server or cloud VM that supports Node.js 18+.
+### 5. Database
 
-### Build and Start
+Use a managed PostgreSQL service that's reachable from Vercel's IP ranges:
+
+- [Vercel Postgres](https://vercel.com/storage/postgres)
+- [Neon](https://neon.tech)
+- [Supabase](https://supabase.com)
+- [PlanetScale](https://planetscale.com) (MySQL)
+
+SQLite is **not** suitable for Vercel deployments -- the file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
+
+## Self-host with Node.js
+
+Run Nextly on any host that supports Node.js 20+. The deployment shape is intentionally boring: build the app, run it under a process manager, put a reverse proxy in front for SSL.
+
+### Requirements
+
+- **Node.js 20+** (matches the `serverExternalPackages` and `sharp` ABI requirements).
+- **A process manager** -- pm2, systemd, Docker, or similar. Keep the Node process supervised so crashes auto-restart.
+- **A reverse proxy** -- nginx or Caddy in front for TLS termination, HTTP/2, and access logging.
+
+### Build and start
 
 ```bash
-# Install dependencies
-pnpm install
-
-# Build the Next.js application
+pnpm install --frozen-lockfile
 pnpm build
-
-# Start in production mode
 pnpm start
 ```
 
-### Process Manager
+The scaffolded `build` script runs `nextly migrate && next build`, and `pnpm start` is `next start`. If you'd rather run migrations as a separate step (recommended for production with zero-downtime deploys), drop `nextly migrate` from `build` and run it via your CI pipeline before promoting the new release.
 
-Use a process manager like PM2 to keep the application running:
+### Environment variables
 
-```bash
-# Install PM2 globally
-npm install -g pm2
+Configure the same variables listed in the production checklist above. On most hosts that means a `.env` file outside the repo (loaded by your process manager) or a secrets manager.
 
-# Start with PM2
-pm2 start pnpm --name "nextly-app" -- start
+### Process manager and reverse proxy
 
-# Save PM2 process list for auto-restart on reboot
-pm2 save
-pm2 startup
-```
+Use a process manager (pm2, systemd, Docker, etc.) and a reverse proxy (nginx, Caddy, etc.) -- consult their documentation for setup specific to your distribution. The Nextly process is a plain Next.js server; nothing about it requires special configuration beyond ensuring the proxy forwards `Host` and `X-Forwarded-Proto` so callbacks resolve correctly.
 
-### Reverse Proxy
+If your reverse proxy is on a separate IP and you rely on rate-limiting / refresh-token IP binding, set `security.trustProxy: true` in `nextly.config.ts` and populate the `TRUSTED_PROXY_IPS` env var with the proxy's CIDR ranges. Otherwise Nextly ignores `X-Forwarded-For` and treats every request as coming from a single bucket, which is the safe default for direct-internet deployments.
 
-Place nginx or Caddy in front as a reverse proxy for SSL termination:
+### Migrations on deploy
 
-```nginx
-# /etc/nginx/sites-available/nextly
-server {
-    listen 443 ssl;
-    server_name example.com;
+For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
 
-    ssl_certificate /etc/ssl/certs/example.com.pem;
-    ssl_certificate_key /etc/ssl/private/example.com-key.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
-
-## Database Setup for Production
-
-Nextly supports PostgreSQL, MySQL, and SQLite. **PostgreSQL is recommended for production**.
-
-### PostgreSQL (Recommended)
-
-Use a managed service like Neon, Supabase, AWS RDS, or DigitalOcean Managed Databases:
-
-```bash
-DB_DIALECT=postgresql
-DATABASE_URL=postgresql://user:password@host:5432/nextly_prod
-```
-
-### MySQL
-
-```bash
-DB_DIALECT=mysql
-DATABASE_URL=mysql://user:password@host:3306/nextly_prod
-```
-
-### SQLite (Development Only)
-
-SQLite works for local development but is not recommended for production deployments:
-
-```bash
-DB_DIALECT=sqlite
-DATABASE_URL=file:./prod.db
-```
-
-### Connection Pool Settings
-
-For production, tune the connection pool:
-
-```bash
-DB_POOL_MAX=20
-DB_POOL_MIN=2
-DB_CONNECTION_TIMEOUT=30000
-DB_QUERY_TIMEOUT=15000
-```
-
-### Running Migrations
-
-Before deploying new application code, run database migrations:
-
-```bash
-DATABASE_URL=$PROD_URL pnpm exec nextly migrate
-```
-
-For the recommended GitHub Actions workflow + Vercel build-step pattern + other-platform setups, see the [Production migrations guide](/docs/guides/production-migrations). It covers `nextly migrate:create`, `nextly migrate:check` (CI integrity gate), and the `nextly_migrations` ledger table.
-
-The deployed app never touches schema. All migrations run as a CLI step before deploy. See the production-migrations guide for why.
-
-## Storage Setup for Production
-
-Choose a storage adapter based on your deployment platform:
-
-| Deployment   | Recommended Storage                     |
-|--------------|-----------------------------------------|
-| Vercel       | Vercel Blob (`@nextlyhq/storage-vercel-blob`) |
-| Self-hosted  | S3, R2, or MinIO (`@nextlyhq/storage-s3`)     |
-
-See the [Media & Storage guide](/docs/guides/media-storage) for detailed configuration of each adapter.
-
-### Quick Environment Setup
-
-**Vercel Blob:**
-
-```bash
-STORAGE_ADAPTER=vercel
-BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxxxxxxx
-```
-
-**AWS S3:**
-
-```bash
-STORAGE_ADAPTER=s3
-S3_BUCKET=my-nextly-bucket
-S3_REGION=us-east-1
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-```
-
-**Cloudflare R2:**
-
-```bash
-STORAGE_ADAPTER=s3
-S3_BUCKET=my-r2-bucket
-S3_REGION=auto
-AWS_ACCESS_KEY_ID=your-r2-access-key
-AWS_SECRET_ACCESS_KEY=your-r2-secret-key
-S3_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
-S3_PUBLIC_URL=https://pub-xxxx.r2.dev
-```
-
-## Security Configuration
-
-### CORS
-
-By default, Nextly uses same-origin only (no CORS headers). For production with a separate frontend domain, configure CORS in `defineConfig()`:
-
-```typescript
-// nextly.config.ts
-export default defineConfig({
-  security: {
-    cors: {
-      origin: ["https://example.com", "https://app.example.com"],
-      credentials: true,
-    },
-  },
-});
-```
-
-### Rate Limiting
-
-Rate limiting is enabled by default (100 read / 30 write requests per minute). Customize or disable it:
-
-```typescript
-// nextly.config.ts
-export default defineConfig({
-  rateLimit: {
-    enabled: true,
-    readLimit: 200,
-    writeLimit: 50,
-    windowMs: 60000, // 1 minute
-  },
-});
-```
-
-### Security Headers
-
-Nextly sets secure response headers by default (CSP, X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy). You can customize them:
-
-```typescript
-// nextly.config.ts
-export default defineConfig({
-  security: {
-    headers: {
-      contentSecurityPolicy: "default-src 'self'",
-      strictTransportSecurity: "max-age=63072000; includeSubDomains",
-    },
-  },
-});
-```
-
-## Email Provider for Production
-
-Configure an email provider so password resets and verification emails work in production. Without one, tokens are returned in API responses (a development-only fallback).
-
-See the [Email guide](/docs/guides/email) for provider setup.
-
-```bash
-# Resend (recommended)
-RESEND_API_KEY=re_xxxxxxxxxxxx
-
-# Or SMTP
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USER=your-user
-SMTP_PASS=your-password
-SMTP_FROM=noreply@example.com
-```
-
-## Environment Variables Checklist
-
-Use this checklist when setting up a production deployment:
-
-### Required
-
-| Variable                 | Description                                         |
-|--------------------------|-----------------------------------------------------|
-| `NODE_ENV`               | Set to `production`                                 |
-| `DB_DIALECT`             | `postgresql`, `mysql`, or `sqlite`                  |
-| `DATABASE_URL`           | Database connection string                          |
-| `AUTH_SECRET`            | JWT signing secret (min 32 chars)                   |
-| `NEXTAUTH_URL`           | Public URL of your application                      |
-| `NEXT_PUBLIC_APP_URL`    | Public URL (used in client-side code)               |
-
-### Storage (choose one)
-
-| Variable                 | Description                                         |
-|--------------------------|-----------------------------------------------------|
-| `STORAGE_ADAPTER`        | `vercel` or `s3`                                    |
-| `BLOB_READ_WRITE_TOKEN`  | Vercel Blob token                                   |
-| `S3_BUCKET`              | S3 bucket name                                      |
-| `S3_REGION`              | S3 region                                           |
-| `AWS_ACCESS_KEY_ID`      | S3 access key                                       |
-| `AWS_SECRET_ACCESS_KEY`  | S3 secret key                                       |
-| `S3_ENDPOINT`            | Custom S3 endpoint (R2, MinIO)                      |
-| `S3_PUBLIC_URL`          | Public URL for file access                          |
-
-### Optional
-
-| Variable                 | Description                                         |
-|--------------------------|-----------------------------------------------------|
-| `AUTH_TRUST_HOST`        | Trust host header (default: `true`)                 |
-| `RESEND_API_KEY`         | Resend API key for emails                           |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | SMTP email config |
-| `DB_POOL_MAX`            | Max database connections (default: `20`)            |
-| `DB_POOL_MIN`            | Min database connections (default: `2`)             |
-
-### Generating Secrets
-
-```bash
-# Generate AUTH_SECRET
-openssl rand -base64 32
-```
-
-## Production Checklist
+## Final checklist
 
 Before going live, verify:
 
-- [ ] `NODE_ENV=production`
-- [ ] `AUTH_SECRET` is at least 32 characters (generated with `openssl rand -base64 32`)
-- [ ] `DATABASE_URL` points to a production database (not localhost)
-- [ ] `NEXTAUTH_URL` and `NEXT_PUBLIC_APP_URL` point to your public domain
-- [ ] Storage adapter is configured (`BLOB_READ_WRITE_TOKEN` or S3 credentials)
-- [ ] Email provider is configured (Resend, SMTP, or SendLayer)
-- [ ] Database migrations have been run (`pnpm db:push`)
-- [ ] `.env` file is not committed to version control
-- [ ] CORS is configured if frontend runs on a different domain
-- [ ] Rate limiting is tuned for your expected traffic
+- [ ] `NODE_ENV=production`.
+- [ ] `NEXTLY_SECRET` is at least 32 characters (generated with `openssl rand -base64 32`).
+- [ ] `DATABASE_URL` points to a production database (not localhost / SQLite).
+- [ ] `NEXT_PUBLIC_APP_URL` is the public URL of your deployment.
+- [ ] `NEXTLY_ALLOWED_ORIGINS` lists any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
+- [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
+- [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
+- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending).
+- [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
+- [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).
+- [ ] Monitoring / error reporting is wired up (Sentry, Datadog, etc.).
+- [ ] `.env*` files are not committed to version control.
 
-## Next Steps
+## Next steps
 
-- [Authentication](/docs/guides/authentication) -- configure RBAC for production
-- [Media & Storage](/docs/guides/media-storage) -- detailed storage adapter configuration
-- [Email](/docs/guides/email) -- production email provider setup
-- [Environment Variables](/docs/configuration/environment) -- full environment variable reference
-- [Database](/docs/database) -- database adapter setup and configuration
+- [Production migrations](/docs/guides/production-migrations) -- forward-only migration model, GitHub Actions and other CI examples.
+- [Authentication](/docs/guides/authentication) -- session, RBAC, and API key configuration.
+- [Media & Storage](/docs/guides/media-storage) -- adapter-specific configuration for S3, Vercel Blob, Uploadthing, local disk.
+- [Email](/docs/guides/email) -- provider setup and local Mailpit testing.
+- [Environment Variables](/docs/configuration/environment) -- full environment variable reference.
+- [Database](/docs/database) -- adapter setup and connection options.
