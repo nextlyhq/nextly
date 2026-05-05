@@ -135,6 +135,18 @@ const DEFAULT_CONFIG = {
 };
 
 /**
+ * Converts a JavaScript value to a type that better-sqlite3 can bind.
+ * better-sqlite3 only accepts: number, string, bigint, Buffer, null.
+ */
+function sanitizeSqliteValue(v: unknown): unknown {
+  if (v === undefined) return null;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (v instanceof Date) return v.toISOString();
+  if (v !== null && typeof v === "object") return JSON.stringify(v);
+  return v;
+}
+
+/**
  * SQLite database adapter for Nextly.
  *
  * Extends the base DrizzleAdapter to provide SQLite-specific functionality
@@ -353,14 +365,16 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       let result: T[];
 
+      const sanitizedParams = params.map(sanitizeSqliteValue);
+
       if (isSelect || hasReturning) {
         // Use .all() for SELECT queries or queries with RETURNING
         const stmt = db.prepare(convertedSql);
-        result = stmt.all(...(params as unknown[])) as T[];
+        result = stmt.all(...sanitizedParams) as T[];
       } else {
         // Use .run() for INSERT/UPDATE/DELETE/PRAGMA settings without RETURNING
         const stmt = db.prepare(convertedSql);
-        const runResult = stmt.run(...(params as unknown[]));
+        const runResult = stmt.run(...sanitizedParams);
         // Return info about the operation
         result = [
           {
@@ -500,7 +514,7 @@ export class SqliteAdapter extends DrizzleAdapter {
     for (const record of data) {
       const placeholders: string[] = [];
       for (const col of columns) {
-        params.push(record[col] as SqlParam);
+        params.push(sanitizeSqliteValue(record[col]) as SqlParam);
         placeholders.push("?");
       }
       valuesClauses.push(`(${placeholders.join(", ")})`);
@@ -596,13 +610,14 @@ export class SqliteAdapter extends DrizzleAdapter {
         const trimmedSql = convertedSql.trim().toUpperCase();
         const isSelect =
           trimmedSql.startsWith("SELECT") || trimmedSql.includes("RETURNING");
+        const sanitizedParams = params.map(sanitizeSqliteValue);
 
         if (isSelect) {
           const stmt = db.prepare(convertedSql);
-          return stmt.all(...(params as unknown[])) as T[];
+          return stmt.all(...sanitizedParams) as T[];
         } else {
           const stmt = db.prepare(convertedSql);
-          const result = stmt.run(...(params as unknown[]));
+          const result = stmt.run(...sanitizedParams);
           return [
             {
               changes: result.changes,
@@ -619,7 +634,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         options?: InsertOptions
       ): Promise<T> => {
         const columns = Object.keys(data);
-        const values = Object.values(data);
+        const values = Object.values(data).map(sanitizeSqliteValue);
         const placeholders = values.map(() => "?").join(", ");
 
         let sql = `INSERT INTO ${this.escapeIdentifier(table)} (${columns.map(c => this.escapeIdentifier(c)).join(", ")}) VALUES (${placeholders})`;
@@ -656,7 +671,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         for (const record of data) {
           const placeholders: string[] = [];
           for (const col of columns) {
-            allValues.push(record[col]);
+            allValues.push(sanitizeSqliteValue(record[col]));
             placeholders.push("?");
           }
           valuesClauses.push(`(${placeholders.join(", ")})`);
