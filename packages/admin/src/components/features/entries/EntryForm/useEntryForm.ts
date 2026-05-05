@@ -79,6 +79,13 @@ export interface EntryFormCollection {
   admin?: {
     preview?: EntryFormPreviewConfig;
   };
+  /**
+   * Whether the collection has the Draft/Published status feature enabled.
+   * When `true`, the entry form shows separate Save Draft / Publish buttons
+   * and a status pill in the slug strip / Document panel. Backed by the
+   * `dynamic_collections.status` boolean column.
+   */
+  status?: boolean;
 }
 
 /**

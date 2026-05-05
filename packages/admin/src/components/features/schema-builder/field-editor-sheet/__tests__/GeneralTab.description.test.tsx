@@ -92,7 +92,8 @@ describe("GeneralTab description write path", () => {
     // exists (e.g., loaded from local builder state that pre-dates the fix).
     const seeded: BuilderField = {
       ...baseField,
-      // @ts-expect-error -- legacy top-level path; this asserts we don't read from it
+      // Why: BuilderField type still has a legacy top-level description slot.
+      // The renderer should read from admin.description (the canonical path).
       description: "Stale top-level value",
       admin: { width: "100%", description: "Canonical value" },
     };

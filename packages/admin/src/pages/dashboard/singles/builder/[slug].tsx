@@ -146,9 +146,9 @@ export default function SingleBuilderEditPage({
       icon: (adminBlock.icon as string | undefined) || "FileText",
       adminGroup: (adminBlock.group as string | undefined) || "",
       order: adminBlock.order as number | undefined,
-      // Status from PR 1's backend addition; defaults false for legacy
-      // Singles written before the column existed.
-      status: (single as { status?: boolean }).status === true,
+      // Status: defaults false for legacy Singles written before the column
+      // existed.
+      status: single.status === true,
     });
 
     setIsInitialized(true);

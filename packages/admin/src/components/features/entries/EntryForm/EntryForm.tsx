@@ -221,7 +221,7 @@ export function EntryForm({
   // Whether this collection has Draft/Published status enabled at the meta
   // level. When false, ActionBar hides the Status pill and merges Save Draft
   // + Publish into a single "Save" button (per Q-D2=A in the redesign spec).
-  const hasStatus = (collection as { status?: boolean }).status === true;
+  const hasStatus = collection.status === true;
 
   // ---------------------------------------------------------------------------
   // Keyboard Shortcuts (standalone mode only)
