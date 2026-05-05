@@ -1,33 +1,27 @@
 /**
- * Schema journal REST handler — F10 PR 4.
+ * Schema journal REST handler. One read-only endpoint that powers the admin
+ * NotificationBell + Dropdown:
  *
- * One read-only endpoint that powers the admin NotificationBell +
- * Dropdown in F10 PR 5:
- *
- *   GET /api/schema/journal?limit=20&before=<ISO> → list of
+ *   GET /api/schema/journal?limit=20&before=<ISO> -> list of
  *     recent applies in the `nextly_migration_journal` table, newest
  *     first, paginated by `started_at` cursor.
  *
  * Auth: super-admin only. Schema applies are admin-level operations;
  * their audit log is gated the same way.
  *
- * Wire shape: Phase 4 Task 11 migrates this handler to `respondData`
- * with body `{ rows, hasMore }`. Pagination here is cursor-style
- * (caller passes `before=<ISO>` to "load more"); there is no total
- * count, no page index, and no totalPages, so the canonical
- * `respondList` meta shape would either need sentinel values
- * (`total: -1`, `totalPages: -1`) or be filled in with synthetic data
- * the underlying query never produced. We pick `respondData` because
- * cursor semantics dominate here and the caller already keys off the
- * `hasMore` flag rather than meta. Errors flow through
- * `withErrorHandler` and produce `application/problem+json`.
+ * Wire shape: `respondData` with body `{ rows, hasMore }`. Pagination is
+ * cursor-style (caller passes `before=<ISO>` to "load more"); there is no
+ * total count, no page index, and no totalPages, so the canonical
+ * `respondList` meta shape would either need sentinel values (`total: -1`,
+ * `totalPages: -1`) or be filled in with synthetic data the underlying
+ * query never produced. `respondData` matches the cursor semantics; the
+ * caller keys off the `hasMore` flag rather than meta.
  *
  * Caching: `private, no-store` so the response never leaks across user
  * sessions in shared caches. `Vary: Cookie` reinforces this for any
  * cooperating intermediary.
  *
  * @module api/schema-journal
- * @since F10 PR 4
  */
 
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
@@ -64,8 +58,8 @@ async function getAdapter(): Promise<AdapterLike> {
  * GET /api/schema/journal
  *
  * Query params:
- *   - limit: number (default 20, clamped to [1, 100]) — page size.
- *   - before: ISO 8601 timestamp — returns rows whose `startedAt` is
+ *   - limit: number (default 20, clamped to [1, 100]); page size.
+ *   - before: ISO 8601 timestamp; returns rows whose `startedAt` is
  *     strictly older than this value. Used for "load more".
  *
  * Response: `{ rows: JournalRow[], hasMore: boolean }` (bare body via
@@ -136,7 +130,7 @@ export const getSchemaJournal = withErrorHandler(async (req: Request) => {
     before,
   });
 
-  // Phase 4: bare cursor read, no envelope. Spread into a fresh literal so
-  // the named result type satisfies the respondData generic constraint.
+  // Bare cursor read, no envelope. Spread into a fresh literal so the named
+  // result type satisfies the respondData generic constraint.
   return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

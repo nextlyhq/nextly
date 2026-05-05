@@ -238,9 +238,9 @@ async function sendWebhook(
       };
     }
 
-    // Audit C3/H8 (T-008): the webhook URL pointed at an internal/
-    // non-public address and was refused before the request left the
-    // host. Surface as a distinct delivery failure.
+    // The webhook URL pointed at an internal / non-public address
+    // and was refused before the request left the host. Surface as a
+    // distinct delivery failure.
     if (error instanceof ExternalUrlError) {
       return {
         url: webhook.url,

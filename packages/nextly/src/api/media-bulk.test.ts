@@ -1,16 +1,16 @@
 /**
- * Regression tests for the media-bulk DELETE wire shape (Phase 4.5).
+ * Regression tests for the media-bulk DELETE wire shape.
  *
  * Pins:
- *   DELETE /api/media/bulk → respondBulk({ message, items, errors })
+ *   DELETE /api/media/bulk -> respondBulk({ message, items, errors })
  *
  * The DELETE route exercises `respondBulk` end-to-end through the same
  * `mediaService.bulkDelete` boundary the admin client hits. POST tests
  * are intentionally NOT in this file: the POST route's pre-validation
  * (zod parse on `UploadMediaInputSchema`) and base64-decode pipeline
- * are pre-existing concerns outside Phase 4.5's scope; the wire-shape
- * contract for `respondBulkUpload` is asserted via direct helper tests
- * in `response-shapes.test.ts` and via the integration-level coverage
+ * are pre-existing concerns; the wire-shape contract for
+ * `respondBulkUpload` is asserted via direct helper tests in
+ * `response-shapes.test.ts` and via the integration-level coverage
  * in `media-service-edge-cases.test.ts`.
  */
 
@@ -34,7 +34,7 @@ vi.mock("../di", () => ({
 // Import after mocks so the route module picks up the mocked di.
 import { DELETE } from "./media-bulk";
 
-describe("media-bulk DELETE → respondBulk (Phase 4.5)", () => {
+describe("media-bulk DELETE -> respondBulk", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     container.clear();
@@ -71,8 +71,8 @@ describe("media-bulk DELETE → respondBulk (Phase 4.5)", () => {
       items: [{ id: "m1" }, { id: "m2" }],
       errors: [],
     });
-    // Regression guards: legacy `data` wrapper, `totalFiles`, `results`
-    // (the pre-Phase-4.5 shape) must not appear on the wire.
+    // Regression guards: legacy `data` wrapper, `totalFiles`, and `results`
+    // must not appear on the wire.
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("totalFiles");
     expect(body).not.toHaveProperty("results");
@@ -101,7 +101,7 @@ describe("media-bulk DELETE → respondBulk (Phase 4.5)", () => {
       })
     );
 
-    // Phase 4.5: partial-success returns 200; per-item failures are data.
+    // Partial-success returns 200; per-item failures are data.
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.items).toEqual([{ id: "m1" }]);

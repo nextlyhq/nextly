@@ -105,11 +105,8 @@ export interface FieldResolution {
 
 export const schemaApi = {
   // Preview schema changes (dry-run, returns diff without applying).
-  //
-  // Phase 4 (Task 19): the previewSchemaChanges dispatcher emits
-  // `respondData({ ...legacyShape, renamed, schemaVersion })` so the wire
-  // body IS the SchemaPreviewResponse shape; type the fetcher generic
-  // directly.
+  // The dispatcher emits the bare SchemaPreviewResponse shape, so we
+  // type the fetcher generic directly.
   preview: async (
     slug: string,
     fields: unknown[]
@@ -121,17 +118,16 @@ export const schemaApi = {
   },
 
   // Apply schema changes (in-place update, no server restart).
-  // renameResolutions are F4 Option E PR 5: one entry per rename
-  // candidate the user picked in SchemaChangeDialog ("rename" preserves
-  // data; "drop_and_add" lets the column drop and a new one create).
+  // renameResolutions carry one entry per rename candidate the user
+  // picked in SchemaChangeDialog ("rename" preserves data;
+  // "drop_and_add" lets the column drop and a new one create).
   //
-  // Phase 4 (Task 19): the applySchemaChanges dispatcher emits
-  // `respondAction(message, { newSchemaVersion, toastSummary? })`, so the
-  // wire body is `{ message, newSchemaVersion, toastSummary? }`. The
-  // canonical action shape has no boolean `success` field (a 2xx
-  // response IS the success signal), so we synthesize `success: true`
-  // here to keep the legacy SchemaApplyResponse contract intact for
-  // existing callers (the schema builder reads `result.success`).
+  // The applySchemaChanges dispatcher emits an action body
+  // (`{ message, newSchemaVersion, toastSummary? }`) with no boolean
+  // `success` field — a 2xx response IS the success signal — so we
+  // synthesize `success: true` here to keep the legacy
+  // SchemaApplyResponse contract intact for existing callers
+  // (the schema builder reads `result.success`).
   apply: async (
     slug: string,
     fields: unknown[],

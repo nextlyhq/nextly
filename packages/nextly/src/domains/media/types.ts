@@ -136,7 +136,7 @@ export interface FolderContents {
  * media-bulk dispatcher can hand it directly to respondBulk without a
  * second translation pass. Successes carry minimal `{id}` records for
  * delete (the file is gone); failures carry canonical NextlyErrorCode
- * + public-safe message per spec section 13.8.
+ * + public-safe message per spec §13.8.
  *
  * Generic over T so a future bulk-update-media op could carry full
  * MediaFile records on success without changing the shape.

@@ -458,12 +458,10 @@ function FormRenderer({ form, onSuccess }: FormRendererProps) {
         }),
       });
 
-      // Phase 4 (Task 15): success path now uses `respondAction(message, { submissionId })`
-      // which produces `{ message, submissionId }` (no `success` flag, no outer
-      // `data` wrapper). Failure path uses the canonical
-      // `{ error: { code, message, data?: { errors? } } }` shape via
-      // NextlyError.toResponseJSON. Validation errors arrive in
-      // `error.data.errors` as `{ path, code, message }[]`.
+      // Success body is `{ message, submissionId }`; failure body is
+      // `{ error: { code, message, data?: { errors? } } }`.
+      // Validation errors arrive in `error.data.errors` as
+      // `{ path, code, message }[]`.
       const responseData = (await response.json().catch(() => null)) as
         | { message?: string; submissionId?: string }
         | {
@@ -667,15 +665,12 @@ export default function FormsPage() {
       // Use the unified admin API endpoint
       const response = await fetch("/admin/api/forms");
       if (response.ok) {
-        // Phase 4 (Task 15): /admin/api/forms now returns the canonical
-        // ListResponse shape `{ items, meta }` directly (per response-shapes.ts
-        // `respondList`), with no outer `{ data: ... }` envelope and no
-        // legacy `success` flag. Read forms off `result.items`.
+        // /admin/api/forms returns `{ items, meta }`.
         const result = (await response.json()) as { items?: Form[] };
         setForms(result.items ?? []);
         setError(null);
       } else {
-        // Phase 4 (Task 15): error wire shape is `{ error: { message, code, ... } }`.
+        // Error wire shape is `{ error: { message, code, ... } }`.
         // Surface the public message when available; fall back otherwise.
         const errorBody = (await response.json().catch(() => null)) as {
           error?: { message?: string };

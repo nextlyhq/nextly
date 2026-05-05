@@ -44,10 +44,8 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
- * Fetch permissions with pagination, search, and sorting.
- *
- * Phase 4.7: pass canonical ListResponse through, mapping `items` over
- * the toPermission shaper. The legacy normalizePagination adapter is gone.
+ * Fetch permissions with pagination, search, and sorting. Maps
+ * `items` through the toPermission shaper.
  */
 export const fetchPermissions = async (
   params: TableParams
@@ -65,8 +63,6 @@ export const fetchPermissions = async (
 
 /**
  * Get a single permission by ID.
- *
- * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export const getPermissionById = async (
   permissionId: string
@@ -81,11 +77,9 @@ export const getPermissionById = async (
 };
 
 /**
- * Update a permission's fields.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiPermissionEntry>`;
- * we still re-fetch via getPermissionById to surface any server-derived
- * fields the mutation result may not include.
+ * Update a permission's fields. Re-fetches via getPermissionById
+ * after the mutation to surface any server-derived fields the
+ * MutationResponse body may not include.
  */
 export const updatePermission = async (
   permissionId: string,
@@ -105,10 +99,8 @@ export const updatePermission = async (
 };
 
 /**
- * Delete a permission by ID.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiPermissionEntry>`;
- * we discard the body.
+ * Delete a permission by ID. Caller expects void; we discard the
+ * response body.
  */
 export const deletePermission = async (permissionId: string): Promise<void> => {
   await fetcher<MutationResponse<ApiPermissionEntry>>(

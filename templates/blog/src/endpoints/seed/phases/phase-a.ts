@@ -15,7 +15,7 @@
  * findings/02-phase-0-verifications.md.
  */
 
-import type { Nextly } from "@revnixhq/nextly";
+import { container, type Nextly } from "@revnixhq/nextly";
 
 import type { SchemaManifest } from "../schema-manifest";
 
@@ -63,19 +63,14 @@ export async function runPhaseA(
     return result;
   }
 
-  // Resolve services lazily — we tolerate environments where one of
-  // them isn't registered (e.g., singles registry name varies). Failures
-  // become warnings, not throws, so a partial Phase A doesn't poison
-  // the rest of the seed.
-  const container = (
-    nextly as unknown as {
-      container: {
-        get: <T>(name: string) => T;
-        has?: (name: string) => boolean;
-      };
-    }
-  ).container;
-
+  // Resolve services from the DI container — `container` is exported
+  // directly from `@revnixhq/nextly` for cases like this where a
+  // template needs an internal service that isn't part of the public
+  // Nextly instance API. `nextly.meta` is the high-level surface;
+  // schema-registry services are lower-level and only used here.
+  // (Confirms availability via getNextly() boot above — the container
+  // is populated by the time the seed POST handler runs.)
+  void nextly; // initialisation is the side-effect we needed
   const collectionRegistry = container.get<CollectionRegistryLike>(
     "dynamicCollectionRegistryService"
   );
@@ -134,6 +129,8 @@ export async function runPhaseA(
       const userFields = container.get<UserFieldDefinitionServiceLike>(
         "userFieldDefinitionService"
       );
+      // Some Nextly versions register the service without get/register
+      // shorthands; we degrade gracefully.
       if (userFields.exists && userFields.register) {
         for (const field of manifest.userExtensionFields) {
           const has = await userFields.exists(field.name).catch(() => false);

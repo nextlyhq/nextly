@@ -8,12 +8,8 @@
  * Generates a password reset token and sends email when the email is
  * registered; silently returns the same generic message when it is not.
  */
-// CSRF double-submit cookie + origin check. Restored after c80d2982
-// reverted the earlier restore in 4bc0d9ee. See docs/auth/csrf.md.
+// CSRF double-submit cookie + origin check. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
-// Phase 4 (Task 10): respondAction emits the canonical `{ message }`
-// success body. The generic message is preserved verbatim so spec §13.3
-// anti-enumeration still holds.
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
@@ -27,7 +23,7 @@ export interface ForgotPasswordHandlerDeps {
   /**
    * Throws NextlyError on internal failure. The handler always swallows
    * NotFound / Invalid email lookups and returns the generic silent-success
-   * message anyway — no caller-visible distinction between matched and
+   * message anyway, with no caller-visible distinction between matched and
    * unmatched emails.
    */
   generatePasswordResetToken: (
@@ -36,17 +32,17 @@ export interface ForgotPasswordHandlerDeps {
   ) => Promise<{ token?: string }>;
 }
 
-// Phase 4 / spec §7.6: canonical generic forgot-password message. Must
-// not echo the user-supplied email back (spec §13.8) and must be byte-
-// identical regardless of whether the email is registered (spec §13.3
-// anti-enumeration).
+// Canonical generic forgot-password message per spec §7.6. Must
+// not echo the user-supplied email back (spec §13.8) and must be
+// byte-identical regardless of whether the email is registered (spec
+// section 13.3 anti-enumeration).
 const SILENT_MESSAGE =
   "If an account exists for this email, a password reset link has been sent.";
 
 /**
- * Audit H2 (T-011): validate the user-supplied `redirectPath` before
- * passing it to the password-reset email builder. An unvalidated value
- * lets an attacker turn the reset email into a phishing redirect.
+ * Validate the user-supplied `redirectPath` before passing it to the
+ * password-reset email builder. An unvalidated value lets an attacker
+ * turn the reset email into a phishing redirect.
  *
  * Accepts:
  *   - Relative paths under `/admin/*` (the legitimate use-case for
@@ -166,13 +162,13 @@ export async function handleForgotPassword(
       });
     }
 
-    // Audit H2 (T-011): validate redirectPath. The reset email embeds it
-    // in the link, so an attacker who can post arbitrary requests to
-    // /auth/forgot-password (no auth required) can craft a phishing
-    // link that looks like a legitimate reset email but redirects the
-    // victim to a controlled site. Reject with a silent fallback to
-    // avoid breaking the existing enumeration protection (the caller
-    // must not be able to distinguish "bad email" from "bad redirect").
+    // Validate redirectPath. The reset email embeds it in the link, so
+    // an attacker who can post arbitrary requests to /auth/forgot-password
+    // (no auth required) can craft a phishing link that looks like a
+    // legitimate reset email but redirects the victim to a controlled
+    // site. Reject with a silent fallback to avoid breaking the existing
+    // enumeration protection (the caller must not be able to distinguish
+    // "bad email" from "bad redirect").
     const safeRedirectPath = sanitizeRedirectPath(redirectPath);
 
     // Per spec §13.3: even if generatePasswordResetToken throws because the
@@ -197,7 +193,7 @@ export async function handleForgotPassword(
     }
 
     await stallResponse(startTime, deps.loginStallTimeMs);
-    // Phase 4 / spec §7.6: silent success body is just `{ message }`.
+    // Silent success body is just `{ message }` per spec §7.6.
     return respondAction(
       SILENT_MESSAGE,
       {},

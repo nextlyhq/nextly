@@ -131,9 +131,7 @@ const nextConfig: NextConfig = {
       "@revnixhq/adapter-postgres": [
         "../../packages/adapter-postgres/src/index.ts",
       ],
-      "@revnixhq/adapter-mysql": [
-        "../../packages/adapter-mysql/src/index.ts",
-      ],
+      "@revnixhq/adapter-mysql": ["../../packages/adapter-mysql/src/index.ts"],
       "@revnixhq/adapter-sqlite": [
         "../../packages/adapter-sqlite/src/index.ts",
       ],
@@ -162,9 +160,7 @@ const nextConfig: NextConfig = {
       "@nextly/actions": ["../../packages/nextly/src/actions/index.ts"],
       "@nextly/api/*": ["../../packages/nextly/src/api/*"],
       "@nextly/auth/*": ["../../packages/nextly/src/auth/*"],
-      "@nextly/collections": [
-        "../../packages/nextly/src/collections/index.ts",
-      ],
+      "@nextly/collections": ["../../packages/nextly/src/collections/index.ts"],
       "@nextly/collections/*": ["../../packages/nextly/src/collections/*"],
       "@nextly/database/*": ["../../packages/nextly/src/database/*"],
       "@nextly/di/*": ["../../packages/nextly/src/di/*"],
@@ -177,9 +173,7 @@ const nextConfig: NextConfig = {
       "@nextly/storage": ["../../packages/nextly/src/storage/index.ts"],
       "@nextly/storage/*": ["../../packages/nextly/src/storage/*"],
       "@nextly/types/*": ["../../packages/nextly/src/types/*"],
-      "@nextly/validation": [
-        "../../packages/nextly/src/validation/index.ts",
-      ],
+      "@nextly/validation": ["../../packages/nextly/src/validation/index.ts"],
       "@nextly/validation/*": ["../../packages/nextly/src/validation/*"],
       // Stubs / native-deps resolution. pg + mysql2 stubs predate this commit
       // and remain load-bearing for Turbopack's optional-peer-dep handling
@@ -187,12 +181,12 @@ const nextConfig: NextConfig = {
       pg: "pg",
       "mysql2/promise": "./src/stubs/mysql2-stub.js",
       mysql2: "./src/stubs/mysql2-stub.js",
-      // CSS files come from dist (the build-css.mjs pipeline applies the
-      // .adminapp scoping post-process; Phase 2 added a watch loop so the
-      // dist file stays fresh during dev). With @revnixhq/admin aliased to
-      // src above, Turbopack stops consulting admin's package.json exports
-      // for subpaths — so the CSS alias is now load-bearing (not dead config
-      // as it was before this commit).
+      // CSS files come from dist (the build-css.mjs pipeline applies
+      // the .adminapp scoping post-process and runs a watch loop so
+      // the dist file stays fresh during dev). With @revnixhq/admin
+      // aliased to src above, Turbopack stops consulting admin's
+      // package.json exports for subpaths — so the CSS alias is
+      // load-bearing.
       "@revnixhq/admin/style.css": [
         "../../packages/admin/dist/styles/globals.css",
       ],

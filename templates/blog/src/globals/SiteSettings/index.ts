@@ -2,8 +2,7 @@
  * SiteSettings single: global configuration for the blog site.
  *
  * Used by Header, Footer, and SEO metadata to display the site name,
- * tagline, logo, and public social handles. Additional singles
- * (Navigation, Homepage) are added in Task 17 Sub-task 5.
+ * tagline, logo, and public social handles.
  */
 import {
   defineSingle,

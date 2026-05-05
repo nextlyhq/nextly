@@ -8,13 +8,9 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
- * and return canonical `respondX` envelopes per spec §5.1 (bare doc on GET,
- * `{ message, item }` on PATCH, 204 on DELETE). Errors serialize as
- * `application/problem+json`. The legacy route-layer `FORBIDDEN to LOCKED`
- * remap is dropped; the registry now throws `NextlyError.forbidden` with the
- * `collection-locked` reason in `logContext`, and the wire surface stays
- * canonical FORBIDDEN.
+ * Locked code-first collections surface as canonical FORBIDDEN: the registry
+ * throws `NextlyError.forbidden` with the `collection-locked` reason in
+ * `logContext`.
  *
  * @example
  * ```typescript
@@ -164,7 +160,7 @@ export const PATCH = withErrorHandler(
 
     const { slug } = await context.params;
 
-    // Body parse failure is a client error — surface as a single-issue
+    // Body parse failure is a client error; surface as a single-issue
     // validation rather than letting the SyntaxError become a 500.
     let body: Record<string, unknown>;
     try {

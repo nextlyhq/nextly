@@ -69,8 +69,6 @@ export default function ContentPage() {
     try {
       const response = await fetch("/admin/api/collections");
       const result = await response.json();
-      // Phase 4 (Task 15 fix): canonical respondList shape - { items, meta }
-      // Previously read result.data.data (legacy enhancedFetcher envelope).
       if (Array.isArray(result.items)) {
         setCollections(result.items);
       }
@@ -86,8 +84,6 @@ export default function ContentPage() {
         `/admin/api/collections/${collectionName}/entries`
       );
       const result = await response.json();
-      // Phase 4 (Task 15 fix): canonical respondList shape - { items, meta }
-      // Previously read result.data.data (legacy enhancedFetcher envelope).
       if (Array.isArray(result.items)) {
         setEntries(result.items);
       } else {
@@ -117,8 +113,6 @@ export default function ContentPage() {
         `/admin/api/collections/${collectionName}/entries`
       );
       const result = await response.json();
-      // Phase 4 (Task 15 fix): canonical respondList shape - { items, meta }
-      // Previously read result.data.data (legacy enhancedFetcher envelope).
       if (Array.isArray(result.items)) {
         return result.items;
       }
@@ -207,18 +201,12 @@ export default function ContentPage() {
       const result = await response.json();
 
       if (response.ok) {
-        // Phase 4 (Task 15 fix): respondMutation returns { message, item }.
-        // We do not need the created item here, but if we did, it would be
-        // result.item rather than the legacy result.data.
         setMessage("Entry created successfully!");
         setShowForm(false);
         setFormData({});
         // void: post-submit refresh is fire-and-forget; UI already updated.
         void loadEntries(selectedCollection.name);
       } else {
-        // Phase 4 (Task 15 fix): canonical error envelope from
-        // withErrorHandler / routeHandler error path:
-        // { error: { code, message, requestId, ... } }.
         const message = result?.error?.message ?? "Failed to create entry";
         setMessage(`Error: ${message}`);
       }
@@ -251,9 +239,6 @@ export default function ContentPage() {
         // void: post-delete refresh is fire-and-forget; UI already updated.
         void loadEntries(selectedCollection.name);
       } else {
-        // Phase 4 (Task 15 fix): canonical error envelope from
-        // withErrorHandler / routeHandler error path:
-        // { error: { code, message, requestId, ... } }.
         const message = result?.error?.message ?? "Failed to delete entry";
         setMessage(`Error: ${message}`);
       }

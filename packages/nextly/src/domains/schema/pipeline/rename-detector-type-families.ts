@@ -14,7 +14,7 @@
 // byte representation differs. SQLite/MySQL "uuid" columns are conventional
 // text/char(36) and naturally fall into the text family.
 //
-// See spec section 3.4 (introspection) for where `fromType` comes from at
+// See spec §3.4 (introspection) for where `fromType` comes from at
 // runtime.
 
 import type { SupportedDialect } from "@revnixhq/adapter-drizzle/types";

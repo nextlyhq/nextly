@@ -74,9 +74,6 @@ const buildQuery = (params: TableParams): string => {
 
 /**
  * Fetch paginated list of Component definitions.
- *
- * Phase 4.7: pass canonical ListResponse straight through. The legacy
- * normalizePagination adapter is gone.
  */
 export const fetchComponents = async (
   params: TableParams
@@ -87,11 +84,9 @@ export const fetchComponents = async (
 };
 
 /**
- * Delete a Component definition by slug.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiComponent>` or
- * `ActionResponse` (delete may be either depending on whether the dispatcher
- * surfaces the deleted record); we discard the body.
+ * Delete a Component definition by slug. Caller expects void;
+ * we discard the response body (which may be MutationResponse or
+ * ActionResponse depending on the dispatcher path).
  */
 export const deleteComponent = async (componentSlug: string): Promise<void> => {
   await fetcher<MutationResponse<unknown>>(
@@ -106,11 +101,11 @@ export const deleteComponent = async (componentSlug: string): Promise<void> => {
 /**
  * Component API service object.
  *
- * Phase 4.6c: server emits canonical `respondX` shapes (spec §5.1). list ->
- * `ListResponse<T>`; bare reads -> `T`; create/update -> `MutationResponse<T>`
- * (`{ message, item }`). We surface the bare `ApiComponent` to callers so
- * mutations match the read shape; toast text comes from `message` when
- * needed.
+ * Server emits canonical `respondX` shapes (spec §5.1): list ->
+ * `ListResponse<T>`; bare reads -> `T`; create/update ->
+ * `MutationResponse<T>`. We surface the bare `ApiComponent` to
+ * callers so mutations match the read shape; toast text comes from
+ * `message` when needed.
  */
 export const componentApi = {
   fetchComponents,

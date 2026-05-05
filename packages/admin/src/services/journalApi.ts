@@ -41,11 +41,10 @@ export interface ListJournalParams {
 }
 
 export const journalApi = {
-  // Phase 4 (Task 19): the schema-journal handler emits
-  // `respondData({ rows, hasMore })` (cursor-style read; respondList
-  // would need synthetic total/page/totalPages this query never produces),
-  // so the wire body IS the JournalListResponse shape. Type the fetcher
-  // generic directly without an envelope wrapper.
+  // The schema-journal handler emits a cursor-style
+  // `{ rows, hasMore }` body — respondList would need synthetic
+  // total/page/totalPages this query never produces — so we type the
+  // fetcher generic with the bare JournalListResponse shape.
   list: (params: ListJournalParams = {}) => {
     const search = new URLSearchParams();
     if (params.limit !== undefined) search.set("limit", String(params.limit));

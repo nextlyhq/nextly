@@ -1,43 +1,46 @@
 ---
 title: Database support and version requirements
-description: Minimum supported versions, cloud provider compatibility, and the warn-and-proceed policy for MySQL-compatible variants.
+description: Minimum supported database versions, cloud-provider compatibility, and the warn-and-proceed policy for MySQL-compatible variants.
 ---
 
-Nextly supports PostgreSQL, MySQL, and SQLite through dedicated adapter packages. Each connect attempt verifies the database version is at or above the minimum Nextly requires. Older real PostgreSQL/MySQL/SQLite versions are refused at boot with a clear upgrade pointer; recognized cloud-flavored MySQL variants are allowed to proceed with a one-time warning.
+Nextly supports PostgreSQL, MySQL, and SQLite through dedicated adapter packages. Each `connect()` call queries the database for its version string and validates it against the minimum Nextly requires. Real PostgreSQL / MySQL / SQLite below minimum hard-fails with an upgrade pointer; recognized MySQL-compatible variants warn and proceed; completely unparseable strings hard-fail at boot rather than silently letting you hit cryptic errors mid-apply.
 
 ## Minimum versions
 
-| Database | Minimum | Why this minimum |
-|----------|---------|------------------|
-| PostgreSQL | 15.0 | Native MERGE statement support; modern btree dedup; full transactional DDL parity. PG 15 is the oldest version still in upstream support. |
-| MySQL | 8.0 | Native `RENAME COLUMN` (8.0); replaces MySQL 5.7's `CHANGE COLUMN` recreate dance. 8.0 is the only modern major in active support. |
-| SQLite | 3.38 | Native `unixepoch()`, strict tables, and improved query planner. 3.38 ships with most distributions Nextly's pinned `better-sqlite3` supports. |
+| Database | Minimum | Why |
+|----------|---------|-----|
+| PostgreSQL | **15.0** | Native `MERGE`, modern btree dedup, full transactional DDL parity. PG 15 is the oldest version still in upstream support. |
+| MySQL | **8.0** | Native `RENAME COLUMN` (replaces MySQL 5.7's `CHANGE COLUMN` recreate dance). 8.0 is the only modern major in active upstream support. |
+| SQLite | **3.38** | Native `unixepoch()`, strict tables, improved query planner. 3.38 ships with most distributions; the pinned `better-sqlite3` ships an even newer build. |
 
-If your database reports a version below the minimum, the adapter's `connect()` call throws `UnsupportedDialectVersionError` with a message pointing at this page.
+If your database reports a version below the minimum, the adapter's `connect()` throws `UnsupportedDialectVersionError` with a message that links back to this page.
 
-## Cloud provider compatibility
+## Cloud-provider compatibility
 
 ### PostgreSQL — supported
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| Standard PostgreSQL (self-hosted, Docker, RDS, Cloud SQL) | Supported | All versions 15.0+ work without configuration. |
-| [Neon](https://neon.tech) | Supported | Auto-detected from URL pattern. Cold-start retries built into the adapter. |
-| [Supabase](https://supabase.com) | Supported | Auto-detected. SSL enforced. |
-| AWS RDS / Aurora PostgreSQL (PG-flavored Aurora, not MySQL Aurora) | Supported | RDS reports as standard PostgreSQL; Aurora PG also passes the version check on the PG-compatible majors. |
+| Standard PostgreSQL (self-hosted, Docker, RDS, Cloud SQL) | Supported | Any 15.0+ build works without configuration. |
+| [Neon](https://neon.tech) | Supported | Auto-detected from URL pattern (`*.neon.tech`). Cold-start retries built into the adapter. SSL on by default. |
+| [Supabase](https://supabase.com) | Supported | Auto-detected from URL pattern (`*.supabase.com` / `*.supabase.co`). SSL on by default. Use the connection-pooler endpoint from **Project Settings -> Database**. |
+| AWS RDS / Aurora PostgreSQL (PG-flavored, not MySQL Aurora) | Supported | RDS reports as standard PostgreSQL; PG-compatible Aurora majors pass the version check. |
+| Vercel Postgres | Supported | Backed by Neon -- treat as Neon. |
+| Railway | Supported | Standard PostgreSQL image. |
+| Cloud SQL (Postgres) | Supported | Standard PostgreSQL with SSL recommended. |
 
 ### MySQL — supported with warnings for variants
 
-Nextly v1 is regression-tested against **real MySQL 8.0+** only. MySQL-protocol-compatible variants are recognized at connect, log a one-time warning through your adapter's logger, and proceed:
+Nextly is regression-tested against **real MySQL 8.0+** only. MySQL-protocol-compatible variants are recognized at connect, log a one-time warning through the adapter's logger, and proceed:
 
 | Variant | Behavior |
 |---------|----------|
 | **MariaDB** (any version) | Warning + proceed. Wire-compatible with MySQL; most operations work but feature drift is possible on advanced SQL. |
 | **TiDB** | Warning + proceed. Advertises MySQL 5.7 protocol; modern TiDB versions support enough MySQL 8 features for typical CMS workloads. |
 | **AWS Aurora MySQL** | Warning + proceed. Internal version reporting differs from upstream MySQL. |
-| **PlanetScale / Vitess** | Warning + proceed. Vitess-based MySQL-compatible layer. |
+| **PlanetScale / Vitess** | Warning + proceed. Vitess-based MySQL-compatible layer. Caveat: PlanetScale's serverless connection model (no foreign keys by default, branched schemas) may surface other issues. |
 
-The warning text routes through the adapter's configured logger and looks like this:
+The warning text routes through your adapter's configured logger and looks like:
 
 ```
 Detected mariadb ('10.11.5-MariaDB-...'). Nextly is regression-tested
@@ -46,45 +49,53 @@ officially supported in v1 but most operations should work. See
 https://nextlyhq.com/docs/database/support.
 ```
 
-If you hit a variant-specific bug, please file an issue with your variant + version. v2 will add opt-in regression coverage for individual variants.
+If a MySQL response is **completely unparseable** -- no version number AND no variant token detected -- Nextly hard-fails at boot.
 
-If a MySQL response is **completely unparseable** (no version number found AND no variant token detected), Nextly hard-fails so the issue surfaces at boot rather than mid-apply later.
+If you hit a variant-specific bug, please file an issue with your variant + version. v2 will add opt-in regression coverage for individual variants.
 
 ### SQLite — supported
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| `better-sqlite3` (default) | Supported | Bundled SQLite is whatever ships with the pinned `better-sqlite3` version (currently 3.45+). |
-| `bun:sqlite` | Not yet supported | Adapter is in scaffold state. |
-| `libSQL` / Turso | Not yet supported | Adapter is in scaffold state. |
+| `better-sqlite3` (default) | Supported | Bundled SQLite ships with the pinned `better-sqlite3` (currently 3.45+). |
+| `bun:sqlite` | Not yet supported | No adapter. |
+| `libSQL` / Turso | Not yet supported | No adapter. |
+
+## Production-migrations rules
+
+- **Forward-only.** No `migrate:rollback` or `migrate:down` exists. To undo a deployed change, write a NEW migration that reverses it.
+- **Schema lives in your repo.** `nextly migrate:create --name=...` scaffolds an empty migration; you commit it; CI applies it before deploy.
+- **The deployed app never touches the schema.** `migrate:fresh` is destructive and CLI-only -- it is rejected if imported from runtime code.
+
+For platform-specific deploy patterns (Vercel + GitHub Actions, Vercel build step, "other platforms"), see [production migrations](/docs/guides/production-migrations).
 
 ## Upgrade guidance
 
 ### PostgreSQL
 
-If you are on PG 12, 13, or 14: most managed providers offer in-place major-version upgrades. Run `SELECT version()` to confirm; consult your provider's docs for upgrade procedure.
+If you are on PG 12 / 13 / 14: most managed providers offer in-place major-version upgrades. Run `SELECT version()` to confirm; consult your provider's docs for the upgrade procedure. For self-hosted, follow the standard `pg_upgrade` workflow.
 
 ### MySQL
 
-If you are on MySQL 5.7: upstream support ended in October 2023. Your provider almost certainly offers a managed upgrade to 8.0. Test the upgrade in a staging environment first since some 5.7 SQL is incompatible with 8.0 reserved-word changes.
+If you are on MySQL 5.7: upstream support ended in October 2023. Your provider almost certainly offers a managed upgrade to 8.0. Test the upgrade in staging first -- some 5.7 SQL is incompatible with 8.0 reserved-word changes.
 
 ### SQLite
 
-Bundled with `better-sqlite3` — upgrade by bumping the package version. If you maintain your own SQLite linkage, install at least 3.38 from your distribution's package manager.
+Bundled with `better-sqlite3`. Upgrade by bumping that package. If you maintain your own SQLite linkage, install at least 3.38 from your distribution's package manager.
 
 ## Why the policy is hybrid
 
 Nextly draws three different lines at connect time:
 
-1. **Real PG/MySQL/SQLite below minimum → hard-fail.** Schema migrations rely on dialect features at the minimum-version threshold (RENAME COLUMN, transactional DDL, MERGE, strict tables). A real MySQL 5.7 user who proceeded would hit confusing mid-apply errors during their first schema change.
-2. **Recognized variant (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) → warn and proceed.** These are real cloud databases millions of developers run. Hard-failing them on first install would block legitimate users from a CMS that mostly works on their stack. The warning makes the trade-off explicit.
-3. **Completely unparseable string → hard-fail.** If we cannot find a version number AND cannot detect a variant token, we surface the issue immediately rather than silently letting the user proceed and hit cryptic errors later.
+1. **Real PG / MySQL / SQLite below minimum -> hard-fail.** Schema migrations rely on dialect features at the minimum-version threshold (`RENAME COLUMN`, transactional DDL, `MERGE`, strict tables). A real MySQL 5.7 user who proceeded would hit confusing mid-apply errors during their first schema change.
+2. **Recognized variant (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) -> warn and proceed.** These are real cloud databases millions of developers run. Hard-failing them on first install would lock out legitimate users from a CMS that mostly works on their stack. The warning makes the trade-off explicit.
+3. **Completely unparseable string -> hard-fail.** If we cannot find a version number AND cannot detect a variant token, we surface the issue immediately rather than silently proceeding into cryptic errors.
 
-The error and warning paths both include a link to this page so users know the upgrade lever or, for variants, that they are running on best-effort support.
+The error and warning paths both link to this page so users know the upgrade lever or, for variants, that they are running on best-effort support.
 
 ## When the version check runs
 
-`checkDialectVersion()` runs inside each adapter's `connect()` method, after the connection is verified alive but before the adapter marks itself ready. PostgreSQL retries transient network failures (Neon cold starts, `EAI_AGAIN`) without re-running the version query in a tight loop; only confirmed version mismatches throw `UnsupportedDialectVersionError`.
+`checkDialectVersion()` runs inside each adapter's `connect()`, after the connection is verified alive but before the adapter marks itself ready. PostgreSQL retries transient network failures (Neon cold starts, `EAI_AGAIN`) without re-running the version query in a tight loop; only confirmed version mismatches throw `UnsupportedDialectVersionError`.
 
 ## Catching the error
 
@@ -98,10 +109,18 @@ try {
 } catch (error) {
   if (error instanceof UnsupportedDialectVersionError) {
     console.error(
-      `Detected ${error.detectedVersion}, required ${error.requiredVersion}`
+      `Detected ${error.detectedVersion}, required ${error.requiredVersion}`,
     );
     process.exit(1);
   }
   throw error;
 }
 ```
+
+## Next steps
+
+- [Database overview](/docs/database) -- feature comparison across dialects
+- [PostgreSQL setup](/docs/database/postgres) -- recommended for production
+- [MySQL setup](/docs/database/mysql) -- supported with caveats
+- [SQLite setup](/docs/database/sqlite) -- local demo only
+- [Production migrations](/docs/guides/production-migrations) -- forward-only deploy patterns

@@ -1,7 +1,7 @@
 /**
  * Single Blog Post Page
  *
- * Full post rendering with the Task 17 post-detail treatment:
+ * Full post rendering:
  *   Reading progress bar (article-scoped)
  *   Category badge + title + meta row (author, date, reading time)
  *   Share bar (Twitter/X, LinkedIn, Copy link)
@@ -32,6 +32,7 @@ import { PostTOC } from "@/components/PostTOC";
 import { ReadingProgressBar } from "@/components/ReadingProgressBar";
 import { RichTextRenderer } from "@/components/RichTextRenderer";
 import { extractToc } from "@/lib/extract-toc";
+import { formatPublishedDate } from "@/lib/format-date";
 import {
   getAdjacentPosts,
   getAllPostSlugs,
@@ -120,13 +121,11 @@ export default async function PostPage({
   const rawHtml = typeof post.content === "string" ? post.content : "";
   const { html: bodyHtml, toc } = extractToc(rawHtml);
 
-  const formattedDate = post.publishedAt
-    ? new Date(post.publishedAt).toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      })
-    : null;
+  const formattedDate = formatPublishedDate(post.publishedAt, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 
   const postUrl = absoluteUrl(`/blog/${slug}`);
 

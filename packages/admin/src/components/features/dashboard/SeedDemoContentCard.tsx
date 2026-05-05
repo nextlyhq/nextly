@@ -59,10 +59,12 @@ export function SeedDemoContentCard() {
     <Card
       className={cn(
         "group/card relative rounded-none border-primary/5 bg-primary/[0.01] backdrop-blur-md overflow-hidden transition-all duration-700 hover:border-primary/40",
+        // Subtle hairline tint — no gradient flood. The accent bar at
+        // the top carries the dominant color cue; the card body stays
+        // neutral so the eye reads the content first, status second.
         (eyebrowState === "success" || eyebrowState === "success-partial") &&
-          "border-success/25 bg-gradient-to-b from-success/[0.04] to-transparent",
-        eyebrowState === "error" &&
-          "border-destructive/30 bg-gradient-to-b from-destructive/[0.04] to-transparent"
+          "border-success/15",
+        eyebrowState === "error" && "border-destructive/20"
       )}
     >
       <AccentBar state={accentState} />
@@ -84,8 +86,8 @@ export function SeedDemoContentCard() {
             {(eyebrowState === "success" ||
               eyebrowState === "success-partial") && (
               <Check
-                className="h-[22px] w-[22px] text-success shrink-0"
-                strokeWidth={3}
+                className="h-[18px] w-[18px] text-success shrink-0"
+                strokeWidth={2.5}
                 aria-hidden="true"
               />
             )}
@@ -245,8 +247,8 @@ export function SeedDemoContentCard() {
 
         {status.kind === "error" && (
           <>
-            <div className="font-mono text-[12px] text-foreground bg-destructive/[0.04] border border-destructive/20 px-4 py-3 rounded-none">
-              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-destructive mb-1">
+            <div className="font-mono text-[12px] text-foreground bg-primary/[0.02] border border-destructive/15 px-4 py-3 rounded-none">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-destructive/80 mb-1">
                 Error
               </div>
               {status.message}

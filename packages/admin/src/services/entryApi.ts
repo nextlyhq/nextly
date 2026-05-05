@@ -11,7 +11,7 @@
  * // Use query keys for caching
  * const queryKey = entryKeys.list('posts', { page: 1, limit: 10 });
  *
- * // Fetch entries (canonical ListResponse shape per spec section 5.1)
+ * // Fetch entries (canonical ListResponse shape per spec §5.1)
  * const result = await entryApi.find('posts', { page: 1, limit: 10 });
  * console.log(result.items);          // Entry[]
  * console.log(result.meta.total);     // Total count
@@ -99,19 +99,6 @@ export type CreateEntryPayload = Record<string, EntryValue>;
  * Update entry payload (partial)
  */
 export type UpdateEntryPayload = Record<string, EntryValue>;
-
-// Phase 4.5: the local `BulkOperationResult` admin shape was deleted in
-// favor of the canonical `BulkResponse<T>` from `lib/api/response-types`,
-// which mirrors the server's respondBulk envelope `{ message, items, errors }`
-// (errors[] carries `{ id, code, message }` per item, with `code` a
-// canonical NextlyErrorCode string). Single source of truth + single
-// round-trip + structured per-item failure surface.
-
-// Phase 4.7: dropped the local PaginatedDocs envelope and the
-// fetchEntries->TableResponse adapter; the find() method now returns
-// canonical ListResponse directly. Consumers read result.items and
-// result.meta.{total,page,limit,totalPages,hasNext,hasPrev} per spec
-// section 5.1.
 
 // ============================================================================
 // Query Keys (TanStack Query v5 Pattern)
@@ -230,9 +217,6 @@ export const buildFindQuery = (params: FindParams): string => {
   const query = new URLSearchParams();
 
   // Pagination (convert to backend format).
-  // Phase 4 (Task 19): backend now reads `limit` (canonical name) instead of
-  // the legacy `pageSize`. Send `limit` directly so we don't have to rename
-  // again in Task 23 cleanup.
   if (params.page !== undefined) {
     query.set("page", String(params.page));
   }
@@ -488,10 +472,8 @@ export const entryApi = {
     const queryString = query.toString();
     const url = `/collections/${collectionSlug}/entries/count${queryString ? `?${queryString}` : ""}`;
 
-    // Phase 4 (Task 19): server emits canonical `respondCount(total)`
-    // (`{ total }`). The legacy admin contract surfaces the count as
-    // `{ totalDocs }`, so we map the canonical field to the existing key
-    // without renaming the public CountResult type used by callers.
+    // Server emits `{ total }`; the public CountResult type still
+    // uses `totalDocs`, so map the field without renaming callers.
     const result = await protectedApi.get<{ total: number }>(url);
     return { totalDocs: result.total };
   },
@@ -516,9 +498,6 @@ export const entryApi = {
     collectionSlug: string,
     data: CreateEntryPayload
   ): Promise<Entry> => {
-    // Phase 4 (Task 19): server returns `MutationResponse<Entry>`
-    // (`{ message, item }`); existing callers expect a bare Entry, so we
-    // project `item`.
     const result = await protectedApi.post<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries`,
       data
@@ -547,8 +526,6 @@ export const entryApi = {
     id: string,
     data: UpdateEntryPayload
   ): Promise<Entry> => {
-    // Phase 4 (Task 19): mutations return `MutationResponse<Entry>`; project
-    // `item` to keep the bare-Entry public signature.
     const result = await protectedApi.patch<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries/${id}`,
       data
@@ -557,7 +534,7 @@ export const entryApi = {
   },
 
   /**
-   * Bulk update entries matching a where clause (Phase 4.5).
+   * Bulk update entries matching a where clause.
    *
    * Hits `PATCH /api/collections/{slug}/entries` (server `bulkUpdateByQuery`).
    * Single round-trip; server runs per-row updates concurrently with full
@@ -593,7 +570,7 @@ export const entryApi = {
   },
 
   /**
-   * Bulk update entries by id list (Phase 4.5).
+   * Bulk update entries by id list.
    *
    * Hits `POST /api/collections/{slug}/entries/bulk-update` (server
    * `bulkUpdateEntries`). Same shape as updateMany; preferred when the
@@ -637,8 +614,6 @@ export const entryApi = {
    * ```
    */
   delete: async (collectionSlug: string, id: string): Promise<Entry> => {
-    // Phase 4 (Task 19): mutations return `MutationResponse<Entry>`; project
-    // `item` so callers continue to receive the deleted entry.
     const result = await protectedApi.delete<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries/${id}`
     );
@@ -646,7 +621,7 @@ export const entryApi = {
   },
 
   /**
-   * Bulk delete entries by id list (Phase 4.5).
+   * Bulk delete entries by id list.
    *
    * Hits `POST /api/collections/{slug}/entries/bulk-delete` (server
    * `bulkDeleteEntries`). Single round-trip; server runs per-row deletes
@@ -708,9 +683,6 @@ export const entryApi = {
     id: string,
     overrides?: Record<string, unknown>
   ): Promise<Entry> => {
-    // Phase 4 (Task 19): duplicate emits `respondMutation(message, entry, 201)`;
-    // peel `item` from the canonical envelope to keep the bare-Entry public
-    // signature.
     const result = await protectedApi.post<{ message: string; item: Entry }>(
       `/collections/${collectionSlug}/entries/${id}/duplicate`,
       overrides ? { overrides } : {}

@@ -3,13 +3,11 @@
  * Verifies that a request has a valid session (access token).
  * Does NOT check permissions -- just authentication.
  *
- * PR 5 (unified-error-system): the local `AuthenticationError` class was
- * deleted in favour of throwing the canonical `NextlyError.authRequired()`
- * factory. The boundary wrapper (`withErrorHandler`) classifies the thrown
- * NextlyError and serialises it as `application/problem+json`. Account
- * state (e.g. expired vs. missing) lives in `logContext`, not on the wire,
- * so route handlers that need to distinguish the two should expose state
- * via `/api/auth/state` rather than peek at the failure code.
+ * Throws `NextlyError.authRequired()` on any failure leg. The boundary
+ * wrapper (`withErrorHandler`) serialises it as `application/problem+json`.
+ * Account state (e.g. expired vs. missing) lives in `logContext`, not on
+ * the wire, so route handlers that need to distinguish the two should
+ * expose state via `/api/auth/state` rather than peek at the failure code.
  */
 import { NextlyError } from "../../errors/nextly-error";
 import { getSession, type GetSessionResult } from "../session/get-session";

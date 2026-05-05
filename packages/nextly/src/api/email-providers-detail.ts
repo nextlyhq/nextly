@@ -14,10 +14,7 @@
  * export { GET, PATCH, DELETE } from '@revnixhq/nextly/api/email-providers-detail';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. The
- * mechanical migration preserves the legacy header-only auth check; real
- * verification lives downstream.
+ * Auth is a header-only presence check; real verification lives downstream.
  *
  * @module api/email-providers-detail
  */
@@ -89,7 +86,7 @@ export const GET = withErrorHandler(
  * - 404 Not Found: Provider with ID does not exist
  * - 500 Internal Server Error: Update failed
  *
- * Response: `{ "data": EmailProvider }` — updated provider with masked
+ * Response: `{ "data": EmailProvider }`; updated provider with masked
  * configuration.
  */
 export const PATCH = withErrorHandler(
@@ -120,7 +117,7 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing an email provider.
  *
- * Requires authentication. Cannot delete the default provider — set another
+ * Requires authentication. Cannot delete the default provider; set another
  * provider as default first.
  *
  * Response Codes:

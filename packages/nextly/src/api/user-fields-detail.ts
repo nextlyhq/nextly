@@ -14,9 +14,6 @@
  * export { GET, PATCH, DELETE } from '@revnixhq/nextly/api/user-fields-detail';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2.
- *
  * @module api/user-fields-detail
  */
 

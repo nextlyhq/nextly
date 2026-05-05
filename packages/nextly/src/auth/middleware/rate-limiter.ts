@@ -4,7 +4,7 @@
  * Lightweight in-memory sliding-window rate limiter scoped to API key IDs.
  * Each key tracks its own sliding window of request timestamps; old entries
  * are pruned on every `check()` call so the array stays bounded at `limit`
- * entries — no background cleanup interval is needed.
+ * entries; no background cleanup interval is needed.
  *
  * Intended for per-key rate limiting of API key authenticated requests.
  * Session-based requests are not rate-limited by this module.
@@ -49,8 +49,8 @@ export interface RateLimitCheckResult {
  *
  * This class is safe to use as a module-level singleton within a single
  * Node.js process. For multi-instance deployments (serverless / multi-pod),
- * rate limit state is not shared across processes — this is an accepted
- * limitation for Plan 14 scope.
+ * rate limit state is not shared across processes; this is an accepted
+ * limitation.
  */
 export class RateLimiter {
   /**
@@ -79,7 +79,7 @@ export class RateLimiter {
     const allowed = count < limit;
 
     if (allowed) {
-      // Record this request only when allowed — keeps the array bounded at `limit`
+      // Record this request only when allowed; keeps the array bounded at `limit`
       timestamps.push(now);
       this.windows.set(keyId, timestamps);
     }

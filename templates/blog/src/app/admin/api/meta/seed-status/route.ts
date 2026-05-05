@@ -22,11 +22,6 @@ const META_KEYS = {
   seedSkippedAt: "seed.skippedAt",
 } as const;
 
-interface MetaServiceLike {
-  get<T = unknown>(key: string): Promise<T | null>;
-  set(key: string, value: unknown): Promise<void>;
-}
-
 async function ensureSuperAdmin(
   request: Request
 ): Promise<{ status: number; error: string } | null> {
@@ -55,9 +50,10 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const nextly = await getNextly({ config });
-    const meta = nextly.container.get<MetaServiceLike>("metaService");
-    const completedAt = await meta.get<string>(META_KEYS.seedCompletedAt);
-    const skippedAt = await meta.get<string>(META_KEYS.seedSkippedAt);
+    const completedAt = await nextly.meta.get<string>(
+      META_KEYS.seedCompletedAt
+    );
+    const skippedAt = await nextly.meta.get<string>(META_KEYS.seedSkippedAt);
     return Response.json({
       completedAt: completedAt ?? null,
       skippedAt: skippedAt ?? null,
@@ -93,13 +89,12 @@ export async function PUT(request: Request): Promise<Response> {
 
   try {
     const nextly = await getNextly({ config });
-    const meta = nextly.container.get<MetaServiceLike>("metaService");
 
     if (typeof body.completedAt === "string") {
-      await meta.set(META_KEYS.seedCompletedAt, body.completedAt);
+      await nextly.meta.set(META_KEYS.seedCompletedAt, body.completedAt);
     }
     if (typeof body.skippedAt === "string") {
-      await meta.set(META_KEYS.seedSkippedAt, body.skippedAt);
+      await nextly.meta.set(META_KEYS.seedSkippedAt, body.skippedAt);
     }
 
     return Response.json({ message: "Seed status updated." });

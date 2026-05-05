@@ -47,8 +47,8 @@ export interface SecurityHeadersConfig {
    * Content-Security-Policy header value.
    * Set to `false` to disable.
    *
-   * Audit M3 (T-020): the previous default `default-src 'none'; frame-
-   * ancestors 'none'` was a hard "block everything" — fine on a pure
+   * The previous default `default-src 'none'; frame-ancestors 'none'`
+   * was a hard "block everything" — fine on a pure
    * JSON response (CSP doesn't enforce on JSON) but instantly broke any
    * HTML response, including the admin SPA. The new default is
    * restrictive but lets a self-hosted Nextly admin UI run end-to-end:
@@ -119,7 +119,7 @@ export interface SecurityHeadersConfig {
 // ============================================================================
 
 /**
- * Audit M3 (T-020). The default CSP is restrictive but lets a self-
+ * The default CSP is restrictive but lets a self-
  * hosted Nextly admin SPA run without an override. See the doc on
  * `SecurityHeadersConfig.contentSecurityPolicy` for the rationale and
  * the override path.
@@ -141,7 +141,7 @@ const DEFAULT_CSP = [
  * Default security header values.
  *
  * - CSP allows self-hosted SPA assets and blocks frame embedding /
- *   plugins / cross-origin form posts (Audit M3 / T-020).
+ *   plugins / cross-origin form posts.
  * - HSTS enforces HTTPS in production.
  * - X-Frame-Options prevents clickjacking (legacy browser fallback).
  * - X-Content-Type-Options prevents MIME sniffing.

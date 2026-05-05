@@ -10,17 +10,12 @@
  * export { POST } from '@revnixhq/nextly/api/email-send-template';
  * ```
  *
- * Wire shape: Phase 4 Task 11 migrates this handler off the legacy
- * `{ data: <result> }` envelope onto `respondAction` (spec §5.1). The
- * service returns `{ success, messageId? }`; the body surfaces both
- * fields plus the resolved template id alongside a server-authored
- * toast. Auth uses the existing `requireAuthentication` middleware
- * bridged to `NextlyError` via `toNextlyAuthError`. Validation flows
- * through `nextlyValidationFromZod` (F11). The attachment resolver
- * throws `NextlyError` directly (validation for caller-fixable
- * failures, internal for storage I/O); `withErrorHandler` produces the
- * canonical problem+json envelope. The machine-readable
- * `EMAIL_ATTACHMENT_*` code lives at `error.data.errors[0].code`.
+ * The service returns `{ success, messageId? }`; the body surfaces both
+ * fields plus the resolved template id alongside a server-authored toast
+ * via `respondAction`. The attachment resolver throws `NextlyError`
+ * directly (validation for caller-fixable failures, internal for storage
+ * I/O); the machine-readable `EMAIL_ATTACHMENT_*` code lives at
+ * `error.data.errors[0].code`.
  *
  * @module api/email-send-template
  */
@@ -120,9 +115,9 @@ export const POST = withErrorHandler(
         attachments: args.attachments,
       }
     );
-    // Phase 4: respondAction. Spread the service result and surface the
-    // resolved template slug so callers can correlate the queued message
-    // back to the request without storing the original payload.
+    // Spread the service result and surface the resolved template slug so
+    // callers can correlate the queued message back to the request without
+    // storing the original payload.
     return respondAction("Email queued.", {
       ...result,
       templateId: args.template,

@@ -10,10 +10,6 @@
  * export { POST } from '@revnixhq/nextly/api/email-providers-test';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
- * Validation errors flow through `nextlyValidationFromZod` (F11).
- *
  * @module api/email-providers-test
  */
 
@@ -39,7 +35,7 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
 }
 
 const testProviderSchema = z.object({
-  // Optional — when omitted the service falls back to the provider's fromEmail.
+  // Optional; when omitted the service falls back to the provider's fromEmail.
   email: z.string().email("A valid test email address is required").optional(),
 });
 
@@ -52,7 +48,7 @@ const testProviderSchema = z.object({
  * Requires authentication. Provider must be active.
  *
  * Request Body (optional):
- * - email: Email address to send the test email to (optional — falls back
+ * - email: Email address to send the test email to (optional; falls back
  *   to the provider's `fromEmail`)
  *
  * Response Codes:

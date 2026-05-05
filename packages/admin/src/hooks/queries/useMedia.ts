@@ -584,7 +584,7 @@ export function useDeleteMedia() {
  * @see {@link useDeleteMedia} - Single media deletion hook
  */
 /**
- * Options for useBulkDeleteMedia hook (Phase 4.5).
+ * Options for useBulkDeleteMedia hook.
  *
  * Surface mirrors `UseBulkDeleteEntriesOptions` so consumers see a
  * consistent shape across entity-specific bulk hooks.
@@ -610,17 +610,14 @@ export interface UseBulkDeleteMediaOptions {
 }
 
 /**
- * Bulk-delete multiple media files in a single round-trip (Phase 4.5).
+ * Bulk-delete multiple media files in a single round-trip.
  *
  * Hits `DELETE /api/media/bulk` (server `media-bulk.ts`). Server runs
  * per-id deletes concurrently via Promise.allSettled with full
- * access-control + storage-cleanup pipeline. Partial failures land in
- * `result.errors` with structured `{ id, code, message }`.
- *
- * Pre-Phase-4.5: this hook used `useBulkMutation` to fan out N parallel
- * single-item DELETE calls. The new pattern is a single round-trip to
- * the server's bulk endpoint; see useBulkEntries.ts for the same pattern
- * applied to collection entries.
+ * access-control + storage-cleanup pipeline. Partial failures land
+ * in `result.errors` with structured `{ id, code, message }`. See
+ * useBulkEntries.ts for the same pattern applied to collection
+ * entries.
  */
 export function useBulkDeleteMedia(options: UseBulkDeleteMediaOptions = {}) {
   const { onComplete, onError, showToast = true } = options;

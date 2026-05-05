@@ -37,9 +37,9 @@ describe("Health Check Route Handlers", () => {
         "public, max-age=60, stale-while-revalidate=30"
       );
 
-      // Phase 4 (Task 11): respondData emits a bare body. Health-check fields
-      // are spread alongside `version` and `uptime` so the payload is never
-      // Boolean-only (spec §5.1 rule 3 / §7.7).
+      // respondData emits a bare body. Health-check fields are spread
+      // alongside `version` and `uptime` so the payload is never Boolean-only
+      // (spec §5.1 rule 3 / §7.7).
       const json = await response.json();
       expect(json).not.toHaveProperty("data");
       expect(json.ok).toBe(true);

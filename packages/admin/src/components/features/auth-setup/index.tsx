@@ -86,10 +86,9 @@ export function Setup() {
     try {
       const csrfToken = await getCsrfToken();
 
-      // Create the admin account (auto-login: server sets access + refresh cookies).
-      // Phase 4 (Task 21): the setup handler emits
-      // `respondAction("Setup complete.", { user, ... })`; capture the
-      // result so the toast can surface the server-authored message.
+      // Create the admin account (auto-login: server sets access +
+      // refresh cookies). Capture the result so the toast can surface
+      // the server-authored message.
       const result = await api.public.post<ActionResponse>("/auth/setup", {
         name: values.fullName,
         email: values.email,
@@ -97,9 +96,8 @@ export function Setup() {
         csrfToken,
       });
 
-      // Phase 4 (Task 21): prefer the server message; fall back to the
-      // welcome string if the server omits it (defensive shim per
-      // spec §9.7).
+      // Prefer the server message; fall back to the welcome string
+      // if the server omits it (defensive shim per spec §9.7).
       toast.success(result?.message ?? "Welcome to " + appName + "!", {
         description: "Your admin account has been created.",
       });

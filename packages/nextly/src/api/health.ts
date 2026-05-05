@@ -20,7 +20,7 @@ import { readOrGenerateRequestId } from "./request-id";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
-// Phase 4 (spec §7.7): health responses must include enough fields that the
+// Per spec §7.7, health responses must include enough fields that the
 // payload is not Boolean-only. We surface the package version and process
 // uptime alongside the database probe so monitoring dashboards can read
 // "this build, this long since restart" without a separate /version probe.
@@ -50,16 +50,16 @@ const HEALTH_CACHE_CONTROL = `public, max-age=${HEALTH_CHECK_CACHE_SECONDS}, sta
 /**
  * GET handler for health check endpoint.
  *
- * Returns the current database/runtime health on the canonical Phase 4
- * `respondData` shape (bare object body). The body merges the database
- * probe with the package version and process uptime so monitoring
- * dashboards have a non-Boolean-only payload to assert against (spec
- * §5.1 rule 3 / §7.7). When the underlying check reports `ok: false`,
- * the handler throws a 503 `SERVICE_UNAVAILABLE` `NextlyError` so the
- * route boundary serializes it as `application/problem+json`. The
- * unhealthy detail (latency, dialect, error string) is logged via
- * `logContext` rather than echoed to the public response. Anonymous
- * monitoring scrapers should not learn implementation specifics.
+ * Returns the current database/runtime health as a bare object body via
+ * `respondData`. The body merges the database probe with the package
+ * version and process uptime so monitoring dashboards have a
+ * non-Boolean-only payload to assert against (spec §5.1 rule 3 / §7.7).
+ * When the underlying check reports `ok: false`, the handler throws a 503
+ * `SERVICE_UNAVAILABLE` `NextlyError` so the route boundary serializes it
+ * as `application/problem+json`. The unhealthy detail (latency, dialect,
+ * error string) is logged via `logContext` rather than echoed to the
+ * public response; anonymous monitoring scrapers should not learn
+ * implementation specifics.
  *
  * Response Codes:
  * - 200 OK: Database is healthy. Body:
@@ -86,10 +86,9 @@ export const GET = withErrorHandler(async (_request: Request) => {
     });
   }
 
-  // Phase 4: respondData. Spread the database probe and add `version` and
-  // `uptime` so the body is never Boolean-only. The spread keeps existing
-  // `ok / timestamp / database` fields in their original positions for
-  // clients that already read them.
+  // Spread the database probe and add `version` and `uptime` so the body is
+  // never Boolean-only. The spread keeps existing `ok / timestamp / database`
+  // fields in their original positions for clients that already read them.
   return respondData(
     {
       ...health,

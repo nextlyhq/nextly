@@ -3,10 +3,6 @@
  * Returns the current session user from the access token.
  * No database hit; purely stateless JWT verification.
  */
-// Phase 4 (Task 10): respondData replaces the hand-rolled `{ data: ... }`
-// envelope on the authenticated success path. Error legs continue to
-// emit `{ error: { code, message } }` directly (refresh-coalescing
-// consumers already special-case those codes).
 import { respondData } from "../../api/response-shapes";
 import {
   clearAccessTokenCookie,
@@ -27,11 +23,11 @@ export async function handleSession(
   const result = await getSession(request, deps.secret);
 
   if (result.authenticated) {
-    // Phase 4 / spec section 7.6: bare `{ user, accessToken }`. The access
-    // token already verified successfully (it's how we got here), so reading
-    // it back from the cookie is safe. We surface it in the body so
-    // non-cookie SDK consumers (mobile, CLI) can pull the live token without
-    // owning cookie storage.
+    // Bare `{ user, accessToken }` per spec §7.6. The access token
+    // already verified successfully (it's how we got here), so reading it
+    // back from the cookie is safe. We surface it in the body so
+    // non-cookie SDK consumers (mobile, CLI) can pull the live token
+    // without owning cookie storage.
     const accessToken = readAccessTokenCookie(request);
     return respondData({ user: result.user, accessToken });
   }

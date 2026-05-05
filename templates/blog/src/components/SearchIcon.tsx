@@ -2,9 +2,8 @@ import Link from "next/link";
 
 /**
  * SearchIcon - magnifier button that navigates to the dedicated
- * `/search` page (implemented in Task 17 Sub-task 11 via Pagefind).
- * Rendered in the Header's right-side icon cluster when
- * Navigation.showSearchIcon is true.
+ * `/search` page (Pagefind-backed). Rendered in the Header's
+ * right-side icon cluster when Navigation.showSearchIcon is true.
  */
 
 export function SearchIcon() {

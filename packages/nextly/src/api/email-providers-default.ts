@@ -11,9 +11,6 @@
  * export { PATCH } from '@revnixhq/nextly/api/email-providers-default';
  * ```
  *
- * Wire shape — Task 21 migration: handler wraps `withErrorHandler` and
- * returns the canonical `{ data: <result> }` envelope per spec §10.2.
- *
  * @module api/email-providers-default
  */
 
@@ -40,7 +37,7 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
  * Requires authentication. Unsets the previous default provider and sets
  * the specified provider as default in a single transaction.
  *
- * No request body required — the provider ID is in the URL path.
+ * No request body required; the provider ID is in the URL path.
  *
  * Response Codes:
  * - 200 OK: Provider set as default successfully
@@ -48,7 +45,7 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
  * - 404 Not Found: Provider with ID does not exist
  * - 500 Internal Server Error: Operation failed
  *
- * Response: `{ "data": EmailProvider }` — updated provider with `isDefault:
+ * Response: `{ "data": EmailProvider }`; updated provider with `isDefault:
  * true` and masked configuration.
  */
 export const PATCH = withErrorHandler(

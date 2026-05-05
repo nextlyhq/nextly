@@ -343,7 +343,7 @@ export default defineCollection(${collectionConfig});
   private generateAccessPlaceholder(): string {
     const i = this.indent;
     return `
-${i}// TODO: Configure access control
+${i}// Configure access control
 ${i}// access: {
 ${i}//   create: ({ req }) => !!req.user,
 ${i}//   read: () => true,
@@ -356,7 +356,7 @@ ${i}// },`;
     const i = this.indent;
     return `
 
-${i}// TODO: Configure hooks
+${i}// Configure hooks
 ${i}// hooks: {
 ${i}//   beforeChange: [
 ${i}//     async ({ data, operation }) => {

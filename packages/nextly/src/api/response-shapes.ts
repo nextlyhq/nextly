@@ -1,10 +1,9 @@
 /**
- * Canonical response-shape helpers for Phase 4. Every server handler
- * (dispatcher methods, REST endpoints, auth handlers, routeHandler
- * direct branches) converges on these instead of hand-rolling JSON.
+ * Canonical response-shape helpers. Every server handler (dispatcher
+ * methods, REST endpoints, auth handlers, routeHandler direct branches)
+ * converges on these instead of hand-rolling JSON.
  *
- * Contract lives in:
- *   docs/superpowers/specs/2026-05-01-phase-4-envelope-migration-design.md section 5.1
+ * Contract lives in the envelope spec, section 5.1.
  *
  * Eight op-types:
  *   respondList         to { items, meta }                   (paginated find)
@@ -13,13 +12,13 @@
  *   respondAction       to { message, ...result }            (non-CRUD mutation)
  *   respondData         to T (bare object)                   (non-CRUD read)
  *   respondCount        to { total }                         (count)
- *   respondBulk         to { message, items, errors }        (bulk by id, Phase 4.5)
- *   respondBulkUpload   to { message, items, errors }        (bulk upload, Phase 4.5)
+ *   respondBulk         to { message, items, errors }        (bulk by id)
+ *   respondBulkUpload   to { message, items, errors }        (bulk upload)
  *
  * Errors do NOT use these helpers. Errors flow through `withErrorHandler`
  * (REST API) or the routeHandler error path (dispatcher API), both of
- * which emit Task 21's canonical singular `{ error: NextlyErrorJSON }`
- * shape. See docs section 6.
+ * which emit the canonical singular `{ error: NextlyErrorJSON }` shape.
+ * See docs section 6.
  *
  * Note on bulk vs. error: respondBulk / respondBulkUpload are NOT errors.
  * A bulk request always succeeds at the request layer (HTTP 200) so long
@@ -79,8 +78,8 @@ export function respondMutation<T>(
 
 /**
  * Action / non-CRUD-mutation response. Body is `{ message, ...result }`.
- * Used for login, forgot-password, verify-email, seed, etc. — anywhere
- * we want to surface a server-authored toast string.
+ * Used for login, forgot-password, verify-email, seed, etc.; anywhere a
+ * server-authored toast string is needed.
  *
  * `result` is optional so silent actions can call `respondAction("Logged out.")`.
  */
@@ -113,7 +112,7 @@ export function respondCount(total: number, init?: ResponseInit): Response {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Bulk shapes (Phase 4.5).
+// Bulk shapes.
 //
 // Two distinct types because the per-item failure key differs:
 //   - id-keyed ops (bulk delete by ids, bulk update by ids, bulk update by

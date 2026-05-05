@@ -251,21 +251,12 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
 
         const query = `?page=1&limit=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`;
 
-        // Fetch permissions and single slugs in parallel so we can correctly
-        // categorize each permission as collection-types, single-types, or settings.
-        //
-        // Phase 4 (post-merge follow-up): both endpoints now return the
-        // canonical paginated wire shape `{ items, meta }` via respondList
-        // (spec section 5.1). Pre-Phase-4 the fetcher peeled `data` so
-        // these calls received bare arrays; the typed generic and the
-        // map/Set construction below assumed that shape. After the
-        // fetcher rewrite (Task 18), the canonical body flows through
-        // unchanged, so we type the response as `{ items, meta }` and
-        // read `.items` for the array. Without this fix the runtime
-        // crashed inside `(response || []).map(...)` (object has no .map),
-        // the catch reset loadingState back to {loaded:false,loading:false},
-        // and the dependency-driven useEffect re-fired in an infinite loop
-        // hammering the rate limiter.
+        // Fetch permissions and single slugs in parallel so we can
+        // correctly categorize each permission as collection-types,
+        // single-types, or settings. Both endpoints return the
+        // canonical paginated `{ items, meta }` shape (spec §5.1) —
+        // typed as ListEnvelope below so we read `.items` for the
+        // array.
         type ListEnvelope<T> = { items: T[]; meta?: unknown };
         const [response, singlesResponse] = await Promise.all([
           protectedApi.get<

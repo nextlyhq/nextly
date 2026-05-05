@@ -52,13 +52,13 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
     });
 
     // uploadFiles returns UploadFileResult[] — one result per file.
-    // Audit M23 / T-028: default contentDisposition flipped from
-    // "inline" to "attachment". An "inline" disposition lets the
-    // browser render the file in-context (HTML, SVG, PDF with embedded
-    // JS) which can land as XSS or drive-by; "attachment" forces the
-    // download dialog so the user has to opt in to opening it.
-    // Adopters who genuinely want inline rendering can still pass
-    // `contentDisposition: "inline"` explicitly.
+    // Default contentDisposition flipped from "inline" to "attachment".
+    // An "inline" disposition lets the browser render the file
+    // in-context (HTML, SVG, PDF with embedded JS) which can land as
+    // XSS or drive-by; "attachment" forces the download dialog so the
+    // user has to opt in to opening it. Adopters who genuinely want
+    // inline rendering can still pass `contentDisposition: "inline"`
+    // explicitly.
     const results = await this.utapi.uploadFiles([file], {
       contentDisposition: options.contentDisposition ?? "attachment",
     });

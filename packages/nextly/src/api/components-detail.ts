@@ -8,11 +8,6 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4.6c): handlers wrap `withErrorHandler` and emit canonical
- * `respondX` shapes per spec §5.1 (`respondDoc` for findByID, `respondMutation`
- * for create/update). Errors flow through the canonical singular
- * `{ error: NextlyErrorJSON }` envelope (spec §6).
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/components/[slug]/route.ts
@@ -78,7 +73,7 @@ export const PATCH = withErrorHandler(
     const { slug } = await context.params;
     const registry = await getComponentRegistry();
 
-    // Body parse failure is a client error — surface as a single-issue
+    // Body parse failure is a client error; surface as a single-issue
     // validation rather than letting the SyntaxError become a 500.
     let body: Record<string, unknown>;
     try {

@@ -53,10 +53,9 @@ interface SmtpProviderConfig {
 export function createSmtpProvider(
   config: SmtpProviderConfig
 ): EmailProviderAdapter {
-  // Audit H7 (T-007): default `secure` to true. Reject obviously
-  // insecure setups at construction time so misconfiguration fails
-  // loudly rather than silently sending plaintext credentials over
-  // the network. STARTTLS on port 587 is allowed via secure: false
+  // Default `secure` to true. Reject obviously insecure setups at
+  // construction time so misconfiguration fails loudly rather than
+  // silently sending plaintext credentials over the network. STARTTLS on port 587 is allowed via secure: false
   // (nodemailer upgrades implicitly when requireTLS is set, but the
   // common pattern in the wild is to leave secure: false on 587).
   const secure = config.secure ?? true;

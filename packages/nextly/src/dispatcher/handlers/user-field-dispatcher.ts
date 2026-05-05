@@ -6,10 +6,9 @@
  * is asked to reload merged fields and ensure the `user_ext` table
  * schema reflects the change so new columns appear immediately.
  *
- * Phase 4 Task 9: every handler returns a Response built via the
- * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
- * passes the Response through unchanged. See spec §5.1 for the
- * canonical shape contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape contract.
  */
 
 import {
@@ -68,9 +67,8 @@ function requireFieldDefinitionService(
 
 const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   listUserFields: {
-    // Phase 4: respondData. The list is non-paginated AND ships
-    // adminConfig as a sibling field (legacy `meta.adminConfig`); we
-    // surface both via respondData so the admin can read both off the
+    // The list is non-paginated AND ships adminConfig as a sibling field;
+    // we surface both via respondData so the admin can read both off the
     // bare body without an envelope.
     execute: async svc => {
       const admin = svc.config.users?.admin;
@@ -94,8 +92,8 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   },
 
   createField: {
-    // Phase 4: respondMutation 201. The user_ext schema sync runs
-    // before respond so the toast firing implies "field is queryable".
+    // The user_ext schema sync runs before respond so the toast firing
+    // implies "field is queryable".
     execute: async (svc, _p, body) => {
       requireFieldDefinitionService(svc);
       const field = await svc.fieldDefinitionService.createField(
@@ -107,8 +105,8 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   },
 
   getField: {
-    // Phase 4: respondDoc. Service throws NextlyError NOT_FOUND if the
-    // field doesn't exist, so we never return a null doc here.
+    // Service throws NextlyError NOT_FOUND if the field doesn't exist,
+    // so we never return a null doc here.
     execute: async (svc, p) => {
       requireFieldDefinitionService(svc);
       const field = await svc.fieldDefinitionService.getField(p.fieldId);
@@ -117,7 +115,6 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   },
 
   updateField: {
-    // Phase 4: respondMutation 200.
     execute: async (svc, p, body) => {
       requireFieldDefinitionService(svc);
       const field = await svc.fieldDefinitionService.updateField(
@@ -130,13 +127,13 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   },
 
   deleteField: {
-    // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete to
+    // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
     // respondMutation, but fieldDefinitionService.deleteField returns
-    // void (no deleted record to surface). We use respondAction here
-    // so the wire shape is `{ message, fieldId }` rather than the
-    // awkward `{ message, item: undefined }` that respondMutation would
-    // emit. If fieldDefinitionService.deleteField is later refactored
-    // to return the deleted record, switch this back to respondMutation.
+    // void (no deleted record to surface). We use respondAction here so
+    // the wire shape is `{ message, fieldId }` rather than the awkward
+    // `{ message, item: undefined }` that respondMutation would emit. If
+    // fieldDefinitionService.deleteField is later refactored to return
+    // the deleted record, switch this back to respondMutation.
     execute: async (svc, p) => {
       requireFieldDefinitionService(svc);
       await svc.fieldDefinitionService.deleteField(p.fieldId);
@@ -146,9 +143,9 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   },
 
   reorderFields: {
-    // Phase 4: respondAction. reorderFields is a non-CRUD mutation:
-    // there's no single "item"; a batch of records was rewritten in
-    // place. Surface the new ordered list as a sibling field.
+    // reorderFields is a non-CRUD mutation: there's no single "item"; a
+    // batch of records was rewritten in place. Surface the new ordered
+    // list as a sibling field.
     execute: async (svc, _p, body) => {
       requireFieldDefinitionService(svc);
       const { fieldIds } = body as { fieldIds: string[] };

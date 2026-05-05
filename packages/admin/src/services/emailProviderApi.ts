@@ -83,11 +83,9 @@ export interface TestProviderResult {
 /**
  * List email providers (no server-side pagination).
  *
- * Phase 4 (Task 19): the email-provider dispatcher emits
- * `respondData({ providers })` (not respondList) because the underlying
- * service returns the full unpaginated array. We therefore type the
- * fetcher with the bare `{ providers }` shape and synthesise a
- * single-page PaginationMeta locally so the existing callers keep
+ * The email-provider dispatcher emits the bare `{ providers }` shape
+ * because the underlying service returns the full unpaginated array.
+ * We synthesise a single-page PaginationMeta locally so callers keep
  * receiving `{ data, meta }`.
  */
 export async function listProviders(params: {
@@ -133,8 +131,6 @@ export async function listProviders(params: {
 
 /**
  * Get a single email provider by ID.
- *
- * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export async function getProvider(id: string): Promise<EmailProviderRecord> {
   return fetcher<EmailProviderRecord>(`/email-providers/${id}`, {}, true);
@@ -142,9 +138,6 @@ export async function getProvider(id: string): Promise<EmailProviderRecord> {
 
 /**
  * Create a new email provider.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<EmailProviderRecord>`;
- * project `item` to keep the public bare-record signature.
  */
 export async function createProvider(
   data: CreateEmailProviderPayload
@@ -162,9 +155,6 @@ export async function createProvider(
 
 /**
  * Update an existing email provider.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<EmailProviderRecord>`;
- * project `item` to keep the public bare-record signature.
  */
 export async function updateProvider(
   id: string,
@@ -182,10 +172,7 @@ export async function updateProvider(
 }
 
 /**
- * Delete an email provider.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<EmailProviderRecord>`;
- * we discard the body since the caller expects void.
+ * Delete an email provider. Caller expects void; we discard the body.
  */
 export async function deleteProvider(id: string): Promise<void> {
   await fetcher<MutationResponse<EmailProviderRecord>>(
@@ -196,10 +183,8 @@ export async function deleteProvider(id: string): Promise<void> {
 }
 
 /**
- * Set an email provider as the default.
- *
- * Phase 4 (Task 19): non-CRUD mutation returning `ActionResponse`; we
- * discard the body.
+ * Set an email provider as the default. Caller expects void; we
+ * discard the ActionResponse body.
  */
 export async function setDefaultProvider(id: string): Promise<void> {
   await fetcher<ActionResponse>(
@@ -211,13 +196,8 @@ export async function setDefaultProvider(id: string): Promise<void> {
 
 /**
  * Send a test email using the specified provider.
- * When `email` is supplied it is used as the destination; otherwise the
- * server falls back to the provider's configured fromEmail.
- *
- * Phase 4 (Task 19): the test endpoint emits
- * `respondAction("Test email dispatched.", { result })`, so the wire body
- * is `{ message, result: TestProviderResult }`. Project `result` to keep
- * the legacy public signature.
+ * When `email` is supplied it is used as the destination; otherwise
+ * the server falls back to the provider's configured fromEmail.
  */
 export async function testProvider(
   id: string,

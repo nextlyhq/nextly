@@ -22,7 +22,7 @@ export function useLogout() {
       // one place (lib/api/csrf.ts). Pre-Phase-4 this hook duplicated the
       // fetch and read the legacy `{ data: { csrfToken } }` shape, which
       // silently broke after the dispatcher was migrated to canonical
-      // `{ token }` per spec section 7.6.
+      // `{ token }` per spec §7.6.
       const csrfToken = await getCsrfToken();
 
       // Call logout endpoint (protected)

@@ -1,10 +1,10 @@
 import { publicApi } from "../lib/api/publicApi";
 import type { ActionResponse } from "../lib/api/response-types";
 
-// Phase 4 (Task 19): the auth dispatcher emits `respondAction(message)` for
-// these flows (no result payload). We type the fetcher with ActionResponse
-// for clarity even though the body is discarded; typing keeps the shape
-// contract explicit and gives a sensible signature when callers want to
+// The auth dispatcher emits `{ message }` for these flows (no result
+// payload). We type the fetcher with ActionResponse for clarity even
+// though the body is discarded; typing keeps the shape contract
+// explicit and gives a sensible signature when callers want to
 // surface the server-supplied message in a toast.
 
 /**

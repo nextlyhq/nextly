@@ -4,15 +4,15 @@ import { z } from "zod";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 /**
- * Audit H5 (T-017): cap admin-supplied regex pattern length. Long
- * patterns are both useless (almost no real-world validation needs
- * 200+ chars) and a vector for hiding catastrophic-backtracking
- * constructs that defeat static analyzers.
+ * Cap admin-supplied regex pattern length. Long patterns are both
+ * useless (almost no real-world validation needs 200+ chars) and a
+ * vector for hiding catastrophic-backtracking constructs that defeat
+ * static analyzers.
  */
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
 /**
- * Audit H9 (T-018): characters that would break the surrounding
+ * Characters that would break the surrounding
  * `CHECK (col ~ '…')` constraint expression when embedded as raw text
  * after the existing single-quote escaping. The R3 update notes that
  * `replace(/'/g, "''")` alone is not sufficient — a regex containing
@@ -259,7 +259,7 @@ export class DynamicCollectionValidationService {
   }
 
   /**
-   * Audit H5 (T-017). The previous check only blocked `(?{` and `(?>` —
+   * The previous check only blocked `(?{` and `(?>` —
    * neither of which is even valid JS regex syntax, so the function
    * accepted catastrophic patterns like `(a+)+b` that DoS the database
    * regex engine on subsequent writes.
@@ -273,7 +273,6 @@ export class DynamicCollectionValidationService {
    *   3. **`safe-regex2`** static analysis. Detects nested-quantifier
    *      and alternation explosion patterns (the standard ReDoS shapes).
    *
-   * Note on `re2`: T-017's spec mentions `re2` "for runtime matching."
    * In this codebase the runtime engine is the database (Postgres `~`
    * or MySQL `REGEXP`), not Node — JS-side runtime matching of admin-
    * supplied patterns does not exist here. So we don't pull in the

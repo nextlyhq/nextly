@@ -1,6 +1,5 @@
-// Phase 4 (Task 10): respondData replaces the hand-rolled `{ data: ... }`
-// envelope. Body is `{ token }` per spec §7.6; the cookie still carries
-// the same value so the double-submit pattern remains intact.
+// Body is `{ token }` per spec §7.6; the cookie carries the same
+// value so the double-submit pattern remains intact.
 import { respondData } from "../../api/response-shapes";
 import { setCsrfCookie } from "../csrf/csrf-cookie";
 import { generateCsrfToken } from "../csrf/generate";

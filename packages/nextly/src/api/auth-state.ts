@@ -1,13 +1,13 @@
 /**
  * GET /api/auth/state
  *
- * Per spec §13.6, this endpoint replaces the leakage paths that login,
- * registration, and forgot-password used to expose. After a successful
- * sign-in the client calls this endpoint to discover the authenticated
- * user's account state (locked, unverified, disabled, password-reset
- * required) — none of which are surfaced through pre-auth endpoints.
+ * Per spec §13.6, this endpoint is the only place that surfaces the
+ * authenticated user's account state (locked, unverified, disabled,
+ * password-reset required); none of these are exposed through pre-auth
+ * endpoints. After a successful sign-in the client calls this endpoint to
+ * discover that state.
  *
- * Wire shape on success (Phase 4 envelope, spec §5.1 respondData):
+ * Wire shape on success (spec §5.1 respondData):
  *   {
  *     "authenticated": true,
  *     "user": { id, email, name },

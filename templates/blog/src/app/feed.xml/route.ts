@@ -20,8 +20,6 @@ export async function GET() {
     title: settings.siteName,
     link: SITE_URL,
     description: settings.siteDescription,
-    // Phase 4 (Task 14): getPosts now returns the canonical envelope shape
-    // (`{ items, meta }`); read the post slice from `items` (was `docs`).
     items: postsToFeedItems(result.items),
   });
 

@@ -17,7 +17,6 @@ export { SelectOptionsEditor } from "./SelectOptionsEditor";
 export { RelationshipEditor } from "./RelationshipEditor";
 export { UploadEditor } from "./UploadEditor";
 export { SchemaChangeDialog } from "./SchemaChangeDialog";
-// Task 11: new dialogs and badges for the schema change flow.
 export { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 
 // Builder UI/UX redesign — new shared components (PR 1).

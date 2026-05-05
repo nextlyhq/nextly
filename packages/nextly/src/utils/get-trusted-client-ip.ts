@@ -1,7 +1,7 @@
 /**
  * Trusted client-IP resolution for Web `Request` objects.
  *
- * Audit C4 (T-005). The previous `getClientIp` helpers parsed
+ * The previous `getClientIp` helpers parsed
  * `X-Forwarded-For` unconditionally and returned the *leftmost* hop —
  * which a direct attacker can forge to defeat per-IP rate limits,
  * brute-force lockouts, and refresh-token IP binding.

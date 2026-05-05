@@ -139,9 +139,6 @@ export class DrizzleStatementExecutor
             causeMsg.includes("already exists") ||
             causeMsg.includes("duplicate column name")
           ) {
-            // TODO(F8/F15): if a previous apply was aborted mid-recreate,
-            // a stale __new_<t> table may survive. The skip-on-already-
-            // exists branch then operates against it. Cleanup deferred.
             continue;
           }
           throw err;

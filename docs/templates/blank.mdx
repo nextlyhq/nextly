@@ -1,0 +1,84 @@
+---
+title: Blank Template
+description: Start from an empty Nextly config and define your own schemas.
+---
+
+The **Blank** template scaffolds a minimal Nextly project with no collections or singles defined. You get the full Next.js App Router setup, the admin route, the standard environment configuration, and an empty `nextly.config.ts` ready for you to fill in. It's the starting point when you want to design your schema from scratch.
+
+## Scaffold
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app my-app --template blank
+```
+</Tab>
+<Tab value="npm">
+```bash
+npx create-nextly-app@latest my-app --template blank
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn create nextly-app my-app --template blank
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun create nextly-app my-app --template blank
+```
+</Tab>
+</Tabs>
+
+## What it ships
+
+- **Empty `nextly.config.ts`** with `collections: []` and `singles: []`. Add definitions here as you build.
+- **Standard Next.js App Router setup** -- root `layout.tsx`, `page.tsx`, `globals.css`, and a `favicon.ico`. The landing page is a simple "Welcome" screen with a link into the admin.
+- **Generated admin route** at `src/app/admin/[[...params]]/`. The page wires up `RootLayout`, `QueryProvider`, `ErrorBoundary`, and the form-builder plugin's CSS imports. The layout reads admin branding from `nextly.config.ts` and injects the resulting CSS variables.
+- **Health and media routes** under `src/app/api/`.
+- **Default `next.config.ts`** with the canonical `serverExternalPackages` list. See [Project Structure](/docs/getting-started/project-structure) for the full list and what each entry does.
+- **Default `.env.example`** with `DB_DIALECT`, `DATABASE_URL`, `NEXTLY_SECRET`, `NEXT_PUBLIC_APP_URL`, and a storage block populated based on the storage option you picked in the CLI.
+- **Generated `nextly-types.ts`** stub under `src/types/generated/` so type generation has a destination on first run.
+
+## File tree
+
+```
+my-app/
+├── src/
+│   ├── app/
+│   │   ├── admin/
+│   │   │   ├── [[...params]]/
+│   │   │   │   ├── layout.tsx
+│   │   │   │   └── page.tsx
+│   │   │   └── api/
+│   │   │       └── [[...params]]/
+│   │   │           └── route.ts
+│   │   ├── api/
+│   │   │   ├── health/
+│   │   │   │   └── route.ts
+│   │   │   └── media/
+│   │   │       └── [[...path]]/
+│   │   │           └── route.ts
+│   │   ├── favicon.ico
+│   │   ├── globals.css
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   └── types/
+│       └── generated/
+│           └── nextly-types.ts
+├── public/
+├── .env
+├── .env.example
+├── eslint.config.mjs
+├── next.config.ts
+├── nextly.config.ts
+├── package.json
+├── postcss.config.mjs
+└── tsconfig.json
+```
+
+## Next steps
+
+- [Installation](/docs/getting-started/installation) -- Create your super-admin account on first run.
+- [Quick Start](/docs/getting-started/quick-start) -- Build something concrete (a blog with posts and categories) to learn the API.
+- [Configuration](/docs/configuration) -- Define your first collections and singles in `nextly.config.ts`.

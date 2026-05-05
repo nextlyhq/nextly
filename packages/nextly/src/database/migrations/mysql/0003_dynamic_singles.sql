@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS `dynamic_singles` (
 	`access_rules` json,
 	`source` varchar(20) NOT NULL DEFAULT 'ui',
 	`locked` boolean NOT NULL DEFAULT false,
+	`status` boolean NOT NULL DEFAULT false,
 	`config_path` varchar(500),
 	`schema_hash` varchar(64) NOT NULL,
 	`schema_version` int NOT NULL DEFAULT 1,

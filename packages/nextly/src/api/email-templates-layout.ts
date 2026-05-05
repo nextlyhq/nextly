@@ -13,9 +13,6 @@
  * export { GET, PATCH } from '@revnixhq/nextly/api/email-templates-layout';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2.
- *
  * @module api/email-templates-layout
  */
 
@@ -64,7 +61,7 @@ export const GET = withErrorHandler(
  * PATCH handler for updating the shared email header and/or footer.
  *
  * Requires authentication. Creates layout templates if they don't exist
- * yet (upsert behavior). Both fields are optional — only provided fields
+ * yet (upsert behavior). Both fields are optional; only provided fields
  * are updated.
  *
  * Request Body (all fields optional):
@@ -77,7 +74,7 @@ export const GET = withErrorHandler(
  * - 401 Unauthorized: Authentication required
  * - 500 Internal Server Error: Update failed
  *
- * Response: `{ "data": { "header": string, "footer": string } }` — the
+ * Response: `{ "data": { "header": string, "footer": string } }`; the
  * full layout after update (re-read from the service).
  */
 export const PATCH = withErrorHandler(

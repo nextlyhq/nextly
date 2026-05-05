@@ -340,20 +340,6 @@ async function runBlankPath(
  * the slug + a per-entity prefix (matching runtime-schema-generator's
  * naming convention).
  *
- * F11 PR 3: typed as `unknown[]` + structural narrowing because the real
- * CollectionConfig / SingleConfig / ComponentConfig types have many more
- * attributes that we don't need here (and listing them all just to please
- * the type checker would be brittle as those configs evolve).
- *
- * F11 PR 3 review TODO #6: this adapter currently extracts only `slug`,
- * `fields`, and `dbName`. Real config types may include:
- * - per-field `dbName` overrides (column-name override; runtime respects
- *   them — silently ignoring here would emit phantom-rename diffs).
- * - `disableDatabase: true` on collections (should filter out).
- * Address either by widening this adapter or by importing the real
- * config types. Out of PR 3 scope; F18 cross-dialect integration tests
- * will surface the gap if it bites.
- *
  * MIRROR: keep this in sync with `migrate-check.ts:toMinimalEntities`
  * (same shape adapter; PR 4 duplicated rather than introducing a shared
  * CLI helper module just for this).

@@ -165,7 +165,7 @@ function ReadOnlyPreview({ permissions }: { permissions: string[] }) {
 
 function RolePermissionsPreview({ roleId }: { roleId: string }) {
   // The listRolePermissions dispatcher emits `respondData({ permissions: [...] })`
-  // (spec section 5.1 non-paginated list). The wire body comes through unchanged,
+  // (spec §5.1 non-paginated list). The wire body comes through unchanged,
   // so we type the response with the canonical `{ permissions }` shape and read
   // `data.permissions`.
   const { data, isLoading, isError } = useQuery({

@@ -35,7 +35,7 @@ import {
 } from "@admin/components/ui/form";
 import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { RelationFieldConfig} from "@admin/types/field-types";
+import type { RelationFieldConfig } from "@admin/types/field-types";
 import { FieldType } from "@admin/types/field-types";
 
 const relationFieldSchema = z.object({
@@ -130,13 +130,8 @@ export function RelationFieldEditor({
     });
 
     try {
-      // Phase 4 (post-merge follow-up): both /admin/api/collections and
-      // /admin/api/singles emit `respondList({ items, meta })` (spec
-      // section 5.1). Pre-Phase-4 the legacy wire was `{ data: [...] }`;
-      // after the rename we read `.items` for the array. Same regression
-      // class as the role-create infinite-loop bug fixed in the
-      // companion useRoleForm.ts edit; centralizing the comment here
-      // would dilute it, so each call site documents its own migration.
+      // Both /admin/api/collections and /admin/api/singles emit
+      // `{ items, meta }` (spec §5.1); read `.items` for the array.
 
       // 2. Fetch Collections
       try {
@@ -253,7 +248,9 @@ export function RelationFieldEditor({
       <form
         ref={formRef}
         id="field-form"
-        onSubmit={(e) => { void handleSubmit(e); }}
+        onSubmit={e => {
+          void handleSubmit(e);
+        }}
         className="space-y-3"
       >
         <Tabs defaultValue="basic" className="w-full">

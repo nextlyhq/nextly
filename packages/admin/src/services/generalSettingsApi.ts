@@ -42,9 +42,6 @@ export interface UpdateGeneralSettingsPayload {
 
 /**
  * Retrieve the current general settings.
- *
- * Phase 4 (Task 19): server emits `respondData(settings)` so the wire
- * body is the bare settings record; type the fetcher generic directly.
  */
 export async function getGeneralSettings(): Promise<GeneralSettingsRecord> {
   return fetcher<GeneralSettingsRecord>(
@@ -58,10 +55,6 @@ export async function getGeneralSettings(): Promise<GeneralSettingsRecord> {
 
 /**
  * Update the general settings.
- *
- * Phase 4 (Task 19): server emits
- * `respondMutation("General settings updated.", settings)`; project
- * `item` for the bare-record public signature.
  */
 export async function updateGeneralSettings(
   data: UpdateGeneralSettingsPayload
