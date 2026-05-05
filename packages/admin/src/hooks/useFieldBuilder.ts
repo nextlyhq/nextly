@@ -218,6 +218,14 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     }
   }, []);
 
+  // Why: PR I trimmed dead branches that targeted "array-drop-<id>" /
+  // "group-drop-<id>" drop zones (no current component renders them since
+  // the offcanvas-sheet drop zones were removed). Q2 also locked drag
+  // scope to within-parent-only, so cross-parent moves between root and
+  // nested are no longer in scope. The page-level handleRowDragEnd is
+  // the live drag handler now; this hook-level handler is kept as a safe
+  // no-op-ish fallback for palette → root drops and same-level reorder
+  // in case any non-page caller exists.
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
@@ -232,83 +240,9 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
 
       if (!activeData) return;
 
-      // Case 1: Dragging from palette → field list
+      // Palette → field list (root drop only -- nested drop zones removed).
       if (activeData.source === "palette") {
         const overId = String(over.id);
-        const overData = over.data.current;
-
-        // Case 1a: Dropped on an Array field's nested drop zone
-        if (
-          overData?.type === "array-field" ||
-          overId.startsWith("array-drop-")
-        ) {
-          let arrayFieldId = overData?.parentFieldId;
-          if (arrayFieldId === undefined && overId.startsWith("array-drop-")) {
-            arrayFieldId = overId.slice("array-drop-".length);
-          }
-          if (arrayFieldId !== undefined) {
-            const newField: BuilderField = {
-              id: generateFieldId(),
-              name: "",
-              label: "",
-              type: activeData.fieldType,
-              validation: {},
-            };
-            setFields(prev => addFieldToArray(prev, arrayFieldId, newField));
-            setSelectedFieldId(newField.id);
-          }
-          return;
-        }
-
-        // Case 1b: Dropped on a Group field's nested drop zone
-        if (
-          overData?.type === "group-field" ||
-          overId.startsWith("group-drop-")
-        ) {
-          let groupFieldId = overData?.parentFieldId;
-          if (groupFieldId === undefined && overId.startsWith("group-drop-")) {
-            groupFieldId = overId.slice("group-drop-".length);
-          }
-          if (groupFieldId !== undefined) {
-            const newField: BuilderField = {
-              id: generateFieldId(),
-              name: "",
-              label: "",
-              type: activeData.fieldType,
-              validation: {},
-            };
-            setFields(prev => addFieldToGroup(prev, groupFieldId, newField));
-            setSelectedFieldId(newField.id);
-          }
-          return;
-        }
-
-        // Case 1c: Landed on a child field inside a nested container
-        if (overId.startsWith("field_")) {
-          const parent = findParentContainerId(fields, overId);
-          if (parent) {
-            const newField: BuilderField = {
-              id: generateFieldId(),
-              name: "",
-              label: "",
-              type: activeData.fieldType,
-              validation: {},
-            };
-            if (parent.containerType === "repeater") {
-              setFields(prev =>
-                addFieldToArray(prev, parent.containerId, newField)
-              );
-            } else {
-              setFields(prev =>
-                addFieldToGroup(prev, parent.containerId, newField)
-              );
-            }
-            setSelectedFieldId(newField.id);
-            return;
-          }
-        }
-
-        // Case 1d: Dropped on field list drop zone or root-level field
         if (overId === "field-list-drop-zone" || overId.startsWith("field_")) {
           const newField: BuilderField = {
             id: generateFieldId(),
@@ -323,86 +257,26 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
         return;
       }
 
-      // Case 2: Reordering within field list (top-level or nested)
+      // Reordering within the field list. PR I keeps only same-level
+      // reorder (top-level row OR within the same nested container).
+      // Cross-parent moves intentionally do nothing (Q2).
       if (activeData.source === "field-list") {
-        const overId = String(over.id);
-        const overData = over.data.current;
-
-        // Case 2a: Moving field into an Array drop zone
-        if (
-          overId.startsWith("array-drop-") ||
-          overData?.type === "array-field"
-        ) {
-          let arrayFieldId = overData?.parentFieldId;
-          if (arrayFieldId === undefined && overId.startsWith("array-drop-")) {
-            arrayFieldId = overId.slice("array-drop-".length);
-          }
-          if (arrayFieldId && active.id !== arrayFieldId) {
-            setFields(prev => {
-              const fieldToMove = findFieldById(prev, String(active.id));
-              if (!fieldToMove) return prev;
-              const withoutActive = deleteFieldById(prev, String(active.id));
-              return addFieldToArray(withoutActive, arrayFieldId, fieldToMove);
-            });
-          }
-          return;
-        }
-
-        // Case 2b: Moving field into a Group drop zone
-        if (
-          overId.startsWith("group-drop-") ||
-          overData?.type === "group-field"
-        ) {
-          let groupFieldId = overData?.parentFieldId;
-          if (groupFieldId === undefined && overId.startsWith("group-drop-")) {
-            groupFieldId = overId.slice("group-drop-".length);
-          }
-          if (groupFieldId && active.id !== groupFieldId) {
-            setFields(prev => {
-              const fieldToMove = findFieldById(prev, String(active.id));
-              if (!fieldToMove) return prev;
-              const withoutActive = deleteFieldById(prev, String(active.id));
-              return addFieldToGroup(withoutActive, groupFieldId, fieldToMove);
-            });
-          }
-          return;
-        }
-
-        // Case 2c: No-op when same target
         if (active.id === over.id) return;
+        const overId = String(over.id);
 
         const activeParent = findParentContainerId(fields, String(active.id));
         const overParent = findParentContainerId(fields, overId);
+        const sameContainer =
+          (!activeParent && !overParent) ||
+          (activeParent &&
+            overParent &&
+            activeParent.containerId === overParent.containerId);
 
-        if (
-          activeParent &&
-          overParent &&
-          activeParent.containerId === overParent.containerId
-        ) {
-          // Both in same nested container — reorder within it
+        if (sameContainer) {
           setFields(prev =>
             reorderNestedFields(prev, String(active.id), overId)
           );
-          return;
         }
-
-        if (activeParent && !overParent && overId.startsWith("field_")) {
-          // Active is nested, over is root — move to root
-          setFields(prev => {
-            const fieldToMove = findFieldById(prev, String(active.id));
-            if (!fieldToMove) return prev;
-            const withoutActive = deleteFieldById(prev, String(active.id));
-            const overIndex = withoutActive.findIndex(f => f.id === overId);
-            if (overIndex === -1) return [...withoutActive, fieldToMove];
-            const result = [...withoutActive];
-            result.splice(overIndex, 0, fieldToMove);
-            return result;
-          });
-          return;
-        }
-
-        // Standard reorder (same level)
-        setFields(prev => reorderNestedFields(prev, String(active.id), overId));
       }
     },
     [fields]

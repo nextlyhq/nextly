@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/storage-uploadthing",
-  "version": "0.0.140",
+  "version": "0.0.142",
   "description": "Uploadthing storage adapter for Nextly",
   "license": "MIT",
   "type": "module",

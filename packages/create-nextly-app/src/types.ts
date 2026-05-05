@@ -10,7 +10,7 @@ export type ProjectType = "blank" | "blog";
  * - visual: Empty config, schemas created via Admin Panel UI (like Strapi/WordPress)
  * - both: Core schemas in code, additional schemas creatable via Admin Panel
  */
-export type ProjectApproach = "code-first" | "visual" | "both";
+export type ProjectApproach = "code-first" | "visual";
 
 /**
  * Template manifest structure (matches template.json files).
@@ -93,10 +93,8 @@ export interface CreateNextlyOptions {
    * Different from projectNameFromArg which creates a subdirectory.
    */
   installInCwd?: boolean;
-  /** Schema approach for content templates (code-first, visual, both) */
+  /** Schema approach for content templates (code-first, visual) */
   approach?: ProjectApproach;
-  /** Include demo content when scaffolding a content template */
-  demoData?: boolean;
   /** Path to local templates directory (for development, bypasses GitHub download) */
   localTemplatePath?: string;
   /** Git branch for template download from GitHub (defaults to "main") */

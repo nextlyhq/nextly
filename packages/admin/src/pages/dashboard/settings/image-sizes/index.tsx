@@ -12,110 +12,36 @@ import type { Column } from "@revnixhq/ui";
 import {
   Badge,
   Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Input,
-  Label,
   ResponsiveTable,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   TableSkeleton,
 } from "@revnixhq/ui";
 import * as React from "react";
 
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import {
+  SettingsLayout,
+  SettingsTableToolbar,
+} from "@admin/components/features/settings";
 import { Columns, Info, Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
+import { Link } from "@admin/components/ui/link";
 import { ActionColumn } from "@admin/components/ui/table/ActionColumn";
-import { authFetch } from "@admin/lib/api/refreshInterceptor";
-
-// ============================================================
-// Types (matching the backend ImageSize interface)
-// ============================================================
-
-interface ImageSize {
-  id: string;
-  name: string;
-  width: number | null;
-  height: number | null;
-  fit: string;
-  quality: number;
-  format: string;
-  isDefault: boolean;
-  sortOrder: number;
-}
-
-// ============================================================
-// API helpers (Direct API calls to backend)
-// ============================================================
-
-async function fetchImageSizes(): Promise<ImageSize[]> {
-  const res = await authFetch("/admin/api/image-sizes", {
-    credentials: "include",
-  });
-  if (!res.ok) return [];
-  // /admin/api/image-sizes emits the canonical respondList envelope
-  // (spec §5.1): `{ items, meta }`.
-  const data = (await res.json()) as { items?: ImageSize[] };
-  return data.items ?? [];
-}
-
-async function createImageSize(input: Partial<ImageSize>): Promise<void> {
-  const res = await authFetch("/admin/api/image-sizes", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Failed to create" }));
-    throw new Error(err.error?.message ?? "Failed to create image size");
-  }
-}
-
-async function updateImageSize(
-  id: string,
-  input: Partial<ImageSize>
-): Promise<void> {
-  const res = await authFetch(`/admin/api/image-sizes/${id}`, {
-    method: "PATCH",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Failed to update" }));
-    throw new Error(err.error?.message ?? "Failed to update image size");
-  }
-}
-
-async function deleteImageSize(id: string): Promise<void> {
-  const res = await authFetch(`/admin/api/image-sizes/${id}`, {
-    method: "DELETE",
-    credentials: "include",
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Failed to delete" }));
-    throw new Error(err.error?.message ?? "Failed to delete image size");
-  }
-}
+import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { navigateTo } from "@admin/lib/navigation";
+import {
+  deleteImageSize,
+  fetchImageSizes,
+  type ImageSize,
+} from "@admin/services/imageSizesApi";
 
 // ============================================================
 // Fit mode display labels
@@ -137,231 +63,15 @@ function getFitShortLabel(fit: string): string {
 }
 
 // ============================================================
-// Add/Edit Size Dialog
-// ============================================================
-
-function SizeFormDialog({
-  open,
-  onOpenChange,
-  editingSize,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  editingSize: ImageSize | null;
-  onSave: (data: Partial<ImageSize>) => Promise<void>;
-}) {
-  const [name, setName] = React.useState("");
-  const [width, setWidth] = React.useState("");
-  const [height, setHeight] = React.useState("");
-  const [fit, setFit] = React.useState("inside");
-  const [quality, setQuality] = React.useState("80");
-  const [format, setFormat] = React.useState("auto");
-  const [isSaving, setIsSaving] = React.useState(false);
-
-  // Populate form when editing
-  React.useEffect(() => {
-    if (editingSize) {
-      setName(editingSize.name);
-      setWidth(editingSize.width?.toString() ?? "");
-      setHeight(editingSize.height?.toString() ?? "");
-      setFit(editingSize.fit);
-      setQuality(editingSize.quality.toString());
-      setFormat(editingSize.format);
-    } else {
-      setName("");
-      setWidth("");
-      setHeight("");
-      setFit("inside");
-      setQuality("80");
-      setFormat("auto");
-    }
-  }, [editingSize, open]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim() || (!width && !height)) return;
-
-    setIsSaving(true);
-    try {
-      await onSave({
-        name: name.trim(),
-        width: width ? parseInt(width) : null,
-        height: height ? parseInt(height) : null,
-        fit,
-        quality: parseInt(quality) || 80,
-        format,
-      });
-      onOpenChange(false);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>
-            {editingSize ? "Edit Image Size" : "Add Image Size"}
-          </DialogTitle>
-          <DialogDescription>
-            {editingSize
-              ? "Update this image size configuration."
-              : "Create a new image size. It will be generated for every uploaded image."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <form
-          onSubmit={e => {
-            void handleSubmit(e);
-          }}
-          className="space-y-4"
-        >
-          {/* Name */}
-          <div className="space-y-1.5">
-            <Label htmlFor="size-name">Name</Label>
-            <Input
-              id="size-name"
-              placeholder="e.g., thumbnail, medium, large"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              required
-              disabled={!!editingSize}
-            />
-            {!editingSize && (
-              <p className="text-xs text-muted-foreground">
-                Used as the key in the API response. Cannot be changed after
-                creation.
-              </p>
-            )}
-          </div>
-
-          {/* Width + Height */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="size-width">Width (px)</Label>
-              <Input
-                id="size-width"
-                type="number"
-                placeholder="Auto"
-                value={width}
-                onChange={e => setWidth(e.target.value)}
-                min={1}
-                max={10000}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="size-height">Height (px)</Label>
-              <Input
-                id="size-height"
-                type="number"
-                placeholder="Auto"
-                value={height}
-                onChange={e => setHeight(e.target.value)}
-                min={1}
-                max={10000}
-              />
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Leave one blank to keep aspect ratio. At least one dimension is
-            required.
-          </p>
-
-          {/* Fit */}
-          <div className="space-y-1.5">
-            <Label>Resize Mode</Label>
-            <Select value={fit} onValueChange={setFit}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="inside">
-                  Fit (shrink to fit, no cropping)
-                </SelectItem>
-                <SelectItem value="cover">
-                  Cover (crop to fill exact size)
-                </SelectItem>
-                <SelectItem value="contain">
-                  Contain (fit with padding)
-                </SelectItem>
-                <SelectItem value="fill">Stretch (may distort)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Format + Quality */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>Format</Label>
-              <Select value={format} onValueChange={setFormat}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="auto">
-                    Auto (WebP when possible)
-                  </SelectItem>
-                  <SelectItem value="webp">WebP</SelectItem>
-                  <SelectItem value="jpeg">JPEG</SelectItem>
-                  <SelectItem value="png">PNG</SelectItem>
-                  <SelectItem value="avif">AVIF</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="size-quality">Quality (%)</Label>
-              <Input
-                id="size-quality"
-                type="number"
-                value={quality}
-                onChange={e => setQuality(e.target.value)}
-                min={1}
-                max={100}
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={isSaving || !name.trim() || (!width && !height)}
-            >
-              {isSaving ? "Saving..." : editingSize ? "Update" : "Create"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ============================================================
 // Main Page Component
 // ============================================================
 
 function ImageSizesContent({
   search,
   setSearch,
-  isFormOpen,
-  setIsFormOpen,
-  editingSize,
-  setEditingSize,
 }: {
   search: string;
   setSearch: (val: string) => void;
-  isFormOpen: boolean;
-  setIsFormOpen: (open: boolean) => void;
-  editingSize: ImageSize | null;
-  setEditingSize: (size: ImageSize | null) => void;
 }) {
   const [sizes, setSizes] = React.useState<ImageSize[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -397,26 +107,6 @@ function ImageSizesContent({
   React.useEffect(() => {
     void loadSizes();
   }, [loadSizes]);
-
-  // Handle create
-  const handleCreate = React.useCallback(
-    async (data: Partial<ImageSize>) => {
-      await createImageSize(data);
-      await loadSizes();
-    },
-    [loadSizes]
-  );
-
-  // Handle update
-  const handleUpdate = React.useCallback(
-    async (data: Partial<ImageSize>) => {
-      if (!editingSize) return;
-      await updateImageSize(editingSize.id, data);
-      setEditingSize(null);
-      await loadSizes();
-    },
-    [editingSize, setEditingSize, loadSizes]
-  );
 
   // Handle delete
   const handleDelete = React.useCallback(
@@ -456,14 +146,10 @@ function ImageSizesContent({
     return filteredSizes.slice(start, start + pageSize);
   }, [filteredSizes, page, pageSize]);
 
-  // Handle edit
-  const handleEdit = React.useCallback(
-    (size: ImageSize) => {
-      setEditingSize(size);
-      setIsFormOpen(true);
-    },
-    [setEditingSize, setIsFormOpen]
-  );
+  // Handle edit — navigate to dedicated edit page
+  const handleEdit = React.useCallback((size: ImageSize) => {
+    navigateTo(buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id }));
+  }, []);
 
   // Columns definition for ResponsiveTable
   const ALWAYS_VISIBLE = new Set(["id", "name"]);
@@ -556,18 +242,17 @@ function ImageSizesContent({
   return (
     <div className="space-y-4">
       {/* Search Bar & Columns Filter */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+      <SettingsTableToolbar
+        search={
           <SearchBar
             value={search}
             onChange={setSearch}
             placeholder="Search image sizes..."
-            className="flex-1 max-w-sm bg-background text-foreground border-primary/5"
+            className="w-full bg-background text-foreground border-input"
             isLoading={isLoading}
           />
-        </div>
-
-        <div className="flex items-center gap-2">
+        }
+        columns={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="md" className="bg-background">
@@ -589,8 +274,8 @@ function ImageSizesContent({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
+        }
+      />
 
       {/* Table Wrapper */}
       <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
@@ -637,14 +322,6 @@ function ImageSizesContent({
           </span>
         </div>
       )}
-
-      {/* Add/Edit dialog */}
-      <SizeFormDialog
-        open={isFormOpen}
-        onOpenChange={setIsFormOpen}
-        editingSize={editingSize}
-        onSave={editingSize ? handleUpdate : handleCreate}
-      />
     </div>
   );
 }
@@ -654,8 +331,6 @@ function ImageSizesContent({
 // ============================================================
 
 export default function ImageSizesSettingsPage() {
-  const [isFormOpen, setIsFormOpen] = React.useState(false);
-  const [editingSize, setEditingSize] = React.useState<ImageSize | null>(null);
   const [search, setSearch] = React.useState("");
 
   return (
@@ -663,27 +338,15 @@ export default function ImageSizesSettingsPage() {
       <PageContainer>
         <SettingsLayout
           actions={
-            <Button
-              onClick={() => {
-                setEditingSize(null);
-                setIsFormOpen(true);
-              }}
-              size="md"
-              className="flex items-center gap-1.5"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Add Size</span>
-            </Button>
+            <Link href={ROUTES.SETTINGS_IMAGE_SIZES_CREATE}>
+              <Button size="md" className="flex items-center gap-1.5">
+                <Plus className="h-4 w-4" />
+                <span>Add Size</span>
+              </Button>
+            </Link>
           }
         >
-          <ImageSizesContent
-            search={search}
-            setSearch={setSearch}
-            isFormOpen={isFormOpen}
-            setIsFormOpen={setIsFormOpen}
-            editingSize={editingSize}
-            setEditingSize={setEditingSize}
-          />
+          <ImageSizesContent search={search} setSearch={setSearch} />
         </SettingsLayout>
       </PageContainer>
     </QueryErrorBoundary>

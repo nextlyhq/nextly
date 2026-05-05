@@ -867,3 +867,19 @@ export const usersPermissionCacheRelation = relations(users, ({ many }) => ({
 
 // F8 PR 5: see postgres.ts re-export comment.
 export { nextlyMigrationJournalSqlite as nextlyMigrationJournal } from "../../schemas/migration-journal/sqlite";
+
+// nextly_meta — runtime key/value flags table.
+// Used for state that doesn't belong in collection schemas. First consumer:
+// seed.completedAt / seed.skippedAt for the dashboard SeedDemoContentCard.
+// See migration 20260504_000000_nextly_meta.sql.
+export const nextlyMeta = sqliteTable(
+  "nextly_meta",
+  {
+    key: text("key").primaryKey(),
+    value: text("value"),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  t => [index("nextly_meta_updated_at_idx").on(t.updatedAt)]
+);

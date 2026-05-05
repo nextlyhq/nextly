@@ -15,6 +15,8 @@
  */
 
 import {
+  Alert,
+  AlertDescription,
   Button,
   Dialog,
   DialogContent,
@@ -26,7 +28,7 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { AlertTriangle, Check, Copy } from "@admin/components/icons";
+import { Check, Copy, Info } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
 
 // ============================================================
@@ -77,16 +79,15 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
         <DialogHeader>
           <DialogTitle>Save your API key</DialogTitle>
           <DialogDescription id="reveal-key-description" asChild>
-            <div>
-              {/* Warning banner */}
-              <div className="mt-1 flex items-start gap-2.5 rounded-none  border border-primary/5 border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                <span>
+            <div className="mt-1">
+              <Alert variant="info" role="status">
+                <Info className="h-4 w-4" />
+                <AlertDescription>
                   This key will not be shown again. Copy and store it somewhere
                   safe now — once you dismiss this dialog, it cannot be
                   recovered.
-                </span>
-              </div>
+                </AlertDescription>
+              </Alert>
             </div>
           </DialogDescription>
         </DialogHeader>

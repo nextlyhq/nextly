@@ -45,10 +45,7 @@ import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pip
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type {
-  DesiredCollection,
-  DesiredSchema,
-} from "../../domains/schema/pipeline/types";
+import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -67,6 +64,7 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   paginatedResponseToMeta,
   toPaginationMeta,
@@ -153,7 +151,12 @@ const COLLECTIONS_METHODS: Record<
         page: toNumber(p.page),
         limit: toNumber(p.limit),
         search: p.search,
-        sortBy: p.sortBy as "slug" | "createdAt" | "updatedAt" | undefined,
+        sortBy: p.sortBy as
+          | "name"
+          | "slug"
+          | "createdAt"
+          | "updatedAt"
+          | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on
@@ -306,20 +309,14 @@ const COLLECTIONS_METHODS: Record<
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      // Build a single-collection DesiredSchema for the pipeline preview.
-      // Singles + components buckets stay empty: the dispatcher's preview
-      // endpoint is collection-scoped today (admin Schema Builder posts
-      // per-collection).
-      const desired: DesiredSchema = {
-        collections: {
-          [p.collectionName]: {
-            slug: p.collectionName,
-            tableName,
-            fields: fields as DesiredCollection["fields"],
-          },
-        },
-        singles: {},
-        components: {},
+      // Build a full DesiredSchema so drizzle-kit sees all managed tables.
+      // Without this, singles/components in the live DB are absent from the
+      // desired snapshot and drizzle-kit offers them as rename candidates.
+      const desired = await buildFullDesiredSchema();
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: fields as DesiredCollection["fields"],
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -452,34 +449,13 @@ const COLLECTIONS_METHODS: Record<
         ? { tableName, byFieldName: resolutions }
         : undefined;
 
-      // Route through the PushSchemaPipeline. Critical: must build the
-      // FULL DesiredSchema snapshot (all managed collections, not just
-      // the one being saved). pushSchema sees any managed table in the
-      // live DB but missing from the desired snapshot as "to be
-      // dropped"; without sibling collections in the snapshot,
-      // drizzle-kit would emit DROP TABLE for them. The post-pushSchema
-      // filter strips DROPs for non-managed tables, but managed siblings
-      // need to be present explicitly so they aren't even considered
-      // for drop.
-      const desired: DesiredSchema = {
-        collections: {},
-        singles: {},
-        components: {},
-      };
-
-      // Add all OTHER managed collections from the registry first.
-      // CollectionRegistryService.getAllCollections returns
-      // DynamicCollectionRecord[]; slug and tableName are required
-      // fields, no defensive guards needed.
-      const allCollections = await registry.getAllCollections();
-      for (const c of allCollections) {
-        if (c.slug === p.collectionName) continue;
-        desired.collections[c.slug] = {
-          slug: c.slug,
-          tableName: c.tableName,
-          fields: c.fields ?? [],
-        };
-      }
+      // Route through the PushSchemaPipeline. Build the FULL
+      // DesiredSchema (collections + singles + components) so
+      // drizzle-kit sees every managed table. Without this, tables
+      // of other entity types in the live DB are absent from the
+      // desired snapshot and drizzle-kit offers them as rename
+      // candidates for the new collection being saved.
+      const desired = await buildFullDesiredSchema();
 
       // Splice in the user's changes for THIS collection (overwrites
       // any registry entry for the same slug).

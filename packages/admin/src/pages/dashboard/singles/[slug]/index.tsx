@@ -19,6 +19,7 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@revnixhq/ui";
 import type React from "react";
 
+import { DocumentTabs } from "@admin/components/features/entries/DocumentTabs";
 import {
   SingleForm,
   type SingleSchema,
@@ -304,7 +305,16 @@ export default function SingleEditPage({
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
           onCancel={handleCancel}
-          headerContent={<SingleBreadcrumbs singleLabel={singleLabel} />}
+          headerContent={
+            <>
+              <SingleBreadcrumbs singleLabel={singleLabel} />
+              {/* Document tabs (Q-D6=c). Singles render Edit + API only —
+                  Versions/Live Preview are suppressed by scope="single". */}
+              <div className="-mx-8 mt-4">
+                <DocumentTabs scope="single" slug={slug} />
+              </div>
+            </>
+          }
           headerActions={
             <Button
               variant="outline"

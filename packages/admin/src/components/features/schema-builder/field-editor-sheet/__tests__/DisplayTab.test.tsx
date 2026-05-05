@@ -93,4 +93,46 @@ describe("DisplayTab", () => {
       screen.getByRole("button", { name: /add condition/i })
     ).toBeInTheDocument();
   });
+
+  describe("PR H feedback 2.2", () => {
+    it("shows '+ Add Condition' button when no condition is set", () => {
+      render(
+        <DisplayTab field={baseField()} siblingFields={[]} onChange={vi.fn()} />
+      );
+      expect(
+        screen.getByRole("button", { name: /\+ add condition/i })
+      ).toBeInTheDocument();
+      // ConditionBuilder source-field dropdown should NOT render
+      // until the user clicks Add Condition.
+      expect(screen.queryByText(/^Source field$/i)).toBeNull();
+    });
+
+    it("seeds an empty condition when '+ Add Condition' is clicked", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <DisplayTab
+          field={baseField()}
+          siblingFields={[]}
+          onChange={onChange}
+        />
+      );
+      await user.click(
+        screen.getByRole("button", { name: /\+ add condition/i })
+      );
+      const last = onChange.mock.lastCall?.[0] as BuilderField;
+      expect(last.admin?.condition).toBeDefined();
+      expect(last.admin?.condition?.field).toBe("");
+      expect(last.admin?.condition?.operator).toBe("equals");
+    });
+
+    it("renders Read-only and Hidden as separate rows (not in a 50/50 grid)", () => {
+      render(
+        <DisplayTab field={baseField()} siblingFields={[]} onChange={vi.fn()} />
+      );
+      // Both still render with their switches and helpers.
+      expect(screen.getByLabelText("Read only")).toBeInTheDocument();
+      expect(screen.getByLabelText("Hidden")).toBeInTheDocument();
+    });
+  });
 });

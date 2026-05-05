@@ -49,7 +49,14 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   },
 ];
 
-export const getFilteredMenuItems = (showBuilder: boolean) =>
-  showBuilder
-    ? MAIN_MENU_ITEMS
-    : MAIN_MENU_ITEMS.filter(item => item.id !== "builders");
+export const getFilteredMenuItems = (
+  showBuilder: boolean,
+  hasInstalledPlugins: boolean = false
+) =>
+  MAIN_MENU_ITEMS.filter(item => {
+    if (item.id === "builders" && !showBuilder) return false;
+    // Plugins functionality is in development; hide the menu entry until at
+    // least one plugin is registered so empty installs don't see a stub page.
+    if (item.id === "plugins" && !hasInstalledPlugins) return false;
+    return true;
+  });

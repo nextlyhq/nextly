@@ -1,5 +1,7 @@
 import type { Control, FieldValues } from "react-hook-form";
 
+import { SettingsSection } from "../SettingsSection";
+
 import { SecretField } from "./SecretField";
 
 // ============================================================
@@ -14,17 +16,14 @@ export function ApiKeyConfigFields({
   providerLabel: string;
 }) {
   return (
-    <div className="space-y-4">
-      <h3 className="text-sm font-medium text-foreground">
-        {providerLabel} Configuration
-      </h3>
+    <SettingsSection label={`${providerLabel} Configuration`}>
       <SecretField
         control={control}
         name="apiKey"
         label="API Key"
         placeholder="Enter your API key"
-        description="Leave blank to keep existing API key"
+        description="Leave blank to keep existing API key."
       />
-    </div>
+    </SettingsSection>
   );
 }

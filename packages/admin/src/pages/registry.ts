@@ -25,12 +25,15 @@ import RolesCreatePage from "./dashboard/roles/create";
 import RolesEditPage from "./dashboard/roles/edit";
 import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
+import EmailLayoutPage from "./dashboard/settings/email-layout/index";
 import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
 import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
 import EmailProvidersPage from "./dashboard/settings/email-providers/index";
 import CreateEmailTemplatePage from "./dashboard/settings/email-templates/create";
 import EditEmailTemplatePage from "./dashboard/settings/email-templates/edit/[id]";
 import EmailTemplatesPage from "./dashboard/settings/email-templates/index";
+import CreateImageSizePage from "./dashboard/settings/image-sizes/create";
+import EditImageSizePage from "./dashboard/settings/image-sizes/edit/[id]";
 import ImageSizesSettingsPage from "./dashboard/settings/image-sizes/index";
 import SettingsPage from "./dashboard/settings/index";
 import SettingsPermissionsPage from "./dashboard/settings/permissions/index";
@@ -244,6 +247,11 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     requiredPermission: "manage-email-templates",
   },
+  [ROUTES.SETTINGS_EMAIL_LAYOUT]: {
+    component: EmailLayoutPage,
+    type: "private",
+    requiredPermission: "manage-email-templates",
+  },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
     type: "private",
@@ -263,6 +271,16 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Image sizes settings
   [ROUTES.SETTINGS_IMAGE_SIZES]: {
     component: ImageSizesSettingsPage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  [ROUTES.SETTINGS_IMAGE_SIZES_CREATE]: {
+    component: CreateImageSizePage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
+    component: EditImageSizePage,
     type: "private",
     requiredPermission: "manage-settings",
   },

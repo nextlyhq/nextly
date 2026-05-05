@@ -20,12 +20,8 @@ export const APPROACH_LABELS: Record<
     hint: "Define in TypeScript config (like Payload CMS)",
   },
   visual: {
-    label: "Visual",
-    hint: "Create via Admin Panel UI (like Strapi/WordPress)",
-  },
-  both: {
-    label: "Both",
-    hint: "Core schemas in code, extend via Admin Panel",
+    label: "Visual schema builder",
+    hint: "Create via Admin Panel UI (like Strapi / WordPress)",
   },
 };
 
@@ -37,7 +33,7 @@ export function getApproachPromptOptions(): Array<{
   label: string;
   hint: string;
 }> {
-  return (["code-first", "visual", "both"] as const).map(value => ({
+  return (["code-first", "visual"] as const).map(value => ({
     value,
     label: APPROACH_LABELS[value].label,
     hint: APPROACH_LABELS[value].hint,

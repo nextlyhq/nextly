@@ -53,7 +53,6 @@ describe("createTelemetryClient", () => {
       properties: {
         flags: {
           yes: false,
-          demoData: true,
           skipInstall: false,
           useYalc: false,
         },
@@ -65,7 +64,6 @@ describe("createTelemetryClient", () => {
       properties: {
         flags: {
           yes: false,
-          demoData: true,
           skipInstall: false,
           useYalc: false,
         },

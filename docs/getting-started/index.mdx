@@ -14,7 +14,7 @@ Nextly supports two approaches to defining your content model. You can use eithe
 Define collections and singles in TypeScript. Your content schema lives in `nextly.config.ts`, is version-controlled, and generates types automatically.
 
 ```typescript title="nextly.config.ts"
-import { defineConfig, defineCollection, text, richText, select } from "@nextlyhq/nextly/config";
+import { defineConfig, defineCollection, text, richText, select } from "nextly/config";
 
 const posts = defineCollection({
   slug: "posts",
@@ -37,19 +37,19 @@ export default defineConfig({
 });
 ```
 
-### Visual (Builder)
+### Visual Schema Builder
 
-Create and modify collections visually through the admin panel at `/admin`. The Schema Builder lets you add fields with drag-and-drop, configure validation, and set up relationships -- all without writing config code. Collections created via the Schema Builder generate database tables dynamically and are immediately available through the same API.
+Create and modify collections visually through the admin panel at `/admin`. The Visual Schema Builder lets you add fields with drag-and-drop, configure validation, and set up relationships -- all without writing config code. Collections created this way generate database tables dynamically and are immediately available through the same API. See [Schema Builder](/docs/admin/builder) for the full walkthrough.
 
 ### Same API, Either Way
 
 Regardless of how you create a collection, you query it the same way:
 
 ```typescript title="app/blog/page.tsx"
-import { nextly } from "@nextlyhq/nextly";
+import { nextly } from "nextly";
 
 export default async function BlogPage() {
-  const { docs: posts } = await nextly.find({
+  const { items: posts } = await nextly.find({
     collection: "posts",
     limit: 10,
   });
@@ -68,34 +68,47 @@ export default async function BlogPage() {
 
 ### Collections
 
-Collections are repeatable content types -- like blog posts, products, or team members. Each collection gets its own database table and admin UI for managing entries.
+Collections are repeatable content types -- like blog posts, products, or team members. Each collection gets its own database table and admin UI for managing entries. See [Collections](/docs/configuration/collections) for the full reference.
 
-### Singles (formerly Globals)
+### Singles
 
-Singles store one-of-a-kind content -- site settings, navigation menus, footer content. They work like collections but hold a single document instead of many.
+Singles store one-of-a-kind content -- site settings, navigation menus, footer content. They work like collections but hold a single document instead of many. See [Singles](/docs/configuration/singles).
 
 ### Fields
 
-Fields define the shape of your content. Nextly provides field types including `text`, `richText`, `number`, `select`, `date`, `relationship`, `upload`, `array`, `group`, `component`, and more. See [Fields](/docs/configuration/fields) for the full list.
+Fields define the shape of your content. Nextly ships eighteen field types organised by category:
+
+- **Basic:** [`text`](/docs/configuration/fields#text), [`textarea`](/docs/configuration/fields#textarea), [`richText`](/docs/configuration/fields#rich-text), [`email`](/docs/configuration/fields#email), [`password`](/docs/configuration/fields#password), [`code`](/docs/configuration/fields#code), [`number`](/docs/configuration/fields#number), [`checkbox`](/docs/configuration/fields#checkbox), [`date`](/docs/configuration/fields#date)
+- **Selection:** [`select`](/docs/configuration/fields#select), [`radio`](/docs/configuration/fields#radio), [`chips`](/docs/configuration/fields#chips)
+- **Media:** [`upload`](/docs/configuration/fields#upload)
+- **Relationship:** [`relationship`](/docs/configuration/fields#relationship)
+- **Layout:** [`repeater`](/docs/configuration/fields#repeater), [`group`](/docs/configuration/fields#group)
+- **Component:** [`component`](/docs/configuration/fields#component)
+- **Advanced:** [`json`](/docs/configuration/fields#json)
+- **Virtual:** [`join`](/docs/configuration/fields#join)
+
+See [Fields](/docs/configuration/fields) for every option per field with examples.
 
 ### Components
 
-Components are reusable field groups that can be embedded in collections, singles, or other components. Define a component once (like an SEO block or a CTA section), then use it across multiple content types.
+Components are reusable field groups that can be embedded in collections, singles, or other components. Define a component once (like an SEO block or a CTA section), then use it across multiple content types. See [Components](/docs/configuration/components).
 
 ### Admin Panel
 
-Nextly includes a full admin interface at `/admin` with role-based access control, a media library, and rich text editing. The admin panel works with both code-first and Schema Builder-created content.
+Nextly includes a full admin interface at `/admin` with role-based access control, a media library, and rich text editing. The admin panel works with both code-first and Visual Schema Builder content. See [Admin Panel](/docs/admin) for the full overview.
 
 ## Prerequisites
 
-- **Node.js 18** or later
-- **Next.js 14, 15, or 16**
-- A supported database: **PostgreSQL** (recommended), **MySQL**, or **SQLite**
+- **Node.js 20** or later
+- **Next.js 16+** (App Router required)
+- **React 19+**
+- **TypeScript 5+**
+- A supported database: **PostgreSQL** (recommended for production), **MySQL**, or **SQLite** (local demo only — see the [SQLite caveats](/docs/database/sqlite))
 - Basic familiarity with Next.js and TypeScript
 
 ## Next Steps
 
 - [Installation](/docs/getting-started/installation) -- Install Nextly in your project
 - [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
-- [Project Structure](/docs/getting-started/project-structure) -- Understand how a Nextly project is organized
+- [Project Structure](/docs/getting-started/project-structure) -- Understand how a Nextly project is organised
 - [Configuration](/docs/configuration) -- Full configuration reference for collections, singles, and fields

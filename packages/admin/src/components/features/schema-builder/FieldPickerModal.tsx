@@ -178,7 +178,7 @@ function FieldTypeRow({
         // Why: small chip appears on row hover/focus so users see the
         // affordance. Whole row is the click target -- chip is visual
         // reinforcement only.
-        className="shrink-0 text-[10px] uppercase tracking-wider border border-border bg-background text-muted-foreground rounded-sm px-1.5 py-0.5 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+        className="shrink-0 text-[10px] uppercase tracking-wider bg-primary text-primary-foreground rounded-sm px-1.5 py-0.5 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
       >
         Add
       </span>

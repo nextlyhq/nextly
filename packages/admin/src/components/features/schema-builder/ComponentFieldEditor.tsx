@@ -34,6 +34,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useComponents } from "@admin/hooks/queries";
 
+import { EditorAlert } from "./EditorAlert";
 import type { ComponentFieldEditorProps, ComponentFieldMode } from "./types";
 
 // ============================================================
@@ -191,24 +192,23 @@ export function ComponentFieldEditor({
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
           <Label className="text-xs font-medium">Component Configuration</Label>
         </div>
-        <div className="flex flex-col items-center gap-3 p-6 rounded-none  border border-primary/5 border-amber-500/20 bg-amber-500/10">
-          <Icons.AlertTriangle className="h-8 w-8 text-amber-500" />
-          <div className="text-center">
-            <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
-              No Components Available
+        {/* PR H feedback 2.2: subtle EditorAlert replaces the loud
+            amber empty state. */}
+        <EditorAlert>
+          <div className="space-y-2">
+            <p>
+              No components available. Create a component first to use this
+              field type.
             </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Create a component first to use component fields.
-            </p>
+            <Link
+              href={ROUTES.COMPONENTS_BUILDER}
+              className="inline-flex items-center gap-1 text-foreground hover:underline"
+            >
+              <Icons.Plus className="h-3 w-3" />
+              Create component
+            </Link>
           </div>
-          <Link
-            href={ROUTES.COMPONENTS_BUILDER}
-            className="inline-flex items-center justify-center gap-1 rounded-none  border border-primary/5 bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-          >
-            <Icons.Plus className="h-4 w-4" />
-            Create Component
-          </Link>
-        </div>
+        </EditorAlert>
       </div>
     );
   }
@@ -359,7 +359,7 @@ export function ComponentFieldEditor({
               {components?.length || 0} selected
             </Badge>
             {(!components || components.length === 0) && (
-              <span className="text-xs text-amber-500">
+              <span className="text-xs text-muted-foreground">
                 Select at least one component
               </span>
             )}
@@ -458,14 +458,12 @@ export function ComponentFieldEditor({
         )}
       </div>
 
-      {/* Info Box */}
-      <div className="flex items-start gap-2 p-3 rounded-none bg-primary/5">
-        <Icons.Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-        <p className="text-xs text-muted-foreground">
-          <strong>Tip:</strong> Components are reusable field groups. Each
-          instance stores its own data in a separate table.
-        </p>
-      </div>
+      {/* PR H feedback 2.2: subtle EditorAlert replaces the
+          bg-primary/5 Tip box. */}
+      <EditorAlert>
+        Components are reusable field groups. Each instance stores its own data
+        in a separate table.
+      </EditorAlert>
     </div>
   );
 }

@@ -87,6 +87,16 @@ export interface FieldDefinitionAdmin {
   };
   /** Hide the gutter for group fields */
   hideGutter?: boolean;
+  /**
+   * Upload fields only -- whether the user can upload new files
+   * inline (vs. only picking from existing media). Default true.
+   * PR H feedback 2.2: matches the framework's
+   * UploadFieldAdminOptions.allowCreate (where the runtime
+   * UploadInput reads from). Editor previously stored this at
+   * top-level field.allowCreate which never reached the runtime;
+   * storing here closes the gap.
+   */
+  allowCreate?: boolean;
 }
 
 export interface FieldDefinition {
@@ -140,8 +150,6 @@ export interface FieldDefinition {
   mimeTypes?: string;
   /** Maximum file size in bytes for upload fields */
   maxFileSize?: number;
-  /** Display thumbnail preview for upload fields */
-  displayPreview?: boolean;
   /** Row labels for array fields (singular/plural) */
   labels?: {
     singular?: string;

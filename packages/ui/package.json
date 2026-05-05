@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/ui",
-  "version": "0.0.140",
+  "version": "0.0.142",
   "description": "Nextly UI — Reusable React component library for Nextly plugins and custom admin UIs",
   "license": "MIT",
   "keywords": [

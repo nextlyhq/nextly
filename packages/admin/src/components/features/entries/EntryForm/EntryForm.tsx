@@ -15,14 +15,15 @@
  * @since 1.0.0
  */
 
-import { Card, CardContent } from "@revnixhq/ui";
 import type React from "react";
 
-import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
 
+import { DocumentTabs } from "../DocumentTabs";
+
+import { ActionBar } from "./ActionBar";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -30,6 +31,7 @@ import { EntryFormHeader } from "./EntryFormHeader";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { TitleHeadlineInput } from "./TitleHeadlineInput";
 import {
   useEntryForm,
   getCollectionFields,
@@ -37,6 +39,7 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import { useRailCollapsed } from "./useRailCollapsed";
 
 // ============================================================================
 // Types
@@ -181,31 +184,19 @@ export function EntryForm({
     onCancel,
   });
 
-  // Get all fields and split them based on admin.position
+  // Get all fields. Title and slug are extracted as system fields rendered in
+  // their own header card (this PR keeps the existing title/slug special-case;
+  // PR 6 of the redesign moves them into the new pinned-headline + rail-slug
+  // layout). Per Q-D1=B in the redesign spec, the rail is system-content only:
+  // no user-defined fields may use `admin.position: 'sidebar'`, and any
+  // legacy `seoField` name match is dropped — components (including ones
+  // named "seo") render inline like every other field.
   const allFields = getCollectionFields(collection);
-
-  // Extract slug and seo specifically for the sidebar tabs.
   const slugField = allFields.find(f => f.name === "slug");
-  const seoField = allFields.find(
-    f =>
-      f.name === "seo" ||
-      (f.type === "group" && f.name?.toLowerCase().includes("seo"))
-  );
   const titleField = allFields.find(f => f.name === "title");
 
   const mainFields = allFields.filter(
-    f =>
-      f.admin?.position !== "sidebar" &&
-      f.name !== "slug" &&
-      f.name !== "title" &&
-      f !== seoField
-  );
-
-  const sidebarFields = allFields.filter(
-    field =>
-      field.admin?.position === "sidebar" &&
-      field.name !== "slug" &&
-      field !== seoField
+    f => f.name !== "slug" && f.name !== "title"
   );
 
   // Get form errors for summary display
@@ -221,6 +212,16 @@ export function EntryForm({
     entry: entry,
     getFormValues: () => form.getValues(),
   });
+
+  // Rail collapse state (PR 5: persisted in localStorage). The toggle button
+  // lives in ActionBar; the rail itself reads `railCollapsed` to decide
+  // whether to render at all.
+  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+
+  // Whether this collection has Draft/Published status enabled at the meta
+  // level. When false, ActionBar hides the Status pill and merges Save Draft
+  // + Publish into a single "Save" button (per Q-D2=A in the redesign spec).
+  const hasStatus = (collection as { status?: boolean }).status === true;
 
   // ---------------------------------------------------------------------------
   // Keyboard Shortcuts (standalone mode only)
@@ -284,8 +285,40 @@ export function EntryForm({
 
           <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
             {/* Main Content */}
-            <div className="flex-1 lg:p-8 pt-6">
+            <div className="flex-1 lg:p-8 pt-6 min-w-0">
               <div className="mb-6">{headerContent}</div>
+              {/* Document tabs (Q-D6=c). Edit + API + Versions(Soon) + LivePreview(Soon). */}
+              <div className="-mx-8">
+                <DocumentTabs
+                  scope="collection"
+                  slug={collection.name}
+                  entryId={entry?.id}
+                />
+              </div>
+              {/* Action bar (Q-D2=A). Status pill + Preview/Save Draft/Publish/More
+                  + Rail toggle. Replaces the rail's old action area. */}
+              <div className="-mx-8 mb-6">
+                <ActionBar
+                  mode={mode}
+                  entry={entry}
+                  singularLabel={singularLabel}
+                  hasStatus={hasStatus}
+                  isSubmitting={isSubmitting}
+                  isPreviewAvailable={isPreviewAvailable}
+                  onPreview={openPreview}
+                  previewLabel={previewLabel}
+                  onSaveDraft={() => {
+                    void handleSubmit(undefined, "draft");
+                  }}
+                  onPublish={() => {
+                    void handleSubmit(undefined, "published");
+                  }}
+                  onCancel={handleCancel}
+                  onDelete={handleDelete}
+                  isRailCollapsed={railCollapsed}
+                  onToggleRail={toggleRail}
+                />
+              </div>
               <EntryFormHeader
                 collectionSlug={collection.name}
                 singularLabel={singularLabel}
@@ -295,31 +328,15 @@ export function EntryForm({
                 onDelete={handleDelete}
                 isDirty={isDirty}
               />
-              {/* Custom Title & Slug row */}
-              {(titleField || slugField) && (
-                <div className="mb-6">
-                  <Card>
-                    <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                      {titleField && (
-                        <div className="w-full">
-                          <FieldRenderer
-                            field={titleField}
-                            disabled={isSubmitting}
-                            readOnly={false}
-                          />
-                        </div>
-                      )}
-                      {slugField && (
-                        <div className="w-full">
-                          <FieldRenderer
-                            field={slugField}
-                            disabled={isSubmitting}
-                            readOnly={false}
-                          />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+              {/* Pinned title headline (Q-D5=iv). Slug moves into the rail's
+                  DocumentPanel (see below); title becomes a borderless 28px
+                  heading-style input above the field grid. */}
+              {titleField && (
+                <div className="-mx-8 mb-2">
+                  <TitleHeadlineInput
+                    titleField={titleField}
+                    disabled={isSubmitting}
+                  />
                 </div>
               )}
 
@@ -332,27 +349,21 @@ export function EntryForm({
               )}
             </div>
 
-            {/* Sidebar */}
-            <div className="w-full lg:w-[360px] shrink-0  border-t border-primary/5 lg:border-t-0 lg :border-l border-primary/5 lg:border-primary/5 bg-background flex flex-col relative z-10">
-              <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                <EntryFormSidebar
-                  mode={mode}
-                  entry={entry}
-                  fields={sidebarFields}
-                  seoField={seoField}
-                  actions={
-                    <EntryFormActions
-                      mode={mode}
-                      isSubmitting={isSubmitting}
-                      onCancel={handleCancel}
-                      isPreviewAvailable={isPreviewAvailable}
-                      onPreview={openPreview}
-                      previewLabel={previewLabel}
-                    />
-                  }
-                />
+            {/* Rail (collapsible per Q-D4 + railCollapsed state). Width 320px
+                (down from 360px per spec section 2.1). On <1024px the rail
+                hides entirely until the mobile sheet ships in a follow-up. */}
+            {!railCollapsed && (
+              <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
+                <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                  <EntryFormSidebar
+                    mode={mode}
+                    entry={entry}
+                    hasStatus={hasStatus}
+                    slugField={slugField}
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </EntryFormProvider>
       </div>

@@ -45,7 +45,6 @@ export type TelemetryEvent =
       properties: {
         flags: {
           yes: boolean;
-          demoData: boolean;
           skipInstall: boolean;
           useYalc: boolean;
         };
@@ -69,7 +68,6 @@ export type TelemetryEvent =
         template: Template;
         database: Database;
         approach: Approach | null;
-        demo_data: boolean;
       };
     }
   | {

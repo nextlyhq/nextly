@@ -7,12 +7,6 @@ import {
   AlertTitle,
   Badge,
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -27,17 +21,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   ResponsiveTable,
-  Skeleton,
   TableSkeleton,
 } from "@revnixhq/ui";
 import type React from "react";
 import { useState, useCallback, useEffect, useMemo } from "react";
 
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import {
+  SettingsLayout,
+  SettingsTableToolbar,
+} from "@admin/components/features/settings";
 import {
   AlertTriangle,
-  ChevronDown,
-  ChevronRight,
   Columns,
   Copy,
   Edit,
@@ -45,7 +39,6 @@ import {
   Loader2,
   MoreHorizontal,
   Plus,
-  Save,
   Trash2,
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -57,9 +50,7 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailTemplates,
-  useEmailLayout,
   useDeleteEmailTemplate,
-  useUpdateEmailLayout,
   usePreviewEmailTemplate,
 } from "@admin/hooks/queries/useEmailTemplates";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
@@ -85,151 +76,6 @@ function formatDate(dateValue?: string): string {
       day: "numeric",
     },
     "N/A"
-  );
-}
-
-// ============================================================
-// Email Layout Section Component
-// ============================================================
-
-function EmailLayoutSection() {
-  const [expanded, setExpanded] = useState(false);
-  const [header, setHeader] = useState("");
-  const [footer, setFooter] = useState("");
-  const [loaded, setLoaded] = useState(false);
-
-  const { data: layout, isLoading } = useEmailLayout({
-    enabled: expanded && !loaded,
-  });
-  const { mutate: doUpdateLayout, isPending: isSaving } =
-    useUpdateEmailLayout();
-
-  // Sync fetched layout data into local state
-  useEffect(() => {
-    if (layout && !loaded) {
-      setHeader(layout.header);
-      setFooter(layout.footer);
-      setLoaded(true);
-    }
-  }, [layout, loaded]);
-
-  const handleSave = useCallback(() => {
-    doUpdateLayout(
-      { header, footer },
-      {
-        onSuccess: () => toast.success("Email layout saved"),
-        onError: err =>
-          toast.error("Failed to save layout", {
-            description: err instanceof Error ? err.message : "Unknown error",
-          }),
-      }
-    );
-  }, [header, footer, doUpdateLayout]);
-
-  return (
-    <Card className="mb-6 border-primary/5 shadow-none">
-      <button
-        type="button"
-        className="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => setExpanded(prev => !prev)}
-      >
-        <CardHeader className="flex flex-row items-center justify-between pb-4 pt-4 px-5">
-          <div className="space-y-1 group">
-            <CardTitle className="text-base font-semibold group-hover-unified">
-              Email Layout Framework
-            </CardTitle>
-            <CardDescription className="text-sm">
-              Global Header/Footer wrapped around all individual email
-              templates. Ideal for consistent branding and footers.
-            </CardDescription>
-          </div>
-          {expanded ? (
-            <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-200" />
-          ) : (
-            <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform duration-200" />
-          )}
-        </CardHeader>
-      </button>
-
-      {expanded && (
-        <>
-          <CardContent className="pt-0 pb-6 px-5  border-t border-primary/5">
-            {isLoading && !loaded ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-                <Skeleton className="h-[200px] w-full rounded-none" />
-                <Skeleton className="h-[200px] w-full rounded-none" />
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-5">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label
-                      htmlFor="layout-header"
-                      className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                    >
-                      Global Header (HTML)
-                    </label>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Prepended automatically to every email. Variables supported:
-                    `{"{{variable}}"}`.
-                  </p>
-                  <textarea
-                    id="layout-header"
-                    value={header}
-                    onChange={e => setHeader(e.target.value)}
-                    rows={8}
-                    className="flex min-h-[200px] w-full rounded-none  border border-primary/5 bg-background/50 px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    placeholder="<div style='padding: 24px; text-align: center;'><!-- Header HTML --></div>"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label
-                      htmlFor="layout-footer"
-                      className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                    >
-                      Global Footer (HTML)
-                    </label>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Appended automatically to every email. Variables supported:
-                    `{"{{variable}}"}`.
-                  </p>
-                  <textarea
-                    id="layout-footer"
-                    value={footer}
-                    onChange={e => setFooter(e.target.value)}
-                    rows={8}
-                    className="flex min-h-[200px] w-full rounded-none  border border-primary/5 bg-background/50 px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    placeholder="<div style='padding: 24px; text-align: center; color: #6t6666;'><!-- Footer HTML --></div>"
-                  />
-                </div>
-              </div>
-            )}
-          </CardContent>
-          <CardFooter className="px-5 py-4  border-t border-primary/5 bg-primary/5 flex justify-end rounded-none">
-            <Button
-              onClick={handleSave}
-              disabled={isSaving || (isLoading && !loaded)}
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving Configuration...
-                </>
-              ) : (
-                <>
-                  <Save className="h-4 w-4" />
-                  Save Changes
-                </>
-              )}
-            </Button>
-          </CardFooter>
-        </>
-      )}
-    </Card>
   );
 }
 
@@ -676,7 +522,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={false}
-              className="bg-background text-foreground border-primary/5"
+              className="w-full bg-background text-foreground border-input"
             />
           </div>
         </div>
@@ -703,7 +549,7 @@ function EmailTemplateTable() {
               onChange={setSearch}
               placeholder="Search templates by name, slug, or subject..."
               isLoading={true}
-              className="bg-background text-foreground border-primary/5"
+              className="w-full bg-background text-foreground border-input"
             />
           </div>
         </div>
@@ -714,19 +560,17 @@ function EmailTemplateTable() {
 
   return (
     <div className="space-y-4">
-      {/* Search toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+      <SettingsTableToolbar
+        search={
           <SearchBar
             value={search}
             onChange={setSearch}
             placeholder="Search templates by name, slug, or subject..."
             isLoading={isLoading}
-            className="flex-1 max-w-sm bg-white text-black border-primary/5"
+            className="w-full bg-background text-foreground border-input"
           />
-        </div>
-
-        <div className="flex items-center gap-2">
+        }
+        columns={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="md" className="bg-background">
@@ -748,8 +592,8 @@ function EmailTemplateTable() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
+        }
+      />
 
       {/* Table */}
       <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
@@ -811,14 +655,7 @@ const EmailTemplatesPage: React.FC = () => {
             </Button>
           }
         >
-          {" "}
-          <div className="space-y-6">
-            {/* Email Layout section */}
-            <EmailLayoutSection />
-
-            {/* Template table */}
-            <EmailTemplateTable />
-          </div>
+          <EmailTemplateTable />
         </SettingsLayout>
       </PageContainer>
     </QueryErrorBoundary>

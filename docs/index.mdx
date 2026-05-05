@@ -3,7 +3,7 @@ title: Nextly Documentation
 description: The open-source, type-safe headless app framework built natively for Next.js. Define content with code or build it visually.
 ---
 
-Nextly is an open-source app framework that runs inside your Next.js application. It gives you two ways to define your content model: write TypeScript config (code-first) or use the visual Schema Builder in the admin panel. Either way, you get the same type-safe API, the same admin interface, and the same query layer.
+Nextly is an open-source app framework that runs inside your Next.js application. It gives you two ways to define your content model: write TypeScript config (code-first) or use the Visual Schema Builder in the admin panel. Either way, you get the same type-safe API, the same admin interface, and the same query layer.
 
 ## Why Nextly?
 
@@ -20,15 +20,35 @@ Nextly is an open-source app framework that runs inside your Next.js application
 - [Installation](/docs/getting-started/installation) -- Install Nextly in a new or existing Next.js project
 - [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
 - [Configuration](/docs/configuration) -- Configure collections, singles, fields, and plugins
-- [API Reference](/docs/api-reference) -- Direct API, REST API, and Server Actions
+- [REST API](/docs/api-reference/rest-api) -- HTTP endpoints, auth, response shapes
+- [Direct API](/docs/api-reference/direct-api) -- Server-side query layer for Server Components
 
 ## Get Started
 
 The fastest way to start is with the scaffolding CLI:
 
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
 ```bash
-npx @nextlyhq/create-nextly-app my-app
+pnpm create nextly-app my-app
 ```
+</Tab>
+<Tab value="npm">
+```bash
+npx create-nextly-app@latest my-app
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn create nextly-app my-app
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun create nextly-app my-app
+```
+</Tab>
+</Tabs>
 
 Or follow the [Quick Start guide](/docs/getting-started/quick-start) to add Nextly to an existing Next.js project and build a blog in 5 minutes.
 
@@ -38,4 +58,4 @@ Or follow the [Quick Start guide](/docs/getting-started/quick-start) to add Next
 - [Installation](/docs/getting-started/installation) -- Install Nextly in your project
 - [Configuration](/docs/configuration) -- Configure collections, singles, fields, and plugins
 - [Database](/docs/database) -- Choose and configure PostgreSQL, MySQL, or SQLite
-- [Deployment](/docs/guides/deployment) -- Deploy to Vercel, Docker, or any Node.js host
+- [Deployment](/docs/guides/deployment) -- Deploy to Vercel or self-host on Node.js

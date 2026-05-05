@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/plugin-form-builder",
-  "version": "0.0.140",
+  "version": "0.0.142",
   "description": "Visual form builder plugin for Nextly with Code-First and Schema Builder support",
   "license": "MIT",
   "type": "module",

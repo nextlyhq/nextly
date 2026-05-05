@@ -37,7 +37,6 @@
 > [!IMPORTANT]
 > Nextly is in active development toward v1.0 — star this repo and follow along as new features and releases drop every few weeks.
 
-
 Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your content schema in code _or_ with the visual builder, choose your database, and get a fully-typed REST and Direct API plus a customizable admin dashboard out of the box. No SaaS, no proprietary cloud, your data, your stack.
 
 - Define collections in TypeScript with the [**code-first approach**](https://nextlyhq.com/docs/configuration/collections), or build them visually in the [**Admin UI Builder**](https://nextlyhq.com/docs/admin/builder)
@@ -53,7 +52,7 @@ Nextly is a TypeScript-first, Next.js-native CMS and app framework. Define your 
 ## Quickstart
 
 ```bash
-pnpm create nextly-app@latest
+pnpm create-nextly-app@latest
 ```
 
 That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.

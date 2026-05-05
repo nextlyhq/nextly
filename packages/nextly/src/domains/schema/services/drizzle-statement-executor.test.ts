@@ -105,6 +105,48 @@ describe("DrizzleStatementExecutor.executeSqlite", () => {
     sqlite.close();
   });
 
+  it("skips duplicate-index errors from raw SQLite (already exists)", async () => {
+    const { sqlite, db } = makeTestDb();
+
+    sqlite.exec(
+      "CREATE TABLE dc_x (id integer PRIMARY KEY); CREATE INDEX idx_dc_x_id ON dc_x(id)"
+    );
+
+    const executor = new DrizzleStatementExecutor("sqlite", db);
+    // Index already exists — should be a no-op, not a throw.
+    await expect(
+      executor.executeStatements({}, [
+        "CREATE INDEX idx_dc_x_id ON dc_x(id)",
+      ])
+    ).resolves.toBeUndefined();
+
+    sqlite.close();
+  });
+
+  it("skips duplicate-index errors wrapped in DrizzleError (.cause chain)", async () => {
+    const { sqlite, db } = makeTestDb();
+
+    sqlite.exec(
+      "CREATE TABLE dc_x (id integer PRIMARY KEY); CREATE INDEX idx_dc_x_id ON dc_x(id)"
+    );
+
+    // The drizzle-orm session.run() wraps better-sqlite3 errors in a
+    // DrizzleError whose .message is "Failed to run the query '...'".
+    // The real SQLite "already exists" error lives in .cause.
+    // Simulate that wrapping to verify the guard catches it.
+    const executor = new DrizzleStatementExecutor("sqlite", db);
+
+    // Run the duplicate CREATE INDEX through the drizzle db handle, which
+    // will go through the drizzle-orm session and produce the wrapped error.
+    await expect(
+      executor.executeStatements({}, [
+        "CREATE INDEX `idx_dc_x_id` ON `dc_x`(`id`)",
+      ])
+    ).resolves.toBeUndefined();
+
+    sqlite.close();
+  });
+
   it("does nothing when statement list is empty (early return)", async () => {
     const { sqlite, db } = makeTestDb();
 

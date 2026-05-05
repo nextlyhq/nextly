@@ -49,14 +49,6 @@ type Props = {
   onApply: (next: BuilderField) => void;
   onDelete: () => void;
   /**
-   * PR D: when editing a `repeater` / `group` field, the legacy
-   * ArrayFieldEditor / GroupFieldEditor renders a "+ Add field" button.
-   * Clicking it asks the parent page to open the FieldPickerModal scoped
-   * to this parent (parentFieldId is the field's id). The parent then
-   * commits the new child via builder.handleNestedFieldAdd.
-   */
-  onAddNestedField?: (parentFieldId: string) => void;
-  /**
    * PR E3: page-computed flag indicating the field being edited is a
    * descendant of a repeating container. Forwarded to AdvancedTab to
    * disable the `unique` switch with explanatory tooltip.
@@ -75,7 +67,6 @@ export function FieldEditorSheet({
   onCancel,
   onApply,
   onDelete,
-  onAddNestedField,
   isInsideRepeatingAncestor = false,
 }: Props) {
   const [draft, setDraft] = useState<BuilderField>(field);
@@ -97,9 +88,17 @@ export function FieldEditorSheet({
             <span className="truncate">
               {mode === "create" ? "New field" : draft.name || "untitled"}
             </span>
-            <span className="text-[10px] text-muted-foreground font-normal border border-border rounded-sm px-1.5 py-0.5 shrink-0">
-              {draft.type} &middot; {widthLabel}
-            </span>
+            {/* PR H feedback 2.2: Type and Width on separate labeled
+                rows on the right side of the header (was one combined
+                chip "text · 100%"). */}
+            <div className="flex flex-col items-end gap-0.5 text-[10px] text-muted-foreground font-normal shrink-0">
+              <span>
+                <span className="opacity-60">Type:</span> {draft.type}
+              </span>
+              <span>
+                <span className="opacity-60">Width:</span> {widthLabel}
+              </span>
+            </div>
           </SheetTitle>
           {/* a11y: SheetDescription is always required by Radix Dialog. */}
           <SheetDescription className="sr-only">
@@ -132,7 +131,6 @@ export function FieldEditorSheet({
                 siblingNames={siblingFields.map(f => f.name)}
                 readOnly={readOnly}
                 onChange={setDraft}
-                onAddNestedField={onAddNestedField}
               />
             </TabsContent>
             <TabsContent value="validation">

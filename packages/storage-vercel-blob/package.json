@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/storage-vercel-blob",
-  "version": "0.0.140",
+  "version": "0.0.142",
   "description": "Vercel Blob storage adapter for Nextly",
   "license": "MIT",
   "type": "module",

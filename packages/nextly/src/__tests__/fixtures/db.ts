@@ -194,6 +194,13 @@ function createTables(sqlite: Database.Database) {
     CREATE INDEX IF NOT EXISTS api_keys_user_id_idx ON api_keys(user_id);
     CREATE INDEX IF NOT EXISTS api_keys_role_id_idx ON api_keys(role_id);
     CREATE INDEX IF NOT EXISTS api_keys_is_active_expires_at_idx ON api_keys(is_active, expires_at);
+
+    CREATE TABLE IF NOT EXISTS nextly_meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS nextly_meta_updated_at_idx ON nextly_meta(updated_at);
   `);
 }
 

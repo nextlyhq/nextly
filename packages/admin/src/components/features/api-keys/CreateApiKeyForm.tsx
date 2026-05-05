@@ -19,6 +19,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  Alert,
+  AlertDescription,
   Button,
   Collapsible,
   CollapsibleContent,
@@ -37,7 +39,6 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import {
-  AlertTriangle,
   ChevronDown,
   ChevronUp,
   Info,
@@ -107,22 +108,14 @@ const TOKEN_TYPE_DESCRIPTORS = {
   "read-only": {
     icon: Info,
     text: "This key can only read data. No create, update, or delete operations are permitted.",
-    colorClass:
-      "bg-primary/5 border-primary/5 text-primary dark:bg-primary/20 dark:border-primary/30 dark:text-primary-foreground/90",
-    iconClass: "text-primary",
   },
   "full-access": {
-    icon: AlertTriangle,
+    icon: Info,
     text: "This key has the same permissions as your account. It can perform any action you are authorized to perform.",
-    colorClass:
-      "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300",
-    iconClass: "text-amber-500",
   },
   "role-based": {
     icon: Shield,
     text: "This key will act as the selected role. Only roles with permissions equal to or less than your own are available.",
-    colorClass: "bg-primary/5 border-primary/5 text-muted-foreground",
-    iconClass: "text-muted-foreground",
   },
 } as const;
 
@@ -154,13 +147,19 @@ function ReadOnlyPreview({ permissions }: { permissions: string[] }) {
   );
 
   return (
-    <p className="text-sm text-muted-foreground">
-      This key can read:{" "}
-      <span className="font-medium text-foreground">
-        {resourceNames.join(", ")}
-      </span>
-      .
-    </p>
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">This key can read:</p>
+      <div className="flex flex-wrap gap-1.5">
+        {resourceNames.map(name => (
+          <span
+            key={name}
+            className="inline-flex items-center rounded-none border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground"
+          >
+            {name}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -217,15 +216,25 @@ function RolePermissionsPreview({ roleId }: { roleId: string }) {
   );
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       {Object.entries(byResource).map(([resource, actions]) => (
-        <div key={resource} className="flex items-baseline gap-3 text-sm">
+        <div
+          key={resource}
+          className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 text-sm"
+        >
           <span className="min-w-32 font-medium text-foreground">
             {humaniseResource(resource)}
           </span>
-          <span className="text-muted-foreground capitalize">
-            {actions.join(", ")}
-          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {actions.map(action => (
+              <span
+                key={action}
+                className="inline-flex items-center rounded-none border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground capitalize"
+              >
+                {action}
+              </span>
+            ))}
+          </div>
         </div>
       ))}
     </div>
@@ -442,14 +451,10 @@ export function CreateApiKeyForm({
                   </div>
 
                   {/* Token type descriptor */}
-                  <div
-                    className={`flex items-start gap-3 rounded-none  border border-primary/5 px-3 py-2.5 text-sm ${descriptor.colorClass}`}
-                  >
-                    <DescriptorIcon
-                      className={`mt-0.5 h-4 w-4 shrink-0 ${descriptor.iconClass}`}
-                    />
-                    <span>{descriptor.text}</span>
-                  </div>
+                  <Alert variant="info" role="status">
+                    <DescriptorIcon className="h-4 w-4" />
+                    <AlertDescription>{descriptor.text}</AlertDescription>
+                  </Alert>
 
                   {/* Role selector — only for "role-based" */}
                   {tokenType === "role-based" && (

@@ -1,6 +1,7 @@
 import { Alert, AlertDescription, AlertTitle, Button } from "@revnixhq/ui";
 import { FormProvider } from "react-hook-form";
 
+import { SettingsSection } from "@admin/components/features/settings";
 import { Loader2, AlertTriangle } from "@admin/components/icons";
 import { useRoleForm } from "@admin/hooks/useRoleForm";
 import type { RoleFormProps } from "@admin/types/ui/form";
@@ -9,6 +10,11 @@ import { RoleBasicInfo } from "./RoleBasicInfo";
 import { RoleInheritance } from "./RoleInheritance";
 import { RolePermissionsSection } from "./RolePermissionsSection";
 import { RoleStatusSection } from "./RoleStatusSection";
+
+/**
+ * Form id used by external buttons (e.g. page-header actions)
+ */
+export const ROLE_FORM_ID = "role-form";
 
 /**
  * RoleForm Component
@@ -70,131 +76,110 @@ export function RoleForm({ roleId }: RoleFormProps) {
         </div>
       ) : (
         <FormProvider {...form}>
+          {/* Page header (sits above the form, but the submit button targets the
+              form via the `form="role-form"` attribute so we still get a single
+              submit even though the buttons live outside the <form> element). */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-2">
+            <div>
+              <h1
+                id="role-form-title"
+                className="text-xl font-semibold text-foreground"
+              >
+                {isEditMode ? "Edit Role" : "Create New Role"}
+              </h1>
+              <p className="text-muted-foreground mt-1">
+                {isEditMode
+                  ? "Update role info and permissions."
+                  : "Define role info and assign permissions."}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                type="button"
+                onClick={handleCancel}
+                disabled={isLoading}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" form={ROLE_FORM_ID} disabled={isLoading}>
+                {isLoading ? (
+                  <>
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                    <span>{isEditMode ? "Updating..." : "Creating..."}</span>
+                    <span className="sr-only">
+                      {isEditMode ? "Updating role" : "Creating role"}
+                    </span>
+                  </>
+                ) : (
+                  <span>{isEditMode ? "Update Role" : "Create Role"}</span>
+                )}
+              </Button>
+            </div>
+          </div>
+
           <form
+            id={ROLE_FORM_ID}
             ref={formRef}
             onSubmit={e => {
               void onSubmit(e);
             }}
-            className="space-y-8"
+            className="space-y-6"
             aria-labelledby="role-form-title"
             noValidate
           >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-2">
-              <div>
-                <h1 className="text-xl font-semibold text-foreground">
-                  {isEditMode ? "Edit Role" : "Create New Role"}
-                </h1>
-                <p className="text-muted-foreground mt-1">
-                  {isEditMode
-                    ? "Update role info and permissions."
-                    : "Define role info and assign permissions."}
+            {/* Top section: Role Details (full width) */}
+            <SettingsSection label="Role Details">
+              <div className="flex flex-col gap-6 py-5">
+                <RoleBasicInfo
+                  form={form}
+                  isEditMode={isEditMode}
+                  isSystemRole={isSystemRole}
+                  isLoading={isLoading}
+                  handleNameChange={handleNameChange}
+                />
+
+                {/* Base Role Selector (Inheritance) */}
+                <RoleInheritance
+                  form={form}
+                  allRoles={allRoles}
+                  selectedBaseRoleIds={selectedBaseRoleIds}
+                  setSelectedBaseRoleIds={setSelectedBaseRoleIds}
+                  rolePermissionsMap={rolePermissionsMap}
+                  setRolePermissionsMap={setRolePermissionsMap}
+                  lockedPermissionIds={lockedPermissionIds}
+                  setLockedPermissionIds={setLockedPermissionIds}
+                />
+
+                {/* Status and Priority (only in create mode for non-system roles) */}
+                <RoleStatusSection
+                  form={form}
+                  isLoading={isLoading}
+                  isSystemRole={isSystemRole}
+                  isEditMode={isEditMode}
+                  statusOptions={statusOptions}
+                />
+              </div>
+            </SettingsSection>
+
+            {/* Bottom section: Permissions (full width) */}
+            <SettingsSection label="Permissions">
+              <div className="py-5 -mx-6">
+                <p className="px-6 text-sm text-muted-foreground mb-4">
+                  Only actions bound by a route are listed below.
                 </p>
+                <RolePermissionsSection
+                  form={form}
+                  allPermissions={allPermissions}
+                  lockedPermissionIds={lockedPermissionIds}
+                  isLoading={isLoading}
+                />
               </div>
-
-              {/* Form Actions (moved opposite title) */}
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="outline"
-                  type="button"
-                  onClick={handleCancel}
-                  disabled={isLoading}
-                  className="h-10 px-4 text-sm font-medium border-primary/5"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={isLoading}
-                  className="h-10 px-4 text-sm font-medium transition-transform active:scale-95"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2
-                        className="h-4 w-4 animate-spin"
-                        aria-hidden="true"
-                      />
-                      <span>{isEditMode ? "Updating..." : "Creating..."}</span>
-                      <span className="sr-only">
-                        {isEditMode ? "Updating role" : "Creating role"}
-                      </span>
-                    </>
-                  ) : (
-                    <span>{isEditMode ? "Update Role" : "Create Role"}</span>
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-6 xl:flex-row items-start">
-              {/* Left Sidebar Card - Role details */}
-              <div className="flex w-full flex-col overflow-hidden rounded-none  border border-primary/5 bg-card xl:w-[380px] xl:shrink-0 sticky top-6">
-                <div className="border-b border-primary/5 p-6">
-                  <h2 className="text-lg font-semibold text-foreground">
-                    Role details
-                  </h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Name and description of the role
-                  </p>
-                </div>
-
-                <div className="flex flex-col gap-6 p-6">
-                  {/* Basic Info Fields */}
-                  <div className="space-y-6">
-                    <RoleBasicInfo
-                      form={form}
-                      isEditMode={isEditMode}
-                      isSystemRole={isSystemRole}
-                      isLoading={isLoading}
-                      handleNameChange={handleNameChange}
-                    />
-
-                    {/* Base Role Selector (Inheritance) */}
-                    <RoleInheritance
-                      form={form}
-                      allRoles={allRoles}
-                      selectedBaseRoleIds={selectedBaseRoleIds}
-                      setSelectedBaseRoleIds={setSelectedBaseRoleIds}
-                      rolePermissionsMap={rolePermissionsMap}
-                      setRolePermissionsMap={setRolePermissionsMap}
-                      lockedPermissionIds={lockedPermissionIds}
-                      setLockedPermissionIds={setLockedPermissionIds}
-                    />
-                  </div>
-
-                  {/* Status and Priority (only in create mode for non-system roles) */}
-                  <RoleStatusSection
-                    form={form}
-                    isLoading={isLoading}
-                    isSystemRole={isSystemRole}
-                    isEditMode={isEditMode}
-                    statusOptions={statusOptions}
-                  />
-                </div>
-              </div>
-
-              {/* Main Content Card - Permissions Card */}
-              <div className="flex-1 w-full min-w-0">
-                <div className="flex w-full flex-col overflow-hidden rounded-none  border border-primary/5 bg-card">
-                  <div className="p-6">
-                    <h2 className="text-lg font-semibold text-foreground mb-1">
-                      Permissions
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      Only actions bound by a route are listed below.
-                    </p>
-                  </div>
-
-                  <div className="pb-6 w-full max-w-full overflow-hidden">
-                    <RolePermissionsSection
-                      form={form}
-                      allPermissions={allPermissions}
-                      lockedPermissionIds={lockedPermissionIds}
-                      isLoading={isLoading}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            </SettingsSection>
 
             {/* Field-Level Permissions and RLS Policies are deferred to future plans */}
           </form>

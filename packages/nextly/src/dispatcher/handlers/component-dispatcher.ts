@@ -55,6 +55,7 @@ import {
   getComponentRegistryFromDI,
   getMigrationJournalFromDI,
 } from "../helpers/di";
+import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -360,16 +361,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      const desired: DesiredSchema = {
-        collections: {},
-        singles: {},
-        components: {
-          [slug]: {
-            slug,
-            tableName,
-            fields: fields as DesiredComponent["fields"],
-          },
-        },
+      const desired = await buildFullDesiredSchema();
+      desired.components[slug] = {
+        slug,
+        tableName,
+        fields: fields as DesiredComponent["fields"],
       };
 
       const pipelinePreview = await previewDesiredSchema({ desired, db, dialect });
@@ -449,16 +445,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
           : undefined;
 
-      const desired: DesiredSchema = {
-        collections: {},
-        singles: {},
-        components: {
-          [slug]: {
-            slug,
-            tableName,
-            fields: fields as DesiredComponent["fields"],
-          },
-        },
+      const desired = await buildFullDesiredSchema();
+      desired.components[slug] = {
+        slug,
+        tableName,
+        fields: fields as DesiredComponent["fields"],
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(

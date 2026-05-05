@@ -3,14 +3,18 @@ title: Collections
 description: Define content types with multiple entries using collections.
 ---
 
-A collection is a content type that stores multiple entries -- think blog posts, products, users, or media files. Each collection maps to a database table, gets automatic REST API endpoints, and appears in the admin panel with list and edit views.
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-<Tabs items={["Code-First", "Builder (Visual)"]}>
-<Tab value="Code-First">
+A collection is a content type that stores multiple entries — blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/api/[slug]`, and appears in the admin panel with list and edit views.
 
-## Defining a Collection
+> **Source of truth:** the `CollectionConfig` interface and `defineCollection()` helper live in `packages/nextly/src/collections/config/define-collection.ts`. Hooks and access-control types are imported from `packages/nextly/src/shared/types/access.ts` and `@nextly/hooks/types`.
 
-Create a file for each collection and use `defineCollection()`:
+<Tabs items={["Code-first", "Visual Schema Builder"]}>
+<Tab value="Code-first">
+
+## Defining a collection
+
+Use `defineCollection()` from `nextly`:
 
 ```typescript title="src/collections/posts.ts"
 import {
@@ -21,50 +25,47 @@ import {
   relationship,
   date,
   option,
-} from '@nextlyhq/nextly';
+} from "nextly";
 
 export default defineCollection({
-  slug: 'posts',
+  slug: "posts",
   labels: {
-    singular: 'Post',
-    plural: 'Posts',
+    singular: "Post",
+    plural: "Posts",
   },
   fields: [
-    text({ name: 'title', required: true }),
-    text({ name: 'slug', unique: true }),
-    richText({ name: 'content' }),
+    text({ name: "title", required: true }),
+    text({ name: "slug", unique: true }),
+    richText({ name: "content" }),
     select({
-      name: 'status',
-      options: [option('Draft'), option('Published'), option('Archived')],
-      defaultValue: 'draft',
+      name: "status",
+      options: [option("Draft"), option("Published"), option("Archived")],
+      defaultValue: "draft",
     }),
-    relationship({ name: 'author', relationTo: 'users' }),
-    date({ name: 'publishedAt' }),
+    relationship({ name: "author", relationTo: "users" }),
+    date({ name: "publishedAt" }),
   ],
   timestamps: true,
   admin: {
-    group: 'Content',
-    icon: 'FileText',
-    useAsTitle: 'title',
-    defaultColumns: ['title', 'status', 'author', 'createdAt'],
-    pagination: {
-      defaultLimit: 25,
-    },
-    description: 'Blog posts and articles',
+    group: "Content",
+    icon: "FileText",
+    useAsTitle: "title",
+    pagination: { defaultLimit: 25 },
+    description: "Blog posts and articles",
   },
   access: {
     read: true,
-    create: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
-    update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
-    delete: ({ roles }) => roles.includes('admin'),
+    create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+    delete: ({ roles }) => roles.includes("admin"),
   },
   hooks: {
     beforeChange: [
       async ({ data, operation }) => {
-        if (operation === 'create' && data?.title && !data.slug) {
+        if (operation === "create" && data?.title && !data.slug) {
           return {
             ...data,
-            slug: data.title.toLowerCase().replace(/\s+/g, '-'),
+            slug: data.title.toLowerCase().replace(/\s+/g, "-"),
           };
         }
         return data;
@@ -77,37 +78,45 @@ export default defineCollection({
 Then register it in your config:
 
 ```typescript title="nextly.config.ts"
-import { defineConfig } from '@nextlyhq/nextly';
-import Posts from './src/collections/posts';
-import Media from './src/collections/media';
+import { defineConfig } from "nextly";
+import Posts from "./src/collections/posts";
 
 export default defineConfig({
-  collections: [Posts, Media],
+  collections: [Posts],
 });
 ```
 
 </Tab>
-<Tab value="Builder (Visual)">
+<Tab value="Visual Schema Builder">
 
-## Creating a Collection in the Schema Builder
+## Creating a collection in the Visual Schema Builder
 
-The Nextly admin panel includes a visual Schema Builder for creating collections without writing code.
+The Nextly admin panel ships with a Visual Schema Builder for creating collections without writing code. (In subsequent prose we'll just call it the Schema Builder.)
 
-1. Open your admin panel and navigate to **Builder > Collections**
-2. Click **Create Collection**
-3. Enter a slug (e.g., `posts`) and display labels
-4. Add fields using the drag-and-drop field editor
-5. Configure admin options, access control, and hooks through the UI
-6. Click **Save** to generate the collection
+1. Open the admin panel and navigate to **Builder > Collections**.
+2. Click **Create Collection**.
+3. Enter a slug (e.g. `posts`) and display labels.
+4. Add fields using the drag-and-drop field editor.
+5. Configure admin options, access control, and hooks through the UI.
+6. Click **Save** to generate the collection.
 
-The Schema Builder produces the same `CollectionConfig` that code-first collections use. You can export a Schema Builder-created collection to TypeScript at any time.
+The Schema Builder produces the same `CollectionConfig` that code-first collections use; you can export a builder-created collection to TypeScript at any time.
 
 </Tab>
 </Tabs>
 
-## Collection Options
+## System fields auto-injection
 
-Only `slug` and `fields` are required. Everything else has sensible defaults.
+`defineCollection()` automatically prepends two system fields if you don't already declare them:
+
+- `title` — `text`, required
+- `slug` — `text`, required, unique
+
+If your config already includes a field named `title` or `slug`, your definition wins; the auto-injection only fills in what you didn't define.
+
+## Collection options
+
+Only `slug` and `fields` are required.
 
 ### `slug`
 
@@ -116,7 +125,7 @@ Only `slug` and `fields` are required. Everything else has sensible defaults.
 | **Type** | `string` |
 | **Required** | Yes |
 
-Unique identifier used as the database table name, API endpoint (`/api/[slug]`), and internal reference. Must be lowercase and URL-friendly.
+Unique identifier used as the database table name (unless `dbName` is set), the API endpoint path (`/api/[slug]`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
 
 ### `fields`
 
@@ -125,7 +134,7 @@ Unique identifier used as the database table name, API endpoint (`/api/[slug]`),
 | **Type** | `FieldConfig[]` |
 | **Required** | Yes |
 
-Array of field definitions that define the document structure. See [Fields](/docs/configuration/fields) for all available types.
+Array of field definitions. See [Fields](/docs/configuration/fields) for the full inventory.
 
 ### `labels`
 
@@ -134,7 +143,7 @@ Array of field definitions that define the document structure. See [Fields](/doc
 | **Type** | `{ singular?: string; plural?: string }` |
 | **Default** | Auto-generated from slug |
 
-Display names in the admin UI. If omitted, labels are derived from the slug (e.g., `blog-posts` becomes singular: "Blog Posts", plural: "Blog Postss").
+Display names in the admin UI. If omitted, the singular label is derived from the slug (`blog-posts` → `Blog Posts`) and the plural is generated from the singular.
 
 ### `timestamps`
 
@@ -143,7 +152,7 @@ Display names in the admin UI. If omitted, labels are derived from the slug (e.g
 | **Type** | `boolean` |
 | **Default** | `true` |
 
-Automatically adds `createdAt` and `updatedAt` fields. `createdAt` is set once on creation; `updatedAt` is refreshed on every save.
+When `true`, every entry gets `createdAt` (set on insert) and `updatedAt` (refreshed on every save) columns.
 
 ### `dbName`
 
@@ -152,7 +161,7 @@ Automatically adds `createdAt` and `updatedAt` fields. `createdAt` is set once o
 | **Type** | `string` |
 | **Default** | Same as `slug` |
 
-Custom database table name. Useful for legacy databases or when the slug doesn't match your naming convention.
+Custom database table name. Useful for legacy schemas or when the slug doesn't match your naming convention.
 
 ### `description`
 
@@ -161,7 +170,7 @@ Custom database table name. Useful for legacy databases or when the slug doesn't
 | **Type** | `string` |
 | **Default** | `undefined` |
 
-Description displayed in the admin UI and used for documentation.
+Description displayed in the admin UI. Falls back to `admin.description` when reading from the type.
 
 ### `sanitize`
 
@@ -170,21 +179,19 @@ Description displayed in the admin UI and used for documentation.
 | **Type** | `boolean` |
 | **Default** | `true` |
 
-When enabled, HTML tags are automatically stripped from plain-text fields (text, textarea, email) before storage. Only disable if the collection intentionally stores HTML in text fields.
+When enabled, the global sanitization hook strips HTML tags from plain-text fields (`text`, `textarea`, `email`) before storage. Set to `false` only if the collection intentionally stores HTML in those fields.
 
 ### `search`
 
 | | |
 |---|---|
 | **Type** | `SearchConfig` |
-| **Default** | Auto-detects searchable fields |
-
-Configure which fields are searchable in list queries.
+| **Default** | Auto-detects `text`/`textarea`/`email` fields |
 
 | Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `searchableFields` | `string[]` | All text/textarea/email fields | Fields to include in search |
-| `minSearchLength` | `number` | `2` | Minimum query length to trigger search |
+|---|---|---|---|
+| `searchableFields` | `string[]` | All `text`/`textarea`/`email` fields | Fields included in search queries. |
+| `minSearchLength` | `number` | `2` | Minimum query length before search runs. |
 
 ### `indexes`
 
@@ -193,12 +200,12 @@ Configure which fields are searchable in list queries.
 | **Type** | `IndexConfig[]` |
 | **Default** | `undefined` |
 
-Compound database indexes for query performance. For single-field indexes, use `index: true` on the field itself. The `id`, `createdAt`, and `updatedAt` fields are indexed automatically.
+Compound database indexes. For single-field indexes, use `index: true` directly on the field. The `id`, `createdAt`, and `updatedAt` columns are indexed automatically.
 
 ```typescript
 indexes: [
-  { fields: ['authorId', 'createdAt'] },
-  { fields: ['slug', 'locale'], unique: true, name: 'slug_locale_unique' },
+  { fields: ["authorId", "createdAt"] },
+  { fields: ["slug", "locale"], unique: true, name: "slug_locale_unique" },
 ]
 ```
 
@@ -209,16 +216,15 @@ indexes: [
 | **Type** | `CustomEndpoint[]` |
 | **Default** | `undefined` |
 
-Custom REST API endpoints mounted at `/api/[slug]/[path]`.
+Additional REST endpoints mounted at `/api/[slug]/[path]`. Each entry is `{ path, method, handler }` where `handler` is a Web-API `(req: Request) => Response | Promise<Response>` function.
 
 ```typescript
 endpoints: [
   {
-    path: '/publish',
-    method: 'post',
+    path: "/publish",
+    method: "post",
     handler: async (req) => {
       const { id } = await req.json();
-      // Publish logic
       return Response.json({ success: true });
     },
   },
@@ -232,123 +238,126 @@ endpoints: [
 | **Type** | `Record<string, unknown>` |
 | **Default** | `undefined` |
 
-Arbitrary metadata accessible by hooks, plugins, or custom code. Not persisted to the database.
+Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
 
-## Admin Options
+## Admin options
 
 Configure how the collection appears in the admin panel via the `admin` property.
 
 | Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `group` | `string` | None | Sidebar group name (collections with the same group appear together) |
-| `icon` | `string` | None | Lucide icon name (e.g., `'FileText'`, `'Users'`) |
-| `hidden` | `boolean` | `false` | Hide from admin navigation (still accessible via URL and API) |
-| `order` | `number` | `100` | Sort order within sidebar group (lower = higher) |
-| `useAsTitle` | `string` | Document ID | Field name to display as the entry title in lists and breadcrumbs |
-| `defaultColumns` | `string[]` | Auto | Columns shown in the list view |
-| `description` | `string` | None | Help text displayed below the collection title |
-| `pagination.defaultLimit` | `number` | `10` | Default entries per page |
-| `pagination.limits` | `number[]` | `[10, 25, 50, 100]` | Available page size options |
-| `isPlugin` | `boolean` | `false` | Show in "Plugins" sidebar section instead of "Collections" |
-| `sidebarGroup` | `string` | None | Custom sidebar group slug |
+|---|---|---|---|
+| `group` | `string` | None | Sidebar group name; collections sharing a group appear together. |
+| `icon` | `string` | None | Lucide icon name (e.g. `"FileText"`, `"Users"`). |
+| `hidden` | `boolean` | `false` | Hide from sidebar navigation (still reachable via direct URL and API). |
+| `order` | `number` | `100` | Sort order within sidebar group (lower = higher). |
+| `sidebarGroup` | `string` | None | Custom sidebar group slug; moves the entry from its default section to a custom group. |
+| `isPlugin` | `boolean` | `false` | Render under the "Plugins" sidebar section instead of "Collections". |
+| `useAsTitle` | `string` | Document ID | Field name used as the entry title in lists and breadcrumbs. |
+| `pagination.defaultLimit` | `number` | `10` | Default entries per page. |
+| `pagination.limits` | `number[]` | `[10, 25, 50, 100]` | Available page-size options. |
+| `description` | `string` | None | Help text below the collection title. |
+| `preview` | `CollectionPreviewConfig` | None | Adds a "Preview" button to the entry form. See below. |
+| `components` | `CollectionAdminComponents` | None | Override default views and inject custom React components. See below. |
 
 ### Preview URLs
-
-Add a "Preview" button to the entry form that opens a preview URL:
 
 ```typescript
 admin: {
   preview: {
     url: (entry) => `/preview/posts/${entry.slug}`,
-    openInNewTab: true,
-    label: 'Preview Post',
+    openInNewTab: true,         // default true
+    label: "Preview Post",      // default "Preview"
   },
 }
 ```
 
-The `url` function receives the current entry data and returns a URL string or `null` if preview is not available.
+The `url` function receives the current entry data (which may include unsaved changes) and returns either a URL string or `null` to hide the button for that entry.
 
-### Custom Admin Components
+### Custom admin components
 
-Override default admin views or inject custom components:
+Override default admin views or inject components at specific positions. Each entry uses the `"package-name/path#ExportName"` component-path format.
 
 ```typescript
 admin: {
   components: {
     views: {
-      Edit: { Component: '@nextlyhq/plugin-form-builder/admin#FormBuilderView' },
+      Edit: { Component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView" },
+      List: { Component: "@nextlyhq/plugin-form-builder/admin#FormsListView" },
     },
-    BeforeListTable: '@nextlyhq/plugin-form-builder/admin#CreateFormButton',
+    BeforeListTable: "@nextlyhq/plugin-form-builder/admin#CreateFormButton",
+    AfterListTable: "@nextlyhq/plugin-form-builder/admin#FormsFooter",
+    BeforeEdit: "@nextlyhq/plugin-form-builder/admin#FormBuilderHeader",
+    AfterEdit: "@nextlyhq/plugin-form-builder/admin#FormBuilderFooter",
   },
 }
 ```
 
-Available injection points: `BeforeListTable`, `AfterListTable`, `BeforeEdit`, `AfterEdit`.
+Available view overrides: `Edit`, `List`. Available injection points: `BeforeListTable`, `AfterListTable`, `BeforeEdit`, `AfterEdit`.
 
-## Access Control
+## Access control
 
-Control who can perform CRUD operations on the collection. Each operation accepts a boolean or a function that receives an `AccessControlContext`.
+Each CRUD operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to the database role/permission system.
 
 ```typescript
 access: {
-  create: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
+  create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
   read: true,
-  update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
-  delete: ({ roles }) => roles.includes('admin'),
+  update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+  delete: ({ roles }) => roles.includes("admin"),
 }
 ```
 
-The `AccessControlContext` contains:
+The `AccessControlContext` passed to functions has the following shape:
 
 | Property | Type | Description |
-|----------|------|-------------|
-| `user` | `{ id, email } \| null` | The authenticated user |
-| `roles` | `string[]` | User's role slugs (includes inherited roles) |
-| `permissions` | `string[]` | Effective permissions in `'resource:action'` format |
-| `operation` | `'create' \| 'read' \| 'update' \| 'delete'` | The operation being performed |
-| `collection` | `string` | The collection slug |
+|---|---|---|
+| `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). |
+| `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). |
+| `permissions` | `string[]` | Effective permissions in `"resource:action"` format. |
+| `operation` | `"create" \| "read" \| "update" \| "delete"` | The operation being checked. |
+| `collection` | `string` | The collection slug. |
 
 **Rules:**
-- Code-defined access always takes precedence over database role/permission checks
-- Omitting an operation falls back to database role/permission checks
-- Super-admin always bypasses all access checks
+
+- Code-defined access always takes precedence over database role/permission checks.
+- Omitting an operation falls back to the database role/permission system.
+- Super-admin always bypasses all access checks.
 
 ## Hooks
 
-Hooks let you run custom logic at specific points in a document's lifecycle. Each hook property accepts an array of handler functions.
+Hooks let you run custom logic at specific points in a document's lifecycle. Every hook property is an array of handlers — they run in array order and can modify the data flowing through (for `before*` hooks).
 
-### Hook Execution Order
+### Eight available hooks
 
-1. `beforeOperation` -- Before any operation begins (can modify operation args)
-2. `beforeValidate` -- Before validation (create/update)
-3. `beforeChange` -- Before database write (create/update)
-4. **Database operation executes**
-5. `afterChange` -- After database write (create/update)
-6. `afterRead` -- After reading from database
-7. `beforeDelete` / `afterDelete` -- Around deletion
+| Hook | Triggers on | Can modify |
+|---|---|---|
+| `beforeOperation` | Before any operation begins. | Yes (operation arguments) |
+| `beforeValidate` | Before validation during create/update. | Yes (data) |
+| `beforeChange` | Before the database write during create/update. | Yes (data) |
+| `afterChange` | After the database write during create/update. | No (side effects) |
+| `beforeRead` | Before reading from the database. | Yes (query parameters) |
+| `afterRead` | After reading from the database. | Yes (transform output) |
+| `beforeDelete` | Before deletion. Throw to prevent. | No |
+| `afterDelete` | After deletion. | No (side effects) |
 
-### Available Hooks
+### Execution order
 
-| Hook | Trigger | Can Modify Data |
-|------|---------|-----------------|
-| `beforeOperation` | Before any operation | Yes (args) |
-| `beforeValidate` | Before validation | Yes |
-| `beforeChange` | Before database write | Yes |
-| `afterChange` | After database write | No (side effects) |
-| `beforeRead` | Before database read | Yes (query params) |
-| `afterRead` | After database read | Yes (transform output) |
-| `beforeDelete` | Before deletion | No (can throw to prevent) |
-| `afterDelete` | After deletion | No (side effects) |
+1. `beforeOperation`
+2. `beforeValidate` (create/update)
+3. `beforeChange` (create/update)
+4. **Database write or read**
+5. `afterChange` (create/update) **or** `afterRead` (reads)
+6. `beforeDelete` / `afterDelete` (deletes)
 
-### Hook Handler
+### Hook handler signature
 
-Every hook handler receives a `HookContext` object:
+Every handler receives a `HookContext` object:
 
 ```typescript
 hooks: {
   beforeChange: [
     async ({ data, operation, collection, user, context, req }) => {
-      if (operation === 'create') {
+      if (operation === "create" && !data.slug) {
         return { ...data, slug: slugify(data.title) };
       }
       return data;
@@ -356,25 +365,37 @@ hooks: {
   ],
   afterChange: [
     async ({ data, req }) => {
-      // Use req.nextly for Direct API access within hooks
+      // Use req.nextly for the Direct API inside hooks
       await req?.nextly?.create({
-        collection: 'activity-logs',
-        data: { action: 'post_updated', postId: data.id },
+        collection: "activity-logs",
+        data: { action: "post_updated", postId: data.id },
       });
     },
   ],
 }
 ```
 
-**Return value behavior:**
-- `before*` hooks: return modified data to pass to the next hook
-- `after*` hooks: return value is ignored (use for side effects)
-- Throwing an error aborts the operation and rolls back the transaction
+**Return-value behavior:**
 
-## Next Steps
+- `before*` hooks: return modified data to pass to the next hook (or the DB).
+- `after*` hooks: return value is ignored; use these for side effects.
+- Throwing aborts the operation and rolls back the transaction.
 
-- **[Fields](/docs/configuration/fields)** -- All field types and validation options
-- **[Singles](/docs/configuration/singles)** -- Single-document content like site settings
-- **[Components](/docs/configuration/components)** -- Reusable field groups for collections and singles
-- **[Schema Builder](/docs/admin/builder)** -- Create collections visually with drag-and-drop
-- **[Direct API](/docs/api-reference/direct-api)** -- Query collections from server-side code
+### When to use which hook
+
+- `beforeOperation` — validate the request, short-circuit before reading args (rate-limit metadata, audit logging entry).
+- `beforeValidate` — coerce inputs (trim strings, normalize emails, derive slugs).
+- `beforeChange` — final mutations before the row is persisted (hash passwords, stamp metadata).
+- `afterChange` — outbound side effects (cache busting, webhooks, queue jobs).
+- `beforeRead` — modify query filters (multi-tenant scoping, soft-delete filtering).
+- `afterRead` — shape the response (compute virtual fields, redact sensitive properties).
+- `beforeDelete` — block deletes when there are dependents.
+- `afterDelete` — cascade cleanup (delete files, revoke tokens, audit log).
+
+## Next steps
+
+- [Fields](/docs/configuration/fields) — every field type and validation option
+- [Singles](/docs/configuration/singles) — single-document content like site settings
+- [Components](/docs/configuration/components) — reusable field groups for collections and singles
+- [Visual Schema Builder](/docs/admin/builder) — create collections visually with drag-and-drop
+- [Direct API](/docs/api-reference/direct-api) — query collections from server-side code

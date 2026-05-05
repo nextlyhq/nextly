@@ -25,10 +25,6 @@ type Props = {
   siblingNames: readonly string[];
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
-  /** PR D: routed through to TypeSpecificEditor so the legacy Group /
-   * Repeater editors can render an "+ Add field" button scoped to the
-   * field being edited. */
-  onAddNestedField?: (parentFieldId: string) => void;
 };
 
 const TYPES_WITH_PLACEHOLDER = new Set([
@@ -53,12 +49,7 @@ const TYPES_WITH_TYPE_SPECIFIC_EDITOR = new Set([
   "blocks",
 ]);
 
-export function GeneralTab({
-  field,
-  readOnly = false,
-  onChange,
-  onAddNestedField,
-}: Props) {
+export function GeneralTab({ field, readOnly = false, onChange }: Props) {
   const isSystem = field.isSystem === true;
   const nameDisabled = readOnly || isSystem;
 
@@ -95,34 +86,36 @@ export function GeneralTab({
 
   return (
     <div className="space-y-4">
-      {/* PR E1: Label first per feedback Section 4. Typing in Label
-          auto-derives Name via toSnakeName until the user manually
-          edits Name. */}
-      <div className="space-y-1">
-        <Label htmlFor="field-label">Label</Label>
-        <Input
-          id="field-label"
-          value={field.label}
-          disabled={readOnly}
-          onChange={e => setLabel(e.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">
-          What content authors see in the record editor.
-        </p>
-      </div>
+      {/* PR H feedback 2.2: Label + Name in one 50/50 row (was two
+          stacked rows). Auto-derive of Name from Label via setLabel
+          (toSnakeName) is unchanged. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="field-label">Label</Label>
+          <Input
+            id="field-label"
+            value={field.label}
+            disabled={readOnly}
+            onChange={e => setLabel(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            What content authors see in the record editor.
+          </p>
+        </div>
 
-      <div className="space-y-1">
-        <Label htmlFor="field-name">Name</Label>
-        <Input
-          id="field-name"
-          value={field.name}
-          disabled={nameDisabled}
-          onChange={e => set("name", e.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">
-          Internal identifier. Used in the database column name and API response
-          key. Auto-derived from Label until you edit it.
-        </p>
+        <div className="space-y-1">
+          <Label htmlFor="field-name">Name</Label>
+          <Input
+            id="field-name"
+            value={field.name}
+            disabled={nameDisabled}
+            onChange={e => set("name", e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Internal identifier. Used in the database column name and API
+            response key. Auto-derived from Label until you edit it.
+          </p>
+        </div>
       </div>
 
       <div className="space-y-1">
@@ -191,7 +184,6 @@ export function GeneralTab({
             field={field}
             readOnly={readOnly}
             onChange={onChange}
-            onAddNestedField={onAddNestedField}
           />
         </div>
       )}
