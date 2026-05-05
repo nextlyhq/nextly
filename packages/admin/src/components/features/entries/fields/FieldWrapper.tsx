@@ -11,10 +11,10 @@
  */
 
 import type { FieldConfig } from "@revnixhq/nextly/config";
+import { Label } from "@revnixhq/ui";
 import type { ReactNode } from "react";
 import { useId } from "react";
 
-import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 import { cn } from "@admin/lib/utils";
 
 // ============================================================
@@ -157,35 +157,31 @@ export function FieldWrapper({
           fieldWithCommonProps.admin?.className,
           className
         )}
-        style={
-          fieldWithCommonProps.admin?.style
-        }
+        style={fieldWithCommonProps.admin?.style}
         data-field={fieldName}
         data-field-type={field.type}
       >
         <div className="pt-0.5">{children}</div>
         <div className="grid gap-1.5 leading-none">
-          <div className="flex items-center gap-2 flex-wrap">
-            <FormLabelWithTooltip
-              htmlFor={fieldId}
-              labelClassName={cn(
-                "text-[11px] font-bold tracking-[0.08em] text-slate-500",
-                error && "text-destructive"
-              )}
-              label={
-                <>
-                  {label}
-                  {isRequired && (
-                    <span className="text-red-500 ml-1" aria-hidden="true">
-                      *
-                    </span>
-                  )}
-                </>
-              }
-              description={description}
-            />
-          </div>
-
+          <Label
+            htmlFor={fieldId}
+            className={cn(
+              "text-[11px] font-bold tracking-[0.08em] text-slate-500",
+              error && "text-destructive"
+            )}
+          >
+            {label}
+            {isRequired && (
+              <span className="text-red-500 ml-1" aria-hidden="true">
+                *
+              </span>
+            )}
+          </Label>
+          {description && (
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              {description}
+            </p>
+          )}
           {error && (
             <p
               id={errorId}
@@ -209,36 +205,36 @@ export function FieldWrapper({
         fieldWithCommonProps.admin?.className,
         className
       )}
-      style={
-        fieldWithCommonProps.admin?.style
-      }
+      style={fieldWithCommonProps.admin?.style}
       data-field={fieldName}
       data-field-type={field.type}
     >
-      {/* Label and Field Type Badge - Inline */}
-      <div className="flex items-center gap-2 flex-wrap mb-1">
-        <FormLabelWithTooltip
-          htmlFor={fieldId}
-          labelClassName={cn(
-            "text-[11px] font-bold tracking-[0.08em] text-slate-500",
-            error && "text-destructive"
-          )}
-          label={
-            <>
-              {label}
-              {isRequired && (
-                <span className="text-red-500 ml-1" aria-hidden="true">
-                  *
-                </span>
-              )}
-            </>
-          }
-          description={description}
-        />
-      </div>
+      {/* Label */}
+      <Label
+        htmlFor={fieldId}
+        className={cn(
+          "text-[11px] font-bold tracking-[0.08em] text-slate-500 mb-1",
+          error && "text-destructive"
+        )}
+      >
+        {label}
+        {isRequired && (
+          <span className="text-red-500 ml-1" aria-hidden="true">
+            *
+          </span>
+        )}
+      </Label>
 
       {/* Input (children) */}
       {children}
+
+      {/* Description / helper text — always visible below the input. Replaces
+          the previous tooltip-on-info-icon pattern (Task 5 PR 5 design D3). */}
+      {description && (
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {description}
+        </p>
+      )}
 
       {/* Error message */}
       {error && (
