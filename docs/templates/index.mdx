@@ -1,0 +1,51 @@
+---
+title: Templates
+description: Starter projects you can scaffold with create-nextly-app.
+---
+
+Templates are starter projects you scaffold via `create-nextly-app`. The CLI prompts you to pick one during setup, or you can pass `--template <name>` for a non-interactive scaffold. Each template ships a working `nextly.config.ts`, the standard project layout, and (for non-blank templates) example collections, singles, and frontend pages.
+
+## Scaffold a project
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app my-app
+```
+</Tab>
+<Tab value="npm">
+```bash
+npx create-nextly-app@latest my-app
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn create nextly-app my-app
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun create nextly-app my-app
+```
+</Tab>
+</Tabs>
+
+Without `--template`, the CLI prompts you to pick one. To skip the prompt, pass `--template <name>`:
+
+```bash
+pnpm create nextly-app my-app --template blank
+pnpm create nextly-app my-app --template blog
+```
+
+## Available templates
+
+- **[Blank](/docs/templates/blank)** -- Empty config, define your own schemas. Good when you want to start from scratch.
+- **[Blog](/docs/templates/blog)** -- Complete blog with posts, categories, tags, frontend pages, and demo content. Good when you want a working starter to learn from.
+
+More templates are planned for the beta release.
+
+## Next Steps
+
+- [Installation](/docs/getting-started/installation) -- Full installation walkthrough including database and storage setup.
+- [Quick Start](/docs/getting-started/quick-start) -- Build a blog from scratch in five minutes.
+- [Configuration](/docs/configuration) -- Configure collections, singles, plugins, and more.
