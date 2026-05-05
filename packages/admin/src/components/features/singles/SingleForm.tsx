@@ -23,7 +23,6 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "@revnixhq/nextly/config";
-import { Card, CardContent } from "@revnixhq/ui";
 import type React from "react";
 import { useEffect, useMemo, useCallback } from "react";
 import { useForm } from "react-hook-form";
@@ -31,15 +30,14 @@ import { z } from "zod";
 
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
+import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
+import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
+import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
-import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
-
-import { SingleFormActions } from "./SingleFormActions";
-import { SingleFormHeader } from "./SingleFormHeader";
-import { SingleFormSidebar } from "./SingleFormSidebar";
 
 // ============================================================================
 // Types
@@ -59,6 +57,13 @@ export interface SingleSchema {
     hidden?: boolean;
     description?: string;
   };
+  /**
+   * Whether this Single has the Draft/Published lifecycle enabled. When
+   * true, the system header splits into Save Draft + Update buttons and the
+   * Document panel + meta strip surface a status pill. Backed by the
+   * `dynamic_singles.status` boolean column.
+   */
+  status?: boolean;
 }
 
 /**
@@ -79,12 +84,13 @@ export interface SingleFormProps {
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
   /** Whether the form is currently submitting */
   isSubmitting?: boolean;
-  /** Callback when form is cancelled */
+  /** Callback when the user clicks Discard changes in the system header
+   *  dropdown (only shown when the form is dirty). */
   onCancel?: () => void;
-  /** Custom components to inject into the form layout flow */
-  headerContent?: React.ReactNode;
-  /** Custom action buttons to place in the header next to the title */
-  headerActions?: React.ReactNode;
+  /** Callback when the user picks "View API response" from the system
+   *  header dropdown. Singles' API URL pattern differs from collections,
+   *  so the page route handles navigation. */
+  onViewApi?: () => void;
   /** Additional CSS classes */
   className?: string;
 }
@@ -275,8 +281,7 @@ export function SingleForm({
   onSubmit,
   isSubmitting = false,
   onCancel,
-  headerContent,
-  headerActions,
+  onViewApi,
   className,
 }: SingleFormProps) {
   // Generate Zod schema from field configurations
@@ -319,11 +324,15 @@ export function SingleForm({
   // Handlers
   // ---------------------------------------------------------------------------
 
+  // Submit handler. Optional `status` arg threads through for
+  // status:true Singles so EntrySystemHeader's Save Draft / Update buttons
+  // can write the appropriate value. Mirrors the EntryForm pattern.
   const handleSubmit = useCallback(
-    async (e?: React.BaseSyntheticEvent) => {
+    async (e?: React.BaseSyntheticEvent, status?: "draft" | "published") => {
       e?.preventDefault();
 
-      await form.handleSubmit(async data => {
+      await form.handleSubmit(async rawData => {
+        const data = status ? { ...rawData, status } : rawData;
         try {
           await onSubmit(data);
           form.reset(data);
@@ -357,103 +366,108 @@ export function SingleForm({
   // Render
   // ---------------------------------------------------------------------------
 
-  // Split fields by placement
+  // System fields: title (system header) and slug (meta strip). Per the
+  // Task 5 design, the rail is system-content only — no SEO / sidebar
+  // special-casing. Any user-defined field with admin.position: "sidebar"
+  // now renders inline like every other Builder field.
   const allFields = schema.fields;
-  const seoField = allFields.find(
-    f =>
-      f.name === "seo" ||
-      (f.type === "group" && f.name?.toLowerCase().includes("seo"))
-  );
-  const slugField = allFields.find(f => f.name === "slug");
-  const titleField = allFields.find(f => f.name === "title");
-
+  const titleField = allFields.find(f => "name" in f && f.name === "title");
+  const slugField = allFields.find(f => "name" in f && f.name === "slug");
   const mainFields = allFields.filter(
-    field =>
-      field.admin?.position !== "sidebar" &&
-      field.name !== "slug" &&
-      field.name !== "title" &&
-      field !== seoField
+    f => !("name" in f) || (f.name !== "slug" && f.name !== "title")
   );
 
-  const sidebarFields = allFields.filter(
-    field =>
-      field.admin?.position === "sidebar" &&
-      field.name !== "slug" &&
-      field !== seoField
-  );
+  // Status flag — singles can opt into Draft/Published via schema.status.
+  // When true, EntrySystemHeader shows Save Draft / Update split, and
+  // EntryMetaStrip / DocumentPanel surface the status pill.
+  const hasStatus = schema.status === true;
+  const documentStatus =
+    (document as { status?: string } | undefined)?.status ?? "draft";
+
+  // Rail collapse pref (shared with collection EntryForm via the same
+  // localStorage key).
+  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+
+  // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
+  // rail panels expect (entry.id / entry.status / entry.created_at /
+  // entry.updated_at). The structural alignment is straightforward — singles
+  // already carry id and updatedAt; status/createdAt are passed through if
+  // present.
+  const entryLike = {
+    id: document.id,
+    status: documentStatus,
+    createdAt: (document as { createdAt?: string }).createdAt,
+    updatedAt: document.updatedAt,
+    title: (document as { title?: string }).title,
+  } as unknown as Parameters<typeof EntrySystemHeader>[0]["entry"];
 
   return (
-    <div className={cn("space-y-6", className)}>
-      {/* Main Form */}
+    <div className={cn("space-y-0", className)}>
       <EntryFormProvider form={form} onSubmit={handleSubmit}>
-        {/* Error summary at top of form */}
-        <FormErrorSummary errors={errors} className="mb-6" />
+        <FormErrorSummary errors={errors} className="mx-6 mt-3" />
 
         <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
-          {/* Main Content */}
-          <div className="flex-1 lg:p-8 pt-6">
-            <div className="mb-6">{headerContent}</div>
-            <SingleFormHeader
-              label={schema.label}
-              description={schema.description}
-              updatedAt={document?.updatedAt}
-              isDirty={isDirty}
-              actions={headerActions}
-            />
-            {/* Custom Title & Slug row */}
-            {(titleField || slugField) && (
-              <div className="mb-6">
-                <Card>
-                  <CardContent className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                    {titleField && (
-                      <div className="w-full">
-                        <FieldRenderer
-                          field={titleField}
-                          disabled={isSubmitting}
-                          readOnly={false}
-                        />
-                      </div>
-                    )}
-                    {slugField && (
-                      <div className="w-full">
-                        <FieldRenderer
-                          field={slugField}
-                          disabled={isSubmitting}
-                          readOnly={false}
-                        />
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            )}
-
-            {mainFields.length > 0 && (
-              <EntryFormContent
-                fields={mainFields}
-                disabled={isSubmitting}
-                withCard
-              />
-            )}
-          </div>
-
-          {/* Sidebar */}
-          <div className="w-full lg:w-[360px] shrink-0  border-t border-primary/5 lg:border-t-0 lg :border-l border-primary/5 lg:border-primary/5 bg-background flex flex-col relative z-10">
-            <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-              <SingleFormSidebar
-                document={document}
-                schema={schema}
-                seoField={seoField}
-                fields={sidebarFields}
-                actions={
-                  <SingleFormActions
-                    isSubmitting={isSubmitting}
-                    onCancel={handleCancel}
-                  />
-                }
+          {/* Main column */}
+          <div className="flex-1 min-w-0 flex flex-col">
+            <div className="-mx-8">
+              <EntrySystemHeader
+                mode="edit"
+                titleField={titleField}
+                hasStatus={hasStatus}
+                isSubmitting={isSubmitting}
+                isDirty={isDirty}
+                entry={entryLike}
+                collectionSlug={schema.slug}
+                onSaveDraft={() => {
+                  void handleSubmit(undefined, "draft");
+                }}
+                onPublish={() => {
+                  void handleSubmit(undefined, "published");
+                }}
+                onCancel={handleCancel}
+                onViewApi={onViewApi}
+                /* Why: Singles use a different API URL pattern than
+                   collections (/api/singles/{slug} vs
+                   /api/collections/{slug}/entries/{id}). The built-in
+                   ShowJSONDialog targets the collection shape, so disable
+                   it here. View API is exposed via onViewApi instead. */
+                showJson={false}
+                isRailCollapsed={railCollapsed}
+                onToggleRail={toggleRail}
               />
             </div>
+            <div className="-mx-8">
+              <EntryMetaStrip
+                slugField={slugField}
+                hasStatus={hasStatus}
+                status={documentStatus}
+                isRailCollapsed={railCollapsed}
+              />
+            </div>
+
+            {mainFields.length > 0 && (
+              <div className="lg:p-8 pt-6">
+                <EntryFormContent
+                  fields={mainFields}
+                  disabled={isSubmitting}
+                  withCard
+                />
+              </div>
+            )}
           </div>
+
+          {/* Rail (collapsible). Same shape and width as collections. */}
+          {!railCollapsed && (
+            <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
+              <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                <EntryFormSidebar
+                  mode="edit"
+                  entry={entryLike}
+                  hasStatus={hasStatus}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </EntryFormProvider>
     </div>
