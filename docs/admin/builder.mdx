@@ -1,131 +1,123 @@
 ---
-title: Schema Builder
-description: Create collections, singles, and components visually with the drag-and-drop Schema Builder.
+title: Visual Schema Builder
+description: Design Collections, Singles, and Components visually with drag-and-drop instead of writing code.
 ---
 
-The Schema Builder is Nextly's visual schema designer. Instead of writing collection definitions in code, you design your content types through a drag-and-drop interface. The Schema Builder auto-generates the TypeScript types, Zod validation schemas, and Drizzle database migrations that the code-first approach would produce manually.
+The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Components that the code-first approach produces, plus the matching TypeScript types and Drizzle migration files. You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
 
-The Schema Builder has three variants that share the same interface:
+The Schema Builder has three variants that share the same canvas, palette, and field editor:
 
-- **Collections Builder** at `/admin/collections/builder`
-- **Singles Builder** at `/admin/singles/builder`
-- **Components Builder** at `/admin/components/builder`
+| Variant | Route | Output |
+|---|---|---|
+| Collections Builder | `/admin/collections/builder` | Persists the schema row, generates a TypeScript schema file under `db.schemasDir` (default `./src/db/schemas/collections/`), and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). |
+| Singles Builder | `/admin/singles/builder` | Persists the schema in the `dynamic_singles` database table. No files written to disk. |
+| Components Builder | `/admin/components/builder` | Persists the component definition in the database. No files written to disk. |
 
-## The Schema Builder Layout
+Edit an existing entity by appending its slug, e.g. `/admin/collections/builder/posts`.
 
-All three Schema Builder variants use the same two-column layout: a main canvas area and a context-sensitive sidebar.
+## Layout
 
-**Canvas (main area).** A sortable list of the fields you have added to your schema. Each field row shows the field icon, label, type badge, and a "Required" badge if applicable. Drag the grip handle on any row to reorder fields. Click a row to open its configuration in the sidebar. Nested field types (Repeater, Group) display their child fields inline with visual indentation and dedicated drop zones.
+Each Schema Builder uses a two-column layout:
 
-**Sidebar (right).** The sidebar switches between three views using tab buttons at the bottom:
+- **Canvas** (main area) — a sortable list of the fields in your schema. Each row shows an icon, the field name, the type badge, and a "Required" indicator. Drag the grip handle to reorder. Click a row to edit it. Container types (Repeater, Group) display their child fields inline with indentation and dedicated drop zones.
+- **Right panel** — the field palette and the field editor. Use the toolbar at the top of the canvas to open the Settings dialog (entity-level config like description, sidebar icon, admin group) or to preview/save changes.
 
-- **Add Fields.** A searchable palette of all available field types, organized into Basic and Advanced categories. Each field type shows an icon, name, and short description. Drag a field onto the canvas, or click it to append it to the field list.
-- **Settings.** Entity-level configuration: description, sidebar icon, admin group, timestamps toggle, "use as title" field, hidden toggle, and (for collections) a Hooks editor for adding pre-built lifecycle hooks.
-- **Field Editor.** When you click a field row on the canvas, the sidebar slides over to show a configuration form with four tabs:
+### Field palette
+
+The field palette groups field types into five categories, in this order:
+
+| Category | Field types in the picker |
+|---|---|
+| Basic | Text, Long text, Editor (rich text), Email, Password, Number |
+| Advanced | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips) |
+| Media | Media (upload) |
+| Relational | Relationship |
+| Structured | Repeater, Group, Component |
+
+This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced / Virtual) so the prose can talk about families that don't all map to a single picker tab — for example, the `join` field is a code-first virtual field with no picker entry.
+
+### Field editor
+
+Click a field on the canvas to slide the field editor over the palette. The editor has four tabs:
 
 | Tab | What you configure |
 |---|---|
-| **General** | Name, label, type, description, required toggle, default value |
-| **Validation** | Type-specific rules: min/max length, pattern, min/max value, min/max rows |
-| **Admin** | Layout width (25%–100%), position (main or sidebar), read-only, hidden, conditional visibility |
-| **Advanced** | Unique constraint, database index, localized (reserved) |
+| **General** | Name (auto-derived slug), label, description, default value, and the field's type-specific options (e.g. Select options, Relationship target, Upload MIME pattern). |
+| **Validation** | `required`, plus type-specific rules: `minLength` / `maxLength`, `min` / `max`, `minRows` / `maxRows`, `minChips` / `maxChips`, regex `pattern`, custom `message`. |
+| **Display** | Layout `width` (25% / 33% / 50% / 66% / 75% / 100%), `position` (Main content or Sidebar), `readOnly`, `hidden`, conditional visibility (a per-field condition keyed off another field's value), description, placeholder. |
+| **Advanced** | `unique` constraint, database `index`, and a reserved `localized` flag (not yet wired through to runtime localization). |
 
-## Available Field Types
+Conditional visibility supports type-aware operators (`equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `isEmpty`, `isNotEmpty`, numeric comparisons, `between`, date `before` / `after`, and boolean `isTrue` / `isNotTrue`).
 
-### Basic Fields
+### Settings dialog
 
-| Field Type | Description |
-|---|---|
-| **Text** | Short text input |
-| **Textarea** | Multi-line text content |
-| **Rich Text** | Rich text editor with formatting |
-| **Email** | Email address field |
-| **Password** | Secure text input |
-| **Number** | Numeric values |
-| **Code** | Code editor with syntax highlighting |
-| **Date** | Date and time picker |
-| **Select** | Dropdown from options |
-| **Radio** | Single choice from options |
-| **Checkbox** | Boolean toggle |
-| **Toggle** | On/off switch |
-| **Upload** | File or image upload |
+The toolbar's Settings button opens a Basics / Advanced modal that edits entity-level metadata: name, slug, description, sidebar icon, admin group (Collections) or category (Components), sort order, and an `i18n` flag. Per-collection lifecycle hooks are configured in code via the `hooks` array on `defineCollection()`; the Visual Schema Builder does not currently expose a hooks editor in the UI.
 
-### Advanced Fields
+## Field types
 
-| Field Type | Description |
-|---|---|
-| **Group** | Nested group of fields. Renders child fields inline |
-| **Repeater** | Repeatable group of fields. Editors add/remove/reorder rows |
-| **Component** | Embed a reusable component field group |
-| **JSON** | Raw JSON data |
-| **Relationship** | Reference to entries in other collections |
+The palette ships every field type Nextly supports through code-first definitions. The label in the picker can differ from the canonical type name (the picker shows "Long text" for `textarea`, "Editor" for `richText`, "Media" for `upload`, "Tags" for `chips`).
 
-Group and Repeater fields support nesting up to 3 levels deep. Each level gets a progressively darker background shade to make the hierarchy visible.
+For the full per-type option reference, see [Fields](/docs/configuration/fields).
 
-## Creating a Collection, Step by Step
+### Container fields and nesting
 
-Here is a typical workflow for creating a new "Blog Posts" collection using the Schema Builder:
+Repeater, Group, and Component fields can themselves contain fields. Nesting is capped at 4 levels deep — `MAX_NESTING_DEPTH = 4` in `packages/admin/src/components/features/schema-builder/types.ts`. Each level renders with a progressively darker background to make the hierarchy visible.
 
-1. Navigate to **Builder > Collections** in the sidebar and click **New Collection**.
+A Component field embeds a reusable component definition (created via the Components Builder or `defineComponent()`). It can target a single component or a list of allowed components, and can be marked repeatable to act as an inline content zone.
 
-2. Enter the collection name. The Schema Builder generates a URL-friendly slug automatically (e.g., "Blog Posts" becomes `blog_posts`).
+## Walkthrough: create a Blog Posts collection
 
-3. Notice that **Title** and **Slug** are already present as system fields. These are included in every collection automatically and cannot be removed.
-
-4. Switch to the **Settings** tab in the right sidebar to set a description, pick a sidebar icon, and choose a field to use as the entry title.
-
-5. Drag a **Rich Text** field from the palette to the center panel. Click the new field row. In the Field Editor, set the name to `content`.
-
-6. Drag an **Upload** field and name it `featuredImage`. In the validation tab, you can restrict the accepted MIME types to `image/*`.
-
-7. Drag a **Select** field and name it `status`. Add options: `draft`, `published`, `archived`.
-
+1. Open `/admin/collections/builder` and click **New Collection**.
+2. Fill in the singular and plural names (e.g. "Post" and "Posts"). The slug is generated from the singular name (`post`); you can override it.
+3. Pick a sidebar icon (Lucide icon name) and an optional admin group, then click **Continue** to enter the canvas.
+4. Drag a **Long text** (`textarea`) field from the palette and rename it `excerpt` in the editor.
+5. Drag an **Editor** (`richText`) field and name it `content`.
+6. Drag a **Media** (`upload`) field and name it `featuredImage`. On the General tab, restrict the MIME pattern to `image/*`.
+7. Drag a **Select** field and name it `status`. Add the options `draft`, `published`, `archived` in the editor.
 8. Drag a **Relationship** field and name it `author`. Set the target collection to `users`.
+9. Reorder the fields by dragging the grip handles.
+10. Click **Save**. For Collections, the toolbar previews the schema diff before applying it; for Singles and Components the change applies immediately.
 
-9. Reorder fields by dragging the grip handles.
+After save, the new collection appears in the admin sidebar under Collections. The generated TypeScript schema and Drizzle migration are written to your `db.schemasDir` and `db.migrationsDir` and should be committed alongside your code.
 
-10. Click **Create**. The Schema Builder sends the schema to the server, which generates:
-    - A collection configuration file
-    - TypeScript interfaces for the collection's documents
-    - A Zod validation schema
-    - A Drizzle database schema and migration
+## Persistence
 
-The new collection immediately appears in the admin sidebar under Collections.
-
-## Auto-Generated Outputs
-
-When you save a Schema Builder schema, Nextly generates all the artifacts the code-first approach requires:
-
-- **TypeScript types.** Interfaces for your collection documents, written to the configured `typescript.outputFile` path
-- **Zod schemas.** Runtime validation schemas that match your field definitions and validation rules
-- **Database migrations.** Drizzle migration files in your configured `db.migrationsDir` that create or alter tables and columns
-
-This means you can start with the Schema Builder to prototype quickly, then switch to code-first definitions for advanced customization, or continue using the Schema Builder exclusively.
-
-## Permissions
-
-The Schema Builder requires the `manage-settings` permission. Users without this permission will not see the Schema Builder section in the sidebar.
-
-By default, the Schema Builder section is visible in development (`NODE_ENV !== "production"`) and hidden in production. You can override this with the `showBuilder` branding option. See [Branding](/docs/admin/branding).
-
-## Schema Builder vs. Code-First
-
-Both approaches produce the same result: registered collections, singles, or components with typed schemas and migrations. Choose the approach that fits your workflow:
-
-| Aspect | Builder (Visual) | Code-first |
+| Entity | Where it is stored | What gets generated |
 |---|---|---|
-| Speed to prototype | Drag-and-drop, instant preview | Write config, run CLI |
-| Version control | Generated files are committed | Hand-written files are committed |
-| Advanced hooks | Add via Hooks panel in Schema Builder | Full programmatic control |
-| Team workflow | Non-developers can contribute | Developers own the schema |
+| Collection | `dynamic_collections` table + files on disk | TypeScript schema file (`<slug>.ts` under `db.schemasDir`) and a Drizzle migration in `db.migrationsDir`. The schema file's path is exported from a generated `index.ts` so the runtime can import it. |
+| Single | `dynamic_singles` table | Runtime-only: the schema is regenerated from the database row on each request. No files are written. |
+| Component | Database row | Runtime-only: stored alongside dynamic singles. No files are written. |
 
-For code-first definitions, see [Collections](/docs/configuration/collections), [Singles](/docs/configuration/singles), and [Fields](/docs/configuration/fields).
+When you edit and re-save a collection, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar). The generator avoids re-running migrations that have already been applied — see [`packages/nextly/src/services/collection-file-manager.ts`](../packages/nextly/src/services/collection-file-manager.ts) for the implementation.
 
-## Next Steps
+## Permissions and visibility
 
-- [Admin Panel Overview](/docs/admin) -- Full admin panel navigation guide
-- [Branding](/docs/admin/branding) -- Control Builder visibility with `showBuilder`
-- [Collections](/docs/configuration/collections) -- Code-first collection definitions
-- [Singles](/docs/configuration/singles) -- Code-first single definitions
-- [Components](/docs/configuration/components) -- Reusable field groups
-- [Fields](/docs/configuration/fields) -- Field type reference and validation options
+The Visual Schema Builder is reached through the Builders top-level icon. That icon is gated by the `admin.branding.showBuilder` toggle:
+
+- Default behaviour: visible when `process.env.NODE_ENV !== "production"`, hidden in production.
+- Force visible: `admin.branding.showBuilder = true` in `nextly.config.ts`.
+- Force hidden: `admin.branding.showBuilder = false`.
+
+See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the full toggle reference.
+
+## Builder vs code-first
+
+Both approaches produce the same registered entities. Pick by workflow:
+
+| Aspect | Visual Schema Builder | Code-first |
+|---|---|---|
+| Speed to prototype | Drag-and-drop | Write config, run `nextly db:sync` |
+| Source of truth | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file |
+| Lifecycle hooks | Configure in code via `hooks` array | Configure in code via `hooks` array |
+| Team workflow | Editors and non-developers can iterate | Developers own the schema |
+
+You can mix both — define core collections in code and let editors prototype new ones in the Schema Builder, or vice versa.
+
+## Next steps
+
+- [Admin Panel Overview](/docs/admin) — full navigation guide
+- [Branding](/docs/admin/branding) — control Builder visibility with `showBuilder`
+- [Collections](/docs/configuration/collections) — code-first collection definitions
+- [Singles](/docs/configuration/singles) — code-first Single definitions
+- [Components](/docs/configuration/components) — reusable field groups
+- [Fields](/docs/configuration/fields) — per-type option reference and validation

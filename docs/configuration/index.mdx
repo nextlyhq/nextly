@@ -1,54 +1,53 @@
 ---
 title: Configuration
-description: Configure your Nextly application with collections, singles, storage, security, and more.
+description: Configure your Nextly application with collections, singles, components, fields, storage, security, and more.
 ---
 
-Nextly is configured through a `nextly.config.ts` file at the root of your project. This file is the single source of truth for your content model, database output paths, storage backends, security settings, and admin panel branding.
+Nextly is configured through a single `nextly.config.ts` file at the root of your project. That file is the source of truth for your content model, database output paths, storage backends, security settings, email, and admin panel branding.
 
-## The Config File
+## The config file
 
-Every Nextly project has a `nextly.config.ts` that exports a config object created with `defineConfig()`:
+Every Nextly project has a `nextly.config.ts` that exports a config built with `defineConfig()`:
 
 ```typescript title="nextly.config.ts"
-import { defineConfig } from '@nextlyhq/nextly';
-import Posts from './src/collections/posts';
-import Media from './src/collections/media';
-import SiteSettings from './src/singles/site-settings';
+import { defineConfig } from "nextly";
+import Posts from "./src/collections/posts";
+import Media from "./src/collections/media";
+import SiteSettings from "./src/singles/site-settings";
 
 export default defineConfig({
   collections: [Posts, Media],
   singles: [SiteSettings],
   db: {
-    schemasDir: './src/db/schemas/collections',
-    migrationsDir: './src/db/migrations',
+    schemasDir: "./src/db/schemas/collections",
+    migrationsDir: "./src/db/migrations",
   },
   typescript: {
-    outputFile: './src/types/generated/payload-types.ts',
+    outputFile: "./src/types/generated/payload-types.ts",
   },
 });
 ```
 
-## What You Can Configure
+## What you can configure
 
 | Area | Description |
 |------|-------------|
-| **[Collections](/docs/configuration/collections)** | Content types with multiple entries (blog posts, products, users) |
-| **[Singles](/docs/configuration/singles)** | One-off documents (site settings, header, footer) |
-| **[Components](/docs/configuration/components)** | Reusable field groups embedded in collections and singles |
-| **[Fields](/docs/configuration/fields)** | Field types, validation, and helpers |
-| **Database** | Schema and migration output directories |
-| **TypeScript** | Generated type output path and module augmentation |
-| **Storage** | Cloud storage backends (S3, Vercel Blob) for file uploads |
-| **Security** | CORS, rate limiting, headers, input sanitization |
-| **Admin** | Branding, logo, colors, favicon, plugin sidebar placement |
-| **Plugins** | Extend Nextly with custom functionality |
-| **Email** | Email provider and template configuration |
-| **Users** | Custom fields on the built-in user model |
+| [Nextly config](/docs/configuration/nextly-config) | Every option in `defineConfig()` with types and defaults |
+| [Collections](/docs/configuration/collections) | Content types with multiple entries (blog posts, products, media) |
+| [Singles](/docs/configuration/singles) | One-off documents (site settings, header, footer) |
+| [Components](/docs/configuration/components) | Reusable field groups embedded in collections and singles |
+| [Fields](/docs/configuration/fields) | Field types, options, validation, and helpers |
+| [Environment variables](/docs/configuration/environment) | Every environment variable Nextly reads |
 
-## Next Steps
+## Visual Schema Builder vs code-first
 
-- **[Nextly Config Reference](/docs/configuration/nextly-config)** -- Every option in `defineConfig()` with types and defaults
-- **[Collections](/docs/configuration/collections)** -- Define content types with fields, hooks, and access control
-- **[Singles](/docs/configuration/singles)** -- Define single-document content like site settings
-- **[Fields](/docs/configuration/fields)** -- All available field types and how to use them
-- **[Environment Variables](/docs/configuration/environment)** -- All environment variables for database, auth, and storage
+Collections, singles, and components can also be created visually in the Visual Schema Builder (the "Schema Builder" link inside the admin panel). The Schema Builder writes the same `CollectionConfig`, `SingleConfig`, and `ComponentConfig` shapes documented in this section, so anything you build visually maps 1:1 to a `defineCollection`, `defineSingle`, or `defineComponent` call.
+
+## Next steps
+
+- [Nextly config reference](/docs/configuration/nextly-config) — every top-level option in `defineConfig()`
+- [Collections](/docs/configuration/collections) — content types with multiple entries
+- [Singles](/docs/configuration/singles) — single-document content like site settings
+- [Components](/docs/configuration/components) — reusable field groups for collections and singles
+- [Fields](/docs/configuration/fields) — every available field type
+- [Environment variables](/docs/configuration/environment) — what to set in `.env`
