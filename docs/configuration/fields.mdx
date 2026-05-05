@@ -625,10 +625,10 @@ repeater({
 | `interfaceName` | `string` | — | TypeScript interface name for code generation. |
 | `dbName` | `string` | Auto | Custom database table name. |
 | `virtual` | `boolean` | `false` | Skip database storage; field exists only in API. |
-| `defaultValue` | `ArrayRowValue[] \| (data) => ArrayRowValue[]` | — | Static default rows. |
+| `defaultValue` | `RepeaterRowValue[] \| (data) => RepeaterRowValue[]` | — | Static default rows. |
 | `admin.initCollapsed` | `boolean` | `false` | Render rows initially collapsed. |
 | `admin.isSortable` | `boolean` | `true` | Enable drag-and-drop reorder. |
-| `admin.components.RowLabel` | `React.ComponentType<ArrayRowLabelProps>` | — | Custom row-label component. |
+| `admin.components.RowLabel` | `React.ComponentType<RepeaterRowLabelProps>` | — | Custom row-label component. |
 
 ```typescript
 // FAQ with custom row labels
