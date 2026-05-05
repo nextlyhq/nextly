@@ -32,10 +32,6 @@ import { seed } from "@/endpoints/seed";
 const TEMPLATE_SLUG = "blog";
 const TEMPLATE_LABEL = "Blog";
 
-interface MetaServiceLike {
-  set(key: string, value: unknown): Promise<void>;
-}
-
 async function ensureSuperAdmin(
   request: Request
 ): Promise<{ status: number; error: string } | null> {
@@ -119,10 +115,7 @@ export async function POST(request: Request): Promise<Response> {
     // seed. We surface it as a warning and let the card auto-hide via
     // its in-memory state instead.
     try {
-      const meta = (
-        nextly as unknown as { container: { get: <T>(name: string) => T } }
-      ).container.get<MetaServiceLike>("metaService");
-      await meta.set("seed.completedAt", new Date().toISOString());
+      await nextly.meta.set("seed.completedAt", new Date().toISOString());
     } catch (metaErr) {
       const m = metaErr instanceof Error ? metaErr.message : String(metaErr);
       result.warnings.push(`could not record seed.completedAt: ${m}`);
