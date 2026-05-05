@@ -7,7 +7,7 @@ import { useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
-import { buildRoute } from "@admin/constants/routes";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCollections, useDashboardStats } from "@admin/hooks/queries";
 import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
