@@ -216,7 +216,14 @@ export function UploadPreview({
   className,
 }: UploadPreviewProps) {
   const isImage = file.mimeType?.startsWith("image/");
-  const thumbnailSrc = file.thumbnailUrl || (isImage ? file.url : undefined);
+  const isSvg = file.mimeType === "image/svg+xml";
+  // SVGs scale natively — Nextly's media pipeline sometimes leaves
+  // thumbnailUrl null for them, so always serve the full URL. For
+  // other images, prefer the generated thumbnail and fall back to
+  // the full URL if it's missing or fails to load (see onError below).
+  const thumbnailSrc = isSvg
+    ? file.url
+    : file.thumbnailUrl || (isImage ? file.url : undefined);
   const dimensions = formatDimensions(file.width, file.height);
   const fileSize = formatFileSize(file.filesize);
 
@@ -253,6 +260,15 @@ export function UploadPreview({
             src={thumbnailSrc}
             alt={file.filename}
             className="w-full h-full object-cover"
+            onError={e => {
+              // If the generated thumbnail 404s (e.g., the storage
+              // adapter never produced one), fall back to the full
+              // URL. Guard against an infinite loop if the full URL
+              // is also broken.
+              if (file.url && e.currentTarget.src !== file.url) {
+                e.currentTarget.src = file.url;
+              }
+            }}
           />
         ) : (
           <div className="flex flex-col items-center gap-2 p-4">
