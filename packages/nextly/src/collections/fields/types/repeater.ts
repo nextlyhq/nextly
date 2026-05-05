@@ -1,10 +1,10 @@
 /**
- * Array Field Type
+ * Repeater Field Type
  *
- * A field for storing repeating sets of fields. Each row in the array
+ * A field for storing repeating sets of fields. Each row in the repeater
  * contains the same field structure, allowing for lists of complex data.
  *
- * @module collections/fields/types/array
+ * @module collections/fields/types/repeater
  * @since 1.0.0
  */
 
@@ -17,11 +17,11 @@ import type {
 } from "./base";
 
 // ============================================================
-// Nested Field Type for Array Fields
+// Nested Field Type for Repeater Fields
 // ============================================================
 
 /**
- * Permissive type alias for fields nested within an array.
+ * Permissive type alias for fields nested within a repeater.
  *
  * Uses a structural subset of BaseFieldConfig with an index signature
  * to accept any concrete field config (text, select, group, etc.) without
@@ -39,48 +39,48 @@ export type FieldConfig = {
 };
 
 // ============================================================
-// Array Field Value Types
+// Repeater Field Value Types
 // ============================================================
 
 /**
- * Value type for a single array row.
+ * Value type for a single repeater row.
  *
  * Each row is an object containing field values keyed by field name.
  */
-export type ArrayRowValue = Record<string, unknown>;
+export type RepeaterRowValue = Record<string, unknown>;
 
 /**
- * Value type for an array field.
+ * Value type for a repeater field.
  *
- * Array fields store an array of row objects, or null/undefined if empty.
+ * Repeater fields store an array of row objects, or null/undefined if empty.
  */
-export type ArrayFieldValue = ArrayRowValue[] | null | undefined;
+export type RepeaterFieldValue = RepeaterRowValue[] | null | undefined;
 
 // ============================================================
-// Array Row Label Component Props
+// Repeater Row Label Component Props
 // ============================================================
 
 /**
  * Props passed to custom RowLabel components.
  *
- * RowLabel components render the label for each row in the array,
+ * RowLabel components render the label for each row in the repeater,
  * allowing dynamic labels based on row data.
  *
  * @example
  * ```typescript
- * const CustomRowLabel: React.FC<ArrayRowLabelProps> = ({ data, index }) => {
+ * const CustomRowLabel: React.FC<RepeaterRowLabelProps> = ({ data, index }) => {
  *   return <span>{data.title || `Item ${index + 1}`}</span>;
  * };
  * ```
  */
-export interface ArrayRowLabelProps {
+export interface RepeaterRowLabelProps {
   /**
-   * The data for this specific array row.
+   * The data for this specific repeater row.
    */
-  data: ArrayRowValue;
+  data: RepeaterRowValue;
 
   /**
-   * The zero-based index of this row in the array.
+   * The zero-based index of this row in the repeater.
    */
   index: number;
 
@@ -91,15 +91,15 @@ export interface ArrayRowLabelProps {
 }
 
 // ============================================================
-// Array Field Labels
+// Repeater Field Labels
 // ============================================================
 
 /**
- * Custom labels for array field UI.
+ * Custom labels for repeater field UI.
  *
- * Allows customization of how array rows are labeled in the Admin UI.
+ * Allows customization of how repeater rows are labeled in the Admin UI.
  */
-export interface ArrayFieldLabels {
+export interface RepeaterFieldLabels {
   /**
    * Singular label for a single row (e.g., "Item", "Entry", "Slide").
    *
@@ -116,18 +116,18 @@ export interface ArrayFieldLabels {
 }
 
 // ============================================================
-// Array Field Admin Options
+// Repeater Field Admin Options
 // ============================================================
 
 /**
- * Admin panel options specific to array fields.
+ * Admin panel options specific to repeater fields.
  *
- * Extends the base admin options with array-specific settings
+ * Extends the base admin options with repeater-specific settings
  * for controlling row display and interaction.
  */
-export interface ArrayFieldAdminOptions extends FieldAdminOptions {
+export interface RepeaterFieldAdminOptions extends FieldAdminOptions {
   /**
-   * Whether array rows should be initially collapsed.
+   * Whether repeater rows should be initially collapsed.
    *
    * When `true`, rows are rendered in a collapsed state and must
    * be expanded to view/edit their contents.
@@ -147,7 +147,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
   isSortable?: boolean;
 
   /**
-   * Custom components for array field rendering.
+   * Custom components for repeater field rendering.
    */
   components?: FieldAdminOptions["components"] & {
     /**
@@ -165,18 +165,18 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
      * }
      * ```
      */
-    RowLabel?: React.ComponentType<ArrayRowLabelProps>;
+    RowLabel?: React.ComponentType<RepeaterRowLabelProps>;
   };
 }
 
 // ============================================================
-// Array Field Configuration
+// Repeater Field Configuration
 // ============================================================
 
 /**
- * Configuration interface for array fields.
+ * Configuration interface for repeater fields.
  *
- * Array fields store repeating sets of fields, allowing users to add,
+ * Repeater fields store repeating sets of fields, allowing users to add,
  * remove, and reorder rows of structured data. Each row contains the
  * same field structure defined in the `fields` property.
  *
@@ -197,10 +197,10 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  *
  * @example
  * ```typescript
- * // Basic array - social links
+ * // Basic repeater - social links
  * const socialLinks: RepeaterFieldConfig = {
  *   name: 'socialLinks',
- *   type: 'array',
+ *   type: 'repeater',
  *   label: 'Social Links',
  *   labels: {
  *     singular: 'Link',
@@ -225,7 +225,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * // FAQ section with custom row labels
  * const faq: RepeaterFieldConfig = {
  *   name: 'faq',
- *   type: 'array',
+ *   type: 'repeater',
  *   label: 'Frequently Asked Questions',
  *   labels: {
  *     singular: 'Question',
@@ -256,7 +256,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  * // Image gallery with validation
  * const gallery: RepeaterFieldConfig = {
  *   name: 'gallery',
- *   type: 'array',
+ *   type: 'repeater',
  *   label: 'Image Gallery',
  *   labels: {
  *     singular: 'Image',
@@ -289,10 +289,10 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  *   },
  * };
  *
- * // Nested arrays - product variants with options
+ * // Nested repeaters - product variants with options
  * const variants: RepeaterFieldConfig = {
  *   name: 'variants',
- *   type: 'array',
+ *   type: 'repeater',
  *   label: 'Product Variants',
  *   fields: [
  *     {
@@ -312,7 +312,7 @@ export interface ArrayFieldAdminOptions extends FieldAdminOptions {
  *     },
  *     {
  *       name: 'options',
- *       type: 'array',
+ *       type: 'repeater',
  *       fields: [
  *         { name: 'name', type: 'text' },
  *         { name: 'value', type: 'text' },
@@ -333,10 +333,10 @@ export interface RepeaterFieldConfig
   type: "repeater";
 
   /**
-   * Fields that make up each row of the array.
+   * Fields that make up each row of the repeater.
    *
    * Each row will contain all these fields. Supports any field type
-   * including nested arrays and groups for complex data structures.
+   * including nested repeaters and groups for complex data structures.
    */
   fields: FieldConfig[];
 
@@ -356,15 +356,15 @@ export interface RepeaterFieldConfig
   maxRows?: number;
 
   /**
-   * Custom labels for array rows.
+   * Custom labels for repeater rows.
    *
    * Used in the Admin UI for buttons like "Add {singular}" and
    * section headers showing "{plural}".
    */
-  labels?: ArrayFieldLabels;
+  labels?: RepeaterFieldLabels;
 
   /**
-   * Default value for the array field.
+   * Default value for the repeater field.
    *
    * An array of row data objects to use as initial values.
    *
@@ -377,13 +377,13 @@ export interface RepeaterFieldConfig
    * ```
    */
   defaultValue?:
-    | ArrayRowValue[]
-    | ((data: Record<string, unknown>) => ArrayRowValue[]);
+    | RepeaterRowValue[]
+    | ((data: Record<string, unknown>) => RepeaterRowValue[]);
 
   /**
    * Admin UI configuration options.
    */
-  admin?: ArrayFieldAdminOptions;
+  admin?: RepeaterFieldAdminOptions;
 
   /**
    * Custom interface name for TypeScript generation.
@@ -402,7 +402,7 @@ export interface RepeaterFieldConfig
   /**
    * Custom database table name (SQL adapters only).
    *
-   * By default, array data is stored in a separate table with an
+   * By default, repeater data is stored in a separate table with an
    * auto-generated name. Use this to specify a custom table name.
    */
   dbName?: string;
@@ -420,10 +420,10 @@ export interface RepeaterFieldConfig
   /**
    * Custom validation function.
    *
-   * Receives the array value and returns `true` for valid
+   * Receives the repeater value and returns `true` for valid
    * or an error message string for invalid.
    *
-   * @param value - The array field value
+   * @param value - The repeater field value
    * @param args - Object containing document data and request context
    * @returns `true` if valid, or an error message string
    *
@@ -437,7 +437,7 @@ export interface RepeaterFieldConfig
    *   return true;
    * }
    *
-   * // Validate unique values within array
+   * // Validate unique values within repeater
    * validate: (value) => {
    *   if (value) {
    *     const names = value.map(row => row.name);
@@ -451,7 +451,7 @@ export interface RepeaterFieldConfig
    * ```
    */
   validate?: (
-    value: ArrayFieldValue,
+    value: RepeaterFieldValue,
     args: { data: Record<string, unknown>; req: RequestContext }
   ) => string | true | Promise<string | true>;
 }
