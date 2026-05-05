@@ -8,7 +8,6 @@ import { defineConfig } from "@revnixhq/nextly/config";
 import { formBuilder } from "@revnixhq/plugin-form-builder";
 import { vercelBlobStorage } from "@revnixhq/storage-vercel-blob";
 
-import TestItems from "./src/app/collections/test-items";
 import ContentSettings from "./src/app/singles/content-settings";
 
 // Initialize Form Builder plugin
@@ -31,7 +30,7 @@ export default defineConfig({
     },
   },
   // Include form builder collections so CLI can sync them to database
-  collections: [TestItems, ...formBuilderPlugin.collections],
+  collections: [...formBuilderPlugin.collections],
   singles: [ContentSettings],
   plugins: [formBuilderPlugin.plugin],
 
