@@ -1,25 +1,19 @@
 "use client";
 
 import { Card, CardContent, Skeleton } from "@revnixhq/ui";
-import {
-  AlertCircle,
-  ChevronRight,
-  Database,
-  FileCheck,
-  Layers,
-  Layout,
-  Puzzle,
-} from "lucide-react";
+import { AlertCircle, Database, FileCheck, Layout, Puzzle } from "lucide-react";
 import type React from "react";
 import { useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
-import { buildRoute, ROUTES } from "@admin/constants/routes";
+import { buildRoute } from "@admin/constants/routes";
 import { useCollections, useDashboardStats } from "@admin/hooks/queries";
 import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
+
+import { GetStartedEmptyState } from "./GetStartedEmptyState";
 
 interface CollectionGroup {
   name: string | null;
@@ -177,22 +171,7 @@ export const CollectionQuickLinks: React.FC = () => {
           <span>Connection Error</span>
         </div>
       ) : counts.length === 0 ? (
-        <div className="py-12 flex flex-col items-center gap-6 bg-primary/5 rounded-none  border border-primary/5 border-dashed border-primary/5">
-          <div className="p-6 rounded-none bg-primary/5  border border-primary/5">
-            <Layers className="h-8 w-8 text-muted-foreground/10" />
-          </div>
-          <div className="space-y-2 text-center">
-            <p className="text-lg font-bold text-foreground tracking-tight">
-              No Collections
-            </p>
-            <Link
-              href={ROUTES.COLLECTIONS_CREATE}
-              className="text-[10px] font-bold uppercase tracking-widest text-primary flex items-center justify-center gap-2 transition-all"
-            >
-              Create Collection <ChevronRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-        </div>
+        <GetStartedEmptyState />
       ) : (
         <div className="space-y-12">
           {groups.map(group => (
