@@ -173,7 +173,7 @@ export function RelationshipSearch({
     item => !excludeIds.includes(item.id)
   );
 
-  // Check if there are more pages to load (canonical meta per spec section 5.1).
+  // Check if there are more pages to load (canonical meta per spec §5.1).
   const hasMore = data?.meta.hasNext ?? false;
   const totalDocs = data?.meta.total ?? 0;
 
@@ -204,7 +204,12 @@ export function RelationshipSearch({
   }, []);
 
   return (
-    <div className={cn("rounded-none  border border-primary/5 bg-card p-4   space-y-4", className)}>
+    <div
+      className={cn(
+        "rounded-none  border border-primary/5 bg-card p-4   space-y-4",
+        className
+      )}
+    >
       {/* Header with title and close button */}
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium">Search Related</h4>

@@ -1,30 +1,30 @@
 /**
- * Refresh-token session binding policy (Audit H3, T-015).
+ * Refresh-token session binding policy.
  *
  * Compares the User-Agent and trusted client IP captured at refresh-token
  * mint time against the same values on the rotation request. Returns one of:
  *
- *   - `{ kind: "ok" }`            — values match (or comparison is impossible
- *                                   because one side is null / unparseable).
- *   - `{ kind: "soft", reason }`  — UA mismatch only. Browsers update User-
- *                                   Agent strings via auto-update, so this is
- *                                   logged but not enforced.
- *   - `{ kind: "hard", reason }`  — IP family flip (v4↔v6) or network-prefix
- *                                   change (different /24 for IPv4, /48 for
- *                                   IPv6). Caller must revoke the user's
- *                                   refresh tokens and force re-auth.
+ *   - `{ kind: "ok" }`            values match (or comparison is impossible
+ *                                 because one side is null / unparseable).
+ *   - `{ kind: "soft", reason }`  UA mismatch only. Browsers update User-
+ *                                 Agent strings via auto-update, so this is
+ *                                 logged but not enforced.
+ *   - `{ kind: "hard", reason }`  IP family flip (v4 to v6) or network-prefix
+ *                                 change (different /24 for IPv4, /48 for
+ *                                 IPv6). Caller must revoke the user's
+ *                                 refresh tokens and force re-auth.
  *
  * The /24 (v4) and /48 (v6) tolerances accept benign mobile-carrier and ISP
  * rotations while still catching cross-network theft. They are conservative
- * by design — a hard-fail forces a fresh login, not data loss, so a slightly
+ * by design; a hard-fail forces a fresh login, not data loss, so a slightly
  * higher false-positive rate is acceptable.
  *
- * Safety note: this policy assumes IP values come from `getTrustedClientIp`
- * (T-005), which only honors `X-Forwarded-For` when `trustProxy` is on and
- * the immediate proxy is in the trusted CIDR list. Without that guarantee,
- * a direct attacker could spoof the IP and either bypass the binding (by
+ * Safety note: this policy assumes IP values come from `getTrustedClientIp`,
+ * which only honors `X-Forwarded-For` when `trustProxy` is on and the
+ * immediate proxy is in the trusted CIDR list. Without that guarantee, a
+ * direct attacker could spoof the IP and either bypass the binding (by
  * matching the stored IP) or weaponise the hard-fail to forcibly log other
- * users out. With T-005 in place, both vectors are closed.
+ * users out.
  */
 
 export type RefreshBindingResult =
@@ -87,7 +87,7 @@ function ipv6PrefixHex(addr: string, prefixBits: number): string | null {
   const hexCount = prefixBits / 4;
 
   let work = addr.toLowerCase();
-  // Embedded IPv4 (e.g. "::ffff:1.2.3.4") → expand the dotted-quad to two
+  // Embedded IPv4 (e.g. "::ffff:1.2.3.4"); expand the dotted-quad to two
   // hex groups so the rest of the routine treats it uniformly.
   const dottedMatch = work.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
   if (dottedMatch) {
@@ -155,7 +155,7 @@ function compareIps(stored: string | null, current: string | null): string | nul
 
   const sf = classifyIp(stored);
   const cf = classifyIp(current);
-  if (sf === 0 || cf === 0) return null; // unparseable → don't enforce
+  if (sf === 0 || cf === 0) return null; // unparseable; don't enforce
   if (sf !== cf) return "ip-family-mismatch";
 
   if (sf === 4) {

@@ -15,11 +15,11 @@ import { handleSetupStatus, handleSetup } from "./setup";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
 /**
- * Audit H4 / T-016: POST paths under `/auth/*` that share one per-IP
- * rate-limit bucket. Login is the obvious credential-stuffing target,
- * but register/forgot-password/reset-password are also sensitive (user
- * enumeration, mailbomb, token-grinding) and an attacker who maxes one
- * shouldn't be able to refresh their budget by switching to another.
+ * POST paths under `/auth/*` that share one per-IP rate-limit bucket.
+ * Login is the obvious credential-stuffing target, but register /
+ * forgot-password / reset-password are also sensitive (user enumeration,
+ * mailbomb, token-grinding) and an attacker who maxes one shouldn't be
+ * able to refresh their budget by switching to another.
  */
 const RATE_LIMITED_AUTH_PATHS = new Set([
   "login",
@@ -52,27 +52,27 @@ export interface AuthRouterDeps {
   revealRegistrationConflict: boolean;
   allowedOrigins: string[];
   /**
-   * Audit C4 / T-005: when true, client-IP resolution honors
-   * `X-Forwarded-For` (filtered through `trustedProxyIps`). When false
-   * (default), proxy headers are ignored.
+   * When true, client-IP resolution honors `X-Forwarded-For` (filtered
+   * through `trustedProxyIps`). When false (default), proxy headers are
+   * ignored.
    */
   trustProxy: boolean;
-  /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
+  /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
   /**
-   * Audit H4 / T-016: per-IP rate limit on auth write endpoints.
-   * `requestsPerHour: 0` disables the envelope. Single shared bucket
-   * across login/register/forgot-password/reset-password per IP.
+   * Per-IP rate limit on auth write endpoints. `requestsPerHour: 0`
+   * disables the envelope. Single shared bucket across login / register
+   * / forgot-password / reset-password per IP.
    */
   authRateLimit: {
     requestsPerHour: number;
     windowMs: number;
   };
   /**
-   * Audit M10 / T-022: writer for security-sensitive auth events.
-   * Handlers call `auditLog.write(...)` on failed CSRF, failed login,
-   * password change, role mutation, and user delete. Writer is
-   * fail-safe — any DB error logs a warning and the request continues.
+   * Writer for security-sensitive auth events. Handlers call
+   * `auditLog.write(...)` on failed CSRF, failed login, password change,
+   * role mutation, and user delete. Writer is fail-safe; any DB error
+   * logs a warning and the request continues.
    */
   auditLog: AuditLogWriter;
 
@@ -130,9 +130,8 @@ export interface AuthRouterDeps {
   }) => Promise<{ id: string; email: string; name: string }>;
   seedPermissions: () => Promise<void>;
 
-  // PR 5 (unified-error-system): these three throw NextlyError on failure
-  // and return the success-case data directly. Result-shape envelopes are
-  // gone — handlers catch NextlyError and serialise via toResponseJSON.
+  // These throw NextlyError on failure and return the success-case data
+  // directly; handlers catch NextlyError and serialise via toResponseJSON.
   registerUser: (data: {
     email: string;
     password: string;
@@ -244,17 +243,17 @@ async function dispatchAuthRequest(
 }
 
 /**
- * Audit M19 / T-025: stamp `Cache-Control: no-store` (and the legacy
- * `Pragma: no-cache`) on every `/auth/*` response, regardless of the
- * handler that produced it. Auth responses can carry tokens, session
- * cookies, or account-state hints — none of those should ever live
- * in a shared / browser / proxy cache.
+ * Stamp `Cache-Control: no-store` (and the legacy `Pragma: no-cache`)
+ * on every `/auth/*` response, regardless of the handler that produced
+ * it. Auth responses can carry tokens, session cookies, or account-state
+ * hints; none of those should ever live in a shared / browser / proxy
+ * cache.
  *
  * Centralising at the router means individual handlers don't have to
  * remember to add the header (and don't have to thread headers
  * through `new Response(...)` literals scattered across the dir).
  *
- * Returns the same `Response` object with mutated headers — `Headers`
+ * Returns the same `Response` object with mutated headers; `Headers`
  * is mutable on `Response.headers`, so no clone is needed.
  */
 function applyNoStoreCache(response: Response | null): Response | null {
@@ -265,11 +264,11 @@ function applyNoStoreCache(response: Response | null): Response | null {
 }
 
 /**
- * Audit M10 / T-022: write a `csrf-failed` event whenever a dispatched
- * handler returns a 403 carrying `error.code === "CSRF_FAILED"`.
- * Centralising this in the router avoids touching every individual
- * handler. Body parsing is gated on the cheap status check first, so
- * happy-path requests pay nothing.
+ * Write a `csrf-failed` audit event whenever a dispatched handler
+ * returns a 403 carrying `error.code === "CSRF_FAILED"`. Centralising
+ * this in the router avoids touching every individual handler. Body
+ * parsing is gated on the cheap status check first, so happy-path
+ * requests pay nothing.
  */
 async function auditCsrfFailure(
   request: Request,
@@ -299,20 +298,20 @@ async function auditCsrfFailure(
 }
 
 /**
- * Audit H4 / T-016: per-IP rate limit on auth write endpoints.
+ * Per-IP rate limit on auth write endpoints.
  *
  * Returns a 429 `Response` when the IP has exhausted its budget for the
  * current window, or `null` when the request should proceed. Uses the
- * shared in-memory sliding-window `rateLimiter` singleton — the same
- * one the API-key middleware uses. T-104 will swap the backing store
- * for Redis so multi-instance deployments share state; until then,
- * single-instance is the documented beta scope.
+ * shared in-memory sliding-window `rateLimiter` singleton (the same
+ * one the API-key middleware uses). The backing store is in-memory, so
+ * single-instance deployments are the documented beta scope until a
+ * shared store lands.
  *
  * Falls back to a single shared `unknown` bucket when the trusted IP
  * is null (matches the pattern in `middleware/rate-limit.ts`). That
  * means a non-proxied deployment without `trustProxy` enabled will
- * lump every auth request into one bucket — heavy-handed but
- * intentional: the alternative (skip the limiter) leaves the
+ * lump every auth request into one bucket: heavy-handed but
+ * intentional, since the alternative (skip the limiter) leaves the
  * deployment open to credential-stuffing.
  */
 function checkAuthIpRateLimit(

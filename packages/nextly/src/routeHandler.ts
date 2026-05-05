@@ -56,7 +56,7 @@ import {
 } from "./api/image-sizes";
 import { readOrGenerateRequestId } from "./api/request-id";
 // Phase 4 Task 12: direct branches (admin-meta, sidebar-groups) emit
-// canonical respondX wire shapes (spec section 5.1) instead of the
+// canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -1194,9 +1194,9 @@ export function createDynamicHandlers(options?: {
   const rateLimitConfig = options?.config?.rateLimit as
     | Parameters<typeof createRateLimiter>[0]
     | undefined;
-  // Audit C4 / T-005: the default keyGenerator needs the trust-proxy
-  // settings so it can resolve a real client IP rather than blindly
-  // trusting X-Forwarded-For. Inject from `security.trustProxy` +
+  // The default keyGenerator needs the trust-proxy settings so it
+  // can resolve a real client IP rather than blindly trusting
+  // X-Forwarded-For. Inject from `security.trustProxy` +
   // TRUSTED_PROXY_IPS env unless the user supplied an override.
   const trustedProxyIpsFromEnv = (process.env.TRUSTED_PROXY_IPS ?? "")
     .split(",")

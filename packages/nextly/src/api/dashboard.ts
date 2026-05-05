@@ -3,20 +3,16 @@
  *
  * Three read-only endpoints for the admin dashboard:
  *
- *   GET /api/dashboard/stats          → aggregated content stats
- *   GET /api/dashboard/recent-entries → last edited entries across collections
- *   GET /api/dashboard/activity       → recent activity log entries
+ *   GET /api/dashboard/stats          to aggregated content stats
+ *   GET /api/dashboard/recent-entries to last edited entries across collections
+ *   GET /api/dashboard/activity       to recent activity log entries
  *
  * All endpoints require authentication (any logged-in user can view the
  * dashboard). No specific permission is needed. The dashboard is the
  * landing page for all authenticated admin users.
  *
- * Wire shape: Phase 4 Task 11 migrates each handler off the legacy
- * `{ data: <result> }` envelope onto the canonical respondX helpers
- * (spec §5.1). All three endpoints expose object-shaped reads with
- * named fields, so they use `respondData` (bare body, no envelope).
- * Errors continue to flow through `withErrorHandler` and serialize as
- * `application/problem+json`.
+ * All three endpoints expose object-shaped reads with named fields, so they
+ * use `respondData` (bare body, no envelope).
  *
  * @module api/dashboard
  * @since 1.0.0
@@ -142,7 +138,7 @@ export const getDashboardRecentEntries = withErrorHandler(
  * Body shape: `{ activities, total, hasMore }`. The activity feed is
  * cursor-style (`hasMore` flag, no page/limit/totalPages metadata
  * surfaced to clients), so this uses `respondData` rather than
- * `respondList`. See the file-level docstring for the migration note.
+ * `respondList`.
  */
 export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);

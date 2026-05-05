@@ -14,28 +14,14 @@
  *
  * Requires `read-settings` (read paths) or `manage-settings` (write paths).
  *
- * Wire shape: Phase 4 Task 12 migrates these handlers off the legacy
- * `{ data: <result> }` envelope onto the canonical respondX helpers
- * (spec section 5.1):
- *
- *   list   -> respondList(items, syntheticMeta)
- *   get    -> respondDoc(item)
- *   create -> respondMutation("Image size created.", item, 201)
- *   update -> respondMutation("Image size updated.", item)
- *   delete -> respondAction("Image size deleted.", { id })
- *
  * The list endpoint is not server-paginated (callers receive every
  * configured image size in one page). To stay on the canonical
- * `respondList` envelope, we ship a single-page synthetic meta whose
- * `total` matches the array length. Mirrors the api-keys pattern
- * established in Task 11.
+ * `respondList` envelope we ship a single-page synthetic meta whose
+ * `total` matches the array length (mirrors the api-keys pattern).
  *
  * The regeneration helpers (`getRegenerationStatus`, `regenerateBatch`)
  * are non-CRUD: status is a pure read (`respondData`) and regenerate is a
  * batch action (`respondAction`).
- *
- * Errors flow through `withErrorHandler` and serialize as
- * `application/problem+json`.
  */
 
 import type { DrizzleAdapter } from "@revnixhq/adapter-drizzle";
@@ -114,8 +100,8 @@ export const listImageSizes = withErrorHandler(async (req: Request) => {
   const service = await getImageSizeService();
   const sizes = await service.list();
 
-  // Phase 4: respondList. Synthetic single-page meta keeps the canonical
-  // list shape even though the underlying service does not paginate.
+  // Synthetic single-page meta keeps the canonical list shape even though
+  // the underlying service does not paginate.
   return respondList(sizes, {
     total: sizes.length,
     page: 1,
@@ -146,7 +132,6 @@ export const getImageSizeById = withErrorHandler(
       throw NextlyError.notFound({ logContext: { resource: "imageSize", id } });
     }
 
-    // Phase 4: respondDoc. Single document fetch returns the row bare.
     return respondDoc(size);
   }
 );
@@ -208,8 +193,6 @@ export const createImageSize = withErrorHandler(async (req: Request) => {
     isDefault: false, // UI-created sizes are not "default" (code-defined)
   });
 
-  // Phase 4: respondMutation 201. The created row is the mutation `item`
-  // and the toast message is server-authored.
   return respondMutation("Image size created.", created, { status: 201 });
 });
 
@@ -247,7 +230,6 @@ export const updateImageSize = withErrorHandler(
     const service = await getImageSizeService();
     const updated = await service.update(id, parsed.data);
 
-    // Phase 4: respondMutation. The updated row is the mutation `item`.
     return respondMutation("Image size updated.", updated);
   }
 );
@@ -265,9 +247,8 @@ export const deleteImageSize = withErrorHandler(
     const service = await getImageSizeService();
     await service.delete(id);
 
-    // Phase 4: respondAction. The service returns void, so we surface the
-    // deleted id alongside the toast message (mirrors the deleteSingle
-    // precedent set in Task 9).
+    // The service returns void, so we surface the deleted id alongside the
+    // toast message (mirrors the deleteSingle precedent).
     return respondAction("Image size deleted.", { id });
   }
 );

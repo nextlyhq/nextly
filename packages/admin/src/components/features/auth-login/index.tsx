@@ -80,20 +80,17 @@ export function Login() {
     try {
       const csrfToken = await getCsrfToken();
 
-      // POST to custom auth login endpoint (replaces Auth.js callback).
-      // Phase 4 (Task 21): the login handler now emits a canonical
-      // `respondAction("Logged in.", { user, accessToken, ... })` body;
-      // capture the result so the toast can surface the server-authored
-      // message rather than hard-coding copy on the client.
+      // POST to custom auth login endpoint. Capture the result so the
+      // toast can surface the server-authored message.
       const result = await api.public.post<ActionResponse>("/auth/login", {
         email: values.email,
         password: values.password,
         csrfToken,
       });
 
-      // Phase 4 (Task 21): prefer `result.message` from the server; fall
-      // back to a friendly hard-coded string if the server omits it for
-      // any reason (defensive shim per spec §9.7).
+      // Prefer `result.message` from the server; fall back to a
+      // hard-coded string if the server omits it (defensive shim per
+      // spec §9.7).
       toast.success(result?.message ?? "Login successful!", {
         description: `Welcome back to ${appName}`,
       });
@@ -152,9 +149,8 @@ export function Login() {
     setResendingVerification(true);
     try {
       const csrfToken = await getCsrfToken();
-      // Phase 4 (Task 21): verify-email/resend handler emits
-      // `respondAction("Verification email sent.")`; surface that
-      // server-authored message instead of duplicating the copy here.
+      // Surface the server-authored message instead of duplicating
+      // copy on the client.
       const result = await api.public.post<ActionResponse>(
         "/auth/verify-email/resend",
         { email, csrfToken }

@@ -1,6 +1,5 @@
-// Phase 4 Task 9: regression tests for the form-dispatcher op-types.
-// Pin the canonical Response shapes per spec §5.1 so the migrated
-// handlers cannot regress.
+// Regression tests for the form-dispatcher op-types. Pin the canonical
+// Response shapes per spec §5.1 so the handlers cannot regress.
 //
 // Coverage target (one representative test per op-type):
 //   respondList:     listForms (paginated)
@@ -186,13 +185,11 @@ describe("dispatchForms, actions (respondAction)", () => {
 });
 
 describe("dispatchForms('submitForm'), validation errors", () => {
-  // These two tests pin the Phase 4 envelope-migration behaviour: the
-  // pre-Phase-4 implementation returned a plain `{ status: 400, message,
-  // errors }` body, but submitForm now throws a NextlyError with code
-  // `VALIDATION_ERROR` that the dispatcher's catch block canonicalises
-  // into `{ error: { code, data: { errors: [...] } } }`. Without these
-  // regression tests, a future refactor could silently revert to the old
-  // shape (the reviewer flagged this as the highest-risk gap in Task 9).
+  // submitForm throws a NextlyError with code `VALIDATION_ERROR` that
+  // the dispatcher's catch block canonicalises into
+  // `{ error: { code, data: { errors: [...] } } }`. These regression
+  // tests guard against a refactor silently reverting to the old
+  // `{ status: 400, message, errors }` body shape.
 
   it("throws VALIDATION_ERROR with REQUIRED code when a required field is empty", async () => {
     // Form has a single required `email` field; we submit an empty
@@ -239,9 +236,9 @@ describe("dispatchForms('submitForm'), validation errors", () => {
       thrownErr = err;
     }
 
-    // Phase 4 contract: the dispatcher throws (it does not return a
-    // legacy { status, errors } body). The framework dispatcher's catch
-    // block is what turns this into a wire response.
+    // The dispatcher throws (it does not return a legacy { status,
+    // errors } body). The framework dispatcher's catch block is what
+    // turns this into a wire response.
     expect(NextlyError.is(thrownErr)).toBe(true);
     const err = thrownErr as NextlyError;
     expect(err.code).toBe("VALIDATION_ERROR");

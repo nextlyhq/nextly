@@ -1408,7 +1408,7 @@ export abstract class DrizzleAdapter {
 }
 
 /**
- * Audit H9 (T-018). Render a `ColumnDefinition.default` as a SQL fragment
+ * Render a `ColumnDefinition.default` as a SQL fragment
  * for embedding in a `DEFAULT` clause. DDL is not protected by Drizzle's
  * prepared statements — these expressions are concatenated into raw SQL —
  * so we treat the default as untrusted input even though it currently

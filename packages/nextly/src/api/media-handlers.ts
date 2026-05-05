@@ -22,15 +22,6 @@
  * }
  * ```
  *
- * Wire shape (Phase 4.6 migration): every dispatch method wraps the inner
- * route work in `withErrorHandler` so unmatched paths and service throws
- * surface as canonical `application/problem+json`. JSON success bodies use
- * the canonical respondX helpers (spec section 5.1): `respondList` for the
- * paginated list, `respondDoc` for findByID, `respondMutation` for
- * create/update, `respondAction` for delete/move (no-doc result). Per-route
- * `withTimezoneFormatting` still runs on JSON success bodies before they
- * leave the wrapper.
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/media/[[...path]]/route.ts

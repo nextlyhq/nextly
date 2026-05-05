@@ -1,10 +1,6 @@
 // CSRF double-submit cookie + origin check. Setup is a one-time but
-// state-changing bootstrap — CSRF guards against a malicious page
-// racing the legitimate first-admin form. See docs/auth/csrf.md.
-// Phase 4 (Task 10): respondAction / respondData replace hand-rolled
-// `{ data: ... }` envelopes here. setup-status now also includes
-// `requiresInitialUser` per spec §7.7 so the field set is no longer
-// Boolean-only.
+// state-changing bootstrap; CSRF guards against a malicious page racing
+// the legitimate first-admin form. See docs/auth/csrf.md.
 import { respondAction, respondData } from "../../api/response-shapes";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
@@ -46,9 +42,9 @@ export interface SetupHandlerDeps {
     ipAddress: string | null;
     expiresAt: Date;
   }) => Promise<void>;
-  /** Audit C4 / T-005: gate XFF parsing on this. Default false. */
+  /** Gate XFF parsing on this. Default false. */
   trustProxy: boolean;
-  /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
+  /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
 }
 
@@ -57,12 +53,12 @@ export async function handleSetupStatus(
   deps: Pick<SetupHandlerDeps, "getUserCount">
 ): Promise<Response> {
   const count = await deps.getUserCount();
-  // Phase 4 / spec §7.7: emit `{ isSetup, requiresInitialUser }` directly
-  // (no `{ data: ... }` wrapper). Both fields are derived from the user
-  // count: `isSetup` is true once a user exists, `requiresInitialUser`
-  // is the inverse so the admin client can drive the bootstrap-form
-  // redirect guard without reinterpreting the same boolean. The pair
-  // also satisfies the §5.1 "no Boolean-only respondData payload" rule.
+  // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both
+  // fields are derived from the user count: `isSetup` is true once a user
+  // exists, `requiresInitialUser` is the inverse so the admin client can
+  // drive the bootstrap-form redirect guard without reinterpreting the
+  // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
+  // respondData payload" rule.
   const isSetup = count > 0;
   return respondData({ isSetup, requiresInitialUser: !isSetup });
 }
@@ -157,8 +153,8 @@ export async function handleSetup(
     ),
   ];
 
-  // Phase 4 / spec §7.6: action message is "Setup complete." plus the
-  // freshly-issued user + tokens. Tokens still travel as HttpOnly cookies;
+  // Action message is "Setup complete." plus the freshly-issued user +
+  // tokens (spec §7.6). Tokens still travel as HttpOnly cookies;
   // surfacing them in the body matches login-handler shape so SDK
   // consumers can pick them up uniformly.
   return respondAction(

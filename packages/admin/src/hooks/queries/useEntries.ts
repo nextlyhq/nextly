@@ -30,11 +30,7 @@ import {
 } from "@tanstack/react-query";
 
 import type { ListResponse } from "@admin/lib/api/response-types";
-import {
-  entryApi,
-  entryKeys,
-  type FindParams,
-} from "@admin/services/entryApi";
+import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
 /**
@@ -60,7 +56,7 @@ export interface UseEntriesOptions<T = Entry> {
  * Fetches entries from a collection with pagination, search, and sorting support.
  * Automatically caches results and provides loading/error states.
  * Returns canonical ListResponse: `{ items, meta: { total, page, limit,
- * totalPages, hasNext, hasPrev } }` per spec section 5.1.
+ * totalPages, hasNext, hasPrev } }` per spec §5.1.
  *
  * ## Features
  * - Automatic caching with 30 second staleTime

@@ -110,14 +110,12 @@ export default async function CategoryPage({
         description={category.description ?? undefined}
         stats={[
           {
-            // Phase 4 (Task 14): canonical envelope; total moved to meta.total.
             text: `${posts.meta.total} ${posts.meta.total === 1 ? "post" : "posts"}`,
           },
           { text: "RSS", href: `/categories/${slug}/feed.xml` },
         ]}
       />
 
-      {/* Phase 4 (Task 14): canonical envelope; post slice is on `items`. */}
       <PostGrid posts={posts.items} />
 
       <div className="mt-12">

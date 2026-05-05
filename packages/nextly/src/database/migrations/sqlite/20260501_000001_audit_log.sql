@@ -1,4 +1,3 @@
--- Migration: Audit log table (Audit M10 / T-022)
 -- Append-only event store for security-sensitive auth events.
 -- See packages/nextly/src/domains/audit/ for the writer service.
 

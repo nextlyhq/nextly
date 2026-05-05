@@ -11,11 +11,6 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
- * and return canonical `respondX` envelopes per spec §5.1 (bare doc on GET,
- * `{ message, item }` on PATCH, 204 on DELETE). Errors are serialized as
- * `application/problem+json`.
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/singles/[slug]/schema/route.ts
@@ -111,7 +106,7 @@ export const PATCH = withErrorHandler(
     const { slug } = await context.params;
     const registry = await getSingleRegistry();
 
-    // Body parse failure is a client error — surface as a single-issue
+    // Body parse failure is a client error; surface as a single-issue
     // validation rather than letting the SyntaxError become a 500.
     let body: Record<string, unknown>;
     try {

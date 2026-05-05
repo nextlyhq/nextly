@@ -2323,12 +2323,11 @@ export class CollectionMutationService extends BaseService {
     try {
       const tableName = getTableName(params.collectionName);
 
-      // Audit M11 / T-023: when update access is `owner-only`, fold
-      // the ownership predicate into the SQL WHERE clause of the
-      // initial fetch. A non-owner sees a 404, never gets the row
-      // back, and the post-fetch check below stays as a defense-in-
-      // depth guard for any future caller that might mutate the
-      // fetch logic.
+      // When update access is `owner-only`, fold the ownership
+      // predicate into the SQL WHERE clause of the initial fetch. A
+      // non-owner sees a 404, never gets the row back, and the
+      // post-fetch check below stays as a defense-in-depth guard for
+      // any future caller that might mutate the fetch logic.
       const ownerConstraint = await this.accessService.getOwnerConstraint(
         params.collectionName,
         "update",
@@ -2353,11 +2352,11 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Defense-in-depth (Audit M11 / T-023): the WHERE-clause filter
-      // above is the load-bearing check. This explicit comparison is
-      // a safety net that fires only if a future refactor accidentally
-      // weakens the fetch query — at which point we'd rather return
-      // 403 than silently let a non-owner through.
+      // Defense-in-depth: the WHERE-clause filter above is the
+      // load-bearing check. This explicit comparison is a safety net
+      // that fires only if a future refactor accidentally weakens the
+      // fetch query — at which point we'd rather return 403 than
+      // silently let a non-owner through.
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
@@ -2629,10 +2628,10 @@ export class CollectionMutationService extends BaseService {
     try {
       const tableName = getTableName(params.collectionName);
 
-      // Audit M11 / T-023: when delete access is `owner-only`, fold
-      // the ownership predicate into the SQL WHERE clause of the
-      // initial fetch. The post-fetch check below remains as a
-      // defense-in-depth guard.
+      // When delete access is `owner-only`, fold the ownership
+      // predicate into the SQL WHERE clause of the initial fetch.
+      // The post-fetch check below remains as a defense-in-depth
+      // guard.
       const ownerConstraint = await this.accessService.getOwnerConstraint(
         params.collectionName,
         "delete",
@@ -2656,9 +2655,9 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Defense-in-depth (Audit M11 / T-023). See updateSingleEntryInTransaction
-      // for the rationale: WHERE-clause filter is load-bearing, this
-      // comparison is the safety net.
+      // See updateSingleEntryInTransaction for the rationale:
+      // WHERE-clause filter is load-bearing, this comparison is the
+      // safety net.
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );

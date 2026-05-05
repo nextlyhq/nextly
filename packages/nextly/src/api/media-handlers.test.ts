@@ -64,7 +64,7 @@ describe("createMediaHandlers timezone formatting", () => {
 
     expect(response.status).toBe(200);
 
-    // Phase 4.6: list endpoint emits respondList `{ items, meta }`.
+    // The list endpoint emits respondList `{ items, meta }`.
     const json = (await response.json()) as {
       items: Array<{ uploadedAt: string; updatedAt: string }>;
     };

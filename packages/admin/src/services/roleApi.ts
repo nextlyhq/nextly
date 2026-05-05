@@ -17,7 +17,7 @@ import type {
 import type { ApiRoleWithRelations } from "../types/role";
 
 // The role-permissions sub-resource is a non-CRUD read. The dispatcher
-// emits `respondData({ permissions })` (named field per spec section 5.1
+// emits `respondData({ permissions })` (named field per spec §5.1
 // rule 3 so the shape can grow without breaking the contract), so the
 // wire body is `{ permissions: [...] }`, not a bare array.
 const fetchRolePermissionIds = async (roleId: string): Promise<string[]> => {
@@ -67,10 +67,8 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
- * Fetch paginated list of roles.
- *
- * Phase 4.7: pass canonical ListResponse through, applying transformRole
- * over `items`. The legacy normalizePagination adapter is gone.
+ * Fetch paginated list of roles. Passes canonical ListResponse
+ * through, applying transformRole over `items`.
  */
 export const fetchRoles = async (
   params: TableParams
@@ -87,10 +85,8 @@ export const fetchRoles = async (
 };
 
 /**
- * Update a role's metadata.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiRole>`; we discard
- * the message + item because the caller expects void.
+ * Update a role's metadata. Caller expects void; we discard the
+ * server's MutationResponse body.
  */
 export const updateRole = async (
   roleId: string,
@@ -119,10 +115,7 @@ export const updateRole = async (
 };
 
 /**
- * Delete a role.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiRole>` for delete;
- * we discard the body.
+ * Delete a role. Caller expects void; we discard the response body.
  */
 export const deleteRole = async (roleId: string): Promise<void> => {
   await fetcher<MutationResponse<ApiRole>>(
@@ -135,10 +128,8 @@ export const deleteRole = async (roleId: string): Promise<void> => {
 };
 
 /**
- * Get a role by ID.
- *
- * Phase 4 (Task 19): findByID returns the bare doc via respondDoc, and the
- * sub-resource `/roles/:id/permissions` returns a bare list. Both are typed
+ * Get a role by ID. `/roles/:id` returns the bare role doc and
+ * `/roles/:id/permissions` returns a bare list — both are typed
  * directly without an envelope wrapper.
  */
 export const getRoleById = async (roleId: string): Promise<Role> => {
@@ -159,7 +150,7 @@ export const getRoleById = async (roleId: string): Promise<Role> => {
  *
  * `/roles/:id` returns the bare role doc via respondDoc.
  * `/roles/:id/parents` returns `{ roles: string[] }` via respondData
- * (named field per spec section 5.1 rule 3 so the shape can grow).
+ * (named field per spec §5.1 rule 3 so the shape can grow).
  */
 export const getRoleDetails = async (
   roleId: string
@@ -202,11 +193,8 @@ export const getRoleDetails = async (
 };
 
 /**
- * Update role permissions by diffing current vs next permission ID arrays.
- *
- * Phase 4 (Task 19): the role-permissions sub-resource is a non-CRUD
- * mutation returning `ActionResponse` (`{ message, ... }`); we discard
- * the body since the caller expects void.
+ * Update role permissions by diffing current vs next permission ID
+ * arrays. Caller expects void; we discard the ActionResponse body.
  */
 export const updateRolePermissions = async (
   roleId: string,
@@ -228,10 +216,8 @@ export const updateRolePermissions = async (
 };
 
 /**
- * Create a new role.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiRole>`; we read
- * `item.id` to keep the legacy `{ id }` projection callers expect.
+ * Create a new role. Returns `{ id }` to match the projection callers
+ * expect; the server's MutationResponse body is otherwise ignored.
  */
 export const createRole = async (
   roleData: Partial<Role> & { childRoleIds?: string[] }
@@ -264,9 +250,6 @@ export const createRole = async (
 
 /**
  * Stats projection over the roles list.
- *
- * Phase 4 (Task 19): typed against the canonical `ListResponse<ApiRole>`;
- * we read `result.items` for the role array.
  */
 export const getStats = async () => {
   try {

@@ -1,6 +1,5 @@
-// Phase 4 Task 9: regression tests for the email-dispatcher op-types.
-// Pin the canonical Response shapes per spec §5.1 so the migrated
-// handlers cannot regress.
+// Regression tests for the email-dispatcher op-types. Pin the canonical
+// Response shapes per spec §5.1 so the handlers cannot regress.
 //
 // The dispatcher hosts TWO entrypoints (providers + templates), so the
 // coverage target spans both.

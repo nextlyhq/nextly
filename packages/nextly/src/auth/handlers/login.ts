@@ -1,6 +1,4 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
-// Phase 4 (Task 10): canonical respondX helpers replace ad-hoc
-// `{ data: ... }` envelopes on the auth surface. See spec §7.6.
 import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
@@ -59,22 +57,22 @@ export interface LoginHandlerDeps {
     ipAddress: string | null;
     expiresAt: Date;
   }) => Promise<void>;
-  /** Audit C4 / T-005: gate XFF parsing on this. Default false. */
+  /** Gate XFF parsing on this. Default false. */
   trustProxy: boolean;
-  /** Audit C4 / T-005: CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
+  /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
-  /** Audit M10 / T-022: writer for security-sensitive auth events. */
+  /** Writer for security-sensitive auth events. */
   auditLog: AuditLogWriter;
 }
 
 /**
  * Serialize a NextlyError to the canonical login error response.
  *
- * PR 5 (unified-error-system): every login failure (CSRF, invalid creds,
- * locked, unverified, inactive, internal) is now returned as a NextlyError
- * with the same wire format that withErrorHandler produces — application/
- * problem+json with code, message, and requestId. Account-state codes have
- * collapsed into AUTH_INVALID_CREDENTIALS per spec §13.1.
+ * Every login failure (CSRF, invalid creds, locked, unverified, inactive,
+ * internal) is returned as a NextlyError with the same wire format that
+ * withErrorHandler produces: application/problem+json with code, message,
+ * and requestId. Account-state codes collapse into
+ * AUTH_INVALID_CREDENTIALS per spec §13.1.
  */
 function buildLoginErrorResponse(
   err: NextlyError,
@@ -112,7 +110,7 @@ export async function handleLogin(
     );
     if (!csrfResult.valid) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      // CSRF stays as a discrete code — it's a configuration / origin issue,
+      // CSRF stays as a discrete code; it's a configuration / origin issue,
       // not an account-state leak. Keep the existing wire shape.
       return jsonResponse(
         403,
@@ -123,10 +121,10 @@ export async function handleLogin(
       );
     }
 
-    // verifyCredentials now throws NextlyError on every failure path.
+    // verifyCredentials throws NextlyError on every failure path.
     // Account-state checks (locked / unverified / inactive) collapse to
-    // AUTH_INVALID_CREDENTIALS per spec §13.1 — the 429 ternary that used
-    // to bubble lockout state to the wire is gone (always 401 now).
+    // AUTH_INVALID_CREDENTIALS per spec §13.1 (always 401, no
+    // separate 429 leg).
     const verifiedUser = await verifyCredentials(
       { email: body.email, password: body.password },
       {
@@ -188,11 +186,11 @@ export async function handleLogin(
 
     await stallResponse(startTime, deps.loginStallTimeMs);
 
-    // Phase 4 / spec §7.6: emit `{ message, user, accessToken, refreshToken,
-    // expiresAt }` directly. Tokens are still issued as HttpOnly cookies for
-    // browser-based clients; surfacing them in the body too lets non-browser
-    // SDK consumers (mobile, CLI) drive Authorization headers without losing
-    // server-authored toast text.
+    // Emit `{ message, user, accessToken, refreshToken, expiresAt }`
+    // directly per spec §7.6. Tokens are still issued as HttpOnly
+    // cookies for browser-based clients; surfacing them in the body too
+    // lets non-browser SDK consumers (mobile, CLI) drive Authorization
+    // headers without losing server-authored toast text.
     return respondAction(
       "Logged in.",
       {
@@ -218,17 +216,17 @@ export async function handleLogin(
       }
     );
   } catch (err) {
-    // All login failures stall to the same minimum so timing cannot be used
-    // to distinguish error legs. PR 5 unifies error shape: NextlyError →
+    // All login failures stall to the same minimum so timing cannot be
+    // used to distinguish error legs. NextlyError serialises via
     // toResponseJSON; everything else collapses to a single INTERNAL_ERROR
     // response so we never leak internals to the wire.
     await stallResponse(startTime, deps.loginStallTimeMs);
-    // Audit M10 / T-022: every login failure (bad password, locked,
-    // unverified, inactive, internal) records a single 'login-failed'
-    // event. We deliberately do not split by reason here — that would
-    // re-introduce the account-state leak PR 5 collapsed at the wire.
-    // The internal `logContext` on the NextlyError still carries the
-    // specific cause for operators reading the audit row's metadata.
+    // Every login failure (bad password, locked, unverified, inactive,
+    // internal) records a single 'login-failed' event. We deliberately do
+    // not split by reason here; that would re-introduce the account-state
+    // leak the unified error wire shape collapses. The internal
+    // `logContext` on the NextlyError still carries the specific cause for
+    // operators reading the audit row's metadata.
     await deps.auditLog.write({
       kind: "login-failed",
       ipAddress: getTrustedClientIp(request, {

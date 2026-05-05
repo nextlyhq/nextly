@@ -1,4 +1,4 @@
-// F10 PR 6 — formatToastSummary unit tests.
+// formatToastSummary unit tests.
 //
 // The helper is exported from collection-dispatcher.ts via a test-only
 // re-export at the bottom of that file. Keeping the implementation

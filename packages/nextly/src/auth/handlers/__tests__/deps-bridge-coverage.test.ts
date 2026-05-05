@@ -2,8 +2,8 @@
  * DI-registration coverage guard.
  *
  * If anything in `deps-bridge.ts` calls `getService("xyz")` for a service
- * that was never registered (as happened with `authService` in Task 10 —
- * caught only when the signup flow 500'd end-to-end), this test fails.
+ * that was never registered, this test fails (the underlying flow would
+ * otherwise 500 end-to-end).
  *
  * We do not boot the full DI container here (that needs a database). We
  * instead statically scan deps-bridge.ts for every `getService("...")`
@@ -25,7 +25,7 @@ const DI_DIR = join(REPO_NEXTLY_SRC, "di");
 
 function stripComments(source: string): string {
   // Strip `/* ... */` block comments, then `// ...` line comments. Good
-  // enough for this guard — regex-level accuracy is fine since we are
+  // enough for this guard; regex-level accuracy is fine since we are
   // not parsing code, just preventing commented-out registrations from
   // satisfying the test.
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -79,7 +79,7 @@ describe("deps-bridge DI registration coverage", () => {
       const hasType = serviceMapPattern.test(diSource);
 
       if (!hasFactory || !hasType) {
-        missing.push(`${name} — registered=${hasFactory} typed=${hasType}`);
+        missing.push(`${name}: registered=${hasFactory} typed=${hasType}`);
       }
     }
 

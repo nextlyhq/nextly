@@ -11,12 +11,9 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4 envelope migration): the JSON path returns
- * `{ code }` via `respondData` per spec §5.1; the `?download=true` path
- * returns the raw code as `text/plain` with a `Content-Disposition`
+ * The JSON path returns `{ code }` via `respondData`; the `?download=true`
+ * path returns the raw code as `text/plain` with a `Content-Disposition`
  * attachment header (binary/text-stream responses bypass JSON envelopes).
- * Errors flow through `withErrorHandler` and serialize as
- * `application/problem+json`.
  *
  * @example
  * ```typescript

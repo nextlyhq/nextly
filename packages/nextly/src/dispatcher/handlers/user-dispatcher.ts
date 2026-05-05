@@ -6,10 +6,9 @@
  * `container.users`, which is the `UserService` instance held on the
  * `ServiceContainer`.
  *
- * Phase 4: every handler returns a Response built via the respondX
- * helpers in `../../api/response-shapes.ts`. The dispatcher passes the
- * Response through unchanged. See spec §5.1 for the canonical shape
- * contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape contract.
  */
 
 import {
@@ -25,7 +24,6 @@ import {
   listEffectivePermissions,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
-// Phase 4.9: shared `toPaginationMeta` (previously a local copy here).
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,

@@ -174,6 +174,10 @@ const CommandInput = forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     className="flex items-center  border-b border-primary/5 px-4"
+    // cmdk-input-wrapper is the attribute the cmdk library targets
+    // in its built-in stylesheet to scope wrapper-level styles.
+    // Required by the library; not a typo.
+    // eslint-disable-next-line react/no-unknown-property
     cmdk-input-wrapper=""
   >
     <Search className="mr-3 h-5 w-5 shrink-0 text-muted-foreground" />

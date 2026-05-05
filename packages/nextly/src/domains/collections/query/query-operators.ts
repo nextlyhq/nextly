@@ -192,8 +192,8 @@ function buildCondition(
 
   // Special handling for 'like', 'contains', and 'search' - wrap with wildcards.
   // 'search' is an alias for 'contains' (case-insensitive ILIKE).
-  // Audit H15 (T-014): escape backslash, percent, and underscore in the
-  // user-supplied value so they are matched as literals rather than as
+  // Escape backslash, percent, and underscore in the user-supplied
+  // value so they are matched as literals rather than as
   // SQL LIKE wildcards. Backslash escape MUST come first or it will
   // double-escape the % / _ replacements that follow. Mirrors the
   // logic in buildSearchCondition (collection-query-service.ts:1196).

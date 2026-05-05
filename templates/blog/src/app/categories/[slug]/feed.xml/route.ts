@@ -35,7 +35,6 @@ export async function GET(
     description:
       category.description ??
       `Posts in ${category.name} on ${settings.siteName}.`,
-    // Phase 4 (Task 14): getPostsByCategory returns canonical ListResult.
     items: postsToFeedItems(posts.items),
   });
 

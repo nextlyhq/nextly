@@ -1,6 +1,6 @@
-// Phase 4: pin the canonical response-shape helpers so the wire format
-// stays stable across every endpoint. Any drift here surfaces as test
-// failures before reaching consumers.
+// Pin the canonical response-shape helpers so the wire format stays stable
+// across every endpoint. Any drift here surfaces as test failures before
+// reaching consumers.
 
 import { describe, expect, it } from "vitest";
 
@@ -93,9 +93,9 @@ describe("respondCount", () => {
   });
 });
 
-// Phase 4.5: bulk wire-shape helpers. Pin both helpers so any drift in
-// the field names or default status appears as a regression at the
-// helper layer (the cheapest place to catch it).
+// Bulk wire-shape helpers. Pin both helpers so any drift in the field names
+// or default status appears as a regression at the helper layer (the
+// cheapest place to catch it).
 
 describe("respondBulk", () => {
   it("emits { message, items, errors } body and 200 status", async () => {

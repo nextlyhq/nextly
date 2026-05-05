@@ -16,15 +16,10 @@
  * export { POST } from '@revnixhq/nextly/api/storage-upload-url';
  * ```
  *
- * Wire shape (Phase 4.6 migration): handler wraps `withErrorHandler` and
- * returns the canonical respondData body (spec section 5.1); the
- * `ClientUploadData` object is shipped bare (uploadUrl, path, method,
- * headers, expiresAt).
- *
  * Adapter-specific failures (no plugin, `clientUploads` not enabled,
  * Vercel-Blob `handleUpload` style adapters) collapse to canonical
- * `NextlyError.validation` shapes — public messages are §13.8 sentences
- * with no collection-slug identifiers; the slug lives in `logContext`.
+ * `NextlyError.validation` shapes; per spec §13.8 the public messages
+ * carry no collection-slug identifier and the slug lives in `logContext`.
  *
  * @module api/storage-upload-url
  */
@@ -108,8 +103,8 @@ export const POST = withErrorHandler(
     const storage = getMediaStorage();
 
     if (!storage.supportsClientUploads(collection)) {
-      // Diagnose why and surface a canonical validation error. Public
-      // messages avoid the collection slug per §13.8 — the slug rides in
+      // Diagnose why and surface a canonical validation error. Per spec
+      // §13.8, public messages avoid the collection slug; the slug rides in
       // logContext for operator triage.
       const config = storage.getCollectionConfig(collection);
       const adapter = storage.getAdapterForCollection(collection);

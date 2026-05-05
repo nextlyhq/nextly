@@ -34,10 +34,7 @@ export default async function BlogPage({
   const { page: pageParam } = await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
 
-  const result = await getPosts({ page: currentPage, limit: 9 });
-  // Phase 4 (Task 14): getPosts now returns canonical envelope
-  // (`{ items, meta }`). Destructure for cleaner JSX below.
-  const { items, meta } = result;
+  const { items, meta } = await getPosts({ page: currentPage, limit: 9 });
 
   return (
     <>

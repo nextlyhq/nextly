@@ -233,7 +233,7 @@ export class CollectionAccessService extends BaseService {
   }
 
   /**
-   * Audit M11 (T-023). Resolve the owner-only constraint for a single
+   * Resolve the owner-only constraint for a single
    * operation as a flat `{ field, value }` pair so callers can fold it
    * directly into a Drizzle `WHERE` clause. Returns `null` when the
    * rule is not `owner-only`, when the caller is bypassing access via

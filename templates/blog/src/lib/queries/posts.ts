@@ -50,8 +50,6 @@ export async function getLatestPosts(limit = 3): Promise<Post[]> {
     limit,
     depth: 2,
   });
-  // Phase 4 (Task 14): Direct API now returns canonical ListResult shape
-  // (`{ items, meta }`) instead of legacy `{ docs, totalDocs, ... }`.
   return coercePosts(result.items);
 }
 
@@ -72,8 +70,6 @@ export async function getFeaturedPost(): Promise<Post | null> {
     limit: 1,
     depth: 2,
   });
-  // Phase 4 (Task 14): canonical ListResult shape exposes the page slice
-  // on `.items`, not `.docs`.
   return result.items[0] ? coercePost(result.items[0]) : null;
 }
 
@@ -83,12 +79,11 @@ export interface PostListOptions {
 }
 
 /**
- * Paginated post-list shape used by helpers below.
- *
- * Phase 4 (Task 14): aligned with Nextly's canonical `ListResult` envelope.
- * The page slice lives on `items` and pagination metadata on `meta`. Pages,
- * feeds, and components consume this shape directly so they don't need to
- * know whether the data came from the Direct API or a higher-level helper.
+ * Paginated post-list shape used by helpers below. Aligned with Nextly's
+ * canonical `ListResult` envelope: the page slice lives on `items` and
+ * pagination metadata on `meta`. Pages, feeds, and components consume
+ * this shape directly so they don't need to know whether the data came
+ * from the Direct API or a higher-level helper.
  */
 export interface PostListResult {
   items: Post[];
@@ -116,7 +111,6 @@ export async function getPosts({
     limit,
     depth: 2,
   });
-  // Phase 4 (Task 14): map canonical ListResult onto our PostListResult.
   return {
     items: coercePosts(result.items),
     meta: {
@@ -145,7 +139,6 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
     depth: 2,
     richTextFormat: "html",
   });
-  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
   return result.items[0] ? coercePost(result.items[0]) : null;
 }
 
@@ -162,7 +155,6 @@ export async function getAllPostSlugs(): Promise<string[]> {
     limit: 1000,
     depth: 0,
   });
-  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
   return result.items.map(d => d.slug as string);
 }
 
@@ -188,7 +180,6 @@ export async function getAllPublishedForArchive(): Promise<ArchiveEntry[]> {
     limit: 1000,
     depth: 0,
   });
-  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
   return result.items.map(d => ({
     id: d.id as string,
     title: d.title as string,
@@ -216,7 +207,6 @@ export async function getPostsByAuthor(
     limit,
     depth: 2,
   });
-  // Phase 4 (Task 14): map canonical ListResult onto our PostListResult.
   return {
     items: coercePosts(result.items),
     meta: {
@@ -251,7 +241,6 @@ export async function getPostsByCategory(
     limit,
     depth: 2,
   });
-  // Phase 4 (Task 14): map canonical ListResult onto our PostListResult.
   return {
     items: coercePosts(result.items),
     meta: {
@@ -281,7 +270,6 @@ export async function getPostsByTag(
     limit,
     depth: 2,
   });
-  // Phase 4 (Task 14): map canonical ListResult onto our PostListResult.
   return {
     items: coercePosts(result.items),
     meta: {
@@ -342,7 +330,6 @@ export async function getAdjacentPosts(
   const pick = (doc?: Record<string, unknown>) =>
     doc ? { title: doc.title as string, slug: doc.slug as string } : null;
 
-  // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
   return {
     previous: pick(prev.items[0]),
     next: pick(next.items[0]),
@@ -383,7 +370,6 @@ export async function getRelatedPosts(
       limit,
       depth: 2,
     });
-    // Phase 4 (Task 14): canonical envelope (`items`) replaces legacy `docs`.
     return coercePosts(result.items);
   };
 

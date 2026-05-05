@@ -5,14 +5,13 @@
  * share the same DI-resolution pattern and neither has enough logic to
  * warrant its own module. Routes 7 provider ops and 8 template ops.
  *
- * Phase 4 Task 9: every handler returns a Response built via the
- * respondX helpers in `../../api/response-shapes.ts`. The dispatcher
- * passes the Response through unchanged. See spec §5.1 for the
- * canonical shape contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape contract.
  *
  * Email services are non-paginated (they return plain arrays), so list
- * methods use respondData with a named field rather than respondList +
- * synthetic pagination meta.
+ * methods use respondData with a named field rather than respondList
+ * plus synthetic pagination meta.
  */
 
 import {
@@ -46,16 +45,15 @@ const EMAIL_PROVIDER_METHODS: Record<
   MethodHandler<EmailProviderServices>
 > = {
   listProviders: {
-    // Phase 4: respondData. The provider service returns a plain array
-    // (no pagination meta), so we wrap it in a named field rather than
-    // manufacturing synthetic pagination meta for respondList.
+    // The provider service returns a plain array (no pagination meta),
+    // so we wrap it in a named field rather than manufacturing synthetic
+    // pagination meta for respondList.
     execute: async svc => {
       const providers = await svc.providerService.listProviders();
       return respondData({ providers });
     },
   },
   createProvider: {
-    // Phase 4: respondMutation 201.
     execute: async (svc, _p, body) => {
       const provider = await svc.providerService.createProvider(
         body as Parameters<typeof svc.providerService.createProvider>[0]
@@ -66,15 +64,14 @@ const EMAIL_PROVIDER_METHODS: Record<
     },
   },
   getProvider: {
-    // Phase 4: respondDoc. Service throws NextlyError NOT_FOUND when
-    // the provider doesn't exist.
+    // Service throws NextlyError NOT_FOUND when the provider doesn't
+    // exist.
     execute: async (svc, p) => {
       const provider = await svc.providerService.getProvider(p.providerId);
       return respondDoc(provider);
     },
   },
   updateProvider: {
-    // Phase 4: respondMutation 200.
     execute: async (svc, p, body) => {
       const provider = await svc.providerService.updateProvider(
         p.providerId,
@@ -84,7 +81,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     },
   },
   deleteProvider: {
-    // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete to
+    // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
     // respondMutation, but providerService.deleteProvider returns void
     // (no deleted record to surface). We use respondAction here so the
     // wire shape is `{ message, providerId }` rather than the awkward
@@ -99,19 +96,19 @@ const EMAIL_PROVIDER_METHODS: Record<
     },
   },
   setDefault: {
-    // Phase 4: respondAction. setDefault is a non-CRUD mutation: no new
-    // record is created and the "updated" record is the same provider
-    // promoted to default. Surface the updated provider as a sibling
-    // field so the admin can refresh its local cache.
+    // setDefault is a non-CRUD mutation: no new record is created and
+    // the "updated" record is the same provider promoted to default.
+    // Surface the updated provider as a sibling field so the admin can
+    // refresh its local cache.
     execute: async (svc, p) => {
       const provider = await svc.providerService.setDefault(p.providerId);
       return respondAction("Default email provider updated.", { provider });
     },
   },
   testProvider: {
-    // Phase 4: respondAction. testProvider is a side-effecting action
-    // (sends an email); the result carries `success`/`error` flags from
-    // the underlying transport.
+    // testProvider is a side-effecting action (sends an email); the
+    // result carries `success`/`error` flags from the underlying
+    // transport.
     execute: async (svc, p, body) => {
       const { email } = body as { email: string };
       const result = await svc.providerService.testProvider(
@@ -132,15 +129,13 @@ const EMAIL_TEMPLATE_METHODS: Record<
   MethodHandler<EmailTemplateServices>
 > = {
   listTemplates: {
-    // Phase 4: respondData. Plain array, no pagination; same rationale
-    // as listProviders.
+    // Plain array, no pagination; same rationale as listProviders.
     execute: async svc => {
       const templates = await svc.templateService.listTemplates();
       return respondData({ templates });
     },
   },
   createTemplate: {
-    // Phase 4: respondMutation 201.
     execute: async (svc, _p, body) => {
       const template = await svc.templateService.createTemplate(
         body as Parameters<typeof svc.templateService.createTemplate>[0]
@@ -151,14 +146,12 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   getTemplate: {
-    // Phase 4: respondDoc.
     execute: async (svc, p) => {
       const template = await svc.templateService.getTemplate(p.templateId);
       return respondDoc(template);
     },
   },
   updateTemplate: {
-    // Phase 4: respondMutation 200.
     execute: async (svc, p, body) => {
       const template = await svc.templateService.updateTemplate(
         p.templateId,
@@ -168,7 +161,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   deleteTemplate: {
-    // Phase 4 spec divergence: spec §5.1 / §7.4 strictly maps delete to
+    // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
     // respondMutation, but templateService.deleteTemplate returns void
     // (no deleted record to surface). We use respondAction here so the
     // wire shape is `{ message, templateId }` rather than the awkward
@@ -183,17 +176,15 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   getLayout: {
-    // Phase 4: respondData. The layout is a `{header, footer}` pair,
-    // not a single document, so the bare data shape fits better than
-    // respondDoc here.
+    // The layout is a `{header, footer}` pair, not a single document,
+    // so the bare data shape fits better than respondDoc here.
     execute: async svc => {
       const layout = await svc.templateService.getLayout();
       return respondData(layout);
     },
   },
   updateLayout: {
-    // Phase 4: respondAction. Service returns void; the action result
-    // is a confirmation toast.
+    // Service returns void; the action result is a confirmation toast.
     execute: async (svc, _p, body) => {
       await svc.templateService.updateLayout(
         body as Parameters<typeof svc.templateService.updateLayout>[0]
@@ -202,9 +193,9 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   previewTemplate: {
-    // Phase 4: respondData. previewTemplate is a non-CRUD read returning
-    // a `{subject, html}` pair (no document identity, no mutation, no
-    // pagination), which matches respondData's contract exactly.
+    // previewTemplate is a non-CRUD read returning a `{subject, html}`
+    // pair (no document identity, no mutation, no pagination), which
+    // matches respondData's contract exactly.
     execute: async (svc, p, body) => {
       const { data: sampleData } = body as {
         data: Record<string, unknown>;

@@ -14,14 +14,10 @@
  * export { GET, POST } from '@revnixhq/nextly/api/user-fields';
  * ```
  *
- * Wire shape — Task 21 migration: handlers wrap `withErrorHandler` and return
- * the canonical `{ data: <result> }` envelope per spec §10.2. The legacy
- * GET response carried both the field list and the user `adminConfig` in
- * `meta` — but spec §10.2 reserves `meta` for pagination only. The
- * canonical replacement is `{ data: { fields, adminConfig? } }` (same
- * structured-data pattern as api-keys.ts `createApiKey` returning
- * `{ data: { doc, key } }`). Validation flows through
- * `nextlyValidationFromZod` (F11).
+ * GET returns `{ data: { fields, adminConfig? } }`. Spec §10.2 reserves
+ * `meta` for pagination only, so the user `adminConfig` rides as a sibling
+ * inside `data` (same structured-data pattern as `createApiKey`'s
+ * `{ data: { doc, key } }`).
  *
  * @module api/user-fields
  */
@@ -98,10 +94,8 @@ const createFieldSchema = z.object({
  * - 500 Internal Server Error: Failed to fetch field definitions
  *
  * Response: `{ "data": { "fields": UserFieldDefinition[], "adminConfig"?:
- * UsersAdminConfig } }`. The structured-data shape replaces the legacy
- * `{ data: [...], meta: { total, ...adminConfig } }` because spec §10.2
- * reserves `meta` for pagination only — admin code must read
- * `data.fields` and `data.adminConfig` instead of `data` / `meta`.
+ * UsersAdminConfig } }`. Admin code reads `data.fields` and
+ * `data.adminConfig` (spec §10.2 reserves `meta` for pagination only).
  *
  * @example
  * ```bash
@@ -144,7 +138,7 @@ export const GET = withErrorHandler(
  * - 409 Conflict: Field name already exists
  * - 500 Internal Server Error: Creation failed
  *
- * Response: `{ "data": UserFieldDefinition }` — created field. Status 201.
+ * Response: `{ "data": UserFieldDefinition }`; the created field. Status 201.
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -161,7 +155,7 @@ export const POST = withErrorHandler(
     }
 
     const service = await getUserFieldDefinitionService();
-    // Force source to 'ui' — code-sourced fields are managed via defineConfig().
+    // Force source to 'ui'; code-sourced fields are managed via defineConfig().
     const field = await service.createField({
       ...validated,
       source: "ui",

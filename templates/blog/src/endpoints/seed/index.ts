@@ -107,8 +107,6 @@ async function pickPermissionIdsForRoles(
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
   try {
     const all = await nextly.permissions.find({ limit: 500 });
-    // Phase 4 (Task 14): permissions.find returns canonical ListResult shape
-    // (`{ items, meta }`); read the page slice from `items` (was `docs`).
     const perms = all.items;
     out.admin = perms.map(p => (p as { id: string }).id);
     out.editor = perms
@@ -154,8 +152,6 @@ async function seedRoles(
   // First pass: find any existing roles by listing.
   try {
     const existing = await nextly.roles.find({ limit: 100, page: 1 });
-    // Phase 4 (Task 14): roles.find returns canonical ListResult shape;
-    // iterate `items` (was `docs`).
     for (const role of TEMPLATE_ROLES) {
       const match = existing.items.find(
         r => (r as { slug?: string }).slug === role.slug
@@ -195,8 +191,6 @@ async function seedRoles(
           permissionIds,
         },
       });
-      // Phase 4 (Task 14): roles.create now returns `{ message, item }`,
-      // so the created role lives on `.item` (was returned bare previously).
       roleIdBySlug[role.slug] = createdRole.item.id as string;
       created++;
       console.log(
@@ -225,11 +219,11 @@ interface SeedData {
   // Optional. Lets the template fetch missing media from a public URL when
   // the local file is absent (e.g. user deleted it, scaffold skipped it).
   seedMedia?: SeedMediaConfig;
-  // Users double as authors in this template (users-as-authors pattern
-  // from Task 17). `slug`, `bio`, and `avatarUrl` are user-extension
-  // scalar fields (see ../configs/codefirst.config.ts). `avatarUrl` can
-  // be either a full URL or a filename; relative filenames get prefixed
-  // with `seedMedia.baseUrl` at seed time.
+  // Users double as authors in this template (users-as-authors
+  // pattern). `slug`, `bio`, and `avatarUrl` are user-extension
+  // scalar fields (see ../configs/codefirst.config.ts). `avatarUrl`
+  // can be either a full URL or a filename; relative filenames get
+  // prefixed with `seedMedia.baseUrl` at seed time.
   users: Array<{
     name: string;
     email: string;
@@ -346,7 +340,7 @@ async function resolveSeedMedia(
   | { error: "not-found" | "fetch-failed"; detail?: string }
 > {
   // Local disk first. Co-located with this file under
-  // src/endpoints/seed/media after Task 24 phase 3.
+  // src/endpoints/seed/media.
   const localPath = path.join(
     process.cwd(),
     "src",
@@ -599,8 +593,6 @@ export async function seed({
           ...(roleIds.length > 0 ? { roles: roleIds } : {}),
         },
       });
-      // Phase 4 (Task 14): users.create now returns `{ message, item }`,
-      // so the created user lives on `.item`.
       userId = createdUser.item.id as string;
       summary.usersCreated++;
     }
@@ -772,8 +764,6 @@ export async function seed({
       where: { slug: { equals: "newsletter" } },
       limit: 1,
     });
-    // Phase 4 (Task 14): canonical envelope; read total from `meta.total`
-    // (was top-level `totalDocs`).
     if (existing.meta.total === 0) {
       // Payload shape: the form-builder plugin's `forms` collection has
       // top-level `name` (required, internal), `slug` (required, unique),

@@ -1,8 +1,8 @@
-// Phase 4: regression tests for the user-dispatcher op-types beyond
-// listUsers. One test per op-type pattern proves the handler returns
-// the correct Response shape; new methods adopting the same pattern
-// inherit the guarantee at the helper level (respondX is unit-tested
-// in api/__tests__/response-shapes.test.ts).
+// Regression tests for the user-dispatcher op-types beyond listUsers.
+// One test per op-type pattern proves the handler returns the correct
+// Response shape; new methods adopting the same pattern inherit the
+// guarantee at the helper level (respondX is unit-tested in
+// api/__tests__/response-shapes.test.ts).
 
 import { describe, expect, it, vi } from "vitest";
 

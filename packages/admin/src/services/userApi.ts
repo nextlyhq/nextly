@@ -26,10 +26,6 @@ const buildQuery = (params: TableParams): string => {
 
 /**
  * Fetch users with pagination, search, and sorting.
- *
- * Phase 4.7: pass the canonical ListResponse straight through; the
- * normalizePagination adapter was deleted along with the legacy
- * TableResponse shape.
  */
 export const fetchUsers = async (
   params: TableParams
@@ -40,10 +36,7 @@ export const fetchUsers = async (
 };
 
 /**
- * Update a user.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<User>`; we discard
- * the message + item here because the caller expects void.
+ * Update a user. Caller expects void; we discard the response body.
  */
 export const updateUser = async (
   userId: string,
@@ -60,11 +53,8 @@ export const updateUser = async (
 };
 
 /**
- * Create a user.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<User>` (`{ message,
- * item }`); we surface the legacy `{ id }` projection so existing callers
- * keep working.
+ * Create a user. Returns `{ id }` to match the projection callers
+ * expect.
  */
 export const createUser = async (
   updates: CreateUserPayload
@@ -81,9 +71,7 @@ export const createUser = async (
 };
 
 /**
- * Delete a user.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<User>`; we discard.
+ * Delete a user. Caller expects void; we discard the response body.
  */
 export const deleteUser = async (userId: string): Promise<void> => {
   await fetcher<MutationResponse<User>>(
@@ -97,9 +85,6 @@ export const deleteUser = async (userId: string): Promise<void> => {
 
 /**
  * Get user by ID.
- *
- * Phase 4 (Task 19): findByID endpoints return the bare doc directly via
- * `respondDoc`, so we type the fetcher generic with the bare `User` shape.
  */
 export const getUserById = async (userId: string): Promise<User> => {
   const result = await fetcher<User>(`/users/${userId}`, {}, true);

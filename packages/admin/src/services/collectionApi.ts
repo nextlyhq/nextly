@@ -27,9 +27,6 @@ const buildQuery = (params: TableParams): string => {
 
 /**
  * Fetch collections with pagination.
- *
- * Phase 4.7: pass canonical ListResponse straight through. The legacy
- * normalizePagination adapter is gone.
  */
 export const fetchCollections = async (
   params: TableParams
@@ -66,10 +63,7 @@ export const fetchCollections = async (
 };
 
 /**
- * Delete a collection.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiCollection>`;
- * we discard the body.
+ * Delete a collection. Caller expects void; we discard the body.
  */
 export const deleteCollection = async (collectionId: string): Promise<void> => {
   await fetcher<MutationResponse<ApiCollection>>(
@@ -84,12 +78,12 @@ export const deleteCollection = async (collectionId: string): Promise<void> => {
 /**
  * Collection API client surface.
  *
- * Phase 4 (Task 19): the `protectedApi.*` calls below now receive the raw
- * canonical body straight from `fetcher`. List endpoints return
- * `ListResponse<T>`; bare reads (get, getSchema, listEntries) return the
- * doc directly; create/update/remove/createEntry/deleteEntry return
- * `MutationResponse<T>`. The legacy `{ message }` projection is preserved
- * by mapping `response.message` from the canonical mutation envelope.
+ * The `protectedApi.*` calls below receive the raw canonical body
+ * straight from `fetcher`. List endpoints return `ListResponse<T>`;
+ * bare reads (get, getSchema, listEntries) return the doc directly;
+ * create/update/remove/createEntry/deleteEntry return
+ * `MutationResponse<T>`. The legacy `{ message }` projection is
+ * preserved by mapping `response.message` from the mutation envelope.
  */
 export const collectionApi = {
   fetchCollections,

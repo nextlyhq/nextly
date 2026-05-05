@@ -5,16 +5,19 @@ import globals from "globals";
 import { config as baseConfig } from "./base.js";
 
 /**
- * Shared ESLint configuration — React internal (library) layer.
+ * React-specific rule set without the base layer.
  *
- * Extends base.js with React + react-hooks rules and browser globals.
- * Does NOT re-apply js.configs.recommended or typescript-eslint configs —
- * those already come from ...baseConfig (removing the prior triple-apply bug).
+ * Exported separately so the monorepo-root ESLint config can compose
+ * these rules under a `files: [...]` predicate for React-bearing
+ * paths. Without this, lint-staged invocations from the repo root
+ * (which pick up the root config, not per-package configs) fail with
+ * "Definition for rule 'react-hooks/exhaustive-deps' was not found"
+ * on any file that uses an inline `// eslint-disable-next-line
+ * react-hooks/...` directive.
  *
  * @type {import("eslint").Linter.Config[]}
  */
-export const config = [
-  ...baseConfig,
+export const reactRules = [
   {
     ...pluginReact.configs.flat.recommended,
     languageOptions: {
@@ -40,3 +43,14 @@ export const config = [
     },
   },
 ];
+
+/**
+ * Shared ESLint configuration — React internal (library) layer.
+ *
+ * Extends base.js with React + react-hooks rules and browser globals.
+ * Does NOT re-apply js.configs.recommended or typescript-eslint configs —
+ * those already come from ...baseConfig (removing the prior triple-apply bug).
+ *
+ * @type {import("eslint").Linter.Config[]}
+ */
+export const config = [...baseConfig, ...reactRules];

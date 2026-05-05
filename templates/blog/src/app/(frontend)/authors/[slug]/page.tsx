@@ -1,7 +1,7 @@
 /**
  * Author Profile Page
  *
- * Profile-centered layout per the Task 17 design (Option B):
+ * Profile-centered layout:
  *   Big centered avatar
  *   Name (H1)
  *   Bio (centered, max-w-prose)
@@ -112,7 +112,6 @@ export default async function AuthorPage({
           style={{ color: "var(--color-fg-muted)" }}
         >
           <span>
-            {/* Phase 4 (Task 14): getPostsByAuthor returns canonical envelope. */}
             {posts.meta.total} {posts.meta.total === 1 ? "post" : "posts"}
           </span>
           <span aria-hidden="true">·</span>
@@ -138,7 +137,6 @@ export default async function AuthorPage({
         >
           Posts by {author.name}
         </h2>
-        {/* Phase 4 (Task 14): canonical envelope; post slice is on `items`. */}
         <PostGrid posts={posts.items} />
       </section>
     </>

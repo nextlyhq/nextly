@@ -1,6 +1,6 @@
 /**
  * Shared dispatcher helpers for translating service-result envelopes
- * to canonical response shapes (Phase 4.9).
+ * to canonical response shapes.
  *
  * What these helpers do: nextly's older service layer (collections,
  * singles, forms, users, auth) returns results in the envelope shape
@@ -9,24 +9,17 @@
  * is rewritten to the newer pattern, dispatchers translate at the
  * boundary: success branches hand bare data to respondX; failures throw
  * a canonical NextlyError so the dispatcher's error path emits the
- * spec section 5.1 error envelope.
+ * spec §5.1 error envelope.
  *
  * What these helpers are NOT: a backward-compat shim for client code.
  * Nothing here lets old admin clients keep working with old wire
- * shapes. The wire is fully canonical post-Phase-4. This file only
- * crosses the service-to-dispatcher boundary inside the package.
+ * shapes. The wire is fully canonical. This file only crosses the
+ * service-to-dispatcher boundary inside the package.
  *
  * Future deletion: when the underlying services are rewritten to throw
- * NextlyError directly (a separate, much larger initiative beyond the
- * 4.X deferred phases), every translator here becomes dead code and
+ * NextlyError directly, every translator here becomes dead code and
  * this file can be removed. Until then, it stays as the canonical
  * boundary translator.
- *
- * Pre-Phase-4.9 these helpers were duplicated across five dispatcher
- * files. Each dispatcher kept a local copy because Phase 4 was migrating
- * dispatchers in parallel and a shared module would have churned every
- * PR. With Phase 4 merged we extract the canonical versions here and
- * have every dispatcher import from one place.
  *
  * Helpers exported:
  *
@@ -37,16 +30,7 @@
  * - `offsetPaginationToMeta`: Singles + Components registries that use
  *   limit/offset semantics.
  * - `unwrapServiceResult`: the `{success, statusCode, message, data}`
- *   envelope unwrap plus status-to-NextlyError mapping. Replaces both
- *   the prior `unwrapServiceResult` (collection, form) and
- *   `unwrapSingleResult` (single), which were near-duplicates.
- *
- * Side effect of consolidating the unwrap helpers: form-dispatcher and
- * single-dispatcher inherit the Bug 6 fix (post-Phase-4 fix-up commit
- * 756f3f3) where status 400 maps to NextlyError.validation rather than
- * falling through to internal/500. Both prior local copies omitted that
- * branch; consolidation makes their error mapping correct without any
- * per-call-site changes.
+ *   envelope unwrap plus status-to-NextlyError mapping.
  */
 
 import type { PaginationMeta } from "../../api/response-shapes";
@@ -55,9 +39,9 @@ import { NextlyError } from "../../errors/nextly-error";
 /**
  * Translate the service-result `{ total, page, limit, totalPages }`
  * shape (used by user/auth/collection metadata services) into the
- * canonical PaginationMeta. Phase 4.8 unified the service-internal
- * field name with the wire field name (`limit`), so this helper now
- * just derives `hasNext`/`hasPrev` from page math.
+ * canonical PaginationMeta. Service-internal and wire field names are
+ * unified on `limit`, so this helper just derives `hasNext`/`hasPrev`
+ * from page math.
  */
 export function toPaginationMeta(meta: {
   total: number;
@@ -141,25 +125,24 @@ export function offsetPaginationToMeta(args: {
  *
  * The legacy `message` rides through `logContext.legacyMessage` so
  * operator logs still carry the original service text. The wire response
- * sees only the canonical NextlyError publicMessage (per spec section
- * 13.8: no driver text, no identifier echo, no value leaking).
+ * sees only the canonical NextlyError publicMessage (per spec §13.8:
+ * no driver text, no identifier echo, no value leaking).
  *
- * Status-to-NextlyError mapping (post-Bug-6 canonical set):
+ * Status-to-NextlyError mapping:
  *   400: NextlyError.validation (with publicData.errors[])
  *   403: NextlyError.forbidden
  *   404: NextlyError.notFound
  *   409: NextlyError.conflict
  *   500 + everything else: NextlyError.internal
  *
- * Unifies the prior `unwrapServiceResult` (collection + form) and
- * `unwrapSingleResult` (single) helpers. The `data?: unknown` parameter
- * accepts any service-result shape (the legacy services are mostly
- * generic-untyped, so callers always know more about the success-shape
- * than the result type carries). Callers pass T explicitly to declare
- * the expected success shape; `data as T` is the canonical cast at the
- * boundary. The success-branch contract guarantees `data` is non-null
- * when `success === true` (the metadata + entry + singles services
- * never return null on success), so the cast is safe.
+ * The `data?: unknown` parameter accepts any service-result shape (the
+ * legacy services are mostly generic-untyped, so callers always know
+ * more about the success-shape than the result type carries). Callers
+ * pass T explicitly to declare the expected success shape; `data as T`
+ * is the canonical cast at the boundary. The success-branch contract
+ * guarantees `data` is non-null when `success === true` (the metadata,
+ * entry, and singles services never return null on success), so the
+ * cast is safe.
  */
 export function unwrapServiceResult<T>(
   result: {

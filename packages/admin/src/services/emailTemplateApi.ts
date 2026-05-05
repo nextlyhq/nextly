@@ -93,10 +93,9 @@ export interface EmailTemplatePreviewResult {
 /**
  * List all email templates.
  *
- * Phase 4 (Task 19): server emits `respondData({ templates })` (the email
- * dispatcher avoids respondList because the underlying service is
- * non-paginated). We project `templates` to keep the bare-array public
- * signature callers expect.
+ * Server emits `{ templates }` (the email dispatcher avoids respondList
+ * because the underlying service is non-paginated). We project
+ * `templates` to keep the bare-array public signature callers expect.
  */
 export async function listTemplates(): Promise<EmailTemplateRecord[]> {
   const result = await fetcher<{ templates: EmailTemplateRecord[] }>(
@@ -109,8 +108,6 @@ export async function listTemplates(): Promise<EmailTemplateRecord[]> {
 
 /**
  * Get a single email template by ID.
- *
- * Phase 4 (Task 19): findByID returns the bare doc via respondDoc.
  */
 export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
   return fetcher<EmailTemplateRecord>(`/email-templates/${id}`, {}, true);
@@ -118,9 +115,6 @@ export async function getTemplate(id: string): Promise<EmailTemplateRecord> {
 
 /**
  * Create a new email template.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<EmailTemplateRecord>`;
- * project `item` for the bare-record public signature.
  */
 export async function createTemplate(
   data: CreateEmailTemplatePayload
@@ -135,9 +129,6 @@ export async function createTemplate(
 
 /**
  * Update an existing email template.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<EmailTemplateRecord>`;
- * project `item` for the bare-record public signature.
  */
 export async function updateTemplate(
   id: string,
@@ -152,11 +143,8 @@ export async function updateTemplate(
 }
 
 /**
- * Delete an email template.
- *
- * Phase 4 (Task 19): server returns `ActionResponse` (delete is an action
- * because the dispatcher's templateService returns void); we discard the
- * body since the caller expects void.
+ * Delete an email template. The caller expects void; we discard the
+ * server's ActionResponse body.
  */
 export async function deleteTemplate(id: string): Promise<void> {
   await fetcher<ActionResponse>(
@@ -167,20 +155,17 @@ export async function deleteTemplate(id: string): Promise<void> {
 }
 
 /**
- * Get the shared email layout (header and footer HTML).
- *
- * Phase 4 (Task 19): the dispatcher emits `respondData(layout)` so the
- * wire body IS the EmailLayout `{ header, footer }`; type the generic
- * with the bare shape directly.
+ * Get the shared email layout (header and footer HTML). The dispatcher
+ * emits the bare `{ header, footer }` shape, so we type the fetcher
+ * generic with EmailLayout directly.
  */
 export async function getLayout(): Promise<EmailLayout> {
   return fetcher<EmailLayout>("/email-templates/layout", {}, true);
 }
 
 /**
- * Update the shared email layout.
- *
- * Phase 4 (Task 19): server returns `ActionResponse`; we discard.
+ * Update the shared email layout. Server returns ActionResponse;
+ * we discard.
  */
 export async function updateLayout(data: Partial<EmailLayout>): Promise<void> {
   await fetcher<ActionResponse>(
@@ -191,11 +176,8 @@ export async function updateLayout(data: Partial<EmailLayout>): Promise<void> {
 }
 
 /**
- * Preview a template with sample data.
- * Returns rendered subject and HTML.
- *
- * Phase 4 (Task 19): server emits `respondData(preview)` (the bare
- * `{ subject, html }` shape).
+ * Preview a template with sample data. Returns rendered subject and
+ * HTML.
  */
 export async function previewTemplate(
   id: string,

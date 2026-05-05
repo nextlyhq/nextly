@@ -198,9 +198,9 @@ export const refreshTokens = pgTable(
   ]
 );
 
-// Audit log for security-sensitive events (Audit M10 / T-022). Append-
-// only by application convention — operators should revoke UPDATE /
-// DELETE GRANTs on this table in production for stricter integrity.
+// Append-only by application convention — operators should revoke
+// UPDATE / DELETE GRANTs on this table in production for stricter
+// integrity.
 export const auditLog = pgTable(
   "audit_log",
   {

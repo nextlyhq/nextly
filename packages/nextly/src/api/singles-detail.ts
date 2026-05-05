@@ -8,11 +8,6 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
- * and return the canonical `respondX` envelopes per spec §5.1 (bare doc on
- * GET, `{ message, item }` on PATCH). Errors are serialized as
- * `application/problem+json`.
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/singles/[slug]/route.ts
@@ -58,20 +53,20 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
 /**
  * Bridge for the legacy `SingleResult` shape (`{ success, statusCode,
  * data?, message?, errors? }`) emitted by `SingleEntryService`. The service
- * still uses the F8 result-shape pattern; converting it to a thrown
+ * still uses the result-shape pattern; converting it to a thrown
  * `NextlyError` at the route boundary keeps the wire format canonical
- * without touching the service layer in Task 8.
+ * without touching the service layer.
  *
  * Mapping:
- *   - 404 → `NextlyError.notFound`. The slug goes to `logContext`; the
- *     public message stays the §13.8-compliant "Not found." (no echo).
- *   - 400 → `NextlyError.validation`. Per-field `errors[]` translate to
+ *   - 404 to `NextlyError.notFound`. The slug goes to `logContext`; the
+ *     public message stays the spec §13.8-compliant "Not found." (no echo).
+ *   - 400 to `NextlyError.validation`. Per-field `errors[]` translate to
  *     the canonical `data.errors[]` shape; the legacy `field` becomes
  *     `path` and a generic `INVALID` code fills the missing slot.
- *   - Anything else → `NextlyError.internal`. The legacy status / message
+ *   - Anything else to `NextlyError.internal`. The legacy status / message
  *     are preserved in `logContext` so operators can correlate.
  *
- * Removed once `SingleEntryService` is migrated to throw directly.
+ * Remove once `SingleEntryService` is migrated to throw directly.
  */
 function throwFromSingleResult<T>(
   result: SingleResult<T>,

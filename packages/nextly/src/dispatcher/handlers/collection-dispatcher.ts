@@ -7,18 +7,15 @@
  * caller's effective read permissions so non-super-admin users only see
  * collections they can actually read.
  *
- * Phase 4 Task 8: every non-bulk handler returns a Response built via
- * the respondX helpers in `../../api/response-shapes.ts`. The
- * dispatcher passes the Response through unchanged. See spec section 5.1 for
- * the canonical shape contract.
+ * Every handler returns a Response built via the respondX helpers in
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape
+ * contract.
  *
- * Phase 4.5: bulk operations (`bulkDeleteEntries`, `bulkUpdateEntries`,
- * `bulkUpdateByQuery`) now emit canonical `respondBulk` envelopes
+ * Bulk operations (`bulkDeleteEntries`, `bulkUpdateEntries`,
+ * `bulkUpdateByQuery`) emit canonical `respondBulk` envelopes
  * (`{ message, items, errors }`). Per-item failures decompose to
- * `{ id, code, message }` keyed by canonical NextlyErrorCode. The
- * service-layer BulkOperationResult was reshaped to carry these directly,
- * so the dispatcher hands service output to respondBulk without per-call
- * translation.
+ * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
 import {
@@ -48,10 +45,7 @@ import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pip
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type {
-  DesiredCollection,
-  DesiredSchema,
-} from "../../domains/schema/pipeline/types";
+import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -71,10 +65,6 @@ import {
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
-// Phase 4.9: shared dispatcher helpers. Previously this file kept local
-// copies of toPaginationMeta / paginatedResponseToMeta / unwrapServiceResult
-// because Phase 4 was migrating dispatchers in parallel; with Phase 4
-// merged we import the canonical versions from one module.
 import {
   paginatedResponseToMeta,
   toPaginationMeta,
@@ -92,14 +82,10 @@ import type { MethodHandler, Params } from "../types";
 
 type CollectionsHandlerType = CollectionsHandler;
 
-// F14 v1: decides whether the apply payload carries actionable rename
-// hints we should log a debug receipt for. Pulled out as a pure helper
-// so tests can pin the "non-empty renames map only" semantics without
-// mocking the entire applySchemaChanges path.
-//
-// v1 always returns false-or-logs; v2 will replace the body to feed
-// hints into the rename detector. Keeping the pure helper here means
-// the v2 swap is one-file.
+// Decides whether the apply payload carries actionable rename hints we
+// should log a debug receipt for. Pure helper so tests can pin the
+// "non-empty renames map only" semantics without mocking the entire
+// applySchemaChanges path.
 function shouldLogF14HintReceipt(hints: unknown): boolean {
   if (!hints || typeof hints !== "object") return false;
   const renames = (hints as { renames?: unknown }).renames;
@@ -107,12 +93,12 @@ function shouldLogF14HintReceipt(hints: unknown): boolean {
   return Object.keys(renames as Record<string, unknown>).length > 0;
 }
 
-// F10 PR 6: render a per-change-kind summary as a toast-friendly
-// phrase. The admin Save handler concatenates this with the
-// collection name like "Posts schema updated. 1 field added".
+// Render a per-change-kind summary as a toast-friendly phrase. The
+// admin Save handler concatenates this with the collection name like
+// "Posts schema updated. 1 field added".
 //
 // Pure helper. Mirrors the admin-side `formatJournalSummary` from
-// `packages/admin/.../formatters.ts` so server-rendered + admin-
+// `packages/admin/.../formatters.ts` so server-rendered and admin-
 // rendered text stay consistent. Kept server-side too because the
 // dispatcher needs to send the string in the apply response.
 function formatToastSummary(summary: {
@@ -138,11 +124,10 @@ const COLLECTIONS_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   createCollection: {
-    // Phase 4: respondMutation 201. The metadata service still returns
-    // the legacy CollectionServiceResult envelope; we unwrap it and
-    // pass the legacy success message through as the toast string so
-    // existing admin UIs see the same copy ("Collection created!
-    // Restart the app...").
+    // The metadata service returns the legacy CollectionServiceResult
+    // envelope; we unwrap it and pass the legacy success message through
+    // as the toast string so admin UIs see the same copy ("Collection
+    // created! Restart the app...").
     execute: async (svc, _, body) => {
       const result = await svc.createCollection(
         requireBody(body, "Collection data is required")
@@ -156,11 +141,11 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   listCollections: {
-    // Phase 4: respondList. Translates the legacy CollectionServiceResult
-    // `{ data, meta }` envelope to the canonical `{ items, meta }` body.
-    // Permission filtering (non-super-admins only see collections they
-    // can read) runs after unwrap so the meta we ship reflects the
-    // FILTERED counts, not the pre-filter totals.
+    // Translates the legacy CollectionServiceResult `{ data, meta }`
+    // envelope to the canonical `{ items, meta }` body. Permission
+    // filtering (non-super-admins only see collections they can read)
+    // runs after unwrap so the meta we ship reflects the FILTERED
+    // counts, not the pre-filter totals.
     execute: async (svc, p) => {
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -179,8 +164,8 @@ const COLLECTIONS_METHODS: Record<
       const data = unwrapServiceResult<unknown>(result);
       const items = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
 
-      // Service meta now uses limit/total/totalPages (Phase 4.8 rename);
-      // toPaginationMeta below adds the canonical hasNext/hasPrev fields.
+      // Service meta uses limit/total/totalPages; toPaginationMeta below
+      // adds the canonical hasNext/hasPrev fields.
       const serviceMeta = result.meta as
         | {
             total?: number;
@@ -243,7 +228,7 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   getCollection: {
-    // Phase 4: respondDoc. Bare doc body (no { data } wrapper).
+    // Bare doc body (no { data } wrapper).
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
       const result = await svc.getCollection({ collectionName: p.collectionName });
@@ -254,9 +239,8 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   updateCollection: {
-    // Phase 4: respondMutation 200. Pass the legacy success message
-    // through so existing toast copy ("Collection updated successfully")
-    // is preserved.
+    // Pass the legacy success message through so existing toast copy
+    // ("Collection updated successfully") is preserved.
     execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and update data are required");
@@ -274,7 +258,7 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   deleteCollection: {
-    // Phase 4: respondMutation 200. The deleted record is the `item`.
+    // The deleted record is the `item`.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
       const result = await svc.deleteCollection({
@@ -293,12 +277,12 @@ const COLLECTIONS_METHODS: Record<
   previewSchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      // F8 PR 3: pipeline preview + legacy-shape translator. Replaces
-      // SchemaChangeService.preview(). The translator emits the legacy
-      // 3-option resolution set so the admin SchemaChangeDialog renders
-      // unchanged. Task 22 tracks the dialog upgrade to consume
-      // ClassifierEvent[] directly (and reach the 4th `delete_nonconforming`
-      // option that the pipeline emits but the legacy shape can't carry).
+      // Pipeline preview plus legacy-shape translator. The translator
+      // emits the legacy 3-option resolution set so the admin
+      // SchemaChangeDialog renders unchanged. Future work tracks the
+      // dialog upgrade to consume ClassifierEvent[] directly (and reach
+      // the 4th `delete_nonconforming` option that the pipeline emits
+      // but the legacy shape can't carry).
       const registry = getCollectionRegistryFromDI();
       if (!registry) {
         throw new Error("Collection registry not initialized");
@@ -353,8 +337,7 @@ const COLLECTIONS_METHODS: Record<
       );
 
       // Forward rename candidates from the same pipeline preview run
-      // (the F4 Option E PR 5 `computeRenameCandidatesForPreview`
-      // helper is now redundant — pipeline already detected them).
+      // (the pipeline already detected them).
       const renamed = pipelinePreview.candidates.map(c => ({
         table: c.tableName,
         from: c.fromColumn,
@@ -365,11 +348,10 @@ const COLLECTIONS_METHODS: Record<
         defaultSuggestion: c.defaultSuggestion,
       }));
 
-      // Phase 4: respondData. previewSchemaChanges returns a custom
-      // preview payload (legacyShape + renamed + schemaVersion) with no
-      // CRUD analog (respondData ships the bare object as the body).
-      // We spread legacyShape into a new object so the resulting body
-      // has at least the renamed/schemaVersion fields, never empty.
+      // previewSchemaChanges returns a custom preview payload
+      // (legacyShape plus renamed plus schemaVersion) with no CRUD
+      // analog. We spread legacyShape into a new object so the resulting
+      // body has at least the renamed/schemaVersion fields, never empty.
       // Cast through `unknown` because SchemaPreviewResult is a sealed
       // shape with no string index signature; respondData's generic
       // requires a Record<string, unknown> for spread compatibility.
@@ -383,21 +365,18 @@ const COLLECTIONS_METHODS: Record<
   },
   // Apply confirmed schema changes via the in-process schema service.
   //
-  // F1 PR 3: single-process model. drizzle-kit/api is loaded lazily via
+  // Single-process model: drizzle-kit/api is loaded lazily via
   // drizzle-kit-lazy.ts (webpackIgnore + turbopackIgnore magic comments
   // keep it out of the handler bundle), so DDL runs cleanly in the same
-  // process serving requests. No more wrapper-mode IPC routing.
+  // process serving requests.
   //
-  // F8 PR 3: bumpSchemaVersion is called directly here after a
-  // successful pipeline apply (was previously wired via
-  // SchemaChangeService.setOnApplySuccess in di/register.ts; that
-  // service + its DI registration are gone).
+  // bumpSchemaVersion is called directly here after a successful
+  // pipeline apply.
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      // F4 Option E PR 5: schemaChangeService is no longer consulted on
-      // the apply path (the F3-era preview-and-throw block is gone).
-      // Registry alone is sufficient as the DI-readiness probe.
+      // Registry alone is sufficient as the DI-readiness probe; the
+      // schema-change service is no longer consulted on the apply path.
       const registry = getCollectionRegistryFromDI();
       if (!registry) {
         throw new Error("Collection registry not initialized");
@@ -421,21 +400,23 @@ const COLLECTIONS_METHODS: Record<
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
-        // Legacy F1 admin UI shape (per-field, used by old SchemaChangeService
-        // path). Kept alive until F8 deletes the legacy service entirely.
+        // Legacy admin UI shape (per-field, used by the old
+        // SchemaChangeService path). Kept alive while admin dialogs
+        // still send it.
         resolutions?: Record<string, FieldResolution>;
         renameResolutions?: BrowserRenameResolution[];
-        // F5 PR 6: typed Resolution[] from the new pipeline contract.
-        // Optional — admin UIs that haven't been upgraded send only the
-        // legacy `resolutions` map and the new pipeline emits no events
-        // until the UI is updated to consume ClassifierEvents from preview.
+        // Typed Resolution[] from the new pipeline contract. Optional:
+        // admin UIs that haven't been upgraded send only the legacy
+        // `resolutions` map and the new pipeline emits no events until
+        // the UI is updated to consume ClassifierEvents from preview.
         eventResolutions?: Resolution[];
-        // F14 v1 — RESERVED FIELD. v1 accepts and IGNORES this. v2 will
-        // implement client-side rename hint tracking + server-side
-        // auto-confirm so the SchemaChangeDialog stops asking the
-        // admin to re-confirm renames they already clicked once.
-        // Reserved here so v2 can ship as a pure additive change
-        // without breaking older admin clients.
+        // RESERVED FIELD: accepted and IGNORED in the current version.
+        // A future revision will implement client-side rename hint
+        // tracking plus server-side auto-confirm so the
+        // SchemaChangeDialog stops asking the admin to re-confirm
+        // renames they already clicked once. Reserved so the future
+        // version can ship as a pure additive change without breaking
+        // older admin clients.
         // See plans/specs/F10-notifications-and-audit-design.md §6.6.
         hints?: {
           renames?: Record<string, string>;
@@ -446,35 +427,34 @@ const COLLECTIONS_METHODS: Record<
       }
       if (!fields) throw new Error("fields is required in request body");
 
-      // F14 v1: log a debug line when hints arrive so we can track
-      // adoption without surprising operators with errors. v1 ignores
-      // the field entirely; v2 will pipe it into the rename detector.
+      // Log a debug line when hints arrive so we can track adoption
+      // without surprising operators with errors. The current version
+      // ignores the field entirely.
       if (shouldLogF14HintReceipt(hints)) {
-        // eslint-disable-next-line no-console -- intentional debug log; v1 reservation only
+        // eslint-disable-next-line no-console -- intentional debug log; reservation only
         console.debug?.(
-          `[F14] hints received but not processed (v1); see plans/specs/F10-notifications-and-audit-design.md §6.6`
+          `[F14] hints received but not processed; see plans/specs/F10-notifications-and-audit-design.md §6.6`
         );
       }
 
       const currentVersion = collection.schemaVersion;
       const tableName = collection.tableName;
 
-      // F5 PR 6: legacy F1 per-field resolutions get translated to typed
+      // Legacy per-field resolutions get translated to typed
       // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
       // pipeline emits events. Until admin dialogs ship the new
       // `eventResolutions` contract, this translator keeps existing UIs
-      // working end-to-end through the new pipeline. F8 will delete the
-      // legacy shape entirely when the dialog ships the new contract.
+      // working end-to-end through the pipeline.
       const legacyBundle = resolutions
         ? { tableName, byFieldName: resolutions }
         : undefined;
 
-      // F3: route through the PushSchemaPipeline via the F2 contract.
-      // Build the FULL DesiredSchema (collections + singles + components)
-      // so drizzle-kit sees every managed table. Without this, tables of
-      // other entity types in the live DB are absent from the desired
-      // snapshot and drizzle-kit offers them as rename candidates for the
-      // new collection being saved.
+      // Route through the PushSchemaPipeline. Build the FULL
+      // DesiredSchema (collections + singles + components) so
+      // drizzle-kit sees every managed table. Without this, tables
+      // of other entity types in the live DB are absent from the
+      // desired snapshot and drizzle-kit offers them as rename
+      // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
 
       // Splice in the user's changes for THIS collection (overwrites
@@ -485,14 +465,13 @@ const COLLECTIONS_METHODS: Record<
         fields: fields as DesiredCollection["fields"],
       };
 
-      // Resolve adapter for the F3 pipeline construction.
+      // Resolve adapter for the pipeline construction.
       const adapter = getAdapterFromDI();
       if (!adapter) {
         throw new Error("Database adapter not initialized");
       }
-      // dialect is an abstract readonly property on DrizzleAdapter — not
-      // a method (a previous iteration mistakenly called .getDialect()
-      // which would crash at runtime; tsc missed it because of `as any`).
+      // `dialect` is an abstract readonly property on DrizzleAdapter,
+      // not a method. Calling `.getDialect()` would crash at runtime.
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
       const databaseName =
@@ -501,14 +480,14 @@ const COLLECTIONS_METHODS: Record<
           : undefined;
 
       // Per-call factory (not the DI-bound applyDesiredSchema in
-      // pipeline/index.ts) so we can thread MySQL databaseName + the
-      // resolved adapter into the F3 PushSchemaPipeline at this site.
+      // pipeline/index.ts) so we can thread MySQL databaseName plus the
+      // resolved adapter into the PushSchemaPipeline at this site.
       //
-      // F4 Option E PR 5: BrowserPromptDispatcher takes pre-attached
-      // rename resolutions from the request body (collected by the admin
-      // SchemaChangeDialog before save) and translates them into
-      // confirmedRenames inside the pipeline's Phase B. No SSE, no
-      // mid-apply prompts — the dialog is the prompt UX.
+      // BrowserPromptDispatcher takes pre-attached rename resolutions
+      // from the request body (collected by the admin SchemaChangeDialog
+      // before save) and translates them into confirmedRenames inside
+      // the pipeline's Phase B. No SSE, no mid-apply prompts; the dialog
+      // is the prompt UX.
       const promptDispatcher = new BrowserPromptDispatcher(
         renameResolutions ?? [],
         eventResolutions ?? [],
@@ -516,15 +495,13 @@ const COLLECTIONS_METHODS: Record<
       );
       const apply = createApplyDesiredSchema({
         applyPipeline: (desiredArg, sourceArg, channelArg) => {
-          // F5 PR 6: real classifier + real pre-cleanup executor wired at
-          // the UI-first save path. The admin's existing SchemaChangeDialog
-          // continues to send the legacy `resolutions` map for the legacy
-          // `SchemaChangeService` path; the new pipeline below ALSO emits
-          // typed events that admin UIs can opt into via `eventResolutions`
-          // (Resolution[]) once the dialog is updated. F8 will delete the
-          // legacy service and the legacy `resolutions` field.
-          // F8 PR 5: real journal from DI (with noop fallback so tests
-          // that bypass DI keep working).
+          // Real classifier and real pre-cleanup executor wired at the
+          // UI-first save path. Admin SchemaChangeDialog still sends the
+          // legacy `resolutions` map; the pipeline ALSO emits typed
+          // events that admin UIs can opt into via `eventResolutions`
+          // (Resolution[]) once the dialog is updated.
+          // Real journal from DI (with noop fallback so tests that
+          // bypass DI keep working).
           const migrationJournal =
             getMigrationJournalFromDI() ?? noopMigrationJournal;
           const pipeline = new PushSchemaPipeline({
@@ -535,8 +512,8 @@ const COLLECTIONS_METHODS: Record<
             preRenameExecutor: noopPreRenameExecutor,
             preCleanupExecutor: new RealPreCleanupExecutor(),
             migrationJournal,
-            // F10 PR 3: admin-save applies print a terminal box +
-            // write the NDJSON line. Same singleton across UI saves.
+            // Admin-save applies print a terminal box and write the
+            // NDJSON line. Same singleton across UI saves.
             notifier: getProductionNotifier(),
           });
           return pipeline.apply({
@@ -546,9 +523,9 @@ const COLLECTIONS_METHODS: Record<
             source: sourceArg,
             promptChannel: channelArg,
             databaseName,
-            // F10 PR 2: tag the journal row with the collection slug
-            // the user is editing so the admin NotificationCenter can
-            // render "Posts schema updated" instead of generic "global".
+            // Tag the journal row with the collection slug the user is
+            // editing so the admin NotificationCenter can render "Posts
+            // schema updated" instead of generic "global".
             uiTargetSlug: p.collectionName,
           });
         },
@@ -559,7 +536,6 @@ const COLLECTIONS_METHODS: Record<
         readSchemaVersionForSlug: (slug: string) =>
           Promise.resolve(slug === p.collectionName ? currentVersion : null),
         // Read post-apply versions for the saved slug from the registry.
-        // F8 will provide a richer signal via the migration journal.
         readNewSchemaVersionsForSlugs: async (slugs: string[]) => {
           const out: Record<string, number> = {};
           for (const slug of slugs) {
@@ -590,20 +566,20 @@ const COLLECTIONS_METHODS: Record<
         throw new Error(result.error.message);
       }
 
-      // Phase 6 follow-up (2026-05-01): pipeline.apply mutated the live
-      // DB (renamed/added/dropped columns) but does NOT persist the
-      // updated `fields` JSON on `dynamic_collections`. Without this
-      // post-apply write, subsequent admin queries (entry list, entry
-      // create form, etc.) build their column references from the STALE
-      // metadata and fail with `no such column: <oldName>`. End-user
-      // symptom: rename succeeds in the DB but the collection looks
-      // empty in the admin UI because every list query 500s.
+      // pipeline.apply mutates the live DB (renamed/added/dropped
+      // columns) but does NOT persist the updated `fields` JSON on
+      // `dynamic_collections`. Without this post-apply write, subsequent
+      // admin queries (entry list, entry create form, etc.) build their
+      // column references from the STALE metadata and fail with `no
+      // such column: <oldName>`. End-user symptom: rename succeeds in
+      // the DB but the collection looks empty in the admin UI because
+      // every list query 500s.
       //
       // Use `adapter.update` directly (not `registry.updateCollection`)
       // because the registry helper auto-bumps `schema_version` and
-      // resets `migration_status` to `"pending"` on any `fields` change
-      // — both wrong here. The pipeline already bumped the schema
-      // version (see bumpSchemaVersion below + the journal record),
+      // resets `migration_status` to `"pending"` on any `fields`
+      // change; both wrong here. The pipeline already bumped the schema
+      // version (see bumpSchemaVersion below plus the journal record),
       // and the migration status is now `applied`, not `pending`.
       // Surgical write of just the `fields` column keeps invariants
       // intact.
@@ -634,9 +610,9 @@ const COLLECTIONS_METHODS: Record<
       // After a schema apply (rename, add, drop) two independent in-memory
       // caches hold Drizzle table objects that are now stale:
       //
-      //   1. CollectionFileManager.schemaRegistry — used by query-service
+      //   1. CollectionFileManager.schemaRegistry: used by query-service
       //      SELECT / JOIN builders (loadDynamicSchema path).
-      //   2. SchemaRegistry.dynamicSchemas — used by adapter.insert /
+      //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
       //      update / delete / select (getTableObject path).
       //
       // Both must be refreshed with the same freshly-generated table built
@@ -665,12 +641,10 @@ const COLLECTIONS_METHODS: Record<
         );
       }
 
-      // F8 PR 3: bumpSchemaVersion was previously wired via
-      // SchemaChangeService.setOnApplySuccess in di/register.ts. With the
-      // legacy service gone, the dispatcher fires it directly after a
+      // The dispatcher fires bumpSchemaVersion directly after a
       // successful pipeline apply. The bump only matters for UI-first
-      // applies (sets the X-Schema-Version response header so admin
-      // tabs know to refetch); HMR + boot paths don't need it.
+      // applies (sets the X-Schema-Version response header so admin tabs
+      // know to refetch); HMR and boot paths don't need it.
       try {
         const { bumpSchemaVersion } = await import("../../routeHandler");
         bumpSchemaVersion();
@@ -678,13 +652,12 @@ const COLLECTIONS_METHODS: Record<
         // routeHandler may be unavailable in non-server contexts (tests).
       }
 
-      // Phase 4: respondAction. applySchemaChanges is a non-CRUD
-      // mutation: there's no "item" to surface. The action result
-      // carries the new schema version (so the admin can update its
-      // X-Schema-Version header probe) and a toast summary string.
-      // toastSummary may be undefined when the pipeline didn't emit
-      // diff counts; respondAction silently drops undefined fields
-      // because we use a conditional spread.
+      // applySchemaChanges is a non-CRUD mutation: there's no "item" to
+      // surface. The action result carries the new schema version (so
+      // the admin can update its X-Schema-Version header probe) and a
+      // toast summary string. toastSummary may be undefined when the
+      // pipeline didn't emit diff counts; the conditional spread drops
+      // undefined fields silently.
       return respondAction(`Schema applied for '${p.collectionName}'`, {
         newSchemaVersion:
           result.newSchemaVersions[p.collectionName] ?? currentVersion + 1,
@@ -695,11 +668,10 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   listEntries: {
-    // Phase 4: respondList. The entry-query service wraps a
-    // PaginatedResponse (`{ docs, totalDocs, limit, page, totalPages,
-    // hasNextPage, hasPrevPage, ... }`) in CollectionServiceResult; we
-    // unwrap it and translate to canonical PaginationMeta via
-    // paginatedResponseToMeta.
+    // The entry-query service wraps a PaginatedResponse
+    // (`{ docs, totalDocs, limit, page, totalPages, hasNextPage,
+    // hasPrevPage, ... }`) in CollectionServiceResult; we unwrap it and
+    // translate to canonical PaginationMeta via paginatedResponseToMeta.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
 
@@ -744,9 +716,8 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   countEntries: {
-    // Phase 4: respondCount. Wire shape canonicalises on `{ total }`
-    // (legacy services returned `{ totalDocs }`, and frontend code that
-    // reads `body.totalDocs` is being migrated alongside this task).
+    // Wire shape canonicalises on `{ total }`. Service still returns
+    // `{ totalDocs }` internally; we translate at the boundary.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
       const result = await svc.countEntries({
@@ -761,7 +732,6 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   createEntry: {
-    // Phase 4: respondMutation 201.
     execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and entry data are required");
@@ -791,7 +761,6 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   getEntry: {
-    // Phase 4: respondDoc.
     execute: async (svc, p) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
@@ -812,7 +781,6 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   updateEntry: {
-    // Phase 4: respondMutation 200.
     execute: async (svc, p, body) => {
       if (!p.collectionName || !p.entryId || !body) {
         throw new Error(
@@ -845,7 +813,7 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   deleteEntry: {
-    // Phase 4: respondMutation 200. The deleted record is the `item`.
+    // The deleted record is the `item`.
     execute: async (svc, p) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
@@ -870,14 +838,11 @@ const COLLECTIONS_METHODS: Record<
       return respondMutation(result.message ?? "Entry deleted.", entry);
     },
   },
-  // Phase 4.5: bulk delete by ids. Service returns BulkOperationResult
-  // with structured per-item failures; the dispatcher hands successes +
+  // Bulk delete by ids. Service returns BulkOperationResult with
+  // structured per-item failures; the dispatcher hands successes plus
   // failures straight to respondBulk. HTTP 200 for partial success
   // (per-item failures are first-class data in the body's `errors`
-  // array, not server errors). Malformed-request validation (missing
-  // collectionName, empty ids) raises in the service envelope path
-  // upstream; the legacy `throw new Error("...")` lines below stay as
-  // pre-existing baseline per Phase 4.5 scope.
+  // array, not server errors).
   bulkDeleteEntries: {
     execute: async (svc, p, body) => {
       const b = body as { ids?: string[] } | undefined;
@@ -912,8 +877,8 @@ const COLLECTIONS_METHODS: Record<
       return respondBulk(message, result.successes, result.failures);
     },
   },
-  // Phase 4.5: bulk update by ids. Successes carry full mutated records
-  // so the admin client can refresh its cache without a re-fetch.
+  // Bulk update by ids. Successes carry full mutated records so the
+  // admin client can refresh its cache without a re-fetch.
   bulkUpdateEntries: {
     execute: async (svc, p, body) => {
       const b = body as
@@ -951,7 +916,7 @@ const COLLECTIONS_METHODS: Record<
       return respondBulk(message, result.successes, result.failures);
     },
   },
-  // Phase 4.5: bulk update by query. The service throws NextlyError on
+  // Bulk update by query. The service throws NextlyError on
   // request-level failures (collection-wide forbidden, limit exceeded,
   // failed match-list query), which the dispatcher's catch path turns
   // into the canonical error envelope. Per-entry failures during the
@@ -992,10 +957,10 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   duplicateEntry: {
-    // Phase 4: respondMutation 201. duplicateEntry is fundamentally a
-    // create: it produces a new row. The bulk-service implementation
-    // delegates to mutationService.createEntry which already returns
-    // statusCode 201, so the wire status matches end-to-end.
+    // duplicateEntry is fundamentally a create: it produces a new row.
+    // The bulk-service implementation delegates to
+    // mutationService.createEntry which already returns statusCode 201,
+    // so the wire status matches end-to-end.
     execute: async (svc, p, body) => {
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
@@ -1026,12 +991,6 @@ const COLLECTIONS_METHODS: Record<
   },
 };
 
-// F8 PR 3 deleted `computeRenameCandidatesForPreview` (and its helper
-// imports `introspectLiveSnapshot`, `buildDesiredTableFromFields`,
-// `diffSnapshots`). Rename candidates now flow out of the same
-// `previewDesiredSchema()` call that produces the rest of the preview
-// response — no second introspect+diff round-trip needed.
-
 /**
  * Dispatch a collections method call. Prefers the DI-registered
  * `CollectionsHandler` (which has dynamic schemas wired up) and falls
@@ -1050,12 +1009,11 @@ export function dispatchCollections(
   return handler.execute(collectionsHandler, params, body);
 }
 
-// F10 PR 6: test seam — the helper is module-private but pure, and
-// re-exporting under a verbose name keeps the public surface honest
-// while letting unit tests pin its behaviour.
+// Test seam: the helper is module-private but pure, and re-exporting
+// under a verbose name keeps the public surface honest while letting
+// unit tests pin its behaviour.
 export const formatToastSummaryForTest = formatToastSummary;
 
-// F14 v1: same test-seam pattern for the hint-receipt decision
-// helper. v1's only behavioural contract is "non-empty renames map →
-// log; everything else → silent"; the tests pin that.
+// Test seam for the hint-receipt decision helper. The behavioural
+// contract is "non-empty renames map -> log; everything else -> silent".
 export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;

@@ -53,8 +53,6 @@ export const fetchPermissionsFromApi = async (options?: {
   params.set("sortOrder", "asc");
 
   const query = params.toString();
-  // Phase 4 (Task 19): server returns canonical `{ items, meta }`
-  // (ListResponse<T>) directly; `fetcher` no longer peels `.data`.
   const result = await fetcher<ListResponse<ApiPermissionEntry>>(
     `/permissions${query ? `?${query}` : ""}`,
     {},

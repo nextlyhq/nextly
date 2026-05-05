@@ -8,11 +8,6 @@
  * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
  * - DATABASE_URL: Database connection string
  *
- * Wire shape (Phase 4 envelope migration): handlers wrap `withErrorHandler`
- * and return the canonical `{ items, meta: { total, page, limit, totalPages,
- * hasNext, hasPrev } }` envelope per spec §5.1. Errors flow through the
- * wrapper and serialize as `application/problem+json`.
- *
  * @example
  * ```typescript
  * // In your Next.js app: app/api/singles/route.ts

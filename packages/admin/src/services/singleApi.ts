@@ -46,9 +46,6 @@ const buildQuery = (params: TableParams): string => {
 
 /**
  * Fetch Singles with pagination and filters.
- *
- * Phase 4.7: pass canonical ListResponse straight through. The legacy
- * normalizePagination adapter is gone.
  */
 export const fetchSingles = async (
   params: TableParams
@@ -59,16 +56,12 @@ export const fetchSingles = async (
 };
 
 /**
- * Delete a Single by slug.
- *
- * Phase 4 (Task 19): server returns `ActionResponse` (delete is a non-CRUD
- * action in single-dispatcher because the registry returns void); we discard
- * the body since the caller expects void.
+ * Delete a Single by slug. Caller expects void; we discard the body.
  */
 export const deleteSingle = async (slug: string): Promise<void> => {
-  // Use MutationResponse<unknown> as a generic shape. The dispatcher emits
-  // either respondMutation (item) or respondAction ({ slug }), and we drop
-  // the body in either case.
+  // Use MutationResponse<unknown> as a generic shape. The dispatcher
+  // emits either respondMutation (item) or respondAction ({ slug }),
+  // and we drop the body in either case.
   await fetcher<MutationResponse<unknown>>(
     `/singles/${slug}`,
     {
@@ -81,11 +74,12 @@ export const deleteSingle = async (slug: string): Promise<void> => {
 /**
  * Single API client object with all operations.
  *
- * Phase 4 (Task 19): the `protectedApi.*` calls below receive the raw
- * canonical body. List endpoints emit `ListResponse<T>`; bare reads (get,
- * getSchema, getDocument) return the doc directly; mutations return
- * `MutationResponse<T>`. We project the legacy shapes the existing callers
- * expect (bare arrays for `list`, `{ message, data }` for `create`, etc.).
+ * The `protectedApi.*` calls below receive the raw canonical body:
+ * list endpoints emit `ListResponse<T>`, bare reads (get, getSchema,
+ * getDocument) return the doc directly, and mutations return
+ * `MutationResponse<T>`. We project to the legacy shapes existing
+ * callers expect (bare arrays for `list`, `{ message, data }` for
+ * `create`, etc.).
  */
 export const singleApi = {
   fetchSingles,
@@ -207,9 +201,6 @@ export const singleApi = {
 
   /**
    * Get a Single's document data.
-   *
-   * Phase 4 (Task 19): the document endpoint returns the bare document
-   * via respondDoc (not a list/mutation envelope).
    */
   getDocument: async (
     slug: string,
@@ -227,10 +218,6 @@ export const singleApi = {
 
   /**
    * Update a Single's document data.
-   *
-   * Phase 4 (Task 19): server returns `MutationResponse<SingleDocument>`;
-   * we project `result.item` so callers continue to receive the document
-   * directly.
    */
   updateDocument: async (
     slug: string,

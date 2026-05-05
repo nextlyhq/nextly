@@ -4,30 +4,18 @@
  * Named handler functions for the five API key endpoints. Each handler owns
  * its full auth + validation + service-call cycle:
  *
- *   requirePermission("update", "api-keys")  →  manage-api-keys system permission
- *   authMethod !== "session" guard           →  create / update / revoke are session-only
+ *   requirePermission("update", "api-keys")  to  manage-api-keys system permission
+ *   authMethod !== "session" guard           to  create / update / revoke are session-only
  *
  * These functions are called by the main route handler when it detects
- * `service === "apiKeys"` in the parsed route (wired in Subtask 3.2.1).
- *
- * Wire shape: Phase 4 Task 11 migrates these handlers off the legacy
- * `{ data: <result> }` envelope onto the canonical respondX helpers
- * (spec §5.1):
- *
- *   list   -> respondList(keys, syntheticMeta)
- *   get    -> respondDoc(key)
- *   create -> respondMutation("API key created.", { doc, key }, 201)
- *   update -> respondMutation("API key updated.", item)
- *   revoke -> respondAction("API key revoked.", { id })
+ * `service === "apiKeys"` in the parsed route.
  *
  * The list endpoint is not server-paginated (callers receive every key
  * they are allowed to see in one page). To stay on the canonical
- * `respondList` envelope, we ship a single-page synthetic meta whose
- * `total` matches the array length. Errors continue to flow through
- * `withErrorHandler` and serialize as `application/problem+json`. The
- * session-only 403 surface keeps its canonical
- * "You don't have permission to perform this action." message; the
- * legacy reason lives in `logContext`.
+ * `respondList` envelope we ship a single-page synthetic meta whose
+ * `total` matches the array length. The session-only 403 surface uses
+ * the canonical "You don't have permission to perform this action."
+ * message per spec §13.8; the session-only reason lives in `logContext`.
  *
  * @module api/api-keys
  * @since 1.0.0
@@ -70,11 +58,10 @@ async function requireApiKeyPermission(
 }
 
 /**
- * Throw the canonical FORBIDDEN error for session-only operations. The
- * legacy "API keys cannot be managed using an API key. Please sign in."
- * message is replaced with the §13.8-canonical sentence so every 403
- * across the API ships the same wording. The session-only reason and
- * the attempted action live in `logContext` for operator triage.
+ * Throw the canonical FORBIDDEN error for session-only operations. Per spec
+ * §13.8 every 403 across the API ships the same canonical sentence; the
+ * session-only reason and the attempted action live in `logContext` for
+ * operator triage.
  */
 function denySessionOnly(action: "create" | "update" | "delete"): never {
   throw NextlyError.forbidden({
@@ -104,8 +91,8 @@ export const listApiKeys = withErrorHandler(
     const allUsers = await isSuperAdmin(authResult.userId);
     const keys = await service.listApiKeys(authResult.userId, { allUsers });
 
-    // Phase 4: respondList. Synthetic single-page meta keeps the canonical
-    // list shape even though the underlying service does not paginate.
+    // Synthetic single-page meta keeps the canonical list shape even though
+    // the underlying service does not paginate.
     return respondList(keys, {
       total: keys.length,
       page: 1,
@@ -147,7 +134,6 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
       });
     }
 
-    // Phase 4: respondDoc. Single document fetch returns the row bare.
     return respondDoc(key);
   })(req);
 }
@@ -155,7 +141,7 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
 /**
  * Create a new API key for the authenticated session user.
  *
- * Session-only — cannot be called via an API key to prevent privilege
+ * Session-only; cannot be called via an API key to prevent privilege
  * escalation. The raw key is returned exactly once in this response; it
  * is never stored and cannot be retrieved again.
  *
@@ -187,9 +173,8 @@ export const createApiKey = withErrorHandler(
       validated
     );
 
-    // Phase 4: respondMutation 201. The composite `{ doc, key }` payload
-    // is the mutation `item` so the one-time raw secret stays adjacent to
-    // its metadata; the toast message is server-authored.
+    // The composite `{ doc, key }` payload is the mutation `item` so the
+    // one-time raw secret stays adjacent to its metadata.
     return respondMutation(
       "API key created.",
       { doc: meta, key },
@@ -201,10 +186,10 @@ export const createApiKey = withErrorHandler(
 /**
  * Update an existing API key's name or description.
  *
- * Token type, role, and duration are immutable — revoke and recreate to
+ * Token type, role, and duration are immutable; revoke and recreate to
  * change them. Ownership is enforced at the service layer.
  *
- * Session-only — cannot be called via an API key.
+ * Session-only; cannot be called via an API key.
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
@@ -234,8 +219,6 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
       validated
     );
 
-    // Phase 4: respondMutation. Updated row is the mutation `item`; the
-    // toast message is server-authored.
     return respondMutation("API key updated.", updated);
   })(req);
 }
@@ -246,7 +229,7 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
  * Sets `isActive = false` on the key. The row is preserved for audit trail
  * purposes. Ownership is enforced at the service layer.
  *
- * Session-only — cannot be called via an API key.
+ * Session-only; cannot be called via an API key.
  *
  * Auth: **session only** + `manage-api-keys` permission.
  *
@@ -264,8 +247,8 @@ export function revokeApiKey(req: Request, id: string): Promise<Response> {
     const service = await getApiKeyService();
     await service.revokeApiKey(id, authResult.userId);
 
-    // Phase 4: respondAction. Revocation is a state transition rather
-    // than a row mutation; surface the affected id alongside the toast.
+    // Revocation is a state transition rather than a row mutation; surface
+    // the affected id alongside the toast.
     return respondAction("API key revoked.", { id });
   })(req);
 }

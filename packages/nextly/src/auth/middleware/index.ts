@@ -81,21 +81,12 @@ function getConfig(): NextlyServiceConfig | undefined {
   return undefined;
 }
 
-// PR 5 (unified-error-system): the AuthenticationError / AuthorizationError
-// classes that used to live here have been deleted. They were dead code (no
-// callers in this package) and their job is now performed by the canonical
-// NextlyError factories: NextlyError.authRequired() and NextlyError.forbidden().
-// Throw those at the call site; the route-handler boundary serialises them
-// via toResponseJSON. The route-level ErrorResponse machinery below is kept
-// for the duration of the migration — it is consumed by routeHandler.ts and
-// many api/*.ts files that will be migrated in a later PR.
-
 /**
  * Standardized error response structure.
  *
  * The optional `headers` field carries HTTP response headers that should be
  * forwarded to the client (e.g. rate-limit headers on 429 responses). It is
- * stripped from the JSON body by `createJsonErrorResponse()` — callers do not
+ * stripped from the JSON body by `createJsonErrorResponse()`; callers do not
  * need to handle it separately.
  */
 export interface ErrorResponse {

@@ -1,6 +1,4 @@
 /**
- * Audit log writer (Audit M10 / T-022).
- *
  * Single entry point for security-sensitive event recording. Callers
  * pass a structured event; the writer persists it to the `audit_log`
  * table via the database adapter.

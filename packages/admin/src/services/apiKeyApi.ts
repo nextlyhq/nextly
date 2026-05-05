@@ -1,14 +1,11 @@
 /**
  * API Key API Service
  *
- * API client for managing API keys. Supports listing, creating, updating,
- * and revoking keys.
- *
- * Phase 4 (Task 19, plan T4.15): the bespoke `apiKeyFetch` helper is gone.
- * Every endpoint now uses the shared `fetcher` typed against the canonical
- * envelope helpers (`ListResponse`, `MutationResponse`, `ActionResponse`)
- * from `lib/api/response-types.ts`. This brings api-keys onto the same
- * wire contract as the rest of the admin services.
+ * API client for managing API keys. Supports listing, creating,
+ * updating, and revoking keys. Every endpoint uses the shared
+ * `fetcher` typed against the canonical envelope helpers
+ * (`ListResponse`, `MutationResponse`, `ActionResponse`) from
+ * `lib/api/response-types.ts`.
  *
  * @example
  * ```ts
@@ -90,11 +87,8 @@ export interface CreateApiKeyResult {
 /**
  * List all API keys visible to the authenticated user.
  *
- * Super-admins see keys across all users. Regular users see only their own.
- *
- * Phase 4 (Task 19): server returns canonical `ListResponse<ApiKeyMeta>`
- * (`{ items, meta }`). We project to the legacy `{ data, meta: { total } }`
- * shape callers expect.
+ * Super-admins see keys across all users. Regular users see only
+ * their own. Returns the legacy `{ data, meta: { total } }` projection.
  */
 export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
   const result = await fetcher<ListResponse<ApiKeyMeta>>("/api-keys", {}, true);
@@ -108,12 +102,8 @@ export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
  * Create a new API key.
  *
  * Session-only — cannot be called via an existing API key.
- * The raw `key` in the result is shown exactly once; it is never stored
- * and cannot be retrieved again.
- *
- * Phase 4 (Task 19): server returns
- * `MutationResponse<{ doc, key }>` (`{ message, item: { doc, key } }`); we
- * project `item` to keep the legacy `{ doc, key }` callers expect.
+ * The raw `key` in the result is shown exactly once; it is never
+ * stored and cannot be retrieved again.
  */
 export async function createApiKey(
   input: CreateApiKeyPayload
@@ -132,11 +122,8 @@ export async function createApiKey(
 /**
  * Update the name or description of an existing API key.
  *
- * Token type, role, and duration are immutable — revoke and recreate to
- * change them. Session-only.
- *
- * Phase 4 (Task 19): server returns `MutationResponse<ApiKeyMeta>`;
- * project `item` for the bare-record public signature.
+ * Token type, role, and duration are immutable — revoke and recreate
+ * to change them. Session-only.
  */
 export async function updateApiKey(
   id: string,
@@ -157,10 +144,7 @@ export async function updateApiKey(
  * Revoke (soft-delete) an API key.
  *
  * Sets `isActive = false`. The row is preserved for audit purposes.
- * Session-only.
- *
- * Phase 4 (Task 19): server returns `respondAction("API key revoked.", { id })`;
- * we discard the body since the caller expects void.
+ * Session-only. Caller expects void; we discard the response body.
  */
 export async function revokeApiKey(id: string): Promise<void> {
   await fetcher<ActionResponse<{ id: string }>>(

@@ -72,10 +72,10 @@ export function useEmailProviders(
 ) {
   return useQuery<EmailProviderListResponse, Error>({
     queryKey: emailProviderKeys.list(params),
-    // Admin-internal field name `pageSize` maps to canonical wire option
-    // `limit`. TableParams.pagination.pageSize stays as the admin-internal
-    // React state name (the user's selected dropdown value) per the
-    // Phase 4.7 boundary documented in packages/ui/src/types/table.ts.
+    // Admin-internal field name `pageSize` maps to canonical wire
+    // option `limit`. TableParams.pagination.pageSize stays as the
+    // admin-internal React state name (the user's selected dropdown
+    // value).
     queryFn: () =>
       listProviders({
         page: params.page,

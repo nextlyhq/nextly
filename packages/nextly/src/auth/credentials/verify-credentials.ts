@@ -1,18 +1,3 @@
-// PR 5 (unified-error-system): security-hardening pass for the login flow.
-//
-// What changed and why:
-//   1. Throws NextlyError on every failure path instead of returning a Result
-//      shape. Account-state codes (locked / unverified / inactive) collapse
-//      into the single AUTH_INVALID_CREDENTIALS public response per spec
-//      §13.1 — they used to leak account state to the wire. Internal context
-//      (the actual "reason") is preserved in logContext for operators.
-//   2. bcrypt compare now runs on every request, even when the user lookup
-//      misses, by hashing the supplied password against a stable decoy hash.
-//      This eliminates the timing side-channel that previously let attackers
-//      enumerate registered emails by measuring response latency.
-//   3. The exported helpers are pure throw-on-error functions; callers no
-//      longer pattern-match a result tuple. handleLogin catches NextlyError
-//      and serialises via toResponseJSON (same shape as withErrorHandler).
 import { NextlyError } from "../../errors/nextly-error";
 import { verifyPassword } from "../password/index";
 
@@ -52,10 +37,9 @@ const DUMMY_HASH =
  *     wire response is identical; logContext records the real cause.
  *   - Returns `VerifiedUser` on success.
  *
- * Failed-attempt tracking and account locking still happen as side-effects
- * inside the wrong-password leg — same lock-out semantics as before, just
- * surfaced as a generic invalid-credentials response instead of a distinct
- * 429.
+ * Failed-attempt tracking and account locking happen as side-effects
+ * inside the wrong-password leg, surfaced as a generic invalid-credentials
+ * response.
  */
 export async function verifyCredentials(
   input: CredentialVerifyInput,

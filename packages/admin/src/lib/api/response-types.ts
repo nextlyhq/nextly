@@ -1,18 +1,17 @@
 /**
- * Canonical response shape types for admin consumers (Phase 4).
+ * Canonical response shape types for admin consumers.
  *
- * Mirrors `packages/nextly/src/api/response-shapes.ts` on the server so
- * service modules and hooks can type their fetcher returns directly:
+ * Mirrors `packages/nextly/src/api/response-shapes.ts` on the server
+ * so service modules and hooks can type their fetcher returns
+ * directly:
  *
  *   const result = await fetcher<ListResponse<User>>("/users");
  *   const users = result.items;
  *   const totalPages = result.meta.totalPages;
  *
- * Contract reference:
- *   docs/superpowers/specs/2026-05-01-phase-4-envelope-migration-design.md §5.1
- *
- * For findByID and non-CRUD reads, the response is a bare `T` — no wrapper
- * type needed. Just `fetcher<User>(...)` or `fetcher<{ permissions, ... }>(...)`.
+ * For findByID and non-CRUD reads, the response is a bare `T` — no
+ * wrapper type needed. Just `fetcher<User>(...)` or
+ * `fetcher<{ permissions, ... }>(...)`.
  */
 
 export type PaginationMeta = {
@@ -51,7 +50,7 @@ export type CountResponse = {
 };
 
 /**
- * Per-item failure entry inside a `BulkResponse<T>` (Phase 4.5).
+ * Per-item failure entry inside a `BulkResponse<T>`.
  *
  * `code` is a canonical NextlyErrorCode value (`NOT_FOUND`, `FORBIDDEN`,
  * `VALIDATION_ERROR`, `CONFLICT`, `INTERNAL_ERROR`, etc.) so the admin
@@ -66,7 +65,7 @@ export type PerItemError = {
 };
 
 /**
- * Per-item failure entry inside a `BulkUploadResponse<T>` (Phase 4.5).
+ * Per-item failure entry inside a `BulkUploadResponse<T>`.
  *
  * Distinct from `PerItemError` because failed uploads do not have an id
  * (the record was never created). The canonical key is `index`, the
@@ -111,10 +110,9 @@ export type BulkUploadResponse<T> = {
 };
 
 /**
- * Error response shape (canonical Task 21 §10.1). Both `withErrorHandler`
- * and the dispatcher path emit this shape after Phase 4. The admin client's
- * `parseApiError.ts` already reads this shape; no client work needed beyond
- * deleting the obsolete "Non-canonical error response" warning eventually.
+ * Error response shape (canonical §10.1). Both `withErrorHandler`
+ * and the dispatcher path emit this shape; the admin client's
+ * `parseApiError.ts` reads it directly.
  */
 export type ErrorResponse = {
   error: {

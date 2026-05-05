@@ -61,9 +61,8 @@ export const buildQuery = (
   } = options;
 
   const query = new URLSearchParams();
-  // `pageSize` is the admin-internal TableParams field name; URL emits the
-  // canonical `limit` query param (Phase 4.8). The TableParams field rename
-  // itself is deferred to Phase 4.7.
+  // `pageSize` is the admin-internal TableParams field name; the URL
+  // emits the canonical `limit` query param.
   const { page, pageSize } = params.pagination;
   const search = params.filters?.search?.trim();
 

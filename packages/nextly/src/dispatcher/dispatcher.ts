@@ -187,21 +187,20 @@ export class ServiceDispatcher {
     try {
       const result = await this.executeServiceMethod(request);
 
-      // Phase 4: handlers migrated via respondX helpers return a Response
-      // directly (with body, status, content-type already set). Pass
-      // through unchanged via DispatchResult.data; routeHandler reads it
-      // as `instanceof Response` and returns it. This MUST come before
-      // the smart-extract path below — a Response has a `.status`
-      // property which would falsely trigger smart-extract and lose
-      // the body.
+      // Handlers built via respondX helpers return a Response directly
+      // (body, status, content-type already set). Pass through unchanged
+      // via DispatchResult.data; routeHandler reads it as `instanceof
+      // Response` and returns it. This MUST come before the smart-extract
+      // path below: a Response has a `.status` property which would
+      // falsely trigger smart-extract and lose the body.
       if (result instanceof Response) {
         return { success: true, data: result, status: result.status };
       }
 
       // Normalize ServiceResult-shaped responses so every dispatch
       // exits via the same DispatchResult contract. The smart-extract
-      // path below stays for unmigrated handlers (Tasks 6-12) that
-      // still return ServiceResult-shaped objects.
+      // path below remains for unmigrated handlers that still return
+      // ServiceResult-shaped objects.
       if (
         result &&
         typeof result === "object" &&
@@ -211,9 +210,9 @@ export class ServiceDispatcher {
         return {
           success: r.success ?? true,
           message: r.success ? r.message : undefined,
-          // Phase 4: even for legacy ServiceResult errors, propagate as
-          // NextlyError so the route wrapper can build a canonical
-          // response. Wrap the legacy string message in INTERNAL_ERROR.
+          // Even for legacy ServiceResult errors, propagate as NextlyError
+          // so the route wrapper can build a canonical response. Wrap the
+          // legacy string message in INTERNAL_ERROR.
           error:
             !r.success && r.message
               ? NextlyError.internal({
@@ -228,11 +227,9 @@ export class ServiceDispatcher {
 
       return { success: true, data: result, status: 200 };
     } catch (error) {
-      // Phase 4: propagate the original NextlyError (not a stringified
-      // message) so the route wrapper rebuilds the response with the
-      // correct status, code, publicData, and headers. Pre-Phase-4
-      // this stringified via `error.message` and a heuristic
-      // text-match (`getErrorStatus`) to recover a status — lossy.
+      // Propagate the original NextlyError (not a stringified message) so
+      // the route wrapper rebuilds the response with the correct status,
+      // code, publicData, and headers.
       const nextlyErr = NextlyError.is(error)
         ? error
         : NextlyError.internal({
@@ -277,9 +274,6 @@ export class ServiceDispatcher {
         throw new Error(`Unknown service: ${service as string}`);
     }
   }
-
-  // Phase 4: getErrorStatus heuristic deleted. Status now comes from
-  // NextlyError.statusCode, propagated through DispatchResult.error.
 
   /** Registers a new service type. */
   addService(service: ServiceType): void {

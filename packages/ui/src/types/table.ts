@@ -1,4 +1,4 @@
-// Canonical pagination metadata (matches spec section 5.1 wire shape and
+// Canonical pagination metadata (matches spec §5.1 wire shape and
 // nextly's response-shapes.ts PaginationMeta). Phase 4.7 unified the admin
 // internal type with the wire contract; the legacy {page, pageSize, total,
 // totalPages} shape was dropped.

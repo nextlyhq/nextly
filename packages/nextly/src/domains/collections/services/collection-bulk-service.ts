@@ -44,7 +44,7 @@ import type {
  * single-item code path and the bulk per-item failure path agree on
  * codes for identical underlying conditions (404 to NOT_FOUND, etc.).
  *
- * Public messages here follow spec section 13.8: generic per-code, no
+ * Public messages here follow spec §13.8: generic per-code, no
  * identifier echo, no value leaking. The legacy `result.message` rides
  * to the operator log via the dispatcher's logger; it never enters the
  * wire `failures[]` (which would defeat the §13.8 rubric).
