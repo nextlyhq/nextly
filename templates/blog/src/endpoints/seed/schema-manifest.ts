@@ -167,7 +167,7 @@ export const BLOG_SCHEMA_MANIFEST: SchemaManifest = {
       fields: [
         {
           name: "headerLinks",
-          type: "array",
+          type: "repeater",
           fields: [
             { name: "label", type: "text", required: true },
             { name: "href", type: "text", required: true },
@@ -176,7 +176,7 @@ export const BLOG_SCHEMA_MANIFEST: SchemaManifest = {
         },
         {
           name: "footerReadLinks",
-          type: "array",
+          type: "repeater",
           fields: [
             { name: "label", type: "text", required: true },
             { name: "href", type: "text", required: true },
