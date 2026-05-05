@@ -315,7 +315,7 @@ function SingleComponentNonRepeatable({
         {isOpen && (
           <div className="space-y-4 px-6 pt-4 pb-4  border-b border-primary/5 border-primary/5 z-0">
             {field.admin?.description && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground leading-relaxed">
                 {field.admin.description}
               </p>
             )}
@@ -371,7 +371,7 @@ function SingleComponentNonRepeatable({
       {isOpen && (
         <div className="p-4 space-y-4">
           {field.admin?.description && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground leading-relaxed">
               {field.admin.description}
             </p>
           )}
@@ -470,7 +470,7 @@ function MultiComponentNonRepeatable({
           )}
         </div>
         {field.admin?.description && (
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground leading-relaxed mt-1">
             {field.admin.description}
           </p>
         )}

@@ -23,7 +23,7 @@
  * });
  *
  * // Get single/global
- * const settings = await nextly.findGlobal({
+ * const settings = await nextly.findSingle({
  *   slug: 'site-settings',
  * });
  * ```

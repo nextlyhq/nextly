@@ -240,7 +240,7 @@ The architecture follows Payload CMS's hybrid pattern: folder-per-collection-whe
 
 These are tracked as follow-ups in `findings/task-17-*.md` in the Nextly integrations workspace:
 
-- On the very first `pnpm dev`, physical tables for the three Singles (site-settings, navigation, homepage) may be created AFTER the user seed runs. The seed's `updateGlobal` calls are wrapped in try/catch and log a warning; the admin panel lets you edit the singles after scaffolding. Subsequent dev restarts work correctly.
+- On the very first `pnpm dev`, physical tables for the three Singles (site-settings, navigation, homepage) may be created AFTER the user seed runs. The seed's `updateSingle` calls are wrapped in try/catch and log a warning; the admin panel lets you edit the singles after scaffolding. Subsequent dev restarts work correctly.
 - The `nextly.find({ collection: "users", ... })` generic path routes through the dynamic-collection registry; the template uses `nextly.users.findOne` instead.
 - `nextly.roles.create` may return an opaque error on some installs; the seed skips gracefully and you can create roles manually at `/admin/roles`.
 

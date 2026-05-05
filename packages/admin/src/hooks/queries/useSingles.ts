@@ -3,7 +3,7 @@
 /**
  * Single Query Hooks
  *
- * TanStack Query hooks for Single (Global) operations (fetch, create, update, delete).
+ * TanStack Query hooks for Single operations (fetch, create, update, delete).
  * Follows the established pattern from useCollections.ts with proper
  * cache invalidation and error handling.
  *
@@ -547,7 +547,9 @@ export function useUpdateSingleDocument(slug: string) {
         queryKey: singleDocumentKeys.detail(slug),
       });
       // Also invalidate the general single documents list
-      void queryClient.invalidateQueries({ queryKey: singleDocumentKeys.all() });
+      void queryClient.invalidateQueries({
+        queryKey: singleDocumentKeys.all(),
+      });
     },
   });
 }

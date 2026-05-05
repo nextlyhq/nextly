@@ -706,7 +706,7 @@ export async function seed({
 
   console.log("  Updating site settings...");
   try {
-    await nextly.updateGlobal({
+    await nextly.updateSingle({
       slug: "site-settings",
       data: {
         title: seedData.siteSettings.siteName,
@@ -726,7 +726,7 @@ export async function seed({
   if (seedData.navigation) {
     console.log("  Updating navigation...");
     try {
-      await nextly.updateGlobal({
+      await nextly.updateSingle({
         slug: "navigation",
         data: seedData.navigation,
       });
@@ -742,7 +742,7 @@ export async function seed({
   if (seedData.homepage) {
     console.log("  Updating homepage...");
     try {
-      await nextly.updateGlobal({
+      await nextly.updateSingle({
         slug: "homepage",
         data: seedData.homepage,
       });

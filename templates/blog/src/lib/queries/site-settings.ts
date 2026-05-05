@@ -27,7 +27,7 @@ const DEFAULTS: SiteSettings = {
 export const getSiteSettings = cache(async (): Promise<SiteSettings> => {
   try {
     const nextly = await getNextly({ config: nextlyConfig });
-    const settings = await nextly.findGlobal({
+    const settings = await nextly.findSingle({
       slug: "site-settings",
       depth: 1,
     });

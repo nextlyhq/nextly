@@ -1,7 +1,7 @@
 /**
  * Single Configuration Types
  *
- * Type definitions for Singles (global documents).
+ * Type definitions for Singles.
  * Singles are single-document entities for storing site-wide configuration
  * such as site settings, navigation menus, footers, and homepage configurations.
  *
@@ -61,7 +61,7 @@ export interface SingleLabel {
  * const admin: SingleAdminOptions = {
  *   group: 'Settings',
  *   icon: 'Settings',
- *   description: 'Global site configuration',
+ *   description: 'Site configuration',
  * };
  * ```
  */
@@ -100,7 +100,7 @@ export interface SingleAdminOptions {
    * Description text displayed below the Single title.
    * Use this to provide helpful context for editors.
    *
-   * @example 'Configure global site settings like name, logo, and SEO defaults.'
+   * @example 'Configure site settings like name, logo, and SEO defaults.'
    */
   description?: string;
 }
@@ -236,7 +236,7 @@ export interface SingleHooks {
  *   admin: {
  *     group: 'Settings',
  *     icon: 'Settings',
- *     description: 'Global site configuration',
+ *     description: 'Site configuration',
  *   },
  *   fields: [
  *     text({ name: 'siteName', required: true, label: 'Site Name' }),
@@ -305,6 +305,23 @@ export interface SingleConfig {
    * ```
    */
   label?: SingleLabel;
+
+  /**
+   * Enable the Draft / Published lifecycle for this Single.
+   *
+   * When `true`, Nextly injects a `status` system column on the data table
+   * (NOT NULL, default `'draft'`) and the admin edit page shows separate
+   * Save Draft / Publish buttons. Public callers querying with
+   * `{ status: { equals: "published" } }` will only see published values;
+   * drafts remain admin-only.
+   *
+   * Mirrors the Schema Builder's Advanced tab "Status (Draft / Published)"
+   * toggle so code-first and Builder configurations converge on the same
+   * underlying behaviour.
+   *
+   * @default false
+   */
+  status?: boolean;
 
   /**
    * Admin panel configuration options.

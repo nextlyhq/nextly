@@ -7,8 +7,6 @@ The Direct API is the recommended way to read and write Nextly data on the serve
 
 If you need to reach the same data from the browser, a mobile app, or a third-party service, use the [REST API](/docs/api-reference/rest-api) instead.
 
-> **Note:** Direct API methods are currently named `findGlobal` / `updateGlobal` / `findGlobals`. They will be renamed to `findSingle` / `updateSingle` / `findSingles` in a future release. The prose in this guide says "Single", but the method names match what is in the runtime today.
-
 ## Initialisation
 
 Import `getNextly` (or the lazy `nextly` convenience object) from the runtime package:
@@ -303,12 +301,12 @@ copy.item.id;  // new id
 
 Singles are single-document entities for site-wide settings (navigation, footer, theme, etc.). The Direct API method names still use the legacy "global" naming.
 
-### findGlobal
+### findSingle
 
 Get a single's content by slug. Returns the bare document.
 
 ```typescript
-const settings = await nextly.findGlobal({
+const settings = await nextly.findSingle({
   slug: "site-settings",
   depth: 1,
 });
@@ -328,12 +326,12 @@ console.log(settings.siteName);
 
 **Returns:** the bare single document (`T`).
 
-### updateGlobal
+### updateSingle
 
 Update a single's content by slug. Returns the bare updated document.
 
 ```typescript
-const updated = await nextly.updateGlobal({
+const updated = await nextly.updateSingle({
   slug: "site-settings",
   data: {
     siteName: "My Awesome Site",
@@ -344,22 +342,22 @@ const updated = await nextly.updateGlobal({
 
 **Returns:** `T` (the updated single document).
 
-### findGlobals
+### findSingles
 
 List the actual content for every registered single. Returns the legacy list shape `{ docs, totalDocs, limit, offset }` (this method has not yet been migrated to the canonical `{ items, meta }` envelope).
 
 ```typescript
-const result = await nextly.findGlobals();
+const result = await nextly.findSingles();
 
 result.docs.forEach(({ slug, label, data }) => {
   console.log(`${label} (${slug}):`, data);
 });
 
 // Filter by source
-const codeSingles = await nextly.findGlobals({ source: "code" });
+const codeSingles = await nextly.findSingles({ source: "code" });
 
 // Search by name or slug
-const settingsLike = await nextly.findGlobals({ search: "settings" });
+const settingsLike = await nextly.findSingles({ search: "settings" });
 ```
 
 | Argument | Type | Default | Description |
@@ -371,7 +369,7 @@ const settingsLike = await nextly.findGlobals({ search: "settings" });
 | `limit` | `number` | — | Max results. |
 | `offset` | `number` | `0` | Skip count. |
 
-**Returns:** `SingleListResult` — `{ docs: GlobalEntry[], totalDocs, limit, offset }`. Each `GlobalEntry` is `{ slug, label, data }`.
+**Returns:** `SingleListResult` — `{ docs: SingleEntry[], totalDocs, limit, offset }`. Each `SingleEntry` is `{ slug, label, data }`.
 
 ## Email
 

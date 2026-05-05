@@ -47,7 +47,7 @@ const DEFAULTS: Homepage = {
 export const getHomepage = cache(async (): Promise<Homepage> => {
   try {
     const nextly = await getNextly({ config: nextlyConfig });
-    const hp = await nextly.findGlobal({ slug: "homepage", depth: 0 });
+    const hp = await nextly.findSingle({ slug: "homepage", depth: 0 });
     if (!hp) return DEFAULTS;
     return {
       heroTitle: (hp.heroTitle as string) || DEFAULTS.heroTitle,

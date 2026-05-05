@@ -32,7 +32,7 @@ import SinglesTable from "./components/SinglesTable";
 /**
  * Singles List Page Component
  *
- * Main page for viewing and managing Singles (Globals).
+ * Main page for viewing and managing Singles.
  */
 const SinglesPage: React.FC = () => {
   return (
@@ -52,14 +52,12 @@ const SinglesPage: React.FC = () => {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Singles</h1>
             <p className="text-sm font-normal text-primary/50 mt-1">
-              Manage single documents and global configurations
+              Manage single documents
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Link href={ROUTES.SINGLES_BUILDER} className="w-full sm:w-auto">
-              <Button
-                size="md"                
-              >
+              <Button size="md">
                 <Plus className="h-4 w-4" />
                 <span>New Single</span>
               </Button>

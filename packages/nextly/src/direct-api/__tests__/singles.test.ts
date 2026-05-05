@@ -1,7 +1,7 @@
 /**
- * Direct API - Singles/Globals Operations Tests
+ * Direct API - Singles Operations Tests
  *
- * Tests: findGlobal, updateGlobal, findGlobals
+ * Tests: findSingle, updateSingle, findSingles
  */
 
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
@@ -27,7 +27,7 @@ describe("Direct API - Singles Operations", () => {
     cleanup?.();
   });
 
-  describe("findGlobal()", () => {
+  describe("findSingle()", () => {
     it("should return single document on success", async () => {
       const mockData = { id: "1", siteName: "My Site", maintenanceMode: false };
       mocks.singleEntryService.get.mockResolvedValue({
@@ -36,7 +36,7 @@ describe("Direct API - Singles Operations", () => {
         data: mockData,
       });
 
-      const result = await nextly.findGlobal({ slug: "site-settings" });
+      const result = await nextly.findSingle({ slug: "site-settings" });
 
       expect(result).toEqual(mockData);
       expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
@@ -54,7 +54,7 @@ describe("Direct API - Singles Operations", () => {
         data: { id: "1" },
       });
 
-      await nextly.findGlobal({
+      await nextly.findSingle({
         slug: "site-settings",
         depth: 2,
         locale: "en",
@@ -77,7 +77,7 @@ describe("Direct API - Singles Operations", () => {
       });
 
       await expect(
-        nextly.findGlobal({ slug: "nonexistent" })
+        nextly.findSingle({ slug: "nonexistent" })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
@@ -89,12 +89,12 @@ describe("Direct API - Singles Operations", () => {
       });
 
       await expect(
-        nextly.findGlobal({ slug: "site-settings" })
+        nextly.findSingle({ slug: "site-settings" })
       ).rejects.toThrow(NextlyError);
     });
   });
 
-  describe("updateGlobal()", () => {
+  describe("updateSingle()", () => {
     it("should return updated document on success", async () => {
       const mockData = {
         id: "1",
@@ -107,7 +107,7 @@ describe("Direct API - Singles Operations", () => {
         data: mockData,
       });
 
-      const result = await nextly.updateGlobal({
+      const result = await nextly.updateSingle({
         slug: "site-settings",
         data: { siteName: "Updated Site" },
       });
@@ -129,7 +129,7 @@ describe("Direct API - Singles Operations", () => {
         data: { id: "1" },
       });
 
-      await nextly.updateGlobal({
+      await nextly.updateSingle({
         slug: "site-settings",
         data: { siteName: "Test" },
         overrideAccess: false,
@@ -156,7 +156,7 @@ describe("Direct API - Singles Operations", () => {
       });
 
       await expect(
-        nextly.updateGlobal({
+        nextly.updateSingle({
           slug: "site-settings",
           data: {},
         })
@@ -171,7 +171,7 @@ describe("Direct API - Singles Operations", () => {
       });
 
       await expect(
-        nextly.updateGlobal({
+        nextly.updateSingle({
           slug: "nonexistent",
           data: { key: "value" },
         })
@@ -179,7 +179,7 @@ describe("Direct API - Singles Operations", () => {
     });
   });
 
-  describe("findGlobals()", () => {
+  describe("findSingles()", () => {
     const makeRegistryRecord = (slug: string) => ({
       id: `id-${slug}`,
       slug,
@@ -217,7 +217,7 @@ describe("Direct API - Singles Operations", () => {
           data: { id: "2", logo: "logo.png" },
         });
 
-      const result = await nextly.findGlobals();
+      const result = await nextly.findSingles();
 
       expect(result.docs).toHaveLength(2);
       expect(result.totalDocs).toBe(2);
@@ -245,7 +245,7 @@ describe("Direct API - Singles Operations", () => {
         data: { id: "1" },
       });
 
-      await nextly.findGlobals();
+      await nextly.findSingles();
 
       expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
         "site-settings",
@@ -264,7 +264,7 @@ describe("Direct API - Singles Operations", () => {
         data: { id: "1" },
       });
 
-      await nextly.findGlobals({ depth: 2, locale: "en" });
+      await nextly.findSingles({ depth: 2, locale: "en" });
 
       expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
         "site-settings",
@@ -278,7 +278,7 @@ describe("Direct API - Singles Operations", () => {
         total: 0,
       });
 
-      await nextly.findGlobals({ source: "code" });
+      await nextly.findSingles({ source: "code" });
 
       expect(mocks.singleRegistryService.listSingles).toHaveBeenCalledWith(
         expect.objectContaining({ source: "code" })
@@ -291,7 +291,7 @@ describe("Direct API - Singles Operations", () => {
         total: 0,
       });
 
-      await nextly.findGlobals({ search: "settings" });
+      await nextly.findSingles({ search: "settings" });
 
       expect(mocks.singleRegistryService.listSingles).toHaveBeenCalledWith(
         expect.objectContaining({ search: "settings" })
@@ -304,7 +304,7 @@ describe("Direct API - Singles Operations", () => {
         total: 10,
       });
 
-      const result = await nextly.findGlobals({ limit: 5, offset: 5 });
+      const result = await nextly.findSingles({ limit: 5, offset: 5 });
 
       expect(mocks.singleRegistryService.listSingles).toHaveBeenCalledWith(
         expect.objectContaining({ limit: 5, offset: 5 })
@@ -320,7 +320,7 @@ describe("Direct API - Singles Operations", () => {
         total: 0,
       });
 
-      await nextly.findGlobals({ migrationStatus: "pending", locked: false });
+      await nextly.findSingles({ migrationStatus: "pending", locked: false });
 
       expect(mocks.singleRegistryService.listSingles).toHaveBeenCalledWith(
         expect.objectContaining({ migrationStatus: "pending", locked: false })
@@ -333,7 +333,7 @@ describe("Direct API - Singles Operations", () => {
         total: 0,
       });
 
-      const result = await nextly.findGlobals();
+      const result = await nextly.findSingles();
 
       expect(result.docs).toEqual([]);
       expect(result.totalDocs).toBe(0);
@@ -355,7 +355,7 @@ describe("Direct API - Singles Operations", () => {
         data: { id: "1" },
       });
 
-      const result = await nextly.findGlobals();
+      const result = await nextly.findSingles();
 
       expect(result.limit).toBe(2);
     });
@@ -371,7 +371,7 @@ describe("Direct API - Singles Operations", () => {
         })
       );
 
-      await expect(nextly.findGlobals()).rejects.toThrow(NextlyError);
+      await expect(nextly.findSingles()).rejects.toThrow(NextlyError);
     });
 
     it("should throw NextlyError(NOT_FOUND) when a single entry fetch returns 404", async () => {
@@ -385,7 +385,7 @@ describe("Direct API - Singles Operations", () => {
         message: "Single not found",
       });
 
-      await expect(nextly.findGlobals()).rejects.toMatchObject({
+      await expect(nextly.findSingles()).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
     });

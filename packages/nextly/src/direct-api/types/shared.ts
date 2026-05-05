@@ -101,7 +101,7 @@ export type CollectionSlug = GeneratedTypes extends {
   : string;
 
 /**
- * Single/Global slug type.
+ * Single slug type.
  *
  * When generated types exist, this resolves to a union of valid single
  * slug literals (e.g., `'site-settings' | 'header'`). Without generated

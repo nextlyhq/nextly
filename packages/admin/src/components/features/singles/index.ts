@@ -1,7 +1,7 @@
 /**
  * Single Form Components
  *
- * Components for editing Single (Global) documents.
+ * Components for editing Single documents.
  *
  * @module components/singles
  */

@@ -22,7 +22,7 @@ import { ROUTES } from "./routes";
  *
  * - `main`: Dashboard (ungrouped, always first, NIS)
  * - `collections`: Content collection items (dynamic — DynamicCollectionNav)
- * - `singles`: Single/global items (dynamic — DynamicSingleNav)
+ * - `singles`: Single items (dynamic — DynamicSingleNav)
  * - `media`: Media Library (standalone, NIS)
  * - `users`: User management section (Users, Roles, Custom Fields)
  * - `plugins`: Plugin entries (dynamic — DynamicPluginNav)

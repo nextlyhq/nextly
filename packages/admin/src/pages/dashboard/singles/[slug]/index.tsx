@@ -1,7 +1,7 @@
 /**
  * Single Edit Page
  *
- * Page component for editing Single (Global) documents.
+ * Page component for editing Single documents.
  * Unlike collection entries, Singles don't have a list view -
  * this page renders directly as the edit form.
  *
@@ -158,7 +158,7 @@ function SingleEditPageSkeleton() {
 /**
  * Single Edit Page
  *
- * Displays a form for editing a Single (Global) document.
+ * Displays a form for editing a Single document.
  * The form fields are dynamically generated based on the Single schema.
  *
  * Unlike collection entry pages, Singles:

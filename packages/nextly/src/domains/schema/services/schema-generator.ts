@@ -217,7 +217,7 @@ const COLUMN_TYPES: Record<
  *
  * The generator creates TypeScript code that can be written to files and
  * used with Drizzle ORM for database operations. Supports both Collections
- * (multi-document entities) and Singles (single-document global configurations).
+ * (multi-document entities) and Singles (single-document configurations).
  *
  * @example
  * ```typescript
@@ -435,7 +435,7 @@ export class SchemaGenerator {
       "// Collections",
       ...collectionExports,
       "",
-      "// Singles (Globals)",
+      "// Singles",
       ...singleExports,
       "",
     ].join("\n");

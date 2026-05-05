@@ -128,14 +128,8 @@ export interface SingleValidationResult {
  * Reserved Single slugs that cannot be used.
  *
  * Extends the base RESERVED_SLUGS with Single-specific reserved names.
- * Note: 'globals' is reserved as it's the API endpoint namespace.
  */
-export const RESERVED_SINGLE_SLUGS = [
-  ...RESERVED_SLUGS,
-  // API namespace for Singles
-  "globals",
-  "global",
-] as const;
+export const RESERVED_SINGLE_SLUGS = [...RESERVED_SLUGS] as const;
 
 const RESERVED_SINGLE_SLUGS_SET: Set<string> = new Set<string>(
   RESERVED_SINGLE_SLUGS

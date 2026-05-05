@@ -80,7 +80,7 @@ export interface SingleFormHeaderProps {
  * <SingleFormHeader
  *   label="Site Settings"
  *   slug="site-settings"
- *   description="Configure global site settings"
+ *   description="Configure site settings"
  *   updatedAt="2024-01-15T10:30:00Z"
  *   actions={<SingleFormActions />}
  * />
@@ -89,7 +89,7 @@ export interface SingleFormHeaderProps {
 export function SingleFormHeader({
   label,
   description,
-  updatedAt,  
+  updatedAt,
   actions,
 }: SingleFormHeaderProps) {
   const lastUpdatedText = updatedAt ? formatTimeAgo(new Date(updatedAt)) : null;
@@ -98,9 +98,13 @@ export function SingleFormHeader({
     <div className="mb-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{label}</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+            {label}
+          </h1>
           {description && (
-            <p className="text-sm font-normal text-primary/50 mt-1">{description}</p>
+            <p className="text-sm font-normal text-primary/50 mt-1">
+              {description}
+            </p>
           )}
         </div>
         {/* Right side: actions */}

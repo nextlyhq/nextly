@@ -1,7 +1,7 @@
 /**
  * Single Services
  *
- * This module provides services for Single (Global) operations:
+ * This module provides services for Single operations:
  *
  * - SingleRegistryService: Unified registry for code-first and UI Singles
  *

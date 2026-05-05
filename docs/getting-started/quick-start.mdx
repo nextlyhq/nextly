@@ -221,7 +221,7 @@ export default async function BlogLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const settings = await nextly.findGlobal({
+  const settings = await nextly.findSingle({
     slug: "blog-settings",
   });
 
@@ -236,8 +236,6 @@ export default async function BlogLayout({
   );
 }
 ```
-
-> **Note:** The Direct API single methods are currently named `findGlobal` / `updateGlobal` / `findGlobals`. They will be renamed to `findSingle` / `updateSingle` / `findSingles` in a future release. Update your imports when that change ships.
 
 ## What You Built
 

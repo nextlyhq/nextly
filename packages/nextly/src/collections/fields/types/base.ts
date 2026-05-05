@@ -214,6 +214,53 @@ export interface FieldCondition {
 }
 
 // ============================================================
+// Validation
+// ============================================================
+
+/**
+ * Shared validation knobs available on field types that support them.
+ *
+ * Mirrors the nested shape the Schema Builder writes
+ * (`field.validation.pattern` etc.) so code-first config and the Builder UI
+ * converge on one source of truth. The renderer reads either the flat or
+ * nested form, but new code-first usage should prefer the nested
+ * `validation` object since it groups related knobs together.
+ *
+ * @example
+ * ```typescript
+ * text({
+ *   name: "slug",
+ *   required: true,
+ *   validation: { pattern: "^[a-z-]+$", message: "Slug must be lowercase" },
+ * })
+ * ```
+ */
+export interface FieldValidation {
+  /** Mark the field as required (mirrors the top-level `required` flag). */
+  required?: boolean;
+  /**
+   * Regex pattern (string form) applied to string values. For optional
+   * fields, empty values bypass the pattern; for required fields the
+   * pattern always runs.
+   */
+  pattern?: string;
+  /** Custom error message displayed when validation fails. */
+  message?: string;
+  /** Minimum string length (for text-like fields). */
+  minLength?: number;
+  /** Maximum string length (for text-like fields). */
+  maxLength?: number;
+  /** Minimum numeric value (for number fields). */
+  min?: number;
+  /** Maximum numeric value (for number fields). */
+  max?: number;
+  /** Minimum number of items in a hasMany / repeater field. */
+  minRows?: number;
+  /** Maximum number of items in a hasMany / repeater field. */
+  maxRows?: number;
+}
+
+// ============================================================
 // Admin UI Options
 // ============================================================
 

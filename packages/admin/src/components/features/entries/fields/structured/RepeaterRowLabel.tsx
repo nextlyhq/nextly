@@ -55,28 +55,36 @@ const TITLE_FIELD_NAMES = [
 // ============================================================
 
 /**
- * RepeaterRowLabel renders the label for each row in an array field.
+ * RepeaterRowLabel renders the label for each row in a Repeater field.
  *
  * Label Resolution Priority:
- * 1. Custom RowLabel component from field.admin.components.RowLabel
- * 2. Value from a title-like field in the row data (title, name, label, etc.)
- * 3. Fallback to "{singular} {index + 1}" pattern
+ * 1. Custom RowLabel component from `field.admin.components.RowLabel`
+ * 2. Value from the field explicitly chosen via `field.rowLabelField` (the
+ *    Builder's "Collapsed row title" dropdown)
+ * 3. Value from a conventional title-like field in the row data
+ *    (title, name, label, heading, subject)
+ * 4. Value from any sub-field marked `admin.useAsTitle: true`
+ * 5. Fallback to "{labels.singular} {index + 1}"
  *
- * @example Default behavior
- * ```tsx
- * <RepeaterRowLabel index={0} field={faqField} data={{ question: "What is...?" }} />
- * // Renders: "Question 1" (using labels.singular)
- * ```
- *
- * @example With title field in data
+ * @example Default behavior with a `title` sub-field
  * ```tsx
  * <RepeaterRowLabel index={0} field={slidesField} data={{ title: "Hero Slide" }} />
  * // Renders: "Hero Slide"
  * ```
  *
- * @example With custom RowLabel component
+ * @example Explicit rowLabelField
+ * ```ts
+ * repeater({
+ *   name: "faqs",
+ *   labels: { singular: "FAQ", plural: "FAQs" },
+ *   rowLabelField: "question",
+ *   fields: [text({ name: "question" }), textarea({ name: "answer" })],
+ * })
+ * // Collapsed rows show each FAQ's question text instead of "FAQ 1, FAQ 2".
+ * ```
+ *
+ * @example Custom RowLabel component (highest priority)
  * ```tsx
- * // In field config:
  * admin: {
  *   components: {
  *     RowLabel: ({ data, index }) => <span>{data.question || `Q${index + 1}`}</span>
@@ -89,10 +97,9 @@ export function RepeaterRowLabel({
   field,
   data,
 }: RepeaterRowLabelComponentProps) {
-  // 1. Check for custom RowLabel component
+  // 1. Custom RowLabel component overrides everything else.
   const CustomRowLabel = field.admin?.components?.RowLabel;
   if (CustomRowLabel) {
-    // Build props matching RepeaterRowLabelProps interface
     const labelProps: RepeaterRowLabelProps = {
       data,
       index,
@@ -101,7 +108,27 @@ export function RepeaterRowLabel({
     return <CustomRowLabel {...labelProps} />;
   }
 
-  // 2. Try to extract a title from common field names
+  // 2. Explicit rowLabelField from the Builder's "Collapsed row title"
+  //    dropdown. Read the named sub-field's value from the row; if it's a
+  //    non-empty string-able value, use it.
+  const explicitField = (field as { rowLabelField?: string }).rowLabelField;
+  if (explicitField) {
+    const value = data[explicitField];
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== "" &&
+      (typeof value === "string" || typeof value === "number")
+    ) {
+      return (
+        <span className="font-medium text-foreground truncate">
+          {String(value)}
+        </span>
+      );
+    }
+  }
+
+  // 3. Auto-detect from common field names.
   for (const fieldName of TITLE_FIELD_NAMES) {
     const value = data[fieldName];
     if (value !== undefined && value !== null && value !== "") {
@@ -114,8 +141,7 @@ export function RepeaterRowLabel({
     }
   }
 
-  // 3. Also check if any sub-field is marked as useAsTitle
-  // (useAsTitle pattern for array row labels)
+  // 4. Sub-field marked admin.useAsTitle: true.
   const titleField = field.fields?.find(
     f =>
       "name" in f &&
@@ -133,7 +159,7 @@ export function RepeaterRowLabel({
     }
   }
 
-  // 4. Fallback to generic label with index
+  // 5. Generic fallback.
   const singularLabel = field.labels?.singular || "Item";
   return (
     <span className="font-medium text-muted-foreground">

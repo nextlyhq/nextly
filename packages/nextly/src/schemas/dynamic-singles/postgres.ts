@@ -3,7 +3,7 @@
  *
  * Defines the `dynamic_singles` table schema for PostgreSQL databases
  * using Drizzle ORM. This schema stores metadata for both UI-created and
- * code-first Singles (Globals) with unified model fields for source tracking,
+ * code-first Singles with unified model fields for source tracking,
  * migration status, and versioning.
  *
  * Singles are single-document entities for storing site-wide configuration

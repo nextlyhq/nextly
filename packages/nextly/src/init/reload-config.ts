@@ -89,6 +89,7 @@ type CollectionDef = {
   timestamps?: boolean;
   admin?: unknown;
   dbName?: string;
+  status?: boolean;
 };
 
 type SingleDef = {
@@ -98,6 +99,7 @@ type SingleDef = {
   description?: string;
   admin?: unknown;
   dbName?: string;
+  status?: boolean;
 };
 
 type ComponentDef = {
@@ -253,7 +255,7 @@ export async function reloadNextlyConfig(opts?: {
       slug: c.slug,
       tableName: c.tableName ?? resolveCollectionTableName(c.slug, c.dbName),
       fields: (c.fields ?? []) as MinimalField[],
-      status: (c as { status?: boolean }).status === true,
+      status: c.status === true,
     });
   }
 
@@ -273,7 +275,7 @@ export async function reloadNextlyConfig(opts?: {
       slug: s.slug,
       tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
       fields: (s.fields ?? []) as MinimalField[],
-      status: (s as { status?: boolean }).status === true,
+      status: s.status === true,
     });
   }
 
