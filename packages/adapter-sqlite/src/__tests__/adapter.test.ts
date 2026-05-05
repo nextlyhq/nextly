@@ -734,4 +734,163 @@ describe("SqliteAdapter", () => {
       );
     });
   });
+
+  // ============================================================
+  // SQLite Value Sanitization
+  // ============================================================
+
+  describe("SQLite value sanitization", () => {
+    it("tx.insert converts boolean true to 1 before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.all.mockReturnValue([{ id: "1", is_active: 1 }]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", is_active: true });
+      });
+
+      expect(mockStatement.all).toHaveBeenCalledWith("1", 1);
+    });
+
+    it("tx.insert converts boolean false to 0 before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.all.mockReturnValue([{ id: "1", is_active: 0 }]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", is_active: false });
+      });
+
+      expect(mockStatement.all).toHaveBeenCalledWith("1", 0);
+    });
+
+    it("tx.insert converts Date to ISO string before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      const date = new Date("2026-05-05T06:00:00.000Z");
+      mockStatement.all.mockReturnValue([
+        { id: "1", created_at: date.toISOString() },
+      ]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", created_at: date });
+      });
+
+      expect(mockStatement.all).toHaveBeenCalledWith("1", date.toISOString());
+    });
+
+    it("tx.insert converts undefined to null before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.all.mockReturnValue([{ id: "1", title: null }]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", title: undefined });
+      });
+
+      expect(mockStatement.all).toHaveBeenCalledWith("1", null);
+    });
+
+    it("tx.insert converts plain objects to JSON strings before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.all.mockReturnValue([{ id: "1", meta: '{"key":"val"}' }]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", meta: { key: "val" } });
+      });
+
+      expect(mockStatement.all).toHaveBeenCalledWith("1", '{"key":"val"}');
+    });
+
+    it("tx.insert converts arrays to JSON strings before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.all.mockReturnValue([{ id: "1", tags: '["a","b"]' }]);
+
+      await adapter.transaction(async tx => {
+        await tx.insert("entries", { id: "1", tags: ["a", "b"] });
+      });
+
+      expect(mockStatement.all).toHaveBeenCalledWith("1", '["a","b"]');
+    });
+
+    it("tx.execute converts boolean params to 0/1 before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.run.mockReturnValue({ changes: 1, lastInsertRowid: 1 });
+
+      await adapter.transaction(async tx => {
+        await tx.execute("UPDATE entries SET is_active = $1 WHERE id = $2", [
+          true,
+          "abc",
+        ]);
+      });
+
+      expect(mockStatement.run).toHaveBeenCalledWith(1, "abc");
+    });
+
+    it("tx.execute converts Date params to ISO strings before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      const date = new Date("2026-05-05T06:00:00.000Z");
+      mockStatement.run.mockReturnValue({ changes: 1, lastInsertRowid: 1 });
+
+      await adapter.transaction(async tx => {
+        await tx.execute("UPDATE entries SET updated_at = $1 WHERE id = $2", [
+          date,
+          "abc",
+        ]);
+      });
+
+      expect(mockStatement.run).toHaveBeenCalledWith(date.toISOString(), "abc");
+    });
+
+    it("executeQuery converts boolean params to 0/1 before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.run.mockReturnValue({ changes: 1, lastInsertRowid: 1 });
+
+      await adapter.executeQuery(
+        "UPDATE entries SET is_active = $1 WHERE id = $2",
+        [true, "abc"]
+      );
+
+      expect(mockStatement.run).toHaveBeenCalledWith(1, "abc");
+    });
+
+    it("executeQuery converts Date params to ISO strings before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      const date = new Date("2026-05-05T06:00:00.000Z");
+      mockStatement.run.mockReturnValue({ changes: 1, lastInsertRowid: 1 });
+
+      await adapter.executeQuery(
+        "UPDATE entries SET updated_at = $1 WHERE id = $2",
+        [date, "abc"]
+      );
+
+      expect(mockStatement.run).toHaveBeenCalledWith(date.toISOString(), "abc");
+    });
+
+    it("insertMany converts boolean values to 0/1 before binding", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      mockStatement.all.mockReturnValue([
+        { id: "1", is_active: 1 },
+        { id: "2", is_active: 0 },
+      ]);
+
+      await adapter.insertMany("entries", [
+        { id: "1", is_active: true },
+        { id: "2", is_active: false },
+      ]);
+
+      const calledArgs = mockStatement.all.mock.calls[0];
+      expect(calledArgs).toContain(1);
+      expect(calledArgs).toContain(0);
+      expect(calledArgs).not.toContain(true);
+      expect(calledArgs).not.toContain(false);
+    });
+  });
 });
