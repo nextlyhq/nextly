@@ -1,114 +1,134 @@
 ---
 title: Direct API
-description: Server-side API for querying and mutating data directly from Next.js server components, route handlers, and server actions.
+description: Server-side API for querying and mutating data directly from Next.js Server Components, server actions, and route handlers. No HTTP, no serialisation overhead.
 ---
 
-The Direct API is the primary way to interact with Nextly data on the server. It calls directly into the service layer -- no HTTP requests, no serialization overhead. Use it in Server Components, Server Actions, API Route Handlers, and anywhere your code runs in a Node.js context.
+The Direct API is the recommended way to read and write Nextly data on the server. It calls into the runtime's service layer in-process, so there is no HTTP round-trip and no JSON serialisation. Use it from Server Components, server actions, route handlers, hooks — anywhere your code already runs in a trusted Node.js context.
 
-## Getting Started
+If you need to reach the same data from the browser, a mobile app, or a third-party service, use the [REST API](/docs/api-reference/rest-api) instead.
 
-Import `getNextly` from `@nextlyhq/nextly` and call it to get the singleton instance:
+> **Note:** Direct API methods are currently named `findGlobal` / `updateGlobal` / `findGlobals`. They will be renamed to `findSingle` / `updateSingle` / `findSingles` in a future release. The prose in this guide says "Single", but the method names match what is in the runtime today.
+
+## Initialisation
+
+Import `getNextly` (or the lazy `nextly` convenience object) from the runtime package:
 
 ```typescript title="app/posts/page.tsx"
-import { getNextly } from '@nextlyhq/nextly';
+import { getNextly } from "nextly";
 
 const nextly = getNextly();
 
-const posts = await nextly.find({
-  collection: 'posts',
-  where: { status: { equals: 'published' } },
-  sort: '-createdAt',
+const result = await nextly.find({
+  collection: "posts",
+  where: { status: { equals: "published" } },
+  sort: "-publishedAt",
   limit: 10,
 });
+
+console.log(result.items);      // Post[]
+console.log(result.meta.total); // number
 ```
 
-You can also use the module-level convenience export, which lazily resolves the singleton on each call:
-
-```typescript title="app/posts/page.tsx"
-import { nextly } from '@nextlyhq/nextly';
-
-const posts = await nextly.find({
-  collection: 'posts',
-  limit: 10,
-});
-```
-
-Both approaches are equivalent. Use whichever reads better in your code.
-
-## Access Control
-
-By default, the Direct API **bypasses all access control** (`overrideAccess: true`). This is the expected behavior for trusted server-side code.
-
-To enforce access control, set `overrideAccess: false` and provide a `user` context:
+The module-level `nextly` export resolves the singleton lazily on each call, so it is safe to import at module scope:
 
 ```typescript
-const posts = await nextly.find({
-  collection: 'posts',
+import { nextly } from "nextly";
+
+const posts = await nextly.find({ collection: "posts", limit: 10 });
+```
+
+`getNextly()` and `nextly` are equivalent — pick whichever reads better. Both throw if the runtime services have not yet been initialised (this happens automatically when your Next.js route handler boots through `createDynamicHandlers`).
+
+## TypeScript support
+
+Run `nextly generate:types` after defining your collections to get full type inference on every Direct API call:
+
+```typescript
+const posts = await nextly.find({ collection: "posts" });
+// posts.items is typed as Post[] when generated types are present.
+
+const invalid = await nextly.find({ collection: "nonexistent" });
+// Type error: collection slug not in the generated union.
+```
+
+The generator writes a `payload-types.ts` (or whatever path you set in `typescript.outputFile`) that augments the runtime's `GeneratedTypes` interface via `declare module "nextly"`. See [Configuration → typescript](/docs/configuration/nextly-config) for the config surface.
+
+## Access control
+
+By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access control, field-level rules, and row-level filters to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` and supply a `user`:
+
+```typescript
+const visiblePosts = await nextly.find({
+  collection: "posts",
   overrideAccess: false,
-  user: { id: 'user-123', role: 'editor' },
+  user: { id: "user-123", role: "editor" },
 });
 ```
 
-## Collection Operations
+`overrideAccess`, `user`, and `context` flow through every hook the operation triggers. Anything you put in `context` is accessible inside hooks via `req.context`.
+
+## Collections
+
+These methods hang off the `nextly` root and operate on collection entries. The shapes shown below match the canonical Phase 4 envelopes (`ListResult<T>`, `MutationResult<T>`, etc.) — verify against [`packages/nextly/src/direct-api/types/shared.ts`](https://github.com/nextlyhq/nextly/blob/dev/packages/nextly/src/direct-api/types/shared.ts) if you need the exact TypeScript definitions.
 
 ### find
 
-Find multiple documents in a collection. Returns a paginated response.
+Find multiple documents in a collection. Returns the canonical list envelope `{ items, meta }`.
 
 ```typescript
 const result = await nextly.find({
-  collection: 'posts',
-  where: { status: { equals: 'published' } },
-  sort: '-publishedAt',
+  collection: "posts",
+  where: { status: { equals: "published" } },
+  sort: "-publishedAt",
   limit: 10,
   page: 1,
   depth: 2,
 });
 
-// result.docs          - Post[]
-// result.totalDocs     - total matching documents
-// result.totalPages    - total pages
-// result.hasNextPage   - boolean
-// result.hasPrevPage   - boolean
-// result.page          - current page number
+result.items;            // Post[]
+result.meta.total;       // total matching rows
+result.meta.page;        // current page (1-indexed)
+result.meta.limit;       // page size
+result.meta.totalPages;  // total pages
+result.meta.hasNext;     // boolean
+result.meta.hasPrev;     // boolean
 ```
 
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `collection` | `string` | *required* | Collection slug |
-| `where` | `WhereFilter` | `undefined` | Filter conditions (see [Querying](#querying) below) |
-| `limit` | `number` | `10` | Maximum documents per page |
-| `page` | `number` | `1` | Page number (1-indexed) |
-| `sort` | `string` | `undefined` | Sort field. Prefix with `-` for descending |
-| `depth` | `number` | `0` | Relationship population depth |
-| `select` | `Record<string, boolean>` | `undefined` | Fields to include/exclude |
-| `populate` | `Record<string, boolean \| PopulateOptions>` | `undefined` | Per-field population control |
-| `pagination` | `boolean` | `true` | Set to `false` to return all documents without pagination metadata |
-| `richTextFormat` | `'json' \| 'html' \| 'both'` | `'json'` | Output format for rich text fields |
-| `overrideAccess` | `boolean` | `true` | Bypass access control checks |
-
-**Return type:** `PaginatedResponse<T>`
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `collection` | `string` | required | Collection slug. |
+| `where` | `WhereFilter` | — | Filter conditions (see [Querying](#querying)). |
+| `limit` | `number` | `10` | Page size. |
+| `page` | `number` | `1` | Page number, 1-indexed. |
+| `sort` | `string` | — | `field` for ascending, `-field` for descending. |
+| `depth` | `number` | `0` | Relationship population depth. |
+| `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
+| `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
+| `pagination` | `boolean` | `true` | Set `false` to return all matching rows without paging. |
+| `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
+| `overrideAccess` | `boolean` | `true` | Bypass access control. |
+| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `context` | `Record<string, unknown>` | — | Custom data forwarded to hooks via `req.context`. |
+| `disableErrors` | `boolean` | `false` | Return an empty result instead of throwing. |
 
 ### findByID
 
-Find a single document by ID.
+Find a single document by ID. Returns the bare document, or throws `NextlyError` (`NOT_FOUND`) when no match is found.
 
 ```typescript
 const post = await nextly.findByID({
-  collection: 'posts',
-  id: 'abc-123',
+  collection: "posts",
+  id: "abc-123",
   depth: 2,
 });
 ```
 
-Set `disableErrors: true` to return `null` instead of throwing when the document is not found:
+Pass `disableErrors: true` to get `null` instead of an exception:
 
 ```typescript
 const post = await nextly.findByID({
-  collection: 'posts',
-  id: 'maybe-exists',
+  collection: "posts",
+  id: "maybe-exists",
   disableErrors: true,
 });
 
@@ -117,203 +137,216 @@ if (post) {
 }
 ```
 
-**Parameters:**
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `collection` | `string` | required | Collection slug. |
+| `id` | `string` | required | Document ID. |
+| `depth` | `number` | `0` | Relationship population depth. |
+| `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
+| `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
+| `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
+| `disableErrors` | `boolean` | `false` | Return `null` instead of throwing. |
+| `overrideAccess` | `boolean` | `true` | Bypass access control. |
+| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `collection` | `string` | *required* | Collection slug |
-| `id` | `string` | *required* | Document ID |
-| `depth` | `number` | `0` | Relationship population depth |
-| `select` | `Record<string, boolean>` | `undefined` | Fields to include/exclude |
-| `disableErrors` | `boolean` | `false` | Return `null` instead of throwing `NotFoundError` |
-
-**Return type:** `T | null`
+**Returns:** `T | null`.
 
 ### create
 
-Create a new document.
+Create a new document. Returns the canonical mutation envelope `{ message, item }`.
 
 ```typescript
-const post = await nextly.create({
-  collection: 'posts',
+const created = await nextly.create({
+  collection: "posts",
   data: {
-    title: 'Hello World',
-    content: 'My first post',
-    status: 'draft',
+    title: "Hello world",
+    content: "My first post",
+    status: "draft",
   },
 });
 
-console.log('Created:', post.id);
+created.message;  // e.g. "Posts created."
+created.item;     // the created Post
+created.item.id;
 ```
 
-**Parameters:**
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `collection` | `string` | required | Collection slug. |
+| `data` | `Record<string, unknown>` | required | Document data. |
+| `draft` | `boolean` | `false` | Save as draft. |
+| `disableVerificationEmail` | `boolean` | `false` | Skip the verification email when creating users. |
+| `overrideAccess` | `boolean` | `true` | Bypass access control. |
+| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `context` | `Record<string, unknown>` | — | Forwarded to hooks. |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `collection` | `string` | *required* | Collection slug |
-| `data` | `Record<string, unknown>` | *required* | Document data |
-| `draft` | `boolean` | `false` | Create as draft |
-| `disableVerificationEmail` | `boolean` | `false` | Skip verification email for auth collections |
-
-**Return type:** `T` (the created document)
-
-**Throws:** `ValidationError` if validation fails.
+**Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`VALIDATION_ERROR`) when the payload fails validation; the thrown error carries field-level details on `error.publicData.errors`.
 
 ### update
 
-Update an existing document by ID or by where clause.
+Update by ID, or update the first match of a `where` clause. Either `id` or `where` is required.
 
 ```typescript
-// Update by ID
+// By ID
 const updated = await nextly.update({
-  collection: 'posts',
-  id: 'abc-123',
-  data: { status: 'published', publishedAt: new Date() },
+  collection: "posts",
+  id: "abc-123",
+  data: { status: "published", publishedAt: new Date() },
 });
 
-// Bulk update by where clause
-const updated = await nextly.update({
-  collection: 'posts',
-  where: { status: { equals: 'draft' } },
-  data: { status: 'archived' },
+updated.item;     // the updated Post
+updated.message;  // "Posts updated."
+
+// By where (single match path — use bulk endpoints for true bulk semantics)
+const archived = await nextly.update({
+  collection: "posts",
+  where: { status: { equals: "draft" } },
+  data: { status: "archived" },
 });
 ```
 
-**Parameters:**
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `collection` | `string` | required | Collection slug. |
+| `id` | `string` | — | Document ID. Either `id` or `where` is required. |
+| `where` | `WhereFilter` | — | Where clause for the by-query path. |
+| `data` | `Record<string, unknown>` | required | Update payload. |
+| `draft` | `boolean` | `false` | Autosave as draft. |
+| `overrideAccess` | `boolean` | `true` | Bypass access control. |
+| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `collection` | `string` | *required* | Collection slug |
-| `id` | `string` | `undefined` | Document ID (either `id` or `where` required) |
-| `where` | `WhereFilter` | `undefined` | Where clause for bulk update |
-| `data` | `Record<string, unknown>` | *required* | Update data |
-
-**Return type:** `T` (the updated document)
-
-**Throws:** `NotFoundError` if no matching documents are found.
+**Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
 
 ### delete
 
-Delete documents by ID or by where clause.
+Delete by ID or by `where`. The two paths return different shapes because a multi-row delete cannot collapse into a single mutation envelope:
 
 ```typescript
-// Delete by ID
-const result = await nextly.delete({
-  collection: 'posts',
-  id: 'abc-123',
+// By ID — returns MutationResult<{ id }>
+const deleted = await nextly.delete({
+  collection: "posts",
+  id: "abc-123",
 });
+deleted.message; // "Posts deleted."
+deleted.item.id; // "abc-123"
 
-// Bulk delete by where clause
-const result = await nextly.delete({
-  collection: 'posts',
-  where: { status: { equals: 'archived' } },
+// By where — returns DeleteResult ({ deleted: boolean, ids: string[] })
+const archived = await nextly.delete({
+  collection: "posts",
+  where: { status: { equals: "archived" } },
 });
-
-console.log('Deleted IDs:', result.ids);
+console.log("Deleted IDs:", archived.ids);
 ```
 
-**Parameters:**
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `collection` | `string` | required | Collection slug. |
+| `id` | `string` | — | Document ID. Either `id` or `where` is required. |
+| `where` | `WhereFilter` | — | Where clause for the bulk-by-query path. |
+| `overrideAccess` | `boolean` | `true` | Bypass access control. |
+| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `collection` | `string` | *required* | Collection slug |
-| `id` | `string` | `undefined` | Document ID (either `id` or `where` required) |
-| `where` | `WhereFilter` | `undefined` | Where clause for bulk delete |
-
-**Return type:** `DeleteResult` (`{ deleted: boolean, ids: string[] }`)
+**Returns:** `MutationResult<{ id: string }> | DeleteResult`.
 
 ### count
 
-Count documents matching a query.
+Count documents matching a query. Returns `{ total }`.
 
 ```typescript
-const { totalDocs } = await nextly.count({
-  collection: 'posts',
-  where: { status: { equals: 'published' } },
+const { total } = await nextly.count({
+  collection: "posts",
+  where: { status: { equals: "published" } },
 });
 
-console.log('Published posts:', totalDocs);
+console.log("Published posts:", total);
 ```
 
-**Return type:** `CountResult` (`{ totalDocs: number }`)
+**Returns:** `CountResult` (`{ total: number }`).
 
 ### bulkDelete
 
-Delete multiple documents by an array of IDs. Supports partial success -- some operations may fail while others succeed.
+Delete many documents by IDs with first-class partial-success semantics. Use this when you need the per-item failure detail that `delete({ where })` cannot give you.
 
 ```typescript
 const result = await nextly.bulkDelete({
-  collection: 'posts',
-  ids: ['post-1', 'post-2', 'post-3'],
+  collection: "posts",
+  ids: ["post-1", "post-2", "post-3"],
 });
 
-console.log('Deleted:', result.success);     // string[]
-console.log('Failed:', result.failed);       // { id, error }[]
+result.successes;    // [{ id: "post-1" }, { id: "post-2" }]
+result.failures;     // [{ id: "post-3", code: "NOT_FOUND", message: "..." }]
+result.total;        // 3
+result.successCount; // 2
+result.failedCount;  // 1
 ```
 
-**Return type:** `BulkOperationResult`
+**Returns:** `BulkOperationResult<T>` — `{ successes, failures, total, successCount, failedCount }`. The HTTP request always returns 200 unless the input itself is malformed; per-item errors live in the body's `failures` array.
 
 ### duplicate
 
-Duplicate an existing document with optional field overrides.
+Duplicate a document. Optionally pass field overrides — overridden fields replace the copied values.
 
 ```typescript
 const copy = await nextly.duplicate({
-  collection: 'posts',
-  id: 'abc-123',
-  overrides: { title: 'Copy of Original Post' },
+  collection: "posts",
+  id: "abc-123",
+  overrides: { title: "Copy of Original Post" },
 });
+
+copy.message;  // "Posts duplicated."
+copy.item.id;  // new id
 ```
 
-**Return type:** `T` (the duplicated document)
+**Returns:** `MutationResult<T>` (`{ message, item }`).
 
-## Singles (formerly Globals) Operations
+## Singles
 
-Singles are single-document entities for site-wide settings like navigation, footer content, or site configuration.
+Singles are single-document entities for site-wide settings (navigation, footer, theme, etc.). The Direct API method names still use the legacy "global" naming.
 
 ### findGlobal
 
-Retrieve a Single document.
+Get a single's content by slug. Returns the bare document.
 
 ```typescript
 const settings = await nextly.findGlobal({
-  slug: 'site-settings',
+  slug: "site-settings",
   depth: 1,
 });
 
-console.log('Site name:', settings.siteName);
+console.log(settings.siteName);
 ```
 
-**Parameters:**
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `slug` | `string` | required | Single slug. |
+| `depth` | `number` | `0` | Relationship population depth. |
+| `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
+| `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
+| `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Rich text output format. |
+| `overrideAccess` | `boolean` | `true` | Bypass access control. |
+| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `slug` | `string` | *required* | Single/global slug |
-| `depth` | `number` | `0` | Relationship population depth |
-| `select` | `Record<string, boolean>` | `undefined` | Fields to include/exclude |
-| `richTextFormat` | `'json' \| 'html' \| 'both'` | `'json'` | Rich text output format |
-
-**Return type:** `T` (the Single document)
+**Returns:** the bare single document (`T`).
 
 ### updateGlobal
 
-Update a Single document.
+Update a single's content by slug. Returns the bare updated document.
 
 ```typescript
 const updated = await nextly.updateGlobal({
-  slug: 'site-settings',
+  slug: "site-settings",
   data: {
-    siteName: 'My Awesome Site',
+    siteName: "My Awesome Site",
     maintenanceMode: false,
   },
 });
 ```
 
-**Return type:** `T` (the updated Single document)
+**Returns:** `T` (the updated single document).
 
 ### findGlobals
 
-Fetch content for all registered Singles.
+List the actual content for every registered single. Returns the legacy list shape `{ docs, totalDocs, limit, offset }` (this method has not yet been migrated to the canonical `{ items, meta }` envelope).
 
 ```typescript
 const result = await nextly.findGlobals();
@@ -323,181 +356,373 @@ result.docs.forEach(({ slug, label, data }) => {
 });
 
 // Filter by source
-const codeSingles = await nextly.findGlobals({ source: 'code' });
+const codeSingles = await nextly.findGlobals({ source: "code" });
+
+// Search by name or slug
+const settingsLike = await nextly.findGlobals({ search: "settings" });
 ```
 
-**Return type:** `SingleListResult` (`{ docs: GlobalEntry[], totalDocs, limit, offset }`)
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `source` | `"code" \| "ui" \| "built-in"` | — | Filter by definition source. |
+| `migrationStatus` | `"synced" \| "pending" \| "generated" \| "applied" \| "failed"` | — | Filter by current schema state. |
+| `locked` | `boolean` | — | Return only locked or only unlocked singles. |
+| `search` | `string` | — | Substring match on slug or label. |
+| `limit` | `number` | — | Max results. |
+| `offset` | `number` | `0` | Skip count. |
+
+**Returns:** `SingleListResult` — `{ docs: GlobalEntry[], totalDocs, limit, offset }`. Each `GlobalEntry` is `{ slug, label, data }`.
+
+## Email
+
+The `nextly.email.*` namespace sends transactional email through whichever provider is configured (database-default first, code-config fallback second).
+
+### email.send
+
+Send a raw HTML email.
+
+```typescript
+const result = await nextly.email.send({
+  to: "user@example.com",
+  subject: "Hello",
+  html: "<p>Welcome to Nextly</p>",
+  text: "Welcome to Nextly",
+});
+
+result.success;    // boolean
+result.messageId;  // provider-assigned ID (when successful)
+result.error;      // error string (when failed)
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `to` | `string \| string[]` | Recipient(s). |
+| `subject` | `string` | Subject line. |
+| `html` | `string` | HTML body. |
+| `text` | `string` | Plain-text fallback. |
+| `from` | `string` | Override the sender. |
+| `providerId` | `string` | Use a specific provider instead of the default. |
+| `attachments` | `EmailAttachmentInput[]` | Media-library attachments. |
+
+**Returns:** `SendEmailResult` — `{ success, messageId?, error? }`.
+
+### email.sendWithTemplate
+
+Send an email rendered from a database template.
+
+```typescript
+const result = await nextly.email.sendWithTemplate({
+  to: "user@example.com",
+  template: "welcome-email",
+  variables: { name: "Alice", productName: "Nextly" },
+});
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `to` | `string \| string[]` | Recipient(s). |
+| `template` | `string` | Template slug. |
+| `variables` | `Record<string, string>` | Substituted into the template. |
+| `from` | `string` | Override the sender. |
+| `providerId` | `string` | Use a specific provider. |
+| `attachments` | `EmailAttachmentInput[]` | Merged with the template's defaults at send time. |
+
+**Returns:** `SendEmailResult` — `{ success, messageId?, error? }`.
+
+## Auth
+
+The Direct API exposes auth operations as methods on the root `nextly` object. They speak directly to the auth service and are useful in server actions and admin scripts.
+
+### login
+
+Verify credentials and issue a signed JWT. The token expiry is 30 days. The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
+
+```typescript
+const result = await nextly.login({
+  email: "user@example.com",
+  password: "secure-password",
+});
+
+result.user;   // { id, email, name, image, ... }
+result.token;  // string (JWT)
+result.exp;    // unix timestamp
+```
+
+**Returns:** `LoginResult` — `{ user, token, exp }`. Throws `NextlyError` (`AUTH_INVALID_CREDENTIALS`) on bad credentials.
+
+### logout
+
+No-op for the Direct API — there is no session state to clear at this layer. Clear your auth cookies in the route handler that wraps the call.
+
+```typescript
+await nextly.logout();
+```
+
+### register
+
+Register a new user with email + password.
+
+```typescript
+const result = await nextly.register({
+  email: "newuser@example.com",
+  password: "secure-password",
+  name: "New User",
+});
+
+result.user; // { id, email, name }
+```
+
+**Returns:** `{ user }`. Throws `NextlyError` (`VALIDATION_ERROR`, `CONFLICT`) on validation failure or duplicate email.
+
+### me / updateMe
+
+Both require an explicit `user.id` because the Direct API has no implicit session.
+
+```typescript
+const profile = await nextly.me({ user: { id: "user-123" } });
+profile.user; // current user record (or null)
+
+const updated = await nextly.updateMe({
+  user: { id: "user-123" },
+  data: { name: "New Display Name" },
+});
+```
+
+**Returns:** `AuthResult` — `{ user, permissions? }`. Throws `NextlyError` (`NOT_FOUND`) if the user does not exist.
+
+### changePassword
+
+```typescript
+await nextly.changePassword({
+  user: { id: "user-123" },
+  currentPassword: "old",
+  newPassword: "new-secure-password",
+});
+```
+
+**Returns:** `{ success: true }`. Throws `NextlyError` (`AUTH_INVALID_CREDENTIALS`) when the current password is wrong.
+
+### forgotPassword
+
+Initiate a password reset. Always returns `success: true` — even when the email is unknown — to avoid user enumeration. Pass `disableEmail: true` to receive the raw token instead of the runtime mailing it for you.
+
+```typescript
+const result = await nextly.forgotPassword({
+  email: "user@example.com",
+});
+
+// With disableEmail
+const tokenResult = await nextly.forgotPassword({
+  email: "user@example.com",
+  disableEmail: true,
+});
+console.log(tokenResult.token); // raw token, you mail it yourself
+```
+
+**Returns:** `{ success: true, token? }`.
+
+### resetPassword
+
+Consume a reset token and set a new password.
+
+```typescript
+const result = await nextly.resetPassword({
+  token: "reset-token-from-email",
+  password: "new-password",
+});
+
+result.email; // address whose password was reset
+```
+
+**Returns:** `{ success: true, email? }`. Throws `NextlyError` (`VALIDATION_ERROR` / `NOT_FOUND`) when the token is invalid or expired.
+
+### verifyEmail
+
+```typescript
+await nextly.verifyEmail({ token: "verification-token" });
+```
+
+**Returns:** `{ success: true, email? }`.
+
+## Other namespaces
+
+The Direct API also exposes typed namespaces for users, media, forms, components, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
+
+| Namespace | Purpose | Key methods |
+|---|---|---|
+| `nextly.users` | User records | `find`, `findOne`, `findByID`, `create`, `update`, `delete` |
+| `nextly.media` | Media library | `upload`, `find`, `findByID`, `update`, `delete`, `bulkDelete`, `folders.list`, `folders.create` |
+| `nextly.forms` | Form-builder forms | `find`, `findBySlug`, `submit`, `submissions` |
+| `nextly.components` | Reusable component definitions | `find`, `findBySlug`, `create`, `update`, `delete` |
+| `nextly.emailProviders` | Provider CRUD | `find`, `findByID`, `create`, `update`, `delete`, `setDefault`, `test` |
+| `nextly.emailTemplates` | Template CRUD + preview + layout | `find`, `findByID`, `findBySlug`, `create`, `update`, `delete`, `preview`, `getLayout`, `updateLayout` |
+| `nextly.userFields` | Custom user field definitions | `find`, `findByID`, `create`, `update`, `delete`, `reorder` |
+| `nextly.roles` | RBAC roles | `find`, `findByID`, `create`, `update`, `delete`, `getPermissions`, `setPermissions` |
+| `nextly.permissions` | RBAC permissions | `find`, `findByID`, `create`, `delete` |
+| `nextly.access` | Permission checks | `check`, `checkApiKey` |
+| `nextly.apiKeys` | API keys | `list`, `findByID`, `create`, `update`, `revoke` |
+
+The full TypeScript surface is generated from [`packages/nextly/src/direct-api/namespaces/`](https://github.com/nextlyhq/nextly/tree/dev/packages/nextly/src/direct-api/namespaces).
 
 ## Querying
 
-The `where` parameter uses a structured query syntax for filtering documents.
+`where` accepts a structured filter object. Conditions on the same level are AND-ed; use `and` and `or` for explicit groupings.
 
 ### Operators
 
 | Operator | Description | Example |
-|----------|-------------|---------|
-| `equals` | Exact match | `{ status: { equals: 'published' } }` |
-| `not_equals` | Not equal | `{ status: { not_equals: 'draft' } }` |
-| `greater_than` | Greater than | `{ price: { greater_than: 100 } }` |
-| `greater_than_equal` | Greater than or equal | `{ price: { greater_than_equal: 100 } }` |
-| `less_than` | Less than | `{ price: { less_than: 50 } }` |
-| `less_than_equal` | Less than or equal | `{ price: { less_than_equal: 50 } }` |
-| `like` | SQL LIKE pattern match | `{ title: { like: '%hello%' } }` |
-| `contains` | Case-insensitive search | `{ title: { contains: 'hello' } }` |
-| `in` | Value in array | `{ status: { in: ['draft', 'published'] } }` |
-| `not_in` | Value not in array | `{ status: { not_in: ['archived'] } }` |
-| `exists` | Field exists (non-null) | `{ image: { exists: true } }` |
+|---|---|---|
+| `equals` | Exact match | `{ status: { equals: "published" } }` |
+| `not_equals` | Not equal | `{ status: { not_equals: "draft" } }` |
+| `greater_than` | `>` | `{ price: { greater_than: 100 } }` |
+| `greater_than_equal` | `>=` | `{ price: { greater_than_equal: 100 } }` |
+| `less_than` | `<` | `{ price: { less_than: 50 } }` |
+| `less_than_equal` | `<=` | `{ price: { less_than_equal: 50 } }` |
+| `like` | SQL `LIKE` (case-sensitive) | `{ title: { like: "%hello%" } }` |
+| `contains` | Case-insensitive substring (`ILIKE`) | `{ title: { contains: "hello" } }` |
+| `search` | Alias for `contains` | `{ title: { search: "hello" } }` |
+| `in` | Value in array | `{ status: { in: ["draft", "published"] } }` |
+| `not_in` | Value not in array | `{ status: { not_in: ["archived"] } }` |
+| `exists` | Field is non-null when `true`, null when `false` | `{ image: { exists: true } }` |
 
-### Combining Conditions
+Point fields also support `near` and `within` geo operators; these are evaluated in the application layer rather than pushed to the database.
 
-Use `and` and `or` to combine conditions:
+### Combining conditions
+
+Same-level keys are implicitly AND-ed:
+
+```typescript
+where: {
+  status: { equals: "published" },
+  category: { equals: "news" },
+}
+```
+
+Use `and` or `or` to express more complex shapes:
 
 ```typescript
 const posts = await nextly.find({
-  collection: 'posts',
+  collection: "posts",
   where: {
     and: [
-      { status: { equals: 'published' } },
-      { or: [
-        { category: { equals: 'news' } },
-        { category: { equals: 'featured' } },
-      ]},
+      { status: { equals: "published" } },
+      {
+        or: [
+          { category: { equals: "news" } },
+          { category: { equals: "featured" } },
+        ],
+      },
       { publishedAt: { less_than: new Date().toISOString() } },
     ],
   },
 });
 ```
 
-Multiple conditions at the same level are implicitly ANDed:
-
-```typescript
-// These two are equivalent
-{ status: { equals: 'published' }, category: { equals: 'news' } }
-{ and: [{ status: { equals: 'published' } }, { category: { equals: 'news' } }] }
-```
-
 ## Sorting
 
-Pass a field name to `sort`. Prefix with `-` for descending order:
+Pass a single field name. Prefix with `-` for descending:
 
 ```typescript
-// Newest first
-const posts = await nextly.find({ collection: 'posts', sort: '-createdAt' });
-
-// Alphabetical by title
-const posts = await nextly.find({ collection: 'posts', sort: 'title' });
+await nextly.find({ collection: "posts", sort: "-publishedAt" });
+await nextly.find({ collection: "posts", sort: "title" });
 ```
 
-## Depth (Relationship Population)
+## Selecting fields
 
-The `depth` parameter controls how deeply relationship and upload fields are populated:
-
-- `0` (default) -- return relationship IDs only
-- `1` -- populate direct relationships with their document data
-- `2+` -- populate nested relationships
+Use `select` to whitelist or blacklist fields on the response. `true` includes, `false` excludes:
 
 ```typescript
-// No population - author field returns an ID string
-const posts = await nextly.find({ collection: 'posts', depth: 0 });
-// posts.docs[0].author => "user-abc"
-
-// Populate one level - author field returns the full user object
-const posts = await nextly.find({ collection: 'posts', depth: 1 });
-// posts.docs[0].author => { id: "user-abc", name: "John", ... }
+await nextly.find({
+  collection: "posts",
+  select: { title: true, slug: true, publishedAt: true },
+});
 ```
 
-For fine-grained control, use the `populate` parameter:
+## Depth
+
+`depth` controls how many levels of relationship and upload fields to populate:
+
+- `0` (default): return relationship IDs as strings.
+- `1`: populate direct relationships with their full document.
+- `2+`: populate nested relationships up to the requested depth.
 
 ```typescript
-const posts = await nextly.find({
-  collection: 'posts',
+const posts = await nextly.find({ collection: "posts", depth: 0 });
+posts.items[0].author; // "user-abc"
+
+const populated = await nextly.find({ collection: "posts", depth: 1 });
+populated.items[0].author; // { id: "user-abc", name: "John", ... }
+```
+
+For per-field control, use `populate`:
+
+```typescript
+await nextly.find({
+  collection: "posts",
   depth: 1,
   populate: {
     author: { select: { name: true, email: true } },
-    category: false, // Skip population for this field
+    category: false, // skip population for this field
   },
 });
 ```
 
-## Rich Text Format
+## Rich text format
 
-Rich text fields store Lexical JSON internally. Use `richTextFormat` to control the output:
-
-```typescript
-// JSON (default) - returns Lexical editor state
-const posts = await nextly.find({ collection: 'posts', richTextFormat: 'json' });
-
-// HTML - returns rendered HTML string
-const posts = await nextly.find({ collection: 'posts', richTextFormat: 'html' });
-// posts.docs[0].content => "<p>Hello world</p>"
-
-// Both - returns an object with both formats
-const posts = await nextly.find({ collection: 'posts', richTextFormat: 'both' });
-// posts.docs[0].content => { json: {...}, html: "<p>Hello world</p>" }
-```
-
-## TypeScript Support
-
-Run `nextly generate:types` to generate type-safe collection slugs and document types. Once generated, the Direct API provides full type inference:
+Rich text fields are stored as Lexical JSON. Pick the output shape with `richTextFormat`:
 
 ```typescript
-// Collection slugs are constrained to valid values
-const posts = await nextly.find({ collection: 'posts' });
-// posts.docs is typed as Post[]
+// JSON (default) — Lexical editor state
+const a = await nextly.find({ collection: "posts", richTextFormat: "json" });
 
-// Invalid slugs produce compile-time errors
-const invalid = await nextly.find({ collection: 'nonexistent' }); // TS error
+// HTML — rendered string
+const b = await nextly.find({ collection: "posts", richTextFormat: "html" });
+b.items[0].content; // "<p>Hello world</p>"
+
+// Both — { json, html }
+const c = await nextly.find({ collection: "posts", richTextFormat: "both" });
+c.items[0].content; // { json: {...}, html: "<p>Hello world</p>" }
 ```
 
-The generated types augment the `GeneratedTypes` interface via module declaration:
+## Errors
 
-```typescript title="payload-types.ts (generated)"
-declare module '@nextlyhq/nextly' {
-  export interface GeneratedTypes extends Config {}
-}
-```
-
-## Error Handling
-
-The Direct API throws typed errors that you can catch and handle:
+Every Direct API failure throws a single `NextlyError` class. The error carries a public payload (safe to surface) and a log payload (for the server logger). Type guards let you narrow without `instanceof` (which can fail at package boundaries):
 
 ```typescript
-import { NotFoundError, ValidationError, isNextlyError } from '@nextlyhq/nextly';
+import { NextlyError } from "nextly";
 
 try {
-  const post = await nextly.findByID({ collection: 'posts', id: 'missing' });
-} catch (error) {
-  if (error instanceof NotFoundError) {
-    // 404 - document not found
-    console.log(error.message);
-  } else if (error instanceof ValidationError) {
-    // 400 - validation failed
-    console.log(error.errors); // { fieldName: ['error message'] }
-  } else if (isNextlyError(error)) {
-    // Other Nextly errors
-    console.log(error.code, error.statusCode);
+  const post = await nextly.findByID({ collection: "posts", id: "missing" });
+} catch (err) {
+  if (NextlyError.isNotFound(err)) {
+    // 404
+    return null;
   }
+  if (NextlyError.isValidation(err)) {
+    // 400 — err.publicData.errors carries [{ path, code, message }]
+    console.log(err.publicData);
+    throw err;
+  }
+  if (NextlyError.isAuthRequired(err)) {
+    // 401
+  }
+  if (NextlyError.isForbidden(err)) {
+    // 403
+  }
+  throw err;
 }
 ```
 
-**Error classes:**
+Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`.
 
-| Class | Code | HTTP Status |
-|-------|------|-------------|
-| `ValidationError` | `VALIDATION_ERROR` | 400 |
-| `UnauthorizedError` | `UNAUTHORIZED` | 401 |
-| `ForbiddenError` | `FORBIDDEN` | 403 |
-| `NotFoundError` | `NOT_FOUND` | 404 |
-| `ConflictError` | `CONFLICT` | 409 |
-| `DuplicateError` | `DUPLICATE` | 409 |
-| `DatabaseError` | `DATABASE_ERROR` | 500 |
+Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `DUPLICATE` (409), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
 
-## Example: Blog Post Listing Page
+The same `NextlyError` is what the route handler serialises into the HTTP error envelope (`{ error: { code, message, requestId, ... } }`) — see the [REST API error response section](/docs/api-reference/rest-api#errors) for the wire format.
 
-A complete example using the Direct API in a Next.js Server Component:
+## Example: blog page
 
 ```typescript title="app/blog/page.tsx"
-import { getNextly } from '@nextlyhq/nextly';
+import { getNextly } from "nextly";
 
 export default async function BlogPage({
   searchParams,
@@ -507,21 +732,21 @@ export default async function BlogPage({
   const { page } = await searchParams;
   const nextly = getNextly();
 
-  const posts = await nextly.find({
-    collection: 'posts',
-    where: { status: { equals: 'published' } },
-    sort: '-publishedAt',
+  const result = await nextly.find({
+    collection: "posts",
+    where: { status: { equals: "published" } },
+    sort: "-publishedAt",
     limit: 12,
     page: Number(page) || 1,
     depth: 1,
-    richTextFormat: 'html',
+    richTextFormat: "html",
   });
 
   return (
     <main>
       <h1>Blog</h1>
       <div className="grid grid-cols-3 gap-6">
-        {posts.docs.map((post) => (
+        {result.items.map((post) => (
           <article key={post.id}>
             <h2>{post.title}</h2>
             <div dangerouslySetInnerHTML={{ __html: post.content }} />
@@ -529,32 +754,17 @@ export default async function BlogPage({
         ))}
       </div>
 
-      {posts.hasNextPage && (
-        <a href={`/blog?page=${posts.nextPage}`}>Next Page</a>
+      {result.meta.hasNext && (
+        <a href={`/blog?page=${result.meta.page + 1}`}>Next page</a>
       )}
     </main>
   );
 }
 ```
 
-## Additional Namespaces
+## Next steps
 
-The Direct API also provides specialized namespaces for users, media, forms, roles, permissions, components, and API keys. Each namespace follows the same patterns shown above.
-
-| Namespace | Example | Description |
-|-----------|---------|-------------|
-| `nextly.users.find()` | User management | CRUD operations on users |
-| `nextly.media.upload()` | Media library | Upload, find, and manage files |
-| `nextly.forms.submit()` | Form submissions | Submit and query form data |
-| `nextly.roles.find()` | Role management | CRUD operations on RBAC roles |
-| `nextly.permissions.find()` | Permission management | CRUD operations on permissions |
-| `nextly.components.find()` | Component registry | Manage reusable component definitions |
-| `nextly.apiKeys.create()` | API key management | Create and manage API keys |
-| `nextly.access.check()` | Access control | Check user permissions programmatically |
-
-## Next Steps
-
-- [REST API](/docs/api-reference/rest-api) -- HTTP endpoints for external clients and browser code
-- [Client SDK](/docs/api-reference/client-sdk) -- TypeScript SDK for browser-side data fetching
-- [Collections](/docs/configuration/collections) -- Define the content types that the Direct API operates on
-- [Authentication](/docs/guides/authentication) -- RBAC and access control for API operations
+- [REST API](/docs/api-reference/rest-api) — HTTP endpoints for browser code, mobile clients, and third-party integrations.
+- [Collections](/docs/configuration/collections) — define the content types the Direct API operates on.
+- [Authentication](/docs/guides/authentication) — RBAC and access control for API operations.
+- [Configuration → typescript.outputFile](/docs/configuration/nextly-config) — set up generated types for full inference.
