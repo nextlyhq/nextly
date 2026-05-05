@@ -116,11 +116,13 @@ export function RepeaterFieldEditor({
 
       {/* Row Labels Section */}
       <div className="space-y-3">
-        <FormLabelWithTooltip
-          className="text-xs font-medium text-muted-foreground"
-          label="Row Labels"
-          description={`Used in buttons like "Add ${labels?.singular || "Item"}" and headers`}
-        />
+        <div className="space-y-1">
+          <Label className="text-xs font-medium">Row labels</Label>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            What this list calls individual rows. Used in the &ldquo;Add&rdquo;
+            button, empty state, and validation messages.
+          </p>
+        </div>
 
         <div className="grid grid-cols-2 gap-3">
           {/* Singular Label */}
@@ -132,7 +134,7 @@ export function RepeaterFieldEditor({
               id="singular-label"
               value={labels?.singular || ""}
               onChange={e => handleSingularChange(e.target.value)}
-              placeholder="e.g., Item"
+              placeholder="Item"
               className="h-8 text-sm"
             />
           </div>
@@ -146,20 +148,40 @@ export function RepeaterFieldEditor({
               id="plural-label"
               value={labels?.plural || ""}
               onChange={e => handlePluralChange(e.target.value)}
-              placeholder="e.g., Items"
+              placeholder="Items"
               className="h-8 text-sm"
             />
           </div>
         </div>
+
+        {/* Live preview — substitutes the user's current values into the
+            same surfaces the entry-form renderer will use. */}
+        <div className="rounded border border-dashed border-primary/10 bg-primary/[0.02] p-2.5 space-y-1">
+          <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
+            Preview
+          </p>
+          <p className="text-xs text-foreground/80">
+            + Add {labels?.singular || "Item"}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            No {labels?.plural || "Items"} yet
+          </p>
+          <p className="text-xs text-destructive/80">
+            Minimum 1 {labels?.singular || "Item"} required
+          </p>
+        </div>
       </div>
 
-      {/* Row Label Field Selector */}
-      <div className="space-y-2 pt-2  border-t border-primary/5">
-        <FormLabelWithTooltip
-          className="text-xs font-medium"
-          label="Row Label Field"
-          description='Use a field value as the row label instead of "Item 1, Item 2..."'
-        />
+      {/* Collapsed row title */}
+      <div className="space-y-2 pt-2 border-t border-primary/5">
+        <div className="space-y-1">
+          <Label className="text-xs font-medium">Collapsed row title</Label>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Pick a sub-field whose value will label each row when collapsed.
+            Falls back to auto-detect (title, name, label, heading, subject)
+            when left as auto.
+          </p>
+        </div>
         <Select
           value={rowLabelField || "__default__"}
           onValueChange={handleRowLabelFieldChange}
@@ -171,7 +193,7 @@ export function RepeaterFieldEditor({
             <SelectItem value="__default__">
               <div className="flex items-center gap-2">
                 <Icons.Hash className="h-3.5 w-3.5 text-muted-foreground" />
-                <span>Default (Item 1, Item 2...)</span>
+                <span>Auto-detect (recommended)</span>
               </div>
             </SelectItem>
             {labelableFields.map(field => (
@@ -187,6 +209,31 @@ export function RepeaterFieldEditor({
             ))}
           </SelectContent>
         </Select>
+
+        {/* Live preview — three sample collapsed rows showing what the row
+            label will look like with the current selection. */}
+        <div className="rounded border border-dashed border-primary/10 bg-primary/[0.02] p-2.5 space-y-1">
+          <p className="text-[10px] font-bold tracking-[0.08em] uppercase text-muted-foreground">
+            Preview when rows are collapsed
+          </p>
+          {(rowLabelField
+            ? ["Sample value 1", "Sample value 2", "Sample value 3"]
+            : [
+                `${labels?.singular || "Item"} 1`,
+                `${labels?.singular || "Item"} 2`,
+                `${labels?.singular || "Item"} 3`,
+              ]
+          ).map((rowText, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 text-xs text-foreground/80"
+            >
+              <span className="text-muted-foreground">▸</span>
+              <span className="text-muted-foreground">{i + 1}</span>
+              <span>{rowText}</span>
+            </div>
+          ))}
+        </div>
 
         {labelableFields.length === 0 && nestedFields.length > 0 && (
           <div className="flex items-start gap-2 p-2 rounded-none bg-primary/5">
