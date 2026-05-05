@@ -12,42 +12,31 @@
  */
 
 :root {
-  --background: #f9f9f9;
-  --foreground: #0f172a;
+  --color-background: #f9fafb;
+  --color-foreground: #0f172a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0f172a;
-    --foreground: #f9f9f9;
+    --color-background: #0b0f19;
+    --color-foreground: #f9fafb;
   }
+}
+
+.dark {
+  --color-background: #0b0f19;
+  --color-foreground: #f9fafb;
+}
+
+@theme {
+  --color-background: var(--color-background);
+  --color-foreground: var(--color-foreground);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-}
-
-.grid-bg {
-  background-image:
-    linear-gradient(to right, rgba(0, 0, 0, 0.04) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
-  background-size: 56px 56px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .grid-bg {
-    background-image:
-      linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-  }
-}
-
-.corner-bracket {
-  width: 28px;
-  height: 28px;
-  border-color: var(--foreground);
-  pointer-events: none;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  overflow-x: hidden;
 }
 
 .pulse-dot {
@@ -55,9 +44,9 @@ body {
   width: 6px;
   height: 6px;
   margin-right: 6px;
-  background: hsl(142.1 76.2% 36.3%);
+  background: #10b981;
   border-radius: 50%;
-  box-shadow: 0 0 8px hsl(142.1 76.2% 36.3%);
+  box-shadow: 0 0 8px #10b981;
   animation: nextly-pulse 1.6s ease-in-out infinite;
 }
 
@@ -77,17 +66,14 @@ body {
   }
 }
 
-/* Inverse-on-hover helper used by the secondary button.
- * Pairs with `hover:bg-current` on the parent so the button flips from
- * outlined to filled on hover. */
-.hover-invert {
-  transition: color 0.25s;
-}
-.group:hover .hover-invert,
-a:hover .hover-invert {
-  color: var(--background);
-}
-
 .font-display {
   font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+}
+
+.btn-primary {
+  @apply inline-flex items-center gap-2.5 rounded-none bg-foreground px-6 py-3.5 text-sm font-semibold text-background transition-all hover:opacity-90 active:scale-95;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center gap-2.5 rounded-none border border-foreground/10 bg-transparent px-6 py-3.5 text-sm font-medium text-foreground transition-all hover:bg-foreground/5 active:scale-95;
 }
