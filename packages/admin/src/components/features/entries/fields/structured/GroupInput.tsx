@@ -214,7 +214,7 @@ export function GroupInput({
               </button>
             </CollapsibleTrigger>
             {field.admin?.description && isOpen && (
-              <p className="text-xs text-slate-500 mt-1 pl-7">
+              <p className="text-xs text-muted-foreground leading-relaxed mt-1 pl-7">
                 {field.admin.description}
               </p>
             )}
