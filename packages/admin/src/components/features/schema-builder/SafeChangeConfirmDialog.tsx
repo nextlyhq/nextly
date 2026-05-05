@@ -1,8 +1,8 @@
-// Lightweight confirmation dialog shown when the user saves a SAFE schema
-// change in the Schema Builder. Previously safe changes applied silently;
-// per Task 11 we always require explicit confirmation so there are no
-// surprises, but safe changes get a shorter dialog than the destructive
-// SchemaChangeDialog (no row counts, no interactive fields, no SQL preview).
+// Lightweight confirmation dialog shown when the user saves a SAFE
+// schema change in the Schema Builder. Safe changes always require
+// explicit confirmation so there are no surprises, but they get a
+// shorter dialog than the destructive SchemaChangeDialog (no row
+// counts, no interactive fields, no SQL preview).
 "use client";
 
 import {

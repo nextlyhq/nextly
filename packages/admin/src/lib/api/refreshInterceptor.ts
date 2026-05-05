@@ -64,8 +64,6 @@ export function setLoginRedirectPath(path: string): void {
  *   2. authFetch sees the code → redirectToLogin() → /admin/login.
  *   3. /admin/login mounts → PublicRoute checks setup-status,
  *      sees no users → navigateTo("/admin/setup"). Bounce.
- *
- * Task 24 phase 1 fix.
  */
 const NO_REDIRECT_PUBLIC_PATHS = new Set([
   "/admin/login",

@@ -242,8 +242,8 @@ export function MediaLibrary({
     return () => clearTimeout(timer);
   }, [search]);
 
-  // Build query params. Local React state name `pageSize` (admin-internal,
-  // Phase 4.7 will rename) maps to canonical wire field `limit`.
+  // Build query params. Local React state name `pageSize` (admin-
+  // internal) maps to canonical wire field `limit`.
   const queryParams: MediaParams = {
     page: page + 1,
     limit: pageSize,
@@ -327,11 +327,10 @@ export function MediaLibrary({
   }, [selectedIds]);
 
   const handleConfirmBulkDelete = React.useCallback(() => {
-    // Phase 4.5: server-bulk pattern. `bulkDeleteMedia` now wraps
-    // `useMutation` (vanilla TanStack Query), so the call signature is
-    // `mutate(variables, options)` with two args. The hook itself shows
-    // a server-authored toast (e.g. "Deleted 4 of 5 files."); we just
-    // close the dialog + clear selection on either success or error.
+    // `bulkDeleteMedia` wraps `useMutation`, so the call signature is
+    // `mutate(variables, options)`. The hook itself shows a server-
+    // authored toast (e.g. "Deleted 4 of 5 files."); we just close
+    // the dialog + clear selection on either success or error.
     const idsArray = Array.from(selectedIds);
     bulkDeleteMedia(idsArray, {
       onSuccess: () => {

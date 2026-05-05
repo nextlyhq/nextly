@@ -1,15 +1,14 @@
 import { BASE_URL } from "./fetcher";
 
-// Fetch a CSRF token from the custom auth server. The server also sets
-// the double-submit cookie as a Set-Cookie header, so the browser will
-// echo it back on the following POST. Both halves must match server-side.
-// Returns an empty string on failure so callers can still send the request
-// and let the server respond with a structured CSRF_FAILED error.
+// Fetch a CSRF token from the custom auth server. The server also
+// sets the double-submit cookie as a Set-Cookie header, so the
+// browser will echo it back on the following POST. Both halves must
+// match server-side. Returns an empty string on failure so callers
+// can still send the request and let the server respond with a
+// structured CSRF_FAILED error.
 //
-// Phase 4 wire shape (spec §7.6): the /auth/csrf endpoint emits
-// `{ token: "..." }` directly via respondData. Phase 4.6 dropped the
-// legacy `data.data?.csrfToken` / `data.csrfToken` fallbacks now that
-// every server build is on the canonical envelope.
+// Wire shape (spec §7.6): the /auth/csrf endpoint emits
+// `{ token: "..." }` directly via respondData.
 export async function getCsrfToken(): Promise<string> {
   try {
     const res = await fetch(`${BASE_URL}/auth/csrf`, {

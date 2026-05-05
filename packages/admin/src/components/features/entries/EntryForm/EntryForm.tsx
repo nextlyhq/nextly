@@ -184,7 +184,7 @@ export function EntryForm({
   // Get all fields and split them based on admin.position
   const allFields = getCollectionFields(collection);
 
-  // Extract slug and seo specifically for the sidebar tabs (Phase 3 requirements)
+  // Extract slug and seo specifically for the sidebar tabs.
   const slugField = allFields.find(f => f.name === "slug");
   const seoField = allFields.find(
     f =>
@@ -228,7 +228,9 @@ export function EntryForm({
 
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
-    onSave: () => { void handleSubmit(); },
+    onSave: () => {
+      void handleSubmit();
+    },
     onCancel: handleCancel,
     isDirty,
     isSubmitting,

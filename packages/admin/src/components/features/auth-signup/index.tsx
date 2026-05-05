@@ -87,10 +87,9 @@ export function Signup() {
 
     try {
       const csrfToken = await getCsrfToken();
-      // Phase 4 (Task 21): the register handler emits
-      // `respondAction("Account created.", { user })` (or the silent
-      // success message when conflict-reveal is off). Capture the
-      // result so the toast can use the server-authored copy.
+      // Capture the result so the toast can use the server-authored
+      // copy (or the silent-success message when conflict-reveal is
+      // off).
       const result = await api.public.post<ActionResponse>("/auth/register", {
         name: values.fullName,
         email: values.email,
@@ -98,9 +97,8 @@ export function Signup() {
         csrfToken,
       });
 
-      // Phase 4 (Task 21): prefer the server message; fall back to the
-      // existing friendly string so the toast still works if the server
-      // omits the field.
+      // Prefer the server message; fall back to the friendly string
+      // so the toast still works if the server omits the field.
       toast.success(result?.message ?? "Account created successfully!", {
         description: "You can now sign in with your credentials.",
       });

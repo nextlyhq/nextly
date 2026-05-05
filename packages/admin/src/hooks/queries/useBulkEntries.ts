@@ -1,19 +1,12 @@
 /**
- * useBulkEntries hooks (Phase 4.5 server-bulk pattern).
+ * useBulkEntries hooks (server-bulk pattern).
  *
  * TanStack Query mutation hooks for bulk entry operations. Each hook
  * dispatches a single round-trip to the server's bulk endpoint
  * (`POST /api/collections/{slug}/entries/bulk-delete` or
- * `POST /api/collections/{slug}/entries/bulk-update`). The server runs
- * per-row deletes/updates concurrently via Promise.allSettled, with
- * full hooks + access-control pipeline preserved per row.
- *
- * Pre-Phase-4.5: these hooks did client-side parallel fan-out via the
- * generic `useBulkMutation` helper, issuing N parallel single-item
- * requests. That pattern was replaced because:
- *   1. Cost: N round-trips, N auth/middleware passes, N log entries.
- *   2. Surface: per-item failure surface was inconsistent across hooks.
- *   3. Spec: Phase 4.5 designed canonical `BulkResponse<T>` envelopes.
+ * `POST /api/collections/{slug}/entries/bulk-update`). The server
+ * runs per-row deletes/updates concurrently via Promise.allSettled,
+ * with full hooks + access-control pipeline preserved per row.
  *
  * Result shape (`BulkResponse<T>`):
  *   - `message`: server-authored toast string (e.g. "Deleted 4 of 5 entries.")

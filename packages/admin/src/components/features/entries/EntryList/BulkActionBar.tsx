@@ -1,8 +1,8 @@
 /**
  * Bulk Action Bar Component
  *
- * Displays when entries are selected, showing count and available bulk actions.
- * This is a minimal functional stub - will be enhanced in Task 2.4.
+ * Displays when entries are selected, showing count and available
+ * bulk actions.
  *
  * @module components/entries/EntryList/BulkActionBar
  * @since 1.0.0
@@ -43,16 +43,8 @@ export interface BulkActionBarProps {
 /**
  * Action bar displayed when entries are selected for bulk operations.
  *
- * Current features (stub):
- * - Selected count display
- * - Delete selected button
- * - Clear selection button
- *
- * Planned features (Task 2.4):
- * - Bulk update with field selector
- * - Bulk status change
- * - Bulk export
- * - Confirmation dialogs
+ * Surfaces a selected-count display, a "delete selected" button, and
+ * a "clear selection" button.
  *
  * @param props - Bulk action bar props
  * @returns Bulk action bar component

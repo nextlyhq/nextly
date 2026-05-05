@@ -116,12 +116,9 @@ export function UserFieldEditor({
       );
       const data = await response.json();
 
-      // Phase 4 (post-merge follow-up): /admin/api/roles emits
-      // `respondList({ items, meta })` (spec §5.1). Pre-Phase-4
-      // the legacy wire was `{ success, data }`; the canonical envelope
-      // dropped `success` (HTTP status carries it) and renamed the
-      // payload field from `data` to `items`. Read `items` and gate on
-      // response.ok instead of an in-body success flag.
+      // /admin/api/roles emits `{ items, meta }` (spec §5.1). Read
+      // `items` and gate on response.ok — the canonical envelope has
+      // no in-body success flag.
       if (response.ok && Array.isArray(data?.items)) {
         setUserRoles(data.items);
       }

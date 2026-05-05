@@ -162,9 +162,9 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
  * ```
  */
 export function useCurrentUserPermissions() {
-  // Phase 4 (Task 18): the fetcher no longer peels a `data` envelope; the
-  // `/me/permissions` endpoint returns the canonical UserPermissionsResponse
-  // shape directly, so `data` here IS the permissions payload.
+  // The `/me/permissions` endpoint returns the canonical
+  // UserPermissionsResponse shape directly, so `data` here IS the
+  // permissions payload.
   const { data, isLoading, error } = useQuery<UserPermissionsResponse>({
     queryKey: ["currentUserPermissions"],
     queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),

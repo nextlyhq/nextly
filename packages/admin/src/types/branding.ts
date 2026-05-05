@@ -53,7 +53,7 @@ export interface AdminBranding {
 
   /**
    * Plugin placement overrides mapping plugin slugs to sidebar group names.
-   * @deprecated Placement is now author-defined via `PluginMetadata.placement`. Will be removed in Phase 5.
+   * @deprecated Placement is now author-defined via `PluginMetadata.placement`.
    */
   pluginPlacements?: Record<string, string>;
 }
