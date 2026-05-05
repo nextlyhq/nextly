@@ -3,7 +3,9 @@ title: Plugins
 description: Extend Nextly with official and custom plugins that add collections, admin views, hooks, and API endpoints.
 ---
 
-> **Status: in development.** Plugin installation and management UI is a preview — the underlying plugin runtime works (the Form Builder plugin below ships with Nextly), but the admin "Plugins" page is read-only and the broader plugin marketplace, install/uninstall flow, and per-plugin settings are not yet implemented. Production projects can use code-registered plugins; UI-driven installs are coming.
+> **Warning: Plugins are not ready for use.**
+>
+> Public plugin support — including stable APIs, documentation guarantees, and the official plugin gallery — lands at the Nextly **beta** release. These pages are kept for the small group of internal alpha users currently exploring `plugin-form-builder`. Surfaces, names, and behaviour will change without notice. **Do not rely on plugins for production or serious development work.** Wait for the beta release announcement before integrating plugins into your project.
 
 Plugins extend Nextly with new functionality without modifying core code. A plugin can add collections, register lifecycle hooks, inject custom admin views, and transform configuration -- all through a single `plugins` array in your config.
 
