@@ -44,7 +44,7 @@ import {
   isRadioField,
   isRelationshipField,
   isUploadField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isDataField,
@@ -305,7 +305,7 @@ function fieldToZodSchema(
     schema = convertRelationshipFieldToZod(field);
   } else if (isUploadField(field)) {
     schema = convertUploadFieldToZod(field);
-  } else if (isArrayField(field)) {
+  } else if (isRepeaterField(field)) {
     schema = convertArrayFieldToZod(field, options);
   } else if (isGroupField(field)) {
     schema = convertGroupFieldToZod(field, options);

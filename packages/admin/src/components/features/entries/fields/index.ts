@@ -27,12 +27,12 @@ export { DateInput, type DateInputProps } from "./selection";
 
 // Structured field inputs (arrays, groups)
 export {
-  ArrayInput,
-  type ArrayInputProps,
-  ArrayRow,
-  type ArrayRowProps,
-  ArrayRowLabel,
-  type ArrayRowLabelComponentProps,
+  RepeaterInput,
+  type RepeaterInputProps,
+  RepeaterRow,
+  type RepeaterRowProps,
+  RepeaterRowLabel,
+  type RepeaterRowLabelComponentProps,
   type RenderFieldFunction,
   GroupInput,
   type GroupInputProps,

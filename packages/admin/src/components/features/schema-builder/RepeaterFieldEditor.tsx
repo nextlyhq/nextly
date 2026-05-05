@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ArrayFieldEditor Component
+ * RepeaterFieldEditor Component
  *
  * Editor for configuring array field settings.
  * Features:
@@ -13,7 +13,7 @@
  * Note: minRows/maxRows are configured in the Validation tab.
  * Nested fields are managed by clicking on them in the main FieldList.
  *
- * @module components/features/schema-builder/ArrayFieldEditor
+ * @module components/features/schema-builder/RepeaterFieldEditor
  */
 
 import {
@@ -32,13 +32,13 @@ import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 
 import { EditorAlert } from "./EditorAlert";
-import type { ArrayFieldEditorProps, ArrayFieldLabels } from "./types";
+import type { RepeaterFieldEditorProps, RepeaterFieldLabels } from "./types";
 
 // ============================================================
-// ArrayFieldEditor Component
+// RepeaterFieldEditor Component
 // ============================================================
 
-export function ArrayFieldEditor({
+export function RepeaterFieldEditor({
   labels,
   onLabelsChange,
   initCollapsed,
@@ -48,7 +48,7 @@ export function ArrayFieldEditor({
   rowLabelField,
   onRowLabelFieldChange,
   nestedFields = [],
-}: ArrayFieldEditorProps) {
+}: RepeaterFieldEditorProps) {
   // Get fields that can be used as row labels (text-like fields with names)
   const labelableFields = useMemo(() => {
     return nestedFields.filter(
@@ -63,7 +63,7 @@ export function ArrayFieldEditor({
   // Handle singular label change
   const handleSingularChange = useCallback(
     (singular: string) => {
-      const newLabels: ArrayFieldLabels = {
+      const newLabels: RepeaterFieldLabels = {
         ...labels,
         singular: singular || undefined,
       };
@@ -80,7 +80,7 @@ export function ArrayFieldEditor({
   // Handle plural label change
   const handlePluralChange = useCallback(
     (plural: string) => {
-      const newLabels: ArrayFieldLabels = {
+      const newLabels: RepeaterFieldLabels = {
         ...labels,
         plural: plural || undefined,
       };
@@ -111,7 +111,7 @@ export function ArrayFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Layers className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Array Configuration</Label>
+        <Label className="text-xs font-medium">Repeater Configuration</Label>
       </div>
 
       {/* Row Labels Section */}

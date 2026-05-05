@@ -8,7 +8,7 @@
  *
  * Supports four modes:
  * - **Single component, non-repeatable:** Renders component fields inline (like GroupInput)
- * - **Single component, repeatable:** Array of same component type (like ArrayInput)
+ * - **Single component, repeatable:** Array of same component type (like RepeaterInput)
  * - **Multi-component, non-repeatable:** Single instance with type selector
  * - **Multi-component, repeatable:** Dynamic zone - array of mixed component types
  *
@@ -529,7 +529,7 @@ function MultiComponentNonRepeatable({
 }
 
 // ============================================================
-// Repeatable Component (Single or Multi) - Like ArrayInput
+// Repeatable Component (Single or Multi) - Like RepeaterInput
 // ============================================================
 
 interface RepeatableComponentProps<

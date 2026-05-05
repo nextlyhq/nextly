@@ -252,16 +252,16 @@ export const isRelationshipField =
 // ============================================================
 
 /**
- * Type guard for array field config.
+ * Type guard for repeater field config.
  *
  * @example
  * ```typescript
- * if (isArrayField(field)) {
+ * if (isRepeaterField(field)) {
  *   console.log(field.fields, field.minRows, field.maxRows);
  * }
  * ```
  */
-export function isArrayField(field: FieldConfig): field is RepeaterFieldConfig {
+export function isRepeaterField(field: FieldConfig): field is RepeaterFieldConfig {
   return field.type === "repeater";
 }
 

@@ -17,7 +17,7 @@
 // Unified Field Config Types
 // ============================================================
 
-import type { RepeaterFieldConfig } from "./array";
+import type { RepeaterFieldConfig } from "./repeater";
 import type { FieldType } from "./base";
 
 // Text field configs
@@ -80,7 +80,7 @@ export * from "./upload";
 export * from "./relationship";
 
 // Structured field types
-export * from "./array";
+export * from "./repeater";
 export * from "./group";
 
 // Component field types
@@ -106,7 +106,7 @@ export * from "./json";
  * - Selection types: checkbox, date, select, radio
  * - Media types: upload
  * - Relational types: relationship
- * - Structured types: array, group, json
+ * - Structured types: repeater, group, json
  *
  * @example
  * ```typescript

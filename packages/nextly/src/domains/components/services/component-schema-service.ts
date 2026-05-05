@@ -47,7 +47,7 @@ import {
   isRadioField,
   isUploadField,
   isRelationshipField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isComponentField,
@@ -692,7 +692,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       }
       return types.uuid;
     }
-    if (isArrayField(field) || isGroupField(field)) {
+    if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
     }
     if (isJSONField(field)) {
@@ -736,7 +736,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return pgText(colName);
     }
-    if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
     }
 
@@ -781,7 +781,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return mysqlVarchar(colName, { length: 36 });
     }
-    if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
     }
 
@@ -821,7 +821,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return sqliteText(colName);
     }
-    if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
 
@@ -875,7 +875,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return `text('${colName}')`;
     }
-    if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return `jsonb('${colName}')`;
     }
     return `text('${colName}')`;
@@ -910,7 +910,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
     if (isRelationshipField(field) || isUploadField(field)) {
       return `varchar('${colName}', { length: 36 })`;
     }
-    if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return `json('${colName}')`;
     }
     return `varchar('${colName}', { length: 255 })`;
@@ -987,7 +987,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (isNumberField(field)) imports.add("double");
         if (isCheckboxField(field)) imports.add("boolean");
         if (isDateField(field)) imports.add("timestamp");
-        if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+        if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
           imports.add("json");
         }
       } else {
@@ -1003,7 +1003,7 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (isNumberField(field)) imports.add("doublePrecision");
         if (isCheckboxField(field)) imports.add("boolean");
         if (isDateField(field)) imports.add("timestamp");
-        if (isArrayField(field) || isGroupField(field) || isJSONField(field)) {
+        if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
           imports.add("jsonb");
         }
       }

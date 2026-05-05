@@ -29,7 +29,7 @@ import {
   isRadioField,
   isUploadField,
   isRelationshipField,
-  isArrayField,
+  isRepeaterField,
   isGroupField,
   isJSONField,
   isChipsField,
@@ -388,8 +388,8 @@ export class ZodGenerator {
     else if (isRelationshipField(field)) {
       zodSchema = this.buildRelationshipSchema(field);
     }
-    // Array fields
-    else if (isArrayField(field)) {
+    // Repeater fields
+    else if (isRepeaterField(field)) {
       zodSchema = this.buildArraySchema(field);
     }
     // Group fields
@@ -593,7 +593,7 @@ export class ZodGenerator {
   }
 
   /**
-   * Builds Zod schema for array fields (nested fields).
+   * Builds Zod schema for repeater fields (nested fields).
    */
   private buildArraySchema(field: DataFieldConfig): string {
     // Get nested fields
@@ -690,7 +690,7 @@ export class ZodGenerator {
         zodSchema = this.buildUploadSchema(field);
       } else if (isRelationshipField(field)) {
         zodSchema = this.buildRelationshipSchema(field);
-      } else if (isArrayField(field)) {
+      } else if (isRepeaterField(field)) {
         zodSchema = this.buildArraySchema(field);
       } else if (isGroupField(field)) {
         zodSchema = this.buildGroupSchema(field);
