@@ -348,7 +348,10 @@ export default function CollectionBuilderEditPage({
         return;
       }
 
-      if (preview.classification === "safe") {
+      if (
+        preview.classification === "safe" &&
+        !(preview.renamed && preview.renamed.length > 0)
+      ) {
         setPreviewData(preview);
         setShowSafeDialog(true);
         return;
@@ -708,54 +711,58 @@ export default function CollectionBuilderEditPage({
           nextly.config.ts continue to work; only the toolbar button +
           sheet are gone. */}
 
-      {/* Safe-change confirmation (additive). */}
-      {previewData && previewData.classification === "safe" && (
-        <SafeChangeConfirmDialog
-          open={showSafeDialog}
-          onOpenChange={setShowSafeDialog}
-          collectionName={slug}
-          changes={previewData.changes}
-          onConfirm={() => {
-            const fieldDefs = getValidatedFields();
-            if (fieldDefs) {
-              void applySchemaChanges(
-                fieldDefs,
-                previewData.schemaVersion,
-                {},
-                []
-              );
-            }
-          }}
-          isApplying={isApplyingSchema}
-        />
-      )}
+      {/* Safe-change confirmation (additive, no rename candidates). */}
+      {previewData &&
+        previewData.classification === "safe" &&
+        !(previewData.renamed && previewData.renamed.length > 0) && (
+          <SafeChangeConfirmDialog
+            open={showSafeDialog}
+            onOpenChange={setShowSafeDialog}
+            collectionName={slug}
+            changes={previewData.changes}
+            onConfirm={() => {
+              const fieldDefs = getValidatedFields();
+              if (fieldDefs) {
+                void applySchemaChanges(
+                  fieldDefs,
+                  previewData.schemaVersion,
+                  {},
+                  []
+                );
+              }
+            }}
+            isApplying={isApplyingSchema}
+          />
+        )}
 
-      {/* Destructive / interactive change dialog. */}
-      {previewData && previewData.classification !== "safe" && (
-        <SchemaChangeDialog
-          open={showSchemaDialog}
-          onOpenChange={setShowSchemaDialog}
-          collectionName={slug}
-          hasDestructiveChanges={previewData.hasDestructiveChanges}
-          classification={previewData.classification}
-          changes={previewData.changes}
-          renamed={previewData.renamed}
-          warnings={previewData.warnings}
-          interactiveFields={previewData.interactiveFields}
-          onConfirm={(resolutions, renameResolutions) => {
-            const fieldDefs = getValidatedFields();
-            if (fieldDefs) {
-              void applySchemaChanges(
-                fieldDefs,
-                previewData.schemaVersion,
-                resolutions,
-                renameResolutions
-              );
-            }
-          }}
-          isApplying={isApplyingSchema}
-        />
-      )}
+      {/* Destructive / interactive / rename change dialog. */}
+      {previewData &&
+        (previewData.classification !== "safe" ||
+          (previewData.renamed && previewData.renamed.length > 0)) && (
+          <SchemaChangeDialog
+            open={showSchemaDialog}
+            onOpenChange={setShowSchemaDialog}
+            collectionName={slug}
+            hasDestructiveChanges={previewData.hasDestructiveChanges}
+            classification={previewData.classification}
+            changes={previewData.changes}
+            renamed={previewData.renamed}
+            warnings={previewData.warnings}
+            interactiveFields={previewData.interactiveFields}
+            onConfirm={(resolutions, renameResolutions) => {
+              const fieldDefs = getValidatedFields();
+              if (fieldDefs) {
+                void applySchemaChanges(
+                  fieldDefs,
+                  previewData.schemaVersion,
+                  resolutions,
+                  renameResolutions
+                );
+              }
+            }}
+            isApplying={isApplyingSchema}
+          />
+        )}
 
       {/* Cancel / back navigation surfaced via the unused isSaving state */}
       {(isSaving || isApplyingSchema) && (
