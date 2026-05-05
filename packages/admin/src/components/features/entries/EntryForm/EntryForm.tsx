@@ -4,10 +4,10 @@
  * Main entry form component that orchestrates all form parts:
  * - useEntryForm hook for state management
  * - EntryFormProvider for form context
- * - EntryFormHeader for title and actions
- * - EntryFormContent for field rendering
- * - EntryFormSidebar for metadata
- * - EntryFormActions for submit/cancel
+ * - EntrySystemHeader for title input + actions + dropdown + rail toggle
+ * - EntryMetaStrip for slug + status pill (when rail collapsed)
+ * - EntryFormContent for field rendering (Builder-defined fields only)
+ * - EntryFormSidebar for system metadata (Document panel only)
  *
  * Supports both standalone (page) and embedded (modal) modes.
  *
@@ -15,23 +15,17 @@
  * @since 1.0.0
  */
 
-import type React from "react";
-
-import { useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
 
-import { DocumentTabs } from "../DocumentTabs";
-
-import { ActionBar } from "./ActionBar";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
-import { EntryFormHeader } from "./EntryFormHeader";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
+import { EntryMetaStrip } from "./EntryMetaStrip";
+import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
-import { TitleHeadlineInput } from "./TitleHeadlineInput";
 import {
   useEntryForm,
   getCollectionFields,
@@ -60,8 +54,6 @@ export interface EntryFormProps {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
-  /** Custom components to inject into the form layout flow */
-  headerContent?: React.ReactNode;
   /**
    * Embedded mode for use in modals.
    * When true:
@@ -161,7 +153,6 @@ export function EntryForm({
   onCancel,
   embedded = false,
   className,
-  headerContent,
 }: EntryFormProps) {
   const {
     form,
@@ -169,9 +160,7 @@ export function EntryForm({
     handleDelete,
     handleCancel,
     isSubmitting,
-    isDeleting,
     isDirty,
-    singularLabel,
   } = useEntryForm({
     collection,
     entry,
@@ -202,25 +191,16 @@ export function EntryForm({
   // Get form errors for summary display
   const { errors } = form.formState;
 
-  // Preview functionality
-  const {
-    isPreviewAvailable,
-    openPreview,
-    label: previewLabel,
-  } = useEntryPreview({
-    collection,
-    entry: entry,
-    getFormValues: () => form.getValues(),
-  });
-
-  // Rail collapse state (PR 5: persisted in localStorage). The toggle button
-  // lives in ActionBar; the rail itself reads `railCollapsed` to decide
-  // whether to render at all.
+  // Rail collapse state. Toggle lives in EntrySystemHeader; the rail itself
+  // reads `railCollapsed` to decide whether to render. Persisted in
+  // localStorage so the choice survives reloads.
   const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
 
   // Whether this collection has Draft/Published status enabled at the meta
-  // level. When false, ActionBar hides the Status pill and merges Save Draft
-  // + Publish into a single "Save" button (per Q-D2=A in the redesign spec).
+  // level. When true, the system header splits into Save Draft + Publish/Update
+  // and the Document panel + meta strip surface the status pill. When false,
+  // the system header collapses to a single Save/Create button and the pill
+  // is hidden.
   const hasStatus = collection.status === true;
 
   // ---------------------------------------------------------------------------
@@ -270,43 +250,31 @@ export function EntryForm({
     );
   }
 
-  // Standalone mode: full layout with header, sidebar, and actions
+  // Standalone mode: compact layout — system header, meta strip, fields,
+  // and (optional) right rail. No breadcrumbs, no DocumentTabs, no separate
+  // page title h1; the title input lives inside EntrySystemHeader.
   return (
     <EntryFormContextProvider
       entryId={entry?.id}
       collectionSlug={collection.name}
       isCreateMode={mode === "create"}
     >
-      <div className={cn("space-y-6", className)}>
-        {/* Main Form */}
+      <div className={cn("space-y-0", className)}>
         <EntryFormProvider form={form} onSubmit={handleSubmit}>
-          {/* Error summary at top of form */}
-          <FormErrorSummary errors={errors} className="mb-6" />
+          <FormErrorSummary errors={errors} className="mx-6 mt-3" />
 
           <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
-            {/* Main Content */}
-            <div className="flex-1 lg:p-8 pt-6 min-w-0">
-              <div className="mb-6">{headerContent}</div>
-              {/* Document tabs (Q-D6=c). Edit + API + Versions(Soon) + LivePreview(Soon). */}
+            {/* Main column */}
+            <div className="flex-1 min-w-0 flex flex-col">
               <div className="-mx-8">
-                <DocumentTabs
-                  scope="collection"
-                  slug={collection.name}
-                  entryId={entry?.id}
-                />
-              </div>
-              {/* Action bar (Q-D2=A). Status pill + Preview/Save Draft/Publish/More
-                  + Rail toggle. Replaces the rail's old action area. */}
-              <div className="-mx-8 mb-6">
-                <ActionBar
+                <EntrySystemHeader
                   mode={mode}
-                  entry={entry}
-                  singularLabel={singularLabel}
+                  titleField={titleField}
                   hasStatus={hasStatus}
                   isSubmitting={isSubmitting}
-                  isPreviewAvailable={isPreviewAvailable}
-                  onPreview={openPreview}
-                  previewLabel={previewLabel}
+                  isDirty={isDirty}
+                  entry={entry}
+                  collectionSlug={collection.name}
                   onSaveDraft={() => {
                     void handleSubmit(undefined, "draft");
                   }}
@@ -319,39 +287,28 @@ export function EntryForm({
                   onToggleRail={toggleRail}
                 />
               </div>
-              <EntryFormHeader
-                collectionSlug={collection.name}
-                singularLabel={singularLabel}
-                mode={mode}
-                entry={entry}
-                isDeleting={isDeleting}
-                onDelete={handleDelete}
-                isDirty={isDirty}
-              />
-              {/* Pinned title headline (Q-D5=iv). Slug moves into the rail's
-                  DocumentPanel (see below); title becomes a borderless 28px
-                  heading-style input above the field grid. */}
-              {titleField && (
-                <div className="-mx-8 mb-2">
-                  <TitleHeadlineInput
-                    titleField={titleField}
+              <div className="-mx-8">
+                <EntryMetaStrip
+                  slugField={slugField}
+                  hasStatus={hasStatus}
+                  status={(entry?.status as string | undefined) ?? "draft"}
+                  isRailCollapsed={railCollapsed}
+                />
+              </div>
+
+              {mainFields.length > 0 && (
+                <div className="lg:p-8 pt-6">
+                  <EntryFormContent
+                    fields={mainFields}
                     disabled={isSubmitting}
+                    withCard
                   />
                 </div>
               )}
-
-              {mainFields.length > 0 && (
-                <EntryFormContent
-                  fields={mainFields}
-                  disabled={isSubmitting}
-                  withCard
-                />
-              )}
             </div>
 
-            {/* Rail (collapsible per Q-D4 + railCollapsed state). Width 320px
-                (down from 360px per spec section 2.1). On <1024px the rail
-                hides entirely until the mobile sheet ships in a follow-up. */}
+            {/* Rail (collapsible). Width 320px. Hidden under 1024px until a
+                future mobile sheet ships. */}
             {!railCollapsed && (
               <div className="hidden lg:flex w-[320px] shrink-0 border-l border-primary/5 bg-background flex-col relative z-10">
                 <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
@@ -359,7 +316,6 @@ export function EntryForm({
                     mode={mode}
                     entry={entry}
                     hasStatus={hasStatus}
-                    slugField={slugField}
                   />
                 </div>
               </div>

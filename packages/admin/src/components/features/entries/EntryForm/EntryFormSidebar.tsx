@@ -1,61 +1,37 @@
 "use client";
 
-import type { FieldConfig } from "@revnixhq/nextly/config";
-
-import {
-  ActivityPanel,
-  DocumentPanel,
-  RevisionsPanel,
-  StatusPanel,
-} from "./panels";
+import { DocumentPanel } from "./panels";
 import type { EntryFormMode, EntryData } from "./useEntryForm";
 
-// ============================================================================
-// Types
-// ============================================================================
+// Why: Task 5 PR 4 collapses the rail down to one panel. StatusPanel folded
+// into DocumentPanel as a Status row; RevisionsPanel and ActivityPanel were
+// "Coming soon" placeholders and removed entirely until those features ship
+// with their own real surfaces.
 
 export interface EntryFormSidebarProps {
-  /** Form mode - 'create' or 'edit' */
+  /** Form mode — DocumentPanel hides ID/Created/Updated/Status in create
+   *  mode since the entry doesn't exist yet. */
   mode: EntryFormMode;
-  /** Entry data with timestamps */
+  /** Entry data — DocumentPanel reads id/status/timestamps. */
   entry?: EntryData | null;
-  /** Whether sidebar should be hidden (embedded mode or rail collapsed) */
+  /** Whether sidebar should be hidden (embedded mode or rail collapsed). */
   hidden?: boolean;
   /** Whether this collection has Draft/Published status enabled. Drives
-   *  whether the StatusPanel renders. */
+   *  whether the Status row renders inside DocumentPanel. */
   hasStatus?: boolean;
-  /** Slug field — threaded into DocumentPanel as the first row with inline
-   *  edit (Q-D5=iv). When the collection has no slug field this stays
-   *  undefined and the slug row is omitted. */
-  slugField?: FieldConfig;
 }
 
-// ============================================================================
-// Component
-// ============================================================================
-
-/**
- * EntryFormSidebar — system-content rail.
- *
- * Stack of named panels (Status, Document, Revisions, Activity). Per Q-D1=B
- * in the redesign spec the rail is system-content only; user fields never
- * render here.
- */
 export function EntryFormSidebar({
   mode,
   entry,
   hidden = false,
   hasStatus = false,
-  slugField,
 }: EntryFormSidebarProps) {
   if (hidden) return null;
 
   return (
     <div className="h-full flex flex-col bg-background overflow-y-auto">
-      <StatusPanel entry={entry} hasStatus={hasStatus} />
-      <DocumentPanel mode={mode} entry={entry} slugField={slugField} />
-      <RevisionsPanel />
-      <ActivityPanel />
+      <DocumentPanel mode={mode} entry={entry} hasStatus={hasStatus} />
     </div>
   );
 }

@@ -17,7 +17,11 @@ export {
   EntryFormProvider,
   type EntryFormProviderProps,
 } from "./EntryFormProvider";
-export { EntryFormHeader, type EntryFormHeaderProps } from "./EntryFormHeader";
+export {
+  EntrySystemHeader,
+  type EntrySystemHeaderProps,
+} from "./EntrySystemHeader";
+export { EntryMetaStrip, type EntryMetaStripProps } from "./EntryMetaStrip";
 export {
   EntryFormContent,
   type EntryFormContentProps,

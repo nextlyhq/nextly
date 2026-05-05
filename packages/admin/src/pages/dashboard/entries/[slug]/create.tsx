@@ -284,22 +284,17 @@ export default function CreateEntryPage({
     );
   }
 
-  // Default: Render standard EntryForm
+  // Default: render the EntryForm directly. Breadcrumbs were removed from
+  // the entry create/edit pages in Task 5 PR 4 — vertical space goes to the
+  // form, not the header chrome.
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        {/* Entry Form - includes its own header via EntryFormHeader */}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           mode="create"
           onSuccess={handleSuccess}
           onCancel={handleCancel}
-          headerContent={
-            <CreateEntryBreadcrumbs
-              collectionSlug={slug}
-              collectionLabel={collectionLabel}
-            />
-          }
         />
       </PageContainer>
     </QueryErrorBoundary>
