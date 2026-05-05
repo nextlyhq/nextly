@@ -1,7 +1,7 @@
 /**
  * Single Configuration Types
  *
- * Type definitions for Singles (global documents).
+ * Type definitions for Singles.
  * Singles are single-document entities for storing site-wide configuration
  * such as site settings, navigation menus, footers, and homepage configurations.
  *
@@ -61,7 +61,7 @@ export interface SingleLabel {
  * const admin: SingleAdminOptions = {
  *   group: 'Settings',
  *   icon: 'Settings',
- *   description: 'Global site configuration',
+ *   description: 'Site configuration',
  * };
  * ```
  */
@@ -100,7 +100,7 @@ export interface SingleAdminOptions {
    * Description text displayed below the Single title.
    * Use this to provide helpful context for editors.
    *
-   * @example 'Configure global site settings like name, logo, and SEO defaults.'
+   * @example 'Configure site settings like name, logo, and SEO defaults.'
    */
   description?: string;
 }
@@ -236,7 +236,7 @@ export interface SingleHooks {
  *   admin: {
  *     group: 'Settings',
  *     icon: 'Settings',
- *     description: 'Global site configuration',
+ *     description: 'Site configuration',
  *   },
  *   fields: [
  *     text({ name: 'siteName', required: true, label: 'Site Name' }),
