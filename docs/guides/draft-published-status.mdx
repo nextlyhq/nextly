@@ -1,0 +1,135 @@
+---
+title: Draft / Published Status
+description: Enable a Draft / Published lifecycle on collections and singles, with side-by-side examples for code-first config and the Visual Schema Builder.
+---
+
+Nextly supports an opt-in Draft / Published lifecycle for collections and singles. When enabled, every record carries a `status` system column (`'draft'` or `'published'`); the admin entry create/edit page splits its primary action into **Save Draft** + **Publish** (or **Update**), and public-facing API queries can filter unpublished records out by default.
+
+This is a meta-level toggle on the collection or single -- you do not declare a `status` field yourself. The framework injects the column at schema-generation time when you opt in.
+
+## Enabling on a collection
+
+### Code-first
+
+Set `status: true` at the top level of `defineCollection`:
+
+```typescript
+import { defineCollection, text, richText } from "@revnixhq/nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  status: true, // enable Draft / Published lifecycle
+  labels: { singular: "Post", plural: "Posts" },
+  fields: [
+    text({ name: "title", required: true }),
+    text({ name: "slug", required: true, unique: true }),
+    richText({ name: "content" }),
+  ],
+});
+```
+
+### Visual Schema Builder
+
+1. Open the collection in the Builder.
+2. Click the **Settings** icon in the toolbar.
+3. Switch to the **Advanced** tab.
+4. Toggle **Status (Draft / Published)** on.
+5. Click **Save**. Nextly will run a schema migration that adds the `status` column to the data table; existing rows backfill to `'draft'` so nothing is accidentally published.
+
+Both paths produce identical runtime behaviour -- the same column, the same admin UI, the same query shape.
+
+## What the system column does
+
+| Property | Value |
+|---|---|
+| Type | `varchar(20)` on Postgres / MySQL, `text` on SQLite |
+| Default | `'draft'` |
+| Nullable | No (NOT NULL) |
+| Indexed | Yes — `{collection}_status_idx` |
+| Allowed values | `'draft'`, `'published'` |
+
+The Nextly runtime injects this column when `status: true` is set on the collection or single config. You never declare a `status` field yourself in `fields: [...]` -- and if a user-defined field with the same name exists, the system flag will conflict with it. Migrate any legacy `select({ name: "status" })` field off before toggling the system flag.
+
+## Enabling on a single
+
+Same shape -- set `status: true` at the top level of `defineSingle`:
+
+```typescript
+import { defineSingle, richText } from "@revnixhq/nextly/config";
+
+export const Homepage = defineSingle({
+  slug: "homepage",
+  status: true,
+  label: { singular: "Homepage" },
+  fields: [
+    richText({ name: "hero" }),
+  ],
+});
+```
+
+In the Visual Schema Builder, the toggle lives in the same Settings → Advanced tab on the single's Builder page.
+
+## Filtering on the public site
+
+Use the standard field-filter syntax with the column name `status`:
+
+```typescript
+import { getNextly } from "@revnixhq/nextly";
+
+const nextly = await getNextly();
+
+// Public list page — only published posts.
+const published = await nextly.find("posts", {
+  where: { status: { equals: "published" } },
+});
+
+// Admin-only path — show all entries regardless of status.
+const all = await nextly.find("posts", {});
+```
+
+The query shape (`{ status: { equals: "published" } }`) works identically across all three dialects. The system column is indexed, so filtering by status is fast even on large tables.
+
+## Admin behaviour
+
+### Action bar
+
+When `status: true` is enabled on a collection or single, the entry create/edit page action bar splits its primary action:
+
+- **Create mode**: `[Save Draft]` (ghost) + `[Publish]` (primary). Pressing Save Draft creates the entry as `'draft'`; Publish creates it as `'published'`.
+- **Edit mode**: `[Save Draft]` (ghost) + `[Update]` (primary). Save Draft demotes to `'draft'`; Update saves with the entry's current status (or `'published'` if the entry was already published).
+
+When `status: false` (the default), the action bar collapses to a single `[Create]` / `[Save]` button.
+
+### Document panel + meta strip
+
+The current state is visible in two places:
+
+- **Document panel (right rail, when expanded)**: a labeled "Status" row with a `DRAFT` or `PUBLISHED` pill, alongside ID, Created, and Updated.
+- **Meta strip (below the title bar, when the rail is collapsed)**: the same pill renders inline before the slug, so editors can see state without re-opening the rail.
+
+## Toggling status off
+
+Disabling `status: true` on a collection that previously had it enabled is a destructive change -- the column gets dropped and any existing `draft` / `published` values are lost.
+
+- **Code-first**: removing `status: true` from your config and saving the file triggers the schema-change pipeline. You'll get a confirmation dialog (or the CLI `--accept-data-loss` flag in non-interactive contexts) before the column is dropped.
+- **Builder UI**: toggling Status off in Settings → Advanced and saving prompts the same destructive-change confirmation dialog. Acknowledge to drop the column.
+
+There is no soft-delete or migration script — the column goes away. If you need to retain the data, export your entries first.
+
+## Migrating from a user-defined `status` field
+
+If your collection already has a user-defined `select({ name: "status" })` field -- for example, the legacy blog template shipped this pattern before the system flag existed -- migrate by:
+
+1. **Remove the user-defined field** from `fields: [...]` in your config.
+2. **Add `status: true`** at the top of the same collection.
+3. **Run the schema migration** (Nextly will detect the field removal and the system column addition; both are applied together).
+4. **Verify your queries** still use `{ status: { equals: "published" } }` -- the column name and value space are preserved, so query call-sites don't need to change.
+5. **Verify your seed** writes the same `status: 'draft' | 'published'` values -- the system column accepts the same shape.
+
+The blog template (`@revnixhq/create-nextly-app` blog) ships this migration applied; new projects scaffolded from the blog template after this release get the unified Save Draft / Publish admin UI for free.
+
+## See also
+
+- [Collection configuration reference](../configuration/index.mdx)
+- [Schema Builder admin UI](../admin/builder.mdx)
+- [Production migrations](./production-migrations.mdx)

@@ -5,6 +5,7 @@
     "production-migrations",
     "authentication",
     "media-storage",
-    "email"
+    "email",
+    "draft-published-status"
   ]
 }
