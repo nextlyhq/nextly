@@ -1,0 +1,150 @@
+---
+title: Blog Template
+description: A complete blog starter with posts, categories, tags, frontend pages, and demo content.
+---
+
+The **Blog** template is a production-quality blog starter. It ships posts, categories, tags, three admin-editable site singles, a full set of public-facing pages under a `(frontend)` route group, RSS feeds, sitemap, OG images, RBAC access policies, and a one-click demo-content seeder. Use it when you want a working starter to read, run, and modify rather than building from scratch.
+
+## Scaffold
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app my-blog --template blog
+```
+</Tab>
+<Tab value="npm">
+```bash
+npx create-nextly-app@latest my-blog --template blog
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn create nextly-app my-blog --template blog
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun create nextly-app my-blog --template blog
+```
+</Tab>
+</Tabs>
+
+To skip the schema-approach prompt, pass `--approach`:
+
+```bash
+pnpm create nextly-app my-blog --template blog --approach code-first
+pnpm create nextly-app my-blog --template blog --approach visual
+```
+
+## Schema approach
+
+The Blog template supports two approaches:
+
+- **`code-first`** (default) -- Collections and singles are defined in TypeScript files under `src/collections/` and `src/globals/`. The CLI copies `configs/codefirst.config.ts` to the project root as `nextly.config.ts`. Best for version control and type safety.
+- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`. After scaffolding, define your schemas through the admin UI; demo data (if selected) seeds the schemas and content on first run.
+
+## What it ships
+
+### Collections
+
+- **Posts** -- Title, slug, rich-text content, featured image, author (relation to users), categories, tags, excerpt, publish date, featured flag, SEO group (metaTitle, metaDescription, ogImage, canonical, noindex), and draft/published status. Auto-generates a slug from the title and computes reading time and word count on save.
+- **Categories** -- Name, slug, description.
+- **Tags** -- Name, slug, description.
+
+The template uses the built-in `users` collection for authors. Posts relate to users via the `author` field, and `users` is extended with three scalar fields (`bio`, `avatarUrl`, `slug`) -- there is no separate `authors` collection.
+
+### Singles
+
+- **Site Settings** -- Site name, tagline, description, logo, social handles. Drives the header, footer, and SEO metadata.
+- **Navigation** -- Header link list, footer "Read" link list, theme-toggle and search-icon visibility flags.
+- **Homepage** -- Hero title and subtitle, plus toggles for featured-post, latest-grid, category-strip, and newsletter-CTA sections, and the newsletter heading and subheading.
+
+### Frontend pages
+
+Public-facing routes live under the `src/app/(frontend)/` route group:
+
+- `/` -- Homepage (hero, featured, latest grid, category strip, newsletter CTA).
+- `/blog` -- All posts, paginated.
+- `/blog/[slug]` -- Post detail with reading-progress bar, auto-generated table of contents, share bar, author card, and prev/next.
+- `/categories` and `/categories/[slug]` -- Category index and per-category archive.
+- `/tags` and `/tags/[slug]` -- Tag cloud and per-tag archive.
+- `/authors/[slug]` -- Author profile page.
+- `/search` -- Client-side search powered by Pagefind.
+
+SEO routes live at the root of `src/app/`:
+
+- `/sitemap.xml`, `/robots.txt`, `/feed.xml` (site-wide RSS).
+- Per-category, per-tag, and per-author RSS at `/{categories,tags,authors}/[slug]/feed.xml`.
+- Default OG image at `/opengraph-image`, plus per-page OG handlers under each `(frontend)` segment.
+
+### Components
+
+A set of React components for the frontend lives under `src/components/`, including `PostCard`, `PostGrid`, `FeaturedPost`, `Hero`, `Header`, `Footer`, `CategoryCardGrid`, `CategoryStrip`, `TagCloud`, `Pagination`, `NewsletterCta`, `RichTextRenderer`, `ThemeToggle`, `ReadingProgressBar`, `PostTOC`, `PostShareBar`, `PostPrevNext`, `AuthorCard`, `JsonLd`, and a few smaller helpers.
+
+### Access control
+
+RBAC policies under `src/access/` gate each CRUD operation:
+
+- `anyone` -- public read.
+- `authenticated` -- any logged-in user.
+- `is-admin` -- the `admin` role.
+- `is-author-or-editor` -- `admin`, `editor`, or `author`.
+
+Three roles (`admin`, `editor`, `author`) are seeded on first run alongside the demo content.
+
+### Demo data
+
+Selecting "Seed demo content" populates 15 posts, 3 authors, 4 categories, and 8 tags. Seeding runs through the **Seed Demo Content** card on the admin dashboard (rendered by `SeedDemoContentCard`) -- click it to start the seed, watch progress, and confirm completion. The seed is idempotent and uses placeholder gradient SVGs that you can replace later.
+
+### Newsletter form
+
+The homepage and footer newsletter forms submit through the form-builder plugin. The seed creates a form with slug `newsletter`; submissions are stored in the `form-submissions` collection and viewable at `/admin/collections/form-submissions`.
+
+## File tree
+
+```
+my-blog/
+├── configs/
+│   ├── codefirst.config.ts        # Code-first config (default)
+│   └── visual.config.ts           # Empty config for the visual approach
+├── scripts/
+│   └── build-search-index.mjs     # Pagefind index builder
+├── src/
+│   ├── access/                    # RBAC access functions
+│   ├── actions/                   # Server actions (newsletter)
+│   ├── app/
+│   │   ├── (frontend)/            # Public-facing pages and OG handlers
+│   │   ├── admin/                 # Generated admin route + seed endpoints
+│   │   ├── authors/[slug]/feed.xml/
+│   │   ├── categories/[slug]/feed.xml/
+│   │   ├── tags/[slug]/feed.xml/
+│   │   ├── feed.xml/route.ts
+│   │   ├── opengraph-image.tsx
+│   │   ├── robots.ts
+│   │   ├── sitemap.ts
+│   │   ├── globals.css
+│   │   └── layout.tsx
+│   ├── collections/
+│   │   ├── Categories.ts
+│   │   ├── Posts/
+│   │   └── Tags.ts
+│   ├── components/                # Frontend React components
+│   ├── endpoints/seed/            # Demo-content seed phases and media
+│   ├── globals/
+│   │   ├── Homepage/
+│   │   ├── Navigation/
+│   │   └── SiteSettings/
+│   ├── hooks/                     # Shared collection hooks (auto-slug, etc.)
+│   └── lib/                       # Cached query helpers, RSS builder, OG layout
+├── .env.example
+├── next.config.ts
+├── package.json
+└── tsconfig.json
+```
+
+## Next steps
+
+- [Installation](/docs/getting-started/installation) -- Pick your database, create the super-admin account, and run the dev server.
+- [Quick Start](/docs/getting-started/quick-start) -- Walk through building a blog from scratch to compare against the template.
+- [Configuration](/docs/configuration) -- Add fields, create new collections, or define your own singles.
