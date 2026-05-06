@@ -4,7 +4,9 @@
  * useEntryJSON Hook
  *
  * Fetches entry data with configurable relationship depth for displaying
- * raw JSON API responses. Used by ShowJSONDialog and potentially API Playground.
+ * raw JSON API responses. Used by ShowJSONDialog. Supports both collection
+ * entries (`scope: "collection"`, requires entryId) and single documents
+ * (`scope: "single"`, no entryId — singletons keyed only by slug).
  *
  * @module hooks/useEntryJSON
  * @since 1.0.0
@@ -13,6 +15,7 @@
 import { useState, useCallback, useEffect } from "react";
 
 import { entryApi } from "@admin/services/entryApi";
+import { singleApi } from "@admin/services/singleApi";
 import type { Entry } from "@admin/types/collection";
 
 // ============================================================================
@@ -20,10 +23,18 @@ import type { Entry } from "@admin/types/collection";
 // ============================================================================
 
 export interface UseEntryJSONOptions {
-  /** Collection slug */
+  /**
+   * Resource scope. Determines the API URL pattern and which service method
+   * fetches the document.
+   * - `"collection"` (default) — `/api/collections/{slug}/entries/{entryId}`
+   * - `"single"` — `/api/singles/{slug}` (entryId ignored)
+   */
+  scope?: "collection" | "single";
+  /** Collection or Single slug. */
   collectionSlug: string;
-  /** Entry ID to fetch */
-  entryId: string;
+  /** Entry ID to fetch. Required when `scope` is `"collection"`; ignored
+   *  when `"single"`. */
+  entryId?: string;
   /** Initial depth for relationship population (default: 0) */
   initialDepth?: number;
   /** Whether to fetch immediately on mount (default: false) */
@@ -95,6 +106,7 @@ export const MIN_DEPTH = 0;
  * ```
  */
 export function useEntryJSON({
+  scope = "collection",
   collectionSlug,
   entryId,
   initialDepth = 0,
@@ -107,24 +119,43 @@ export function useEntryJSON({
     Math.min(Math.max(initialDepth, MIN_DEPTH), MAX_DEPTH)
   );
 
-  // Build the API URL for display
-  const apiUrl = `/api/collections/${collectionSlug}/entries/${entryId}${depth > 0 ? `?depth=${depth}` : ""}`;
+  // Build the API URL for display. Branching here keeps the dialog's
+  // address bar accurate per scope.
+  const depthSuffix = depth > 0 ? `?depth=${depth}` : "";
+  const apiUrl =
+    scope === "single"
+      ? `/api/singles/${collectionSlug}${depthSuffix}`
+      : `/api/collections/${collectionSlug}/entries/${entryId}${depthSuffix}`;
 
   // Format JSON string with pretty printing
   const jsonString = data ? JSON.stringify(data, null, 2) : "";
 
   /**
-   * Fetch entry data with current depth
+   * Fetch the document with current depth. Routes through the per-scope
+   * service: collection entries via entryApi.findByID, singles via
+   * singleApi.getDocument.
    */
   const fetchEntry = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const entry = await entryApi.findByID(collectionSlug, entryId, {
-        depth,
-      });
-      setData(entry);
+      if (scope === "single") {
+        const doc = await singleApi.getDocument(collectionSlug, { depth });
+        // SingleDocument shape is structurally compatible with Entry for
+        // display purposes; the dialog only reads/serializes the JSON.
+        setData(doc as unknown as Entry);
+      } else {
+        if (!entryId) {
+          throw new Error(
+            "useEntryJSON: entryId is required when scope is 'collection'"
+          );
+        }
+        const entry = await entryApi.findByID(collectionSlug, entryId, {
+          depth,
+        });
+        setData(entry);
+      }
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to fetch entry";
@@ -133,7 +164,7 @@ export function useEntryJSON({
     } finally {
       setIsLoading(false);
     }
-  }, [collectionSlug, entryId, depth]);
+  }, [scope, collectionSlug, entryId, depth]);
 
   /**
    * Update depth and trigger refetch
