@@ -677,6 +677,67 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     ).toBe(false);
   });
 
+  it("MySQL safety: blocks TRUNCATE TABLE for non-managed (system) tables, allows for managed", async () => {
+    // MySQL drizzle-kit 0.31.x emits `truncate table {name}` before an
+    // ALTER COLUMN TYPE change when the table has rows. System tables like
+    // `users` are included in the desired schema to prevent false-positive
+    // rename detection (MySQL lacks tablesFilter), but must never be
+    // truncated. Managed tables (dc_*, etc.) are allowed through because
+    // the user already confirmed data-loss via the classifier.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [
+          // System table truncate — MUST be blocked.
+          `truncate table users;`,
+          `truncate table sessions;`,
+          // Managed table truncate — allowed (user confirmed data loss).
+          `truncate table dc_posts;`,
+          // Normal additive statement — always allowed.
+          `CREATE TABLE \`dc_posts\` (\`id\` varchar(36) NOT NULL)`,
+        ],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { pipeline, mocks } = makePipeline({ pushSchemaImpl });
+
+    await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    const [, executedStmts] = mocks.executor.executeStatements.mock
+      .calls[0] as [unknown, string[]];
+
+    // System-table TRUNCATEs blocked, managed TRUNCATE + CREATE pass.
+    expect(executedStmts).toHaveLength(2);
+    expect(executedStmts[0]).toMatch(/truncate table dc_posts/i);
+    expect(executedStmts[1]).toMatch(/CREATE TABLE/i);
+    expect(executedStmts.some(s => /truncate table users/i.test(s))).toBe(false);
+    expect(executedStmts.some(s => /truncate table sessions/i.test(s))).toBe(false);
+
+    // Two console.warn calls for the two blocked system truncates.
+    const warnCalls = warnSpy.mock.calls.map(c => String(c[0]));
+    expect(warnCalls.some(m => m.includes("Blocked TRUNCATE TABLE"))).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
   it("Phase 5: dequal short-circuit skips pushSchema when desired is unchanged since last apply", async () => {
     // Run pipeline once to populate the snapshot cache; then run again
     // with the SAME desired and assert pushSchema is not called the

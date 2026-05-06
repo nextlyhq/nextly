@@ -816,6 +816,34 @@ export class PushSchemaPipeline {
     );
 
     return statements.filter(stmt => {
+      // Block TRUNCATE TABLE for non-managed (system) tables.
+      // MySQL drizzle-kit 0.31.x emits `truncate table {name}` before an
+      // ALTER COLUMN TYPE when the table has rows. System tables like
+      // `users`, `sessions`, etc. are included in the desired schema so
+      // drizzle-kit doesn't misidentify them as rename candidates, but
+      // they must never be truncated by the dynamic-collections pipeline.
+      // Managed tables (dc_*, single_*, comp_*) are allowed through — the
+      // user explicitly confirmed any data-loss risk via the classifier.
+      //
+      // This is the ONLY defense for MySQL (tablesFilter not supported) —
+      // mirroring the existing DROP TABLE guard below.
+      const truncateMatch = stmt.match(
+        /^TRUNCATE\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
+      );
+      if (truncateMatch) {
+        const tableName = truncateMatch[1] ?? "<unknown>";
+        if (!isManagedTable(tableName)) {
+          // eslint-disable-next-line no-console -- operator-visible protection signal
+          console.warn(
+            `[Nextly schema] Blocked TRUNCATE TABLE "${tableName}" emitted by ` +
+              `drizzle-kit pushSchema (non-managed system table — never truncate). ` +
+              `(managed=${isManagedTable(tableName)})`
+          );
+          return false;
+        }
+        return true;
+      }
+
       const dropMatch = stmt.match(
         /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
