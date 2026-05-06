@@ -1,39 +1,40 @@
 # Nextly Templates
 
-Starter templates for the `create-nextly-app` CLI. Each template provides a pre-configured project setup with collections, frontend pages, and optional demo content.
+Starter templates for the `create-nextly-app` CLI. Each template is a pre-configured project setup with collections, frontend pages, and (optionally) seed content.
 
-## Available Templates
+## Available templates
 
-| Template  | Description                                                                      | Status |
-| --------- | -------------------------------------------------------------------------------- | ------ |
-| **base**  | Shared foundation (admin routes, API handlers, styles). Not selectable directly. | Stable |
-| **blank** | Empty config for building from scratch.                                          | Alpha  |
-| **blog**  | Blog with posts, authors, categories, frontend pages, and demo content.          | Alpha  |
+| Template  | Description                                                                                | Status |
+| --------- | ------------------------------------------------------------------------------------------ | ------ |
+| **base**  | Shared foundation (admin routes, API handlers, styles). Not selectable directly.           | Stable |
+| **blank** | Empty config for building from scratch.                                                    | Alpha  |
+| **blog**  | Blog with posts, categories, tags, users-as-authors, frontend pages, RSS, sitemap, search. | Alpha  |
 
-## How Templates Are Used
+See [`templates/base/README.md`](./base/README.md), [`templates/blank/README.md`](./blank/README.md), and [`templates/blog/README.md`](./blog/README.md) for per-template details.
 
-The CLI downloads templates from this directory at runtime via GitHub's Codeload API. The `base` template is always applied first, then the selected template overlays its files on top.
+## How templates are used
+
+The CLI downloads templates from this directory at runtime via GitHub's Codeload API. The `base` template is always applied first, then the selected template (`blank` or `blog`) overlays its files on top.
 
 For local development, use `--local-template` to read from the filesystem:
 
 ```bash
-npx create-nextly-app my-blog \
+pnpm create-nextly-app@latest my-blog \
   --local-template ./templates \
   --template blog \
   --use-yalc
 ```
 
-## Template Structure
+## Template structure
 
-Each template directory contains:
+Each user-selectable template directory contains:
 
 ```
 templates/{name}/
 ├── template.json              # Manifest with metadata for the CLI
 ├── configs/                   # Approach-specific nextly.config.ts variants
 │   ├── codefirst.config.ts    # Code-first approach (full schemas in TypeScript)
-│   ├── visual.config.ts       # Visual approach (schemas via Admin Panel)
-│   └── both.config.ts         # Hybrid approach
+│   └── visual.config.ts       # Visual approach (schemas via Admin Panel)
 ├── seed/                      # Demo content (optional)
 │   ├── nextly.seed.ts         # Seed script
 │   ├── seed-data.json         # Content entries
@@ -43,18 +44,18 @@ templates/{name}/
     └── components/            # Reusable UI components
 ```
 
-The `base` template is simpler (no configs/, seed/, or frontend pages). The `blank` template only has a `template.json` and a `nextly.config.ts`.
+The `base` template has no `configs/`, `seed/`, or frontend pages; it ships shared scaffolding only. The `blank` template has only a `template.json` and a `nextly.config.ts`.
 
-## Creating a New Template
+## Creating a new template
 
-1. Create a directory under `templates/` with your template name
-2. Add a `template.json` manifest (see existing templates for the schema)
-3. Add approach-specific configs in `configs/` if your template has content schemas
-4. Add frontend pages in `src/app/(frontend)/` and components in `src/components/`
-5. Add seed data in `seed/` if your template should offer demo content
-6. Update `AVAILABLE_TEMPLATES` in `packages/create-nextly-app/src/lib/templates.ts`
+1. Create a directory under `templates/` with your template name.
+2. Add a `template.json` manifest (see the schema below).
+3. Add approach-specific configs in `configs/` if your template has content schemas.
+4. Add frontend pages in `src/app/(frontend)/` and components in `src/components/`.
+5. Add seed data in `seed/` if your template ships demo content.
+6. Update `AVAILABLE_TEMPLATES` in `packages/create-nextly-app/src/lib/templates.ts`.
 
-## template.json Schema
+## template.json schema
 
 ```json
 {
@@ -62,7 +63,7 @@ The `base` template is simpler (no configs/, seed/, or frontend pages). The `bla
   "label": "Display Name",
   "description": "Short description for the CLI prompt",
   "hint": "Brief hint shown next to the label",
-  "approaches": ["code-first", "visual", "both"],
+  "approaches": ["code-first", "visual"],
   "defaultApproach": "code-first",
   "collections": ["collection-slugs"],
   "singles": ["single-slugs"],
@@ -73,4 +74,4 @@ The `base` template is simpler (no configs/, seed/, or frontend pages). The `bla
 }
 ```
 
-Set `approaches` to an empty array for templates that don't need approach selection (like blank).
+Set `approaches` to an empty array for templates that do not need approach selection (like `blank`).
