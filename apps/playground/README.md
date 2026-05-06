@@ -1,44 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Playground
 
-## Getting Started
+Internal development sandbox for working on Nextly. Used by maintainers to iterate on the runtime, admin panel, plugins, and adapters.
 
-First, run the development server:
+> This is not an example for end users. Use [`templates/blog`](../../templates/blog) for that.
+
+## What this is
+
+A pre-wired Nextly project with the admin panel mounted at `/admin`, the form builder plugin registered, and a database adapter selected via env vars. Edits to `packages/*` source files hot-reload here through workspace dependencies.
+
+## Run it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+cd apps/playground
+cp .env.example .env   # copy and fill DATABASE_URL, BLOB_READ_WRITE_TOKEN, etc.
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Visit [`http://localhost:3000/admin/setup`](http://localhost:3000/admin/setup) to create the first admin user.
 
 ## Database configuration
 
-Copy `.env.example` to `.env` for the full reference of supported variables. Three minimal `.env.<dialect>` templates are also provided for quick DB switching — copy the one you want to `.env`:
+Three minimal `.env.<dialect>` templates are provided for quick DB switching. Copy the one you want into `.env`:
 
-- `.env.postgresql` — PostgreSQL
-- `.env.mysql` — MySQL
-- `.env.sqlite` — SQLite
+- `.env.postgresql` for PostgreSQL
+- `.env.mysql` for MySQL
+- `.env.sqlite` for SQLite
 
-## Learn More
+`.env.example` carries the full reference of supported variables (storage tokens, email providers, telemetry overrides, etc.).
 
-To learn more about Next.js, take a look at the following resources:
+## What's wired up
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **Admin:** mounted at `app/admin/[[...params]]/page.tsx` via `<RootLayout />` from `@revnixhq/admin`
+- **Plugins:** `@revnixhq/plugin-form-builder` registered with admin pluginOverrides
+- **Storage:** `@revnixhq/storage-vercel-blob` (when `BLOB_READ_WRITE_TOKEN` is set)
+- **Email:** Resend when `RESEND_API_KEY` is set, SMTP fallback otherwise
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## License
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+[MIT](../../LICENSE.md)
