@@ -1,84 +1,75 @@
-# @nextly/admin
+# @revnixhq/admin
 
-Admin dashboard and management interface for Nextly.
+The admin dashboard and management interface for Nextly. Mounts at `/admin` in your Next.js app.
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/admin"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/admin?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
+## What it is
+
+`@revnixhq/admin` ships the React admin panel: collection list views, entry editors, the field UI registry, the visual Schema Builder, the media library, and user/role management. It runs inside your Next.js app's App Router, not as a separate server.
+
+Install this whenever you want a `/admin` UI in your Nextly project. Skip it if you only need the API surface from `@revnixhq/nextly`.
 
 ## Installation
 
 ```bash
-npm install @nextly/admin
-# or
-pnpm add @nextly/admin
+pnpm add @revnixhq/admin
 ```
 
-## Peer Dependencies
-
-This package requires the following peer dependencies:
-
-- `nextly` - Core Nextly package
-- `react` - React 18 or 19
-- `react-dom` - React DOM 18 or 19
-- `next` - Next.js 14+
+Peer dependencies (must be installed in the consuming project):
 
 ```bash
-npm install nextly react react-dom next
-# or
-pnpm add nextly react react-dom next
+pnpm add @revnixhq/nextly react react-dom next
 ```
 
-## Usage
+## Quick usage
 
-### App Router Integration
+Mount the admin under a catch-all App Router route (`app/admin/[[...params]]/page.tsx`):
 
-```typescript
-// app/admin/[[...params]]/page.tsx
-import { RootLayout, AdminRouter } from "@nextly/admin";
-import "@nextly/admin/styles.css";
+```tsx
+"use client";
+
+import "@revnixhq/admin/style.css";
+import { RootLayout } from "@revnixhq/admin";
 
 export default function AdminPage() {
-  return (
-    <RootLayout>
-      <AdminRouter />
-    </RootLayout>
-  );
+  return <RootLayout />;
 }
 ```
 
-### API Route Setup
+After running `pnpm dev`, visit `http://localhost:3000/admin/setup` to create the first admin user.
 
-```typescript
-// app/admin/api/[[...params]]/route.ts
-import { createDynamicHandlers } from "nextly/runtime";
+## Main exports
 
-const handlers = createDynamicHandlers();
-export const { GET, POST, PUT, PATCH, DELETE } = handlers;
-```
+- [`RootLayout`](https://nextlyhq.com/docs/admin) – the top-level admin component, mounted by your catch-all route
+- [`ThemeProvider`](https://nextlyhq.com/docs/admin/customization), `useTheme` – light/dark theme toggle
+- [`BrandingProvider`](https://nextlyhq.com/docs/admin/customization), `useBranding` – customize logo and admin branding
+- [`QueryProvider`](https://nextlyhq.com/docs/admin/customization) – TanStack Query client wrapper
+- TanStack Query hooks for users, roles, permissions, collections, and media (e.g. `useUsers`, `useRoles`, `useCollection`)
 
-## Exports
+## Compatibility
 
-| Export                     | Description               |
-| -------------------------- | ------------------------- |
-| `@nextly/admin`            | Main components and hooks |
-| `@nextly/admin/styles.css` | Required CSS styles       |
-
-## Features
-
-- Collection management dashboard
-- User and role management
-- Media library with drag-and-drop
-- Dynamic collection builder
-- Field permissions UI
-- Dark/light theme support
-
-## Related Packages
-
-- `nextly` - Core Nextly functionality
-- `@nextly/client` - Client SDK for browser-based applications
-- `@nextly/ui` - Shared UI components
+- Next.js 15+
+- React 18 or 19
+- `@revnixhq/nextly` 0.0.x
 
 ## Documentation
 
-Full documentation coming soon.
+**[Admin docs →](https://nextlyhq.com/docs/admin)**
+
+## Related packages
+
+- [`@revnixhq/nextly`](../nextly) – the core runtime
+- [`@revnixhq/client`](../client) – browser-side type-safe client (in development)
+- [`@revnixhq/ui`](../ui) – the underlying component library
 
 ## License
 
-MIT
+[MIT](../../LICENSE.md)

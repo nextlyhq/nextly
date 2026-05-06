@@ -1,88 +1,81 @@
-# @nextly/ui
+# @revnixhq/ui
 
-Headless UI components for Nextly plugins and extensions.
+Headless React component library for Nextly's admin panel, plugins, and any custom UI you build on top.
 
-## Status
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/ui"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/ui?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
 
-> **Under Development** - Scaffolded in Plan 1, full implementation pending.
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
 
-This package is currently a placeholder with basic components. The full UI library will be extracted from `@nextly/admin` to provide reusable components for plugin development.
+## What it is
+
+A shadcn/ui-flavored component set built on Radix primitives, `class-variance-authority`, and Tailwind. The same components power the admin panel; you can use them in your own custom admin views, plugin UIs, or marketing pages.
+
+Install this whenever you want admin-consistent UI in a Nextly extension or a frontend that should match the admin look.
 
 ## Installation
 
 ```bash
-npm install @nextly/ui
-# or
-pnpm add @nextly/ui
+pnpm add @revnixhq/ui
 ```
 
-## Peer Dependencies
-
-This package requires React as a peer dependency:
+Peer dependencies:
 
 ```bash
-npm install react react-dom
-# or
-pnpm add react react-dom
+pnpm add react react-dom lucide-react
 ```
 
-## Usage
+## Setup
 
-```typescript
-import { Button, cn } from "@nextly/ui";
+Register the Tailwind preset in your `tailwind.config.ts`:
 
-function MyComponent() {
-  return (
-    <Button variant="default" size="lg">
-      Click me
-    </Button>
-  );
-}
-```
+```ts
+import { uiPreset } from "@revnixhq/ui";
 
-## Current Components
-
-| Component | Description                                  |
-| --------- | -------------------------------------------- |
-| `Button`  | Versatile button with variants and sizes     |
-| `cn`      | Utility for merging Tailwind CSS class names |
-
-## Planned Components
-
-Components will be extracted from `@nextly/admin`:
-
-- Form inputs (Input, Textarea, Select, Checkbox)
-- Dialog and Modal
-- Dropdown Menu
-- Data Table
-- Tabs
-- Toast notifications
-- And more...
-
-## Styling
-
-This package uses Tailwind CSS classes. Ensure your project has Tailwind configured and includes the package in your content paths:
-
-```javascript
-// tailwind.config.js
-module.exports = {
-  content: [
-    // ... your paths
-    "./node_modules/@nextly/ui/**/*.{js,mjs}",
-  ],
+export default {
+  presets: [uiPreset],
+  content: ["./src/**/*.{ts,tsx}", "./node_modules/@revnixhq/ui/dist/**/*.js"],
 };
 ```
 
-## Related Packages
+Then import any component:
 
-- `nextly` - Core Nextly functionality
-- `@nextly/admin` - Admin dashboard (uses this package)
-- `@nextly/client` - Client SDK
+```tsx
+import { Button } from "@revnixhq/ui";
+
+<Button variant="outline">Click me</Button>;
+```
+
+## Components
+
+**Buttons & Inputs:** `Button`, `Input`, `Textarea`, `Label`
+**Display:** `Badge`, `Card`, `Alert`, `Separator`, `Skeleton`, `Progress`, `Avatar`, `Spinner`
+**Toggles:** `Checkbox`, `RadioGroup`, `Switch`, `Collapsible`
+**Overlays:** `Dialog`, `AlertDialog`, `Sheet`, `Popover`, `Tooltip`
+**Menus:** `DropdownMenu`, `Select`, `Command`, `Tabs`, `Accordion`
+**Tables:** `Table`, `ResponsiveTable`, `TableSearch`, `TablePagination`, `TableSkeleton`, `TableEmpty`, `TableError`, `TableLoading`
+**Other:** `Toaster`, `toast`, `cn`, `PortalProvider`, `uiPreset`
+
+## Compatibility
+
+- React 18 or 19
+- Tailwind CSS 3.4+ (or 4 with the same preset)
+- `lucide-react` 0.400+
 
 ## Documentation
 
-Full documentation coming soon.
+**[UI components docs →](https://nextlyhq.com/docs/admin/customization)**
+
+## Related packages
+
+- [`@revnixhq/admin`](../admin) – uses these components throughout
+- [`@revnixhq/nextly`](../nextly) – the runtime
+- [`@revnixhq/client`](../client) – data fetching
 
 ## License
 
-MIT
+[MIT](../../LICENSE.md)

@@ -1,69 +1,62 @@
-# @nextly/client
+# @revnixhq/client
 
-Client SDK for browser-based applications using Nextly.
+The browser-side type-safe REST client SDK for Nextly.
 
-## Status
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/client"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/client?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-pre--alpha-red?style=flat-square" /></a>
+</p>
 
-> **Under Development** - Scaffolded in Plan 1, full implementation pending.
+> [!WARNING]
+> **`@revnixhq/client` is a placeholder package.** The class and methods exist, but every method currently throws `Not implemented`. The implementation lands ahead of 1.0. For now, query the [REST API](https://nextlyhq.com/docs/api-reference/rest-api) directly with `fetch` from your client code.
 
-This package is currently a placeholder. The full client SDK implementation will provide a type-safe REST API client for browser-based applications.
+## Planned shape
 
-## Installation
+When the SDK ships, it will provide:
 
-```bash
-npm install @nextly/client
-# or
-pnpm add @nextly/client
-```
+```ts
+import { NextlySDK } from "@revnixhq/client";
 
-## Usage
+const sdk = new NextlySDK({ baseURL: "/api" });
 
-```typescript
-import { NextlySDK } from "@nextly/client";
-
-// Initialize the SDK
-const sdk = new NextlySDK({
-  baseURL: "/api",
-});
-
-// Query collections
-const posts = await sdk.find({
+const { docs, totalPages } = await sdk.find({
   collection: "posts",
-  where: { status: "published" },
+  where: { status: { equals: "published" } },
   limit: 10,
 });
-
-// Create entries
-const newPost = await sdk.create({
-  collection: "posts",
-  data: { title: "Hello World", content: "..." },
-});
 ```
 
-## Planned Features
+Types for `posts.title`, `posts.body`, etc. will be inferred from your `nextly.config.ts` collections.
 
-- Type-safe REST API client
-- Automatic request/response typing
-- Authentication handling
-- Request caching and deduplication
-- React Query integration (optional)
-- Optimistic updates support
+## Until the SDK ships
 
-## Exports
+Use `fetch` against the REST API. Example (server component or client code):
 
-| Export           | Description               |
-| ---------------- | ------------------------- |
-| `@nextly/client` | NextlySDK class and types |
+```ts
+const res = await fetch("/api/posts?where[status][equals]=published&limit=10", {
+  cache: "no-store",
+});
+const { docs } = await res.json();
+```
 
-## Related Packages
+For server-side queries from inside the same Next.js process, use the [Direct API](https://nextlyhq.com/docs/api-reference/direct-api) on `@revnixhq/nextly` instead. It bypasses HTTP and is fully typed today.
 
-- `nextly` - Core Nextly functionality (server-side)
-- `@nextly/admin` - Admin dashboard
+## Compatibility
+
+- Modern browsers (ES2022+)
+- `@revnixhq/nextly` 0.0.x
 
 ## Documentation
 
-Full documentation coming soon.
+**[Client SDK roadmap →](https://nextlyhq.com/docs/api-reference/client)**
+
+## Related packages
+
+- [`@revnixhq/nextly`](../nextly) – exposes the REST API this client will talk to
+- [`@revnixhq/admin`](../admin) – admin panel
+- [`@revnixhq/ui`](../ui) – component library
 
 ## License
 
-MIT
+[MIT](../../LICENSE.md)
