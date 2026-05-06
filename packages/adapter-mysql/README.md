@@ -1,334 +1,101 @@
-# @nextly/adapter-mysql
+# @revnixhq/adapter-mysql
 
-MySQL database adapter for Nextly. Extends `@nextly/adapter-drizzle` to provide MySQL-specific functionality using the `mysql2` driver.
+MySQL database adapter for Nextly. Built on `mysql2` with connection pooling and transactions.
 
-## Overview
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/adapter-mysql"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/adapter-mysql?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
 
-This adapter provides:
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
 
-- Connection pooling via `mysql2` Pool
-- Full transaction support with isolation levels
-- CRUD operations with workarounds for missing RETURNING clause
-- MySQL-specific error classification
-- JSON type support
-- FULLTEXT search capabilities
-- SSL/TLS connection support
-- Automatic retry for deadlocks
+## What it is
+
+The MySQL adapter for Nextly. Use this if your database is MySQL or a MySQL-compatible cloud database (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess work on best-effort).
+
+If you can pick a database, prefer PostgreSQL for new Nextly projects: it has the full feature set including JSONB, arrays, savepoints, and `RETURNING`. MySQL emulates some of these and disables others. See the [feature comparison](https://nextlyhq.com/docs/database#feature-comparison).
 
 ## Installation
 
 ```bash
-pnpm add @nextly/adapter-mysql mysql2
+pnpm add @revnixhq/adapter-mysql mysql2
 ```
 
-Or with npm:
+## Quick usage
+
+Nextly selects the adapter from your `.env` file. Install the package and set:
 
 ```bash
-npm install @nextly/adapter-mysql mysql2
+DB_DIALECT=mysql
+DATABASE_URL=mysql://user:password@localhost:3306/mydb
 ```
 
-## Peer Dependencies
+That's it. Nextly's runtime instantiates the adapter on boot.
 
-- `mysql2` (^3.0.0) - MySQL client for Node.js
+## Required environment variables
 
-## Quick Start
+| Variable       | Required?   | Default                  | Notes                                   |
+| -------------- | ----------- | ------------------------ | --------------------------------------- |
+| `DATABASE_URL` | yes         | (none)                   | Standard `mysql://...` URL.             |
+| `DB_DIALECT`   | recommended | (auto-detected from URL) | One of `postgresql`, `mysql`, `sqlite`. |
 
-```typescript
-import { createMySqlAdapter } from "@nextly/adapter-mysql";
+For SSL on managed providers (PlanetScale, Aurora MySQL), include the SSL params in the URL or set `MYSQL_SSL=true`.
+
+## Programmatic usage (advanced)
+
+For custom bootstrap (test harnesses, scripts):
+
+```ts
+import { createMySqlAdapter } from "@revnixhq/adapter-mysql";
 
 const adapter = createMySqlAdapter({
   url: process.env.DATABASE_URL!,
 });
 
 await adapter.connect();
-
-// Query data
-const users = await adapter.select("users", {
-  where: { and: [{ column: "status", op: "=", value: "active" }] },
-  orderBy: [{ column: "created_at", direction: "desc" }],
-  limit: 10,
-});
-
-await adapter.disconnect();
 ```
 
-## Configuration Options
+Most users do not need this.
 
-| Option                     | Type                   | Default | Description                        |
-| -------------------------- | ---------------------- | ------- | ---------------------------------- |
-| `url`                      | `string`               | -       | MySQL connection URL               |
-| `host`                     | `string`               | -       | Database host (alternative to URL) |
-| `port`                     | `number`               | `3306`  | Database port                      |
-| `database`                 | `string`               | -       | Database name                      |
-| `user`                     | `string`               | -       | Database user                      |
-| `password`                 | `string`               | -       | Database password                  |
-| `pool.min`                 | `number`               | `2`     | Minimum pool connections           |
-| `pool.max`                 | `number`               | `10`    | Maximum pool connections           |
-| `pool.idleTimeoutMs`       | `number`               | `30000` | Idle connection timeout (ms)       |
-| `pool.connectionTimeoutMs` | `number`               | `10000` | Connection timeout (ms)            |
-| `ssl`                      | `boolean \| SslConfig` | -       | SSL/TLS configuration              |
-| `timezone`                 | `string`               | -       | Session timezone                   |
-| `charset`                  | `string`               | -       | Connection charset                 |
+## Supported MySQL versions
 
-### Full Configuration Example
+- MySQL 8.0 or newer required
+- MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) work on best-effort. The adapter detects the variant at connect time and warns when behavior may diverge.
 
-```typescript
-import { createMySqlAdapter } from "@nextly/adapter-mysql";
+## Dialect notes
 
-const adapter = createMySqlAdapter({
-  url: process.env.DATABASE_URL!,
-  pool: {
-    min: 2,
-    max: 20,
-    idleTimeoutMs: 30000,
-    connectionTimeoutMs: 10000,
-  },
-  ssl: {
-    rejectUnauthorized: true,
-    ca: process.env.CA_CERT,
-  },
-  timezone: "+00:00",
-  charset: "utf8mb4",
-});
+MySQL lacks a few features Nextly leans on in PostgreSQL. The adapter emulates or works around them:
 
-await adapter.connect();
-```
+- `RETURNING` clause: emulated with an extra `SELECT` after writes.
+- `ILIKE`: emulated as `LOWER(...) LIKE LOWER(...)`.
+- Savepoints: disabled by the adapter.
+- `JSONB`: not available; `JSON` columns are used instead.
 
-## Database Capabilities
+## Main exports
 
-MySQL has some limitations compared to PostgreSQL:
+- `MySqlAdapter` – the adapter class
+- `createMySqlAdapter` – factory for programmatic use
+- `isMySqlAdapter` – type guard
+- Type exports: `MySqlAdapterConfig`
 
-| Capability        | Supported | Notes                           |
-| ----------------- | --------- | ------------------------------- |
-| JSON              | ✅        | Native JSON type                |
-| JSONB             | ❌        | Use JSON instead                |
-| Arrays            | ❌        | Not supported natively          |
-| Full-text search  | ✅        | FULLTEXT indexes                |
-| ILIKE             | ❌        | Uses `LOWER() LIKE` workaround  |
-| RETURNING         | ❌        | Uses `INSERT` then `SELECT`     |
-| Savepoints        | ⚠️        | Disabled for safety (see notes) |
-| ON CONFLICT       | ✅        | `ON DUPLICATE KEY UPDATE`       |
-| Generated columns | ✅        | MySQL 5.7.6+                    |
+## Compatibility
 
-## Usage Examples
+- Node.js 18+
+- `mysql2` 3+
+- `@revnixhq/nextly` 0.0.x
 
-### Transactions
+## Documentation
 
-```typescript
-const result = await adapter.transaction(async tx => {
-  // Insert a user
-  const user = await tx.insert("users", {
-    email: "user@example.com",
-    name: "New User",
-  });
+**[MySQL adapter docs →](https://nextlyhq.com/docs/database/mysql)**
 
-  // Insert related data
-  await tx.insert("profiles", {
-    user_id: user.id,
-    bio: "Hello world",
-  });
+## Related packages
 
-  return user;
-});
-```
-
-### Transaction with Isolation Level
-
-```typescript
-const result = await adapter.transaction(
-  async tx => {
-    const accounts = await tx.select("accounts", {
-      where: { and: [{ column: "balance", op: ">", value: 1000 }] },
-    });
-    return accounts;
-  },
-  {
-    isolationLevel: "repeatable read",
-    retryCount: 3, // Retry on deadlocks
-    retryDelayMs: 100,
-  }
-);
-```
-
-### Using the Adapter Class Directly
-
-```typescript
-import { MySqlAdapter } from "@nextly/adapter-mysql";
-import type { MySqlAdapterConfig } from "@nextly/adapter-mysql";
-
-const config: MySqlAdapterConfig = {
-  url: process.env.DATABASE_URL!,
-  pool: { max: 10 },
-};
-
-const adapter = new MySqlAdapter(config);
-await adapter.connect();
-```
-
-## Error Handling
-
-MySQL errors are automatically classified into `DatabaseError` types. See [`@nextly/adapter-drizzle`](../adapter-drizzle) for the full error handling API.
-
-### MySQL Error Code Mapping
-
-| MySQL Code | Error Kind              | Description                     |
-| ---------- | ----------------------- | ------------------------------- |
-| 1062       | `unique_violation`      | Duplicate entry                 |
-| 1451, 1452 | `foreign_key_violation` | Foreign key constraint violated |
-| 1048       | `not_null_violation`    | Column cannot be null           |
-| 3819       | `check_violation`       | Check constraint violated       |
-| 1213       | `deadlock`              | Deadlock detected               |
-| 1205       | `timeout`               | Lock wait timeout               |
-| 2002, 2003 | `connection`            | Connection errors               |
-
-### Error Handling Example
-
-```typescript
-import { isDatabaseError } from "@nextly/adapter-drizzle/types";
-
-try {
-  await adapter.insert("users", { email: "duplicate@example.com" });
-} catch (error) {
-  if (isDatabaseError(error)) {
-    switch (error.kind) {
-      case "unique_violation":
-        console.log(`Duplicate entry: ${error.message}`);
-        break;
-      case "deadlock":
-        console.log("Deadlock detected, consider retrying");
-        break;
-      default:
-        console.log(`Database error: ${error.message}`);
-    }
-  }
-}
-```
-
-## Production Tips
-
-- **Connection pooling:** Set `pool.max` based on workload; MySQL's default `max_connections` is 151
-- **SSL:** Always enable SSL in production for secure connections
-- **Timezone:** Set `timezone: "+00:00"` to store timestamps in UTC
-- **Charset:** Use `charset: "utf8mb4"` for full Unicode support including emojis
-- **Deadlock retries:** Use `retryCount` in transactions to handle transient deadlocks
-
-## Advanced Usage
-
-### Drizzle Access
-
-Access the underlying Drizzle ORM instance for advanced queries:
-
-```typescript
-const db = adapter.getDrizzle(schema);
-
-// Use Drizzle's query builder
-const users = await db
-  .select()
-  .from(usersTable)
-  .where(eq(usersTable.status, "active"));
-```
-
-### Type Guard
-
-```typescript
-import { isMySqlAdapter } from "@nextly/adapter-mysql";
-
-if (isMySqlAdapter(adapter)) {
-  // TypeScript knows adapter is MySqlAdapter
-  console.log(adapter.dialect); // 'mysql'
-}
-```
-
-### Pool Statistics
-
-```typescript
-const stats = adapter.getPoolStats();
-if (stats) {
-  console.log(
-    `Active: ${stats.active}, Idle: ${stats.idle}, Waiting: ${stats.waiting}`
-  );
-}
-```
-
-## Type Exports
-
-This package re-exports commonly used types from `@nextly/adapter-drizzle`:
-
-```typescript
-import type {
-  MySqlAdapterConfig,
-  DatabaseCapabilities,
-  PoolStats,
-  TransactionContext,
-  TransactionOptions,
-  WhereClause,
-  SelectOptions,
-  InsertOptions,
-  UpdateOptions,
-  DeleteOptions,
-  DatabaseError,
-  DatabaseErrorKind,
-} from "@nextly/adapter-mysql";
-```
-
-## MySQL-Specific Notes
-
-### No RETURNING Clause
-
-MySQL doesn't support the `RETURNING` clause. The adapter works around this by:
-
-1. Executing the `INSERT` statement
-2. Using `LAST_INSERT_ID()` to get the auto-increment ID
-3. Executing a `SELECT` to retrieve the inserted row
-
-This means `insert()` operations require two queries instead of one.
-
-### Savepoints Disabled
-
-Savepoints are disabled in this adapter due to MySQL's quirks with nested transactions. If you need savepoint-like behavior, consider:
-
-- Restructuring your transaction logic
-- Using PostgreSQL or SQLite which have full savepoint support
-
-### ILIKE Emulation
-
-MySQL doesn't have native `ILIKE`. The adapter uses `LOWER(column) LIKE LOWER(value)` as a workaround, which may impact index usage.
-
-## Troubleshooting
-
-### Connection refused
-
-- Verify MySQL is running and accepting connections
-- Check host, port, and firewall settings
-- Ensure the database exists and user has access
-
-### Access denied
-
-- Verify username and password
-- Check user privileges: `SHOW GRANTS FOR 'user'@'host'`
-
-### Too many connections
-
-- Reduce `pool.max` or increase MySQL's `max_connections`
-- Ensure connections are being released (call `disconnect()` on shutdown)
-
-### Deadlocks
-
-- Use `retryCount` option in transactions
-- Review query order to minimize lock contention
-- Consider using `"read committed"` isolation level
-
-### Character encoding issues
-
-- Set `charset: "utf8mb4"` for full Unicode support
-- Ensure your database and tables use `utf8mb4` collation
-
-## Related Packages
-
-- [`@nextly/adapter-drizzle`](../adapter-drizzle) - Base adapter with shared logic
-- [`@nextly/adapter-postgres`](../adapter-postgres) - PostgreSQL adapter
-- [`@nextly/adapter-sqlite`](../adapter-sqlite) - SQLite adapter
+- [`@revnixhq/adapter-postgres`](../adapter-postgres)
+- [`@revnixhq/adapter-sqlite`](../adapter-sqlite)
+- [`@revnixhq/adapter-drizzle`](../adapter-drizzle) – the base class
 
 ## License
 
-MIT
+[MIT](../../LICENSE.md)
