@@ -1,6 +1,19 @@
 # @revnixhq/storage-vercel-blob
 
-[Vercel Blob](https://vercel.com/docs/storage/vercel-blob) storage adapter for [Nextly](https://github.com/revnix/nextly-dev). Optimized for Vercel deployments with built-in support for client-side uploads to bypass the 4.5 MB serverless body limit.
+[Vercel Blob](https://vercel.com/docs/storage/vercel-blob) storage adapter for Nextly. Optimized for Vercel deployments with built-in support for client-side uploads to bypass the 4.5 MB serverless body limit.
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/storage-vercel-blob"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/storage-vercel-blob?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
+## What it is
+
+Stores Nextly media uploads on Vercel Blob. The simplest option if you are deploying to Vercel and want zero infrastructure setup. Client-side uploads (large files bypass the serverless body limit) are enabled with one config flag.
 
 ## Installation
 
@@ -8,92 +21,66 @@
 pnpm add @revnixhq/storage-vercel-blob
 ```
 
-`@revnixhq/storage-vercel-blob` expects `@revnixhq/nextly` to be installed alongside it.
+## Quick usage
 
-## Required credentials
+Register the storage adapter in `nextly.config.ts`:
 
-Set the `BLOB_READ_WRITE_TOKEN` environment variable (recommended) or pass `token` explicitly. Get the token from **Vercel Dashboard → Storage → Blob → Tokens**. The adapter throws at boot if the token is missing.
-
-## Quick start
-
-```typescript
+```ts
 import { defineConfig } from "@revnixhq/nextly/config";
 import { vercelBlobStorage } from "@revnixhq/storage-vercel-blob";
 
 export default defineConfig({
   storage: [
     vercelBlobStorage({
-      token: process.env.BLOB_READ_WRITE_TOKEN,
-      collections: {
-        media: true,
-      },
+      token: process.env.BLOB_READ_WRITE_TOKEN!,
+      collections: { media: true },
     }),
   ],
 });
 ```
 
-## Client uploads (recommended on Vercel)
+## Required environment variables
 
-Vercel serverless functions cap request bodies at **4.5 MB**. For anything larger, enable `clientUploads: true` on the collection — the browser uploads directly to Vercel Blob and only metadata flows through your server route:
+| Variable                | Required? | Default | Notes                                                                  |
+| ----------------------- | --------- | ------- | ---------------------------------------------------------------------- |
+| `BLOB_READ_WRITE_TOKEN` | yes       | (none)  | Provisioned automatically by Vercel when you enable Blob in a project. |
 
-```typescript
+## Client-side uploads
+
+For files larger than ~4.5 MB on Vercel's serverless functions, enable client uploads:
+
+```ts
 vercelBlobStorage({
+  token: process.env.BLOB_READ_WRITE_TOKEN!,
   collections: {
-    media: {
-      clientUploads: true,
-    },
+    media: { clientUploads: true },
   },
 });
 ```
 
-Client uploads require a `handleUpload` route handler using `@vercel/blob/client`. See the [Vercel Blob client uploads docs](https://vercel.com/docs/storage/vercel-blob/client-upload).
+The admin uploader hands the file to the browser-side SDK, which uploads directly to Blob. Server only signs the upload.
 
-## Configuration
+## Main exports
 
-| Option               | Type                                                    | Default    | Notes                                                     |
-| -------------------- | ------------------------------------------------------- | ---------- | --------------------------------------------------------- |
-| `token`              | `string`                                                | env        | Falls back to `BLOB_READ_WRITE_TOKEN`.                    |
-| `collections`        | `Record<string, boolean \| VercelBlobCollectionConfig>` | —          | **Required.**                                             |
-| `addRandomSuffix`    | `boolean`                                               | `true`     | Appends a random suffix to filenames to avoid collisions. |
-| `cacheControlMaxAge` | `number`                                                | `31536000` | Seconds. Vercel enforces a 60s minimum.                   |
-| `allowOverwrite`     | `boolean`                                               | `false`    | Only relevant when `addRandomSuffix: false`.              |
-| `storeId`            | `string`                                                | —          | Required if your Vercel project has multiple Blob stores. |
-| `multipartThreshold` | `number`                                                | `5242880`  | Files above this size use multipart upload.               |
-| `access`             | `'public'`                                              | `'public'` | Vercel Blob does not support private access.              |
-| `enabled`            | `boolean`                                               | `true`     | Disables the plugin without removing it.                  |
+- `vercelBlobStorage` – plugin factory for `defineConfig.storage`
+- `VercelBlobStorageAdapter` – the adapter class (advanced)
+- Type exports: `VercelBlobStorageConfig`
 
-`addRandomSuffix` and `allowOverwrite` can be overridden per collection.
+## Compatibility
 
-## Per-collection configuration
-
-```typescript
-vercelBlobStorage({
-  collections: {
-    media: { prefix: "uploads/" },
-    documents: {
-      prefix: "docs/",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      clientUploads: true,
-    },
-  },
-});
-```
-
-## Limitations & behavioral notes
-
-- **All blobs are publicly accessible by URL.** Vercel Blob has no private mode and no signed download URLs. Do not use this adapter for files that must be access-controlled — use [`@revnixhq/storage-s3`](../storage-s3) with `acl: 'private'` instead.
-- **SVG and HTML uploads are hard-rejected.** Vercel Blob cannot serve objects with a per-object `Content-Disposition: attachment` or restrictive CSP, so SVG/HTML/XHTML uploads would be stored XSS. The adapter throws on attempted uploads of MIME types `image/svg+xml`, `text/html`, `application/xhtml+xml`, and extensions `svg`, `svgz`, `html`, `htm`, `xhtml`. Use the S3/R2 adapter for these file types or convert SVGs to PNG/WebP before upload.
-- **Folder prefixes are sanitized.** `..`, leading `/`, and other path-traversal patterns are rejected at upload time. Existing collection prefixes containing `..` will hard-error after this version.
-- **`addRandomSuffix` defaults to `true`.** Disabling it without setting `allowOverwrite: true` will throw on duplicate filenames.
+- Node.js 18+
+- `@vercel/blob` (peer)
+- `@revnixhq/nextly` 0.0.x
 
 ## Documentation
 
-See the [main repository](https://github.com/revnix/nextly-dev) for full Nextly documentation.
+**[Vercel Blob storage docs →](https://nextlyhq.com/docs/guides/media-storage)**
 
-## Governance
+## Related packages
 
-- [Security policy](https://github.com/revnix/nextly-dev/blob/dev/SECURITY.md) — report vulnerabilities privately
-- [Code of Conduct](https://github.com/revnix/nextly-dev/blob/dev/CODE_OF_CONDUCT.md)
-- [Contributing](https://github.com/revnix/nextly-dev/blob/dev/CONTRIBUTING.md)
-- [License (MIT)](./LICENSE)
+- [`@revnixhq/storage-s3`](../storage-s3)
+- [`@revnixhq/storage-uploadthing`](../storage-uploadthing)
+
+## License
+
+[MIT](../../LICENSE.md)

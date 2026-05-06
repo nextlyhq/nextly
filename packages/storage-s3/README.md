@@ -1,6 +1,19 @@
 # @revnixhq/storage-s3
 
-AWS S3 storage adapter for [Nextly](https://github.com/revnix/nextly-dev) — supports S3, Cloudflare R2, MinIO, and other S3-compatible object stores.
+Amazon S3 (and S3-compatible: Cloudflare R2, MinIO, Backblaze B2, Wasabi, DigitalOcean Spaces) storage adapter for Nextly.
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/storage-s3"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/storage-s3?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
+## What it is
+
+Stores Nextly media uploads on Amazon S3 or any S3-compatible object store. R2, MinIO, B2, Wasabi, and DigitalOcean Spaces all work via the same adapter; you do not need separate packages.
 
 ## Installation
 
@@ -8,15 +21,11 @@ AWS S3 storage adapter for [Nextly](https://github.com/revnix/nextly-dev) — su
 pnpm add @revnixhq/storage-s3
 ```
 
-`@revnixhq/storage-s3` expects `@revnixhq/nextly` to be installed alongside it.
+## Quick usage
 
-## Required credentials
+Register the storage adapter in `nextly.config.ts`:
 
-Provide credentials via either explicit config or AWS-SDK-standard environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optionally `AWS_REGION`). The SDK picks them up natively if you omit them from the config.
-
-## Quick start
-
-```typescript
+```ts
 import { defineConfig } from "@revnixhq/nextly/config";
 import { s3Storage } from "@revnixhq/storage-s3";
 
@@ -27,39 +36,26 @@ export default defineConfig({
       region: process.env.AWS_REGION!,
       accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-      collections: {
-        media: true,
-      },
+      collections: { media: true },
     }),
   ],
 });
 ```
 
-## Configuration
+## Required environment variables
 
-| Option               | Type                       | Default                      | Notes                                         |
-| -------------------- | -------------------------- | ---------------------------- | --------------------------------------------- |
-| `bucket`             | `string`                   | —                            | **Required.** Must already exist.             |
-| `region`             | `string`                   | —                            | **Required.** Use `'auto'` for Cloudflare R2. |
-| `accessKeyId`        | `string`                   | env                          | Falls back to `AWS_ACCESS_KEY_ID`.            |
-| `secretAccessKey`    | `string`                   | env                          | Falls back to `AWS_SECRET_ACCESS_KEY`.        |
-| `endpoint`           | `string`                   | —                            | Required for R2, MinIO, Spaces.               |
-| `forcePathStyle`     | `boolean`                  | `false`                      | Required for MinIO.                           |
-| `acl`                | `S3ObjectACL`              | `'private'`                  | See **Security defaults** below.              |
-| `publicUrl`          | `string`                   | —                            | CDN/custom-domain URL. Required for R2.       |
-| `signedDownloads`    | `boolean`                  | `false`                      | Generate signed URLs for private objects.     |
-| `signedUrlExpiresIn` | `number`                   | `3600`                       | Seconds.                                      |
-| `cacheControl`       | `string`                   | `'public, max-age=31536000'` | Sent on every upload.                         |
-| `contentDisposition` | `'inline' \| 'attachment'` | unset                        | See **Security defaults**.                    |
-| `enabled`            | `boolean`                  | `true`                       | Disables the plugin without removing it.      |
+| Variable                | Required?                   | Default | Notes                         |
+| ----------------------- | --------------------------- | ------- | ----------------------------- |
+| `S3_BUCKET`             | yes                         | (none)  |                               |
+| `AWS_REGION`            | yes for AWS                 | (none)  | Use `auto` for Cloudflare R2. |
+| `AWS_ACCESS_KEY_ID`     | yes (if not using IAM role) | (none)  |                               |
+| `AWS_SECRET_ACCESS_KEY` | yes (if not using IAM role) | (none)  |                               |
 
-`acl`, `cacheControl`, and `contentDisposition` can be overridden per collection.
+You can also pass these explicitly to `s3Storage(...)` instead of using env vars.
 
-## Provider examples
+## Cloudflare R2
 
-### Cloudflare R2
-
-```typescript
+```ts
 s3Storage({
   bucket: process.env.R2_BUCKET!,
   region: "auto",
@@ -71,13 +67,13 @@ s3Storage({
 });
 ```
 
-### MinIO (self-hosted)
+## MinIO
 
-```typescript
+```ts
 s3Storage({
   bucket: "my-bucket",
   region: "us-east-1",
-  endpoint: "http://localhost:9000",
+  endpoint: "https://minio.example.com",
   forcePathStyle: true,
   accessKeyId: process.env.MINIO_ACCESS_KEY!,
   secretAccessKey: process.env.MINIO_SECRET_KEY!,
@@ -85,54 +81,45 @@ s3Storage({
 });
 ```
 
-### DigitalOcean Spaces
-
-```typescript
-s3Storage({
-  bucket: "my-space",
-  region: "nyc3",
-  endpoint: "https://nyc3.digitaloceanspaces.com",
-  collections: { media: true },
-});
-```
-
 ## Per-collection configuration
 
-```typescript
+```ts
 s3Storage({
   bucket: "my-bucket",
   region: "us-east-1",
   collections: {
     media: true,
     "private-docs": {
-      prefix: "docs/",
-      acl: "private",
-      signedDownloads: true,
-      signedUrlExpiresIn: 900,
+      prefix: "private/",
       clientUploads: true,
+      signedDownloads: true,
+      signedUrlExpiresIn: 3600,
     },
   },
 });
 ```
 
-## Client uploads & signed URLs
+## Main exports
 
-Enable `clientUploads: true` on a collection to bypass server-side upload limits (e.g. Vercel's 4.5 MB serverless body cap). The plugin exposes `getClientUploadUrl(filename, mimeType, collection)` for the admin UI to call. Enable `signedDownloads: true` to serve private objects via short-lived signed URLs.
+- `s3Storage` – plugin factory for `defineConfig.storage`
+- `S3StorageAdapter` – the adapter class (advanced)
+- Type exports: `S3StorageConfig`, `S3CollectionConfig`
 
-## Security defaults
+## Compatibility
 
-- **`acl` defaults to `'private'`.** Uploaded objects are not world-readable unless you explicitly opt in to `'public-read'` (or pair with a public-read bucket policy).
-- **Filenames are sanitized** to `[a-zA-Z0-9._-]` before being used as S3 keys. Path separators are stripped.
-- **Cloudflare R2 ignores ACL.** Configure public access in the R2 dashboard or use a `publicUrl` to a CDN-fronted public bucket.
-- **`contentDisposition`** is unset by default. For collections that accept user-uploaded HTML, SVG, or PDF, set `contentDisposition: 'attachment'` to force the download dialog instead of inline rendering — protects against stored XSS.
+- Node.js 18+
+- `@revnixhq/nextly` 0.0.x
+- AWS S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi, DigitalOcean Spaces
 
 ## Documentation
 
-See the [main repository](https://github.com/revnix/nextly-dev) for full Nextly documentation.
+**[S3 storage docs →](https://nextlyhq.com/docs/guides/media-storage)**
 
-## Governance
+## Related packages
 
-- [Security policy](https://github.com/revnix/nextly-dev/blob/dev/SECURITY.md) — report vulnerabilities privately
-- [Code of Conduct](https://github.com/revnix/nextly-dev/blob/dev/CODE_OF_CONDUCT.md)
-- [Contributing](https://github.com/revnix/nextly-dev/blob/dev/CONTRIBUTING.md)
-- [License (MIT)](./LICENSE)
+- [`@revnixhq/storage-vercel-blob`](../storage-vercel-blob)
+- [`@revnixhq/storage-uploadthing`](../storage-uploadthing)
+
+## License
+
+[MIT](../../LICENSE.md)

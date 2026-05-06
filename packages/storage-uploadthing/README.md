@@ -1,6 +1,19 @@
 # @revnixhq/storage-uploadthing
 
-[UploadThing](https://uploadthing.com) storage adapter for [Nextly](https://github.com/revnix/nextly-dev). Stores files on UploadThing's CDN and serves them from `utfs.io`.
+[UploadThing](https://uploadthing.com) storage adapter for Nextly. Stores media on UploadThing's CDN and serves them from `utfs.io`.
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/storage-uploadthing"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/storage-uploadthing?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
+## What it is
+
+Stores Nextly media uploads on UploadThing. Useful if you already use UploadThing for the rest of your Next.js stack, or want a managed CDN with no AWS account setup.
 
 ## Installation
 
@@ -8,58 +21,51 @@
 pnpm add @revnixhq/storage-uploadthing
 ```
 
-`@revnixhq/storage-uploadthing` expects `@revnixhq/nextly` to be installed alongside it.
+## Quick usage
 
-## Required credentials
+Register the storage adapter in `nextly.config.ts`:
 
-Set the `UPLOADTHING_TOKEN` environment variable (recommended) or pass `token` explicitly. Get the token from the UploadThing dashboard under **API Keys**.
-
-## Quick start
-
-```typescript
+```ts
 import { defineConfig } from "@revnixhq/nextly/config";
 import { uploadthingStorage } from "@revnixhq/storage-uploadthing";
 
 export default defineConfig({
   storage: [
     uploadthingStorage({
-      token: process.env.UPLOADTHING_TOKEN,
-      collections: {
-        media: true,
-      },
+      token: process.env.UPLOADTHING_TOKEN!,
+      collections: { media: true },
     }),
   ],
 });
 ```
 
-## Configuration
+## Required environment variables
 
-| Option        | Type                                                 | Default | Notes                                    |
-| ------------- | ---------------------------------------------------- | ------- | ---------------------------------------- |
-| `token`       | `string`                                             | env     | Falls back to `UPLOADTHING_TOKEN`.       |
-| `collections` | `Record<string, boolean \| CollectionStorageConfig>` | —       | **Required.**                            |
-| `enabled`     | `boolean`                                            | `true`  | Disables the plugin without removing it. |
+| Variable            | Required? | Default | Notes                                             |
+| ------------------- | --------- | ------- | ------------------------------------------------- |
+| `UPLOADTHING_TOKEN` | yes       | (none)  | Find in the UploadThing dashboard under API keys. |
 
-UploadThing's adapter surface is intentionally small — most behavior is controlled by your UploadThing project settings, not the adapter.
+## Main exports
 
-## Limitations
+- `uploadthingStorage` – plugin factory for `defineConfig.storage`
+- `UploadthingStorageAdapter` – the adapter class (advanced)
+- Type exports: `UploadthingStorageConfig`
 
-- **Public CDN only.** All uploads land on the public `utfs.io` CDN. There is no private-bucket mode and no signed download URLs.
-- **No client-side upload URLs from this adapter.** UploadThing has its own client-upload pattern (`UploadButton` / `UploadDropzone` from `@uploadthing/react`); this adapter does not generate `getClientUploadUrl` data.
-- **Delete errors are silently swallowed.** A failed single delete (e.g. file already gone) does not throw. A failed `bulkDelete` reports all keys as failed (all-or-nothing) rather than per-key.
+## Compatibility
 
-## Security defaults
-
-- **`contentDisposition` defaults to `'attachment'`** ([T-028](https://github.com/revnix/nextly-dev)). User-uploaded HTML, SVG, and PDF files get the browser download dialog instead of being rendered in-context, which mitigates stored-XSS and drive-by-download from authenticated user uploads. Adopters who genuinely want inline rendering must pass `contentDisposition: 'inline'` explicitly.
-- **Filenames are sanitized** to `[a-zA-Z0-9._-]` before upload. Path separators are stripped.
+- Node.js 18+
+- `uploadthing` (peer)
+- `@revnixhq/nextly` 0.0.x
 
 ## Documentation
 
-See the [main repository](https://github.com/revnix/nextly-dev) for full Nextly documentation.
+**[UploadThing storage docs →](https://nextlyhq.com/docs/guides/media-storage)**
 
-## Governance
+## Related packages
 
-- [Security policy](https://github.com/revnix/nextly-dev/blob/dev/SECURITY.md) — report vulnerabilities privately
-- [Code of Conduct](https://github.com/revnix/nextly-dev/blob/dev/CODE_OF_CONDUCT.md)
-- [Contributing](https://github.com/revnix/nextly-dev/blob/dev/CONTRIBUTING.md)
-- [License (MIT)](./LICENSE)
+- [`@revnixhq/storage-s3`](../storage-s3)
+- [`@revnixhq/storage-vercel-blob`](../storage-vercel-blob)
+
+## License
+
+[MIT](../../LICENSE.md)
