@@ -76,13 +76,22 @@ export interface EntrySystemHeaderProps {
 
   /**
    * Whether to render the built-in Show JSON dropdown item (which uses
-   * `ShowJSONDialog` with the collection-entry API URL pattern). Singles
-   * have a different API URL shape and should pass `false`; the dropdown
-   * still gets View API via `onViewApi` if needed.
+   * `ShowJSONDialog`). Defaults to `true`. Set `false` to suppress the
+   * menu item entirely (e.g. for resources whose API surface isn't
+   * representable as a single GET).
    *
    * @default true
    */
   showJson?: boolean;
+
+  /**
+   * Resource scope passed through to the Show JSON dialog and used by the
+   * `View API response` URL display. Determines whether the dialog hits
+   * `/api/collections/{slug}/entries/{id}` or `/api/singles/{slug}`.
+   *
+   * @default "collection"
+   */
+  scope?: "collection" | "single";
 
   /** Rail collapsed state. */
   isRailCollapsed?: boolean;
@@ -107,6 +116,7 @@ export function EntrySystemHeader({
   onDuplicate,
   onViewApi,
   showJson = true,
+  scope = "collection",
   isRailCollapsed = false,
   onToggleRail,
 }: EntrySystemHeaderProps) {
@@ -247,8 +257,14 @@ export function EntrySystemHeader({
             )}
             {showEditMenuItems && showJson && (
               <ShowJSONDialog
+                scope={scope}
                 collectionSlug={collectionSlug}
-                entryId={entry.id}
+                /* Why: collection scope needs the entry id to build
+                   /api/collections/{slug}/entries/{id}; single scope is
+                   keyed only by slug so entryId is unused. The narrowing
+                   above (showEditMenuItems requires entry?.id) keeps both
+                   shapes safe. */
+                entryId={scope === "single" ? undefined : entry.id}
                 trigger={
                   <DropdownMenuItem onSelect={e => e.preventDefault()}>
                     <Code className="h-3.5 w-3.5" />

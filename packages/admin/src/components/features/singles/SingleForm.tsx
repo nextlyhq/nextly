@@ -426,12 +426,11 @@ export function SingleForm({
                 }}
                 onCancel={handleCancel}
                 onViewApi={onViewApi}
-                /* Why: Singles use a different API URL pattern than
-                   collections (/api/singles/{slug} vs
-                   /api/collections/{slug}/entries/{id}). The built-in
-                   ShowJSONDialog targets the collection shape, so disable
-                   it here. View API is exposed via onViewApi instead. */
-                showJson={false}
+                /* Why: Singles share the Show JSON dialog with collections,
+                   but at the /api/singles/{slug} URL pattern. Passing
+                   `scope="single"` routes the dialog through singleApi
+                   instead of entryApi. */
+                scope="single"
                 isRailCollapsed={railCollapsed}
                 onToggleRail={toggleRail}
               />

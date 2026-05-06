@@ -45,10 +45,17 @@ import { useEntryJSON, MAX_DEPTH } from "@admin/hooks/useEntryJSON";
 // ============================================================================
 
 export interface ShowJSONDialogProps {
-  /** Collection slug */
+  /**
+   * Resource scope. Determines the API URL pattern and which fetch hook
+   * runs underneath. Defaults to `"collection"` for backwards compatibility
+   * with the original collection-entry call sites.
+   */
+  scope?: "collection" | "single";
+  /** Collection or Single slug. */
   collectionSlug: string;
-  /** Entry ID to display */
-  entryId: string;
+  /** Entry ID to display. Required when `scope` is `"collection"`; ignored
+   *  when `"single"` (singles are keyed only by slug). */
+  entryId?: string;
   /** Custom trigger element (defaults to Code icon button) */
   trigger?: React.ReactNode;
   /** Initial depth for relationship population (default: 0) */
@@ -86,6 +93,7 @@ export interface ShowJSONDialogProps {
  * ```
  */
 export function ShowJSONDialog({
+  scope = "collection",
   collectionSlug,
   entryId,
   trigger,
@@ -104,6 +112,7 @@ export function ShowJSONDialog({
     apiUrl,
     jsonString,
   } = useEntryJSON({
+    scope,
     collectionSlug,
     entryId,
     initialDepth,
@@ -159,7 +168,9 @@ export function ShowJSONDialog({
     const newDepth = parseInt(value, 10);
     setDepth(newDepth);
     // Refetch with new depth
-    setTimeout(() => { void refetch(); }, 0);
+    setTimeout(() => {
+      void refetch();
+    }, 0);
   };
 
   // Generate depth options (0 to MAX_DEPTH)
@@ -224,7 +235,9 @@ export function ShowJSONDialog({
             <Button
               variant="outline"
               size="md"
-              onClick={() => { void handleCopy(); }}
+              onClick={() => {
+                void handleCopy();
+              }}
               disabled={!jsonString || isLoading}
               className="gap-2"
             >
