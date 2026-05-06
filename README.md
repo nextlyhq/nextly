@@ -70,26 +70,24 @@ import {
   defineCollection,
   text,
   richText,
-  relation,
-} from "@revnixhq/nextly";
-import { postgresAdapter } from "@revnixhq/adapter-postgres";
+  relationship,
+} from "@revnixhq/nextly/config";
 
-const posts = defineCollection({
+const Posts = defineCollection({
   slug: "posts",
   fields: [
-    text("title", { required: true }),
-    richText("body"),
-    relation("author", { to: "users" }),
+    text({ name: "title", required: true }),
+    richText({ name: "body" }),
+    relationship({ name: "author", relationTo: "users" }),
   ],
 });
 
 export default defineConfig({
-  database: postgresAdapter({ connectionString: process.env.DATABASE_URL }),
-  collections: [posts],
+  collections: [Posts],
 });
 ```
 
-`posts.title` and `posts.body` are now typed, queryable via REST or Direct API, and editable from the admin panel.
+Set `DATABASE_URL` (and optionally `DB_DIALECT`) in your `.env`; Nextly picks the dialect automatically. `Posts.title` and `Posts.body` are typed end to end, queryable via REST or Direct API, and editable from the admin panel.
 
 ## Packages
 

@@ -1,28 +1,45 @@
 # @revnixhq/nextly
 
-A modern, type-safe headless CMS for Next.js. Define your content schema with code-first configuration or the visual schema builder, then consume it through a typed API in your app.
+The core Nextly package: collection runtime, database services, REST and Direct APIs, RBAC, hooks, and the plugin system. Every Nextly project depends on this.
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/nextly"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/nextly?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
+## Why Nextly?
+
+|                                                                                                                                     |                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Code-first or visual schema.** Define collections in TypeScript, or build them in the Schema Builder. Same data model either way. | **Type-safe everywhere.** REST API, Direct API, and admin UI are fully typed end to end. |
+| **Pluggable databases.** PostgreSQL, MySQL, SQLite via official adapters. Add your own with the adapter base.                       | **Pluggable storage.** S3 (and R2, MinIO), Vercel Blob, UploadThing for media.           |
+| **Granular access control.** Roles, permissions, and field-level access out of the box.                                             | **Self-hosted, MIT-licensed.** Your stack, your data, no vendor lock-in.                 |
+
+<!-- Hero visual pending: see docs/superpowers/specs/2026-05-06-readme-anatomy-design.md §11.4 -->
 
 ## Quickstart
 
-Scaffold a new Nextly project:
+Add Nextly to an existing Next.js app:
 
 ```bash
-npx @revnixhq/create-nextly-app@latest
-# or
-pnpm dlx @revnixhq/create-nextly-app@latest
-# or
-yarn dlx @revnixhq/create-nextly-app
+pnpm add @revnixhq/nextly @revnixhq/admin @revnixhq/adapter-postgres pg
 ```
 
-Or add Nextly to an existing Next.js app:
+Or scaffold a fresh project (recommended for first-time use):
 
 ```bash
-pnpm add @revnixhq/nextly @revnixhq/admin @revnixhq/adapter-postgres
+pnpm create-nextly-app@latest
 ```
 
-A minimal `nextly.config.ts`:
+## A tiny example
 
-```typescript
+Define a `posts` collection in `nextly.config.ts`:
+
+```ts
 import {
   defineConfig,
   defineCollection,
@@ -40,86 +57,50 @@ export default defineConfig({
 });
 ```
 
-Database connection is configured via `DATABASE_URL` plus a database adapter package — see the [adapter docs](https://nextlyhq.com/docs/database).
+Set `DATABASE_URL` in `.env`; Nextly selects the dialect from the URL protocol or from `DB_DIALECT`. See the [database docs](https://nextlyhq.com/docs/database) for adapter selection.
 
-See the [documentation](https://nextlyhq.com/docs) for the full configuration reference, the visual schema builder, plugins, and deploy guides.
+Read the collection from a server component or route handler via the Direct API:
 
-## Features
+```ts
+// app/api/posts/route.ts
+import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
-- **Code-first or visual schema** — author collections in TypeScript or in the admin UI
-- **Type-safe Direct API** — `nextly.collections.find(...)` with end-to-end inferred types
-- **Pluggable database adapters** — PostgreSQL, MySQL, SQLite (Drizzle-backed)
-- **Pluggable storage adapters** — local disk, S3 / R2 / MinIO, Vercel Blob, UploadThing
-- **Built-in admin dashboard** — `@revnixhq/admin` ships ready-to-mount React components
-- **Role-based access control** — entities, permissions, per-field access rules
-- **Lifecycle hooks** — beforeCreate / afterUpdate / etc. for custom workflows
-- **Plugin system** — type-safe plugin context with access to services and hooks
-- **Auth** — first-party email/password + session management
-- **Media library** — folder hierarchy, bulk operations, image processing via Sharp
-- **CLI-driven migrations** — `.sql` files in repo, applied in CI before deploy
-
-## Database adapters
-
-Pick the adapter for your database — the rest of Nextly is the same regardless of dialect:
-
-| Database   | Package                                             | Notes                                                     |
-| ---------- | --------------------------------------------------- | --------------------------------------------------------- |
-| PostgreSQL | [`@revnixhq/adapter-postgres`](../adapter-postgres) | 15+. Auto-detects Neon / Supabase / RDS.                  |
-| MySQL      | [`@revnixhq/adapter-mysql`](../adapter-mysql)       | 8+. MariaDB / Aurora / PlanetScale recognized at connect. |
-| SQLite     | [`@revnixhq/adapter-sqlite`](../adapter-sqlite)     | 3.38+. Bundled `better-sqlite3`.                          |
-
-## Storage adapters
-
-| Backend                                 | Package                                                   |
-| --------------------------------------- | --------------------------------------------------------- |
-| AWS S3 / Cloudflare R2 / MinIO / Spaces | [`@revnixhq/storage-s3`](../storage-s3)                   |
-| Vercel Blob                             | [`@revnixhq/storage-vercel-blob`](../storage-vercel-blob) |
-| UploadThing                             | [`@revnixhq/storage-uploadthing`](../storage-uploadthing) |
-
-Local disk is the default and requires no adapter package.
-
-## Production migrations
-
-Nextly ships a CLI-driven migration workflow. Schema changes land as committed `.sql` files; CI applies them before the new app code is deployed. The deployed app never alters schema.
-
-```bash
-# Local: edit nextly.config.ts, generate the migration
-pnpm exec nextly migrate:create --name=add_excerpt
-
-# CI: verify integrity + apply against $DATABASE_URL
-pnpm exec nextly migrate:check
-pnpm exec nextly migrate
-
-# Then deploy your app
+export async function GET() {
+  const nextly = await getNextly({ config: nextlyConfig });
+  const result = await nextly.find({ collection: "posts", limit: 10 });
+  return Response.json(result);
+}
 ```
 
-See the [production migrations guide](https://nextlyhq.com/docs/guides/production-migrations) for Vercel + GitHub Actions and other platform recipes.
-
-## Requirements
-
-| Tool    | Minimum                                           |
-| ------- | ------------------------------------------------- |
-| Node.js | 18+ (Node 22 LTS is what we test against)         |
-| Next.js | 14+ for production; 16+ recommended for Turbopack |
-| pnpm    | 8+                                                |
-
-## Related packages
-
-- [`@revnixhq/admin`](../admin) — admin dashboard React components
-- [`@revnixhq/ui`](../ui) — headless UI primitives shared by admin + plugins
-- [`@revnixhq/client`](../client) — browser SDK (in development)
-- [`@revnixhq/plugin-form-builder`](../plugin-form-builder) — drag-and-drop form builder plugin
+`Posts.title` and `Posts.body` are typed end to end, queryable via REST or Direct API, and editable from the admin panel.
 
 ## Documentation
 
-Full docs: **[nextlyhq.com/docs](https://nextlyhq.com/docs)**
+- [**Installation**](https://nextlyhq.com/docs/getting-started/installation)
+- [**Configuration**](https://nextlyhq.com/docs/configuration/nextly-config)
+- [**Collections**](https://nextlyhq.com/docs/configuration/collections)
+- [**Fields**](https://nextlyhq.com/docs/configuration/fields)
+- [**Direct API**](https://nextlyhq.com/docs/api-reference/direct-api)
+- [**REST API**](https://nextlyhq.com/docs/api-reference/rest-api)
+- [**Authentication & permissions**](https://nextlyhq.com/docs/guides/authentication)
+- [**Plugin development**](https://nextlyhq.com/docs/plugins)
+
+## Community
+
+- [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) for questions, ideas, and show-and-tell
+- [**Issues**](https://github.com/nextlyhq/nextly/issues) for bug reports and feature requests
+- [**Discord**](https://discord.gg/hJUg9AZMn) for real-time chat with the team and other users
+- [**Contributing guide**](https://github.com/nextlyhq/nextly/blob/main/CONTRIBUTING.md) for local setup, the dev workflow, and PR conventions
 
 ## Contributing
 
-Issues and PRs welcome at [github.com/nextlyhq/nextly](https://github.com/nextlyhq/nextly). See the root [CONTRIBUTING.md](https://github.com/nextlyhq/nextly/blob/dev/CONTRIBUTING.md) for setup, conventions, and how to run the test suite.
+Contributions of every size are welcome. Start with the [Contributing guide](https://github.com/nextlyhq/nextly/blob/main/CONTRIBUTING.md) for local setup and PR conventions.
 
-## Governance
+## License
 
-- [Security policy](https://github.com/nextlyhq/nextly/blob/dev/SECURITY.md) — report vulnerabilities privately
-- [Code of Conduct](https://github.com/nextlyhq/nextly/blob/dev/CODE_OF_CONDUCT.md)
-- [License (MIT)](./LICENSE)
+[MIT](https://github.com/nextlyhq/nextly/blob/main/LICENSE.md). Free to use, modify, and distribute.
+
+---
+
+_The `nextly` npm package name was kindly transferred by [Hamin Lee](https://hmart.app/en/). [Read the small story →](https://mobeenabdullah.com/blog/a-small-npm-story-from-pakistan-to-seoul)._
