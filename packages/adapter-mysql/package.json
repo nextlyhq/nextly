@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/adapter-mysql",
-  "version": "0.0.142",
+  "version": "0.0.143",
   "description": "MySQL database adapter for Nextly - extends @nextly/adapter-drizzle",
   "license": "MIT",
   "type": "module",

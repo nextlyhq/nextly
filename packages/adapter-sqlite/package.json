@@ -1,6 +1,6 @@
 {
   "name": "@revnixhq/adapter-sqlite",
-  "version": "0.0.142",
+  "version": "0.0.143",
   "description": "SQLite database adapter for Nextly - extends @nextly/adapter-drizzle",
   "license": "MIT",
   "type": "module",
