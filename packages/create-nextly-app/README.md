@@ -1,120 +1,111 @@
-# create-nextly-app
+# @revnixhq/create-nextly-app
 
-CLI to scaffold a new Nextly CMS project or add Nextly to an existing Next.js app.
+The official CLI for scaffolding a new Nextly CMS project or adding Nextly to an existing Next.js app.
 
-## Quick Start
+<p align="center">
+  <a href="https://www.npmjs.com/package/@revnixhq/create-nextly-app"><img alt="npm" src="https://img.shields.io/npm/v/@revnixhq/create-nextly-app?style=flat-square&label=npm&color=cb3837" /></a>
+  <a href="https://github.com/nextlyhq/nextly/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/nextlyhq/nextly?style=flat-square&color=blue" /></a>
+  <a href="https://nextlyhq.com/docs"><img alt="Status" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" /></a>
+</p>
+
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
+## Why Nextly?
+
+|                                                                                                                                     |                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Code-first or visual schema.** Define collections in TypeScript, or build them in the Schema Builder. Same data model either way. | **Type-safe everywhere.** REST API, Direct API, and admin UI are fully typed end to end. |
+| **Pluggable databases.** PostgreSQL, MySQL, SQLite via official adapters. Add your own with the adapter base.                       | **Pluggable storage.** S3 (and R2, MinIO), Vercel Blob, UploadThing for media.           |
+| **Granular access control.** Roles, permissions, and field-level access out of the box.                                             | **Self-hosted, MIT-licensed.** Your stack, your data, no vendor lock-in.                 |
+
+<!-- Hero visual pending: see docs/superpowers/specs/2026-05-06-readme-anatomy-design.md §11.4 -->
+
+## Quickstart
 
 ```bash
-npx @revnixhq/create-nextly-app my-blog
+pnpm create-nextly-app@latest
 ```
 
-The CLI walks you through template selection, schema approach, and database setup interactively.
+The CLI walks you through:
+
+1. Project name (or `.` for the current directory)
+2. Template (`blank` or `blog`)
+3. Schema approach (`code-first` or `visual`)
+4. Database (`sqlite`, `postgresql`, or `mysql`)
+
+After scaffolding, `pnpm dev` runs the project; visit `http://localhost:3000/admin/setup` to create the first admin user.
 
 ## Templates
 
-| Template  | Description                                                                                   |
-| --------- | --------------------------------------------------------------------------------------------- |
-| **Blank** | Empty config. Define your own schemas from scratch.                                           |
-| **Blog**  | Posts, authors, categories, site settings. Includes frontend pages and optional demo content. |
+| Template  | Description                                                                         |
+| --------- | ----------------------------------------------------------------------------------- |
+| **blank** | Empty config. Define your own collections from scratch.                             |
+| **blog**  | Posts, categories, tags, frontend pages, RSS, sitemap, and admin-editable homepage. |
 
-More templates (website, portfolio, e-commerce) are planned for future releases.
+More templates (portfolio, e-commerce, SaaS admin) are planned.
 
-### Blog Template
+## Schema approaches
 
-The blog template includes:
+| Approach       | Description                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------- |
+| **code-first** | Schemas live in `nextly.config.ts` plus files under `src/collections/`. Type-safe and version-controlled. |
+| **visual**     | Schemas are defined in the Admin UI's Schema Builder. Stored in the database.                             |
 
-- **Collections**: Posts (with rich text, featured images, author/category relationships), Authors, Categories
-- **Singles**: Site Settings (site name, tagline, social links)
-- **Frontend pages**: Homepage, blog listing with pagination, single post, author profile, category archive
-- **Components**: Header, Footer, PostCard, PostGrid, Pagination, AuthorCard, CategoryBadge, RichTextRenderer
-- **Seed data** (optional): 5 sample posts, 2 authors, 3 categories with placeholder images
+The two approaches are not mutually exclusive: a code-first project can add UI-defined collections later, and vice versa.
 
-All frontend pages use Server Components with Nextly's Direct API for zero-overhead data fetching.
-
-## Schema Approaches
-
-When selecting a content template (like Blog), you choose how to define your schemas:
-
-| Approach       | Description                                                                                     |
-| -------------- | ----------------------------------------------------------------------------------------------- |
-| **Code-first** | Full schema definitions in `nextly.config.ts`. Type-safe, version-controlled. Like Payload CMS. |
-| **Visual**     | Empty config. Schemas created via the Admin Panel UI. Like Strapi/WordPress.                    |
-| **Both**       | Core schemas in code, extend with additional collections via the Admin Panel.                   |
-
-## Usage
-
-### Interactive (recommended)
+## Non-interactive usage
 
 ```bash
-npx @revnixhq/create-nextly-app my-project
-```
-
-### With flags (non-interactive)
-
-```bash
-# Blog with code-first approach and demo content
-npx @revnixhq/create-nextly-app my-blog \
-  --template blog \
-  --approach code-first \
-  --demo-data \
-  --database sqlite
+# Blog with code-first approach
+pnpm create-nextly-app@latest my-blog --template blog --approach code-first
 
 # Blank project with PostgreSQL
-npx @revnixhq/create-nextly-app my-app \
-  --template blank \
-  --database postgresql
+pnpm create-nextly-app@latest my-app --template blank --database postgresql
 
-# Quick setup with all defaults (blank + SQLite)
-npx @revnixhq/create-nextly-app my-app -y
+# Skip prompts entirely (defaults: blank, SQLite)
+pnpm create-nextly-app@latest my-app -y
 ```
 
-### CLI Flags
+## CLI flags
 
-| Flag                      | Short | Description                                | Default            |
-| ------------------------- | ----- | ------------------------------------------ | ------------------ |
-| `--template <name>`       | `-t`  | Template to use (blank, blog)              | Interactive prompt |
-| `--approach <type>`       | `-a`  | Schema approach (code-first, visual, both) | Interactive prompt |
-| `--demo-data`             |       | Include demo content                       | Interactive prompt |
-| `--database <db>`         | `-d`  | Database (sqlite, postgresql, mysql)       | Interactive prompt |
-| `--yes`                   | `-y`  | Skip prompts, use defaults                 |                    |
-| `--branch <branch>`       | `-b`  | Git branch for template download           | main               |
-| `--local-template <path>` |       | Local templates directory (dev only)       |                    |
-| `--skip-install`          |       | Skip dependency installation               |                    |
-| `--use-yalc`              |       | Use yalc for local packages (dev only)     |                    |
+| Flag                      | Short | Description                                        | Default            |
+| ------------------------- | ----- | -------------------------------------------------- | ------------------ |
+| `--yes`                   | `-y`  | Skip prompts; use defaults (blank, SQLite)         |                    |
+| `--template <name>`       | `-t`  | Template (`blank`, `blog`)                         | Interactive prompt |
+| `--approach <type>`       | `-a`  | Schema approach (`code-first`, `visual`)           | Interactive prompt |
+| `--database <db>`         | `-d`  | Database (`sqlite`, `postgresql`, `mysql`)         | Interactive prompt |
+| `--branch <branch>`       | `-b`  | Git branch for template download                   | `main`             |
+| `--local-template <path>` |       | Local templates directory (dev only)               |                    |
+| `--skip-install`          |       | Skip dependency install (for local testing)        |                    |
+| `--use-yalc`              |       | Use yalc for local package installation (dev only) |                    |
 
-## How Templates Work
+Run `pnpm create-nextly-app --help` for the full list and inline help.
 
-Templates are stored in the `/templates/` directory at the monorepo root (not bundled in this package). When you run the CLI:
+## Documentation
 
-1. Templates are downloaded from GitHub at runtime (like Payload CMS's create-payload-app)
-2. The base template provides shared foundation (admin routes, API handlers, styles)
-3. The selected template overlays its files on top (frontend pages, components, config)
-4. Approach-specific config is copied based on your selection
-5. Seed files are included when demo data is selected
+- [**Quick start**](https://nextlyhq.com/docs/getting-started/quick-start)
+- [**Installation**](https://nextlyhq.com/docs/getting-started/installation)
+- [**Project structure**](https://nextlyhq.com/docs/getting-started/project-structure)
+- [**Templates**](https://nextlyhq.com/docs/templates)
 
-For local development, use `--local-template` to read from the filesystem instead of downloading.
+## Community
 
-## After Scaffolding
+- [**GitHub Discussions**](https://github.com/nextlyhq/nextly/discussions) for questions, ideas, and show-and-tell
+- [**Issues**](https://github.com/nextlyhq/nextly/issues) for bug reports and feature requests
+- [**Discord**](https://discord.gg/hJUg9AZMn) for real-time chat with the team and other users
+- [**Contributing guide**](https://github.com/nextlyhq/nextly/blob/main/CONTRIBUTING.md) for local setup, the dev workflow, and PR conventions
 
-```bash
-cd my-blog
-pnpm dev
-```
+## Contributing
 
-On first run, Nextly will:
+Contributions of every size are welcome. Start with the [Contributing guide](https://github.com/nextlyhq/nextly/blob/main/CONTRIBUTING.md) for local setup and PR conventions.
 
-- Create database tables
-- Sync collections from your config
-- Seed demo content (if selected)
-- Generate TypeScript types
+## Telemetry
 
-Visit `http://localhost:3000` to see your site and `http://localhost:3000/admin/setup` to create your admin account.
+The Nextly CLI (`create-nextly-app` and `nextly`) collects anonymous usage data to help us improve the tool. No personal information, project contents, file paths, or secrets are collected. Telemetry is automatically disabled in CI, Docker, production, and non-interactive shells.
 
-## Requirements
-
-- Node.js 18+
-- Next.js 14+ with App Router
+See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the full list of what is and is not collected, and for instructions on opting out (`nextly telemetry disable` or `NEXTLY_TELEMETRY_DISABLED=1`).
 
 ## License
 
-MIT
+[MIT](https://github.com/nextlyhq/nextly/blob/main/LICENSE.md). Free to use, modify, and distribute.
