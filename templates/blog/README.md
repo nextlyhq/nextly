@@ -1,5 +1,8 @@
 # Blog Template
 
+> [!IMPORTANT]
+> Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.
+
 A production-quality blog starter for Nextly. Ships with:
 
 - 15 seeded posts · 3 authors · 4 categories · 8 tags
@@ -79,11 +82,12 @@ Typography lives under `.prose-blog` for the rich-text renderer; tokens adjust a
 
 ## Schema approaches
 
-The template supports all three Nextly schema approaches:
+The template supports both Nextly schema approaches:
 
 - **Code-first** (`configs/codefirst.config.ts`) - Full schemas in TypeScript. Best for version control and type safety.
 - **Visual** (`configs/visual.config.ts`) - Empty config. Create schemas via the Admin Panel.
-- **Both** (`configs/both.config.ts`) - Core schemas in code, extendable via the UI.
+
+The two approaches are not mutually exclusive: a code-first project can add UI-defined collections later via the Schema Builder, and vice versa.
 
 ## Customization
 
@@ -141,9 +145,10 @@ All pages fetch data using Nextly's Direct API:
 
 ```typescript
 import { getNextly } from "@revnixhq/nextly";
+import nextlyConfig from "@nextly-config";
 
 export default async function BlogPage() {
-  const nextly = await getNextly();
+  const nextly = await getNextly({ config: nextlyConfig });
   // Returns ListResult<T> = { items, meta }.
   const result = await nextly.find({
     collection: "posts",
@@ -194,7 +199,6 @@ To send a welcome email on subscription, add an `afterChange` hook on the `form-
 templates/blog/
   configs/
     codefirst.config.ts    # Code-first schemas + plugins
-    both.config.ts         # Code-first + UI extensions
     visual.config.ts       # Empty; UI-created schemas only
   seed/
     media/                 # Gradient SVG placeholders (see README there)
