@@ -7,7 +7,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 > **SQLite is for local demos only.** Concurrent writes serialize on a single file lock, the database is fragile across process crashes and shared filesystems, there is no SSL or network access, and you will likely hit issues even during serious local development. Use **PostgreSQL** for any meaningful work -- `docker compose up -d postgres` is a one-liner. Set `DB_DIALECT=postgresql` and point `DATABASE_URL` at it. See the [PostgreSQL setup page](/docs/database/postgres#local-development-with-docker).
 
-The SQLite adapter wraps [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) -- a synchronous C++ binding -- behind the same async `DrizzleAdapter` interface as the other dialects. It is in the codebase so a one-off demo, a quick `npx create-nextly-app` walk-through, or a tiny in-memory test suite Just Works without any infrastructure.
+The SQLite adapter wraps [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) -- a synchronous C++ binding -- behind the same async `DrizzleAdapter` interface as the other dialects. It is in the codebase so a one-off demo, a quick `npx create-nextly-app@alpha` walk-through, or a tiny in-memory test suite Just Works without any infrastructure.
 
 > **Minimum version: SQLite 3.38.** The pinned `better-sqlite3` ships a much newer SQLite (3.45+ at time of writing), so users on this package always pass the version check. See [database support](/docs/database/support).
 

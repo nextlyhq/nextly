@@ -49,12 +49,12 @@ program
     "after",
     `
 Examples:
-  $ npx create-nextly-app my-project
-  $ npx create-nextly-app my-project -y
-  $ npx create-nextly-app my-blog -t blog -a code-first
-  $ npx create-nextly-app my-project --database postgresql
-  $ npx create-nextly-app .
-  `
+  $ npx create-nextly-app@alpha my-project
+  $ npx create-nextly-app@alpha my-project -y
+  $ npx create-nextly-app@alpha my-blog -t blog -a code-first
+  $ npx create-nextly-app@alpha my-project --database postgresql
+  $ npx create-nextly-app@alpha .
+`
   )
   .action(
     async (
