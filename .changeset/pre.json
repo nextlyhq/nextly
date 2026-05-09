@@ -1,0 +1,24 @@
+{
+  "mode": "pre",
+  "tag": "alpha",
+  "initialVersions": {
+    "playground": "0.1.1",
+    "@nextlyhq/adapter-drizzle": "0.0.1",
+    "@nextlyhq/adapter-mysql": "0.0.1",
+    "@nextlyhq/adapter-postgres": "0.0.1",
+    "@nextlyhq/adapter-sqlite": "0.0.1",
+    "@nextlyhq/admin": "0.0.1",
+    "create-nextly-app": "0.0.1",
+    "@nextlyhq/eslint-config": "0.0.1",
+    "nextly": "0.0.1",
+    "@nextlyhq/plugin-form-builder": "0.0.1",
+    "@nextlyhq/prettier-config": "0.0.1",
+    "@nextlyhq/storage-s3": "0.0.1",
+    "@nextlyhq/storage-uploadthing": "0.0.1",
+    "@nextlyhq/storage-vercel-blob": "0.0.1",
+    "@nextlyhq/telemetry": "0.0.1",
+    "@nextlyhq/tsconfig": "0.0.1",
+    "@nextlyhq/ui": "0.0.1"
+  },
+  "changesets": []
+}
