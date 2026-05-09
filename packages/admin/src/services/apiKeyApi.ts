@@ -35,7 +35,7 @@ export interface ApiKeyMeta {
   id: string;
   name: string;
   description: string | null;
-  /** First 16 characters of the key — e.g. "sk_live_abcdefgh". Used for masked display only. */
+  /** First 16 characters of the key — e.g. "nx_live_abcdefgh". Used for masked display only. */
   keyPrefix: string;
   tokenType: ApiKeyTokenType;
   /** Populated only when tokenType is "role-based". */

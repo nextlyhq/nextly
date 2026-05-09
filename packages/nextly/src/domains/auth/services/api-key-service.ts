@@ -12,20 +12,20 @@
  *   persisted. The full key is returned exactly once on creation and must
  *   be surfaced to the caller immediately.
  * - Keys are cryptographically random (32 bytes = 256-bit entropy).
- * - The `sk_live_` prefix allows instant identification in logs/configs.
+ * - The `nx_live_` prefix allows instant identification in logs/configs.
  * - Expiry is enforced at validation time; expired keys return `null` from
  *   `authenticateApiKey()` and result in a `401` response.
  *
  * ## Key Format
  *
  * ```
- * sk_live_<base64url-32-bytes>
+ * nx_live_<base64url-32-bytes>
  * └──────┘ └───────────────────┘
  *  prefix   43-char base64url secret (256 bits)
  *
- * Full key example : sk_live_abc123XYZ...  (51 chars total)
+ * Full key example : nx_live_abc123XYZ...  (51 chars total)
  * Stored hash      : sha256(fullKey) as hex string (64 chars)
- * Display prefix   : first 16 chars ("sk_live_abcdefgh") for masked UI display
+ * Display prefix   : first 16 chars ("nx_live_abcdefgh") for masked UI display
  * ```
  *
  * @module services/auth/api-key-service
@@ -76,7 +76,7 @@ export type ExpiresIn = "7d" | "30d" | "90d" | "unlimited";
 
 /** The key value returned by generateApiKey(). fullKey is shown once and never stored. */
 export interface GeneratedApiKey {
-  /** The full raw key — e.g. "sk_live_abc123...". Show to the user once, then discard. */
+  /** The full raw key — e.g. "nx_live_abc123...". Show to the user once, then discard. */
   fullKey: string;
   /** SHA-256 hex digest of fullKey. Stored in the database for lookup. */
   keyHash: string;
@@ -92,7 +92,7 @@ export interface ApiKeyMeta {
   id: string;
   name: string;
   description: string | null;
-  /** First 16 chars of the key (e.g. "sk_live_abcdefgh") — for masked UI display. */
+  /** First 16 chars of the key (e.g. "nx_live_abcdefgh") — for masked UI display. */
   keyPrefix: string;
   tokenType: ApiKeyTokenType;
   /** Populated only for role-based keys. Null if no role is set or role was deleted. */
@@ -124,7 +124,7 @@ export interface UpdateApiKeyInput {
   description?: string | null;
 }
 
-const KEY_PREFIX = "sk_live_";
+const KEY_PREFIX = "nx_live_";
 
 /**
  * Generate a new cryptographically-random API key.
@@ -133,7 +133,7 @@ const KEY_PREFIX = "sk_live_";
  * display prefix. The full key must be shown to the user immediately — it is
  * NOT stored and cannot be retrieved later.
  *
- * Key format: `sk_live_<base64url-32-bytes>`
+ * Key format: `nx_live_<base64url-32-bytes>`
  * - 32 random bytes encoded as base64url = 43 characters (no padding)
  * - Total key length: 8 (prefix) + 43 (secret) = 51 characters
  * - Entropy: 256 bits (same as a 32-byte AES key)
@@ -143,9 +143,9 @@ const KEY_PREFIX = "sk_live_";
  * @example
  * ```typescript
  * const { fullKey, keyHash, keyPrefix } = generateApiKey();
- * // fullKey   → "sk_live_abc123XYZ..." (return to user, never store)
+ * // fullKey   → "nx_live_abc123XYZ..." (return to user, never store)
  * // keyHash   → "a3f2c1..." (store in DB for lookup)
- * // keyPrefix → "sk_live_abcdefgh" (store in DB for UI display)
+ * // keyPrefix → "nx_live_abcdefgh" (store in DB for UI display)
  * ```
  */
 export function generateApiKey(): GeneratedApiKey {
@@ -172,12 +172,12 @@ export function generateApiKey(): GeneratedApiKey {
  * sufficient for high-entropy secrets, and the approach used by GitHub and
  * Stripe for their API key hashing.
  *
- * @param rawKey - The full API key string (e.g. "sk_live_abc123...")
+ * @param rawKey - The full API key string (e.g. "nx_live_abc123...")
  * @returns 64-character lowercase hex string (SHA-256 digest)
  *
  * @example
  * ```typescript
- * const hash = hashApiKey("sk_live_abc123...");
+ * const hash = hashApiKey("nx_live_abc123...");
  * // → "a3f2c1d9e8b7..." (64 hex chars, deterministic)
  *
  * // Lookup by hash in the database:
@@ -234,7 +234,7 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
  *   tokenType: "read-only",
  *   expiresIn: "30d",
  * });
- * // key is the raw "sk_live_..." — surface to user immediately, never stored
+ * // key is the raw "nx_live_..." — surface to user immediately, never stored
  *
  * // Validate an incoming request key
  * const result = await service.authenticateApiKey(rawKeyFromHeader);
@@ -781,7 +781,7 @@ export class ApiKeyService extends BaseService {
    * Validate an incoming raw API key from a request header.
    *
    * Called by auth middleware on every request that presents a
-   * `Authorization: Bearer sk_live_...` header. Designed for the hot path:
+   * `Authorization: Bearer nx_live_...` header. Designed for the hot path:
    * - Single SELECT with 5 columns, no JOIN
    * - Unique index hit on `keyHash` (O(1) lookup)
    * - Fire-and-forget `lastUsedAt` update (not awaited)
