@@ -23,7 +23,7 @@
  * └──────┘ └───────────────────┘
  *  prefix   43-char base64url secret (256 bits)
  *
- * Full key example : nx_live_abc123XYZ...  (51 chars total)
+ * Full key example : nx_live_<random>...  (51 chars total)
  * Stored hash      : sha256(fullKey) as hex string (64 chars)
  * Display prefix   : first 16 chars ("nx_live_abcdefgh") for masked UI display
  * ```
@@ -76,7 +76,7 @@ export type ExpiresIn = "7d" | "30d" | "90d" | "unlimited";
 
 /** The key value returned by generateApiKey(). fullKey is shown once and never stored. */
 export interface GeneratedApiKey {
-  /** The full raw key — e.g. "nx_live_abc123...". Show to the user once, then discard. */
+  /** The full raw key — e.g. "nx_live_<random>...". Show to the user once, then discard. */
   fullKey: string;
   /** SHA-256 hex digest of fullKey. Stored in the database for lookup. */
   keyHash: string;
@@ -143,7 +143,7 @@ const KEY_PREFIX = "nx_live_";
  * @example
  * ```typescript
  * const { fullKey, keyHash, keyPrefix } = generateApiKey();
- * // fullKey   → "nx_live_abc123XYZ..." (return to user, never store)
+ * // fullKey   → "nx_live_<random>..." (return to user, never store)
  * // keyHash   → "a3f2c1..." (store in DB for lookup)
  * // keyPrefix → "nx_live_abcdefgh" (store in DB for UI display)
  * ```
@@ -172,12 +172,12 @@ export function generateApiKey(): GeneratedApiKey {
  * sufficient for high-entropy secrets, and the approach used by GitHub and
  * Stripe for their API key hashing.
  *
- * @param rawKey - The full API key string (e.g. "nx_live_abc123...")
+ * @param rawKey - The full API key string (e.g. "nx_live_<random>...")
  * @returns 64-character lowercase hex string (SHA-256 digest)
  *
  * @example
  * ```typescript
- * const hash = hashApiKey("nx_live_abc123...");
+ * const hash = hashApiKey("nx_live_<random>...");
  * // → "a3f2c1d9e8b7..." (64 hex chars, deterministic)
  *
  * // Lookup by hash in the database:

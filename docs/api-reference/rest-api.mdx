@@ -45,7 +45,7 @@ Send the API key as a Bearer token:
 
 ```bash
 curl https://example.com/api/collections/posts/entries \
-  -H "Authorization: Bearer nx_live_abc123..."
+  -H "Authorization: Bearer nx_live_<random>..."
 ```
 
 API keys are managed via `POST /api/api-keys` (admin UI). There is **no** `X-API-Key` header — `Authorization: Bearer <key>` is the only supported form.

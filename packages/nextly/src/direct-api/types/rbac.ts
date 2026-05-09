@@ -417,7 +417,7 @@ export interface FindApiKeyByIDArgs extends DirectAPIConfig {
  *   tokenType: 'read-only',
  *   expiresIn: '90d',
  * });
- * // key → "nx_live_abc123..." (show to user once, then discard)
+ * // key → "nx_live_<random>..." (show to user once, then discard)
  * ```
  */
 export interface CreateApiKeyArgs extends DirectAPIConfig {
@@ -483,7 +483,7 @@ export interface RevokeApiKeyArgs extends DirectAPIConfig {
  *
  * @example
  * ```typescript
- * const result = await nextly.access.checkApiKey({ rawKey: 'nx_live_abc123...' });
+ * const result = await nextly.access.checkApiKey({ rawKey: 'nx_live_<random>...' });
  * if (!result.valid) return Response.json({ error: 'Unauthorized' }, { status: 401 });
  * ```
  */
