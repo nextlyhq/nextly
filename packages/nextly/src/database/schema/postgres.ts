@@ -449,7 +449,7 @@ export const apiKeys = pgTable(
     description: text("description"),
     // SHA-256 hex digest of the full key — primary lookup column, never the raw key
     keyHash: varchar("key_hash", { length: 64 }).notNull(),
-    // First 16 characters of the full key for display (e.g. "sk_live_abcdefgh")
+    // First 16 characters of the full key for display (e.g. "nx_live_abcdefgh")
     keyPrefix: varchar("key_prefix", { length: 16 }).notNull(),
     // Token type determines permission resolution strategy at request time
     tokenType: varchar("token_type", { length: 20 }).notNull(),

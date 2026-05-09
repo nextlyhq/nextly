@@ -22,4 +22,11 @@ paths = [
   '''pnpm-lock\.yaml$''',
   '''package-lock\.json$''',
   '''yarn\.lock$''',
+  # API-key service tests carry "nx_live_*" fixtures by design — the
+  # fixtures are required to exercise hash determinism, prefix length,
+  # and avalanche-effect tests. They are NOT real secrets (no real
+  # entropy past the visible prefix). The generic-api-key rule fires on
+  # them because the fixture strings are long enough to look like keys.
+  '''packages/nextly/src/domains/auth/__tests__/api-key-service\.test\.ts$''',
+  '''packages/nextly/src/services/auth/api-key-service\.test\.ts$''',
 ]

@@ -45,7 +45,7 @@ Send the API key as a Bearer token:
 
 ```bash
 curl https://example.com/api/collections/posts/entries \
-  -H "Authorization: Bearer sk_live_abc123..."
+  -H "Authorization: Bearer nx_live_<random>..."
 ```
 
 API keys are managed via `POST /api/api-keys` (admin UI). There is **no** `X-API-Key` header — `Authorization: Bearer <key>` is the only supported form.
@@ -448,7 +448,7 @@ Create:
 
 ```bash
 curl -X POST "http://localhost:3000/api/collections/posts/entries" \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"title":"New Post","content":"Hello!","status":"draft"}'
 ```
@@ -464,7 +464,7 @@ Update (PATCH a single field set; everything not in the body is left alone):
 
 ```bash
 curl -X PATCH "http://localhost:3000/api/collections/posts/entries/abc-123" \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"status":"published"}'
 ```
@@ -473,7 +473,7 @@ Delete:
 
 ```bash
 curl -X DELETE "http://localhost:3000/api/collections/posts/entries/abc-123" \
-  -H "Authorization: Bearer sk_live_..."
+  -H "Authorization: Bearer nx_live_..."
 ```
 
 Count:
@@ -487,14 +487,14 @@ Duplicate:
 
 ```bash
 curl -X POST "http://localhost:3000/api/collections/posts/entries/abc-123/duplicate" \
-  -H "Authorization: Bearer sk_live_..."
+  -H "Authorization: Bearer nx_live_..."
 ```
 
 Bulk delete (status 200, partial success in body):
 
 ```bash
 curl -X POST "http://localhost:3000/api/collections/posts/entries/bulk-delete" \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"ids":["post-1","post-2","post-3"]}'
 ```
@@ -513,7 +513,7 @@ Bulk update by IDs:
 
 ```bash
 curl -X POST "http://localhost:3000/api/collections/posts/entries/bulk-update" \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"ids":["post-1","post-2"],"data":{"status":"archived"}}'
 ```
@@ -522,7 +522,7 @@ Bulk update by query (PATCH on the collection root with a `where` clause in the 
 
 ```bash
 curl -X PATCH "http://localhost:3000/api/collections/posts/entries" \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived"}}'
 ```
@@ -545,7 +545,7 @@ Update content:
 
 ```bash
 curl -X PATCH http://localhost:3000/api/singles/site-settings \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"siteName":"My New Site","maintenanceMode":false}'
 ```
@@ -556,7 +556,7 @@ Both endpoints accept an authenticated request (cookie or API key). The body mat
 
 ```bash
 curl -X POST http://localhost:3000/api/email/send \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{
     "to": "user@example.com",
@@ -565,7 +565,7 @@ curl -X POST http://localhost:3000/api/email/send \
   }'
 
 curl -X POST http://localhost:3000/api/email/send-with-template \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{
     "to": "user@example.com",

@@ -558,7 +558,7 @@ export interface NextlyConfig {
    * API key authentication configuration.
    *
    * Controls per-key rate limiting applied when requests authenticate via
-   * `Authorization: Bearer sk_live_...`. Session-based requests are unaffected.
+   * `Authorization: Bearer nx_live_...`. Session-based requests are unaffected.
    */
   apiKeys?: ApiKeysConfig;
 

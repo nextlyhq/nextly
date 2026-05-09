@@ -36,7 +36,7 @@
       - any-glob-to-any-file:
           - packages/create-nextly-app/**
 
-"scope: deps":
+"dependencies":
   - changed-files:
       - any-glob-to-any-file:
           - "**/package.json"

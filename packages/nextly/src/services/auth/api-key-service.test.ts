@@ -4,10 +4,10 @@ import { generateApiKey, hashApiKey, isKeyExpired } from "./api-key-service";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants derived from the documented key format:
-//   sk_live_<base64url-32-bytes>
+//   nx_live_<base64url-32-bytes>
 //   prefix (8) + secret (43) = 51 chars total
 // ─────────────────────────────────────────────────────────────────────────────
-const KEY_PREFIX = "sk_live_";
+const KEY_PREFIX = "nx_live_";
 const PREFIX_LENGTH = KEY_PREFIX.length; // 8
 const SECRET_LENGTH = 43; // base64url(32 bytes) with no padding
 const FULL_KEY_LENGTH = PREFIX_LENGTH + SECRET_LENGTH; // 51
@@ -78,7 +78,7 @@ describe("generateApiKey()", () => {
     it("should contain only characters valid in HTTP Authorization headers", () => {
       // HTTP header values may not contain +, /, or = (base64 standard chars).
       // base64url replaces + → - and / → _ and omits padding =.
-      // The sk_live_ prefix uses only alphanumeric + underscore — also safe.
+      // The nx_live_ prefix uses only alphanumeric + underscore — also safe.
       const { fullKey } = generateApiKey();
 
       expect(fullKey).toMatch(BASE64URL_SAFE_PATTERN);
@@ -131,7 +131,7 @@ describe("generateApiKey()", () => {
 
     it("should produce different keyPrefix values on successive calls", () => {
       // The display prefix is the first 16 chars of the key.
-      // The first 8 chars ('sk_live_') are always the same, but chars 9–16
+      // The first 8 chars ('nx_live_') are always the same, but chars 9–16
       // come from the random secret, so they should differ between calls.
       const { keyPrefix: p1 } = generateApiKey();
       const { keyPrefix: p2 } = generateApiKey();
@@ -145,9 +145,7 @@ describe("hashApiKey()", () => {
   describe("determinism", () => {
     it("should return the same hash when called twice with the same key", () => {
       // Arrange
-      // Use an "nx_test_" prefix in fixtures (not the real "sk_live_" prefix)
-      // so secret scanners don't flag them as Stripe live keys.
-      const rawKey = "nx_test_testkey1234567890abcdefghijklmnop";
+      const rawKey = "nx_live_testkey1234567890abcdefghijklmnop";
 
       // Act
       const hash1 = hashApiKey(rawKey);
@@ -173,7 +171,7 @@ describe("hashApiKey()", () => {
   describe("output format", () => {
     it(`should return a ${HASH_LENGTH}-character string (SHA-256 hex digest)`, () => {
       // Arrange
-      const rawKey = "sk_live_somekey";
+      const rawKey = "nx_live_somekey";
 
       // Act
       const hash = hashApiKey(rawKey);
@@ -184,7 +182,7 @@ describe("hashApiKey()", () => {
 
     it("should return a lowercase hexadecimal string", () => {
       // Arrange
-      const rawKey = "sk_live_somekey";
+      const rawKey = "nx_live_somekey";
 
       // Act
       const hash = hashApiKey(rawKey);
@@ -197,7 +195,7 @@ describe("hashApiKey()", () => {
   describe("non-reversibility and collision resistance", () => {
     it("should not return the original key as the hash (non-reversible)", () => {
       // Arrange
-      const rawKey = "sk_live_abc123";
+      const rawKey = "nx_live_abc123";
 
       // Act
       const hash = hashApiKey(rawKey);
@@ -208,8 +206,8 @@ describe("hashApiKey()", () => {
 
     it("should produce different hashes for different keys", () => {
       // Arrange
-      const key1 = "nx_test_keyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-      const key2 = "nx_test_keyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+      const key1 = "nx_live_keyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const key2 = "nx_live_keyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
       // Act
       const hash1 = hashApiKey(key1);
@@ -221,8 +219,8 @@ describe("hashApiKey()", () => {
 
     it("should produce different hashes for keys differing by a single character", () => {
       // Demonstrate SHA-256 avalanche effect
-      const key1 = "nx_test_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-      const key2 = "nx_test_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB";
+      const key1 = "nx_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const key2 = "nx_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB";
 
       const hash1 = hashApiKey(key1);
       const hash2 = hashApiKey(key2);
