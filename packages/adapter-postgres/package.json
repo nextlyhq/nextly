@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-postgres",
-  "version": "0.0.1",
+  "version": "0.0.2-alpha.0",
   "description": "PostgreSQL database adapter for Nextly - extends @nextly/adapter-drizzle",
   "license": "MIT",
   "type": "module",
