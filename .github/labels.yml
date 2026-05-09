@@ -18,6 +18,9 @@
 - name: "type: security"
   color: "b60205"
   description: "Security report or fix"
+- name: "type: discussion"
+  color: "c2e0c6"
+  description: "Open-ended proposal, RFC, or roadmap topic"
 
 # ── status: ── lifecycle (only one at a time per issue)
 - name: "status: needs-triage"
@@ -72,9 +75,9 @@
 - name: "scope: cli"
   color: "755aaf"
   description: "create-nextly-app"
-- name: "scope: deps"
+- name: "dependencies"
   color: "0366d6"
-  description: "Dependency updates"
+  description: "Dependency updates (label applied by Dependabot)"
 
 # ── flag: ── special markers (manual)
 - name: "flag: breaking-change"
@@ -86,3 +89,17 @@
 - name: "flag: needs-migration-guide"
   color: "f6ae66"
   description: "Requires user-facing migration documentation"
+- name: "flag: needs-changelog"
+  color: "f6ae66"
+  description: "Touches user-facing behavior but is missing a changeset"
+- name: "flag: stale"
+  color: "cccccc"
+  description: "No activity for a while; may be auto-closed"
+
+# ── GitHub-native labels ── platform treats these specially in the UI
+- name: "good first issue"
+  color: "7057ff"
+  description: "Beginner-friendly entry point for new contributors"
+- name: "help wanted"
+  color: "008672"
+  description: "Maintainer welcomes a community PR for this issue"

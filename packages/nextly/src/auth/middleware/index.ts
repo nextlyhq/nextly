@@ -158,7 +158,7 @@ export interface AuthContext {
 /**
  * API key authentication middleware.
  *
- * Validates an `Authorization: Bearer sk_live_...` header and resolves the
+ * Validates an `Authorization: Bearer nx_live_...` header and resolves the
  * effective permission set for the authenticated key. Returns a three-state result:
  *
  * - `null` — no `Authorization: Bearer` header present (or header is malformed).

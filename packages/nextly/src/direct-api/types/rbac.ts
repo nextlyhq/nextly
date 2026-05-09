@@ -361,7 +361,7 @@ export interface CheckAccessArgs {
  */
 export type ApiKeyResult = ApiKeyMeta & {
     /**
-     * The full raw key value (e.g., `"sk_live_..."`).
+     * The full raw key value (e.g., `"nx_live_..."`).
      *
      * Only present on `apiKeys.create()` responses.
      * This is the only time the raw key is returned — store it safely.
@@ -417,7 +417,7 @@ export interface FindApiKeyByIDArgs extends DirectAPIConfig {
  *   tokenType: 'read-only',
  *   expiresIn: '90d',
  * });
- * // key → "sk_live_abc123..." (show to user once, then discard)
+ * // key → "nx_live_<random>..." (show to user once, then discard)
  * ```
  */
 export interface CreateApiKeyArgs extends DirectAPIConfig {
@@ -483,7 +483,7 @@ export interface RevokeApiKeyArgs extends DirectAPIConfig {
  *
  * @example
  * ```typescript
- * const result = await nextly.access.checkApiKey({ rawKey: 'sk_live_abc123...' });
+ * const result = await nextly.access.checkApiKey({ rawKey: 'nx_live_<random>...' });
  * if (!result.valid) return Response.json({ error: 'Unauthorized' }, { status: 401 });
  * ```
  */

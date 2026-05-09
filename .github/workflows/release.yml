@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
 
 # Only one release can run at a time. Never cancel a running publish.
 concurrency:
