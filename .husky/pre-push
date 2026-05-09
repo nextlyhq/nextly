@@ -1,4 +1,19 @@
 #!/usr/bin/env sh
+
+# Skip in CI. The release workflow does an internal `git push` (via
+# `changesets/action`) when it commits version bumps; CI's `ci.yml`
+# already runs the same lint+build validation as a separate gated step.
+# Running them again here is redundant and broke the release flow:
+# `pnpm turbo lint` runs *before* `pnpm run build` in this hook, so
+# in CI (where the turbo cache is fresh) lint can't resolve workspace
+# package imports until build has produced the dist outputs.
+#
+# Local pushes still get the full pre-push validation.
+if [ -n "$CI" ]; then
+  echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
+  exit 0
+fi
+
 set -e
 pnpm turbo lint --continue \
   --filter='./packages/*'
