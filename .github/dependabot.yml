@@ -2,12 +2,15 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: weekly
       day: monday
       time: "04:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 10
+    # Limit kept low during alpha to avoid Dependabot fatigue while we
+    # iterate fast. Raise after API stabilizes.
+    open-pull-requests-limit: 5
     # Title format: "chore(deps): bump zod from 4.1.0 to 4.2.0"
     # `include: scope` was REMOVED — it appended a second scope after the
     # one already in `prefix`, producing invalid "chore(deps)(deps): ..."
@@ -15,21 +18,28 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps)"
+    # Group only minor/patch into one PR. Major bumps get their own
+    # individual PRs so each potentially-breaking change is reviewed
+    # one at a time — important during alpha when the framework's
+    # external dependency surface is still moving.
     groups:
       all-minor-and-patch:
         update-types:
           - minor
           - patch
-      major-updates:
-        update-types:
-          - major
+    # `drizzle-kit` is exact-pinned by policy — `scripts/check-drizzle-kit-pin.cjs`
+    # enforces it in CI. Telling Dependabot to skip it avoids weekly
+    # PRs that CI would just block.
+    ignore:
+      - dependency-name: "drizzle-kit"
     reviewers:
-      - aqib-rx
+      - mobeenabdullah
     labels:
       - dependencies
 
   - package-ecosystem: github-actions
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: weekly
       day: monday
@@ -47,7 +57,7 @@ updates:
         patterns:
           - "*"
     reviewers:
-      - aqib-rx
+      - mobeenabdullah
     labels:
       - dependencies
       - github-actions
