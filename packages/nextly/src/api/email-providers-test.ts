@@ -1,0 +1,111 @@
+/**
+ * Email Provider Test API Route Handler for Next.js
+ *
+ * Sends a test email through a specific provider to verify configuration.
+ * Re-export in your Next.js application at /api/email-providers/[id]/test.
+ *
+ * @example
+ * ```typescript
+ * // In your Next.js app: app/api/email-providers/[id]/test/route.ts
+ * export { POST } from 'nextly/api/email-providers-test';
+ * ```
+ *
+ * @module api/email-providers-test
+ */
+
+import { z } from "zod";
+
+import { container } from "../di";
+import { NextlyError } from "../errors/nextly-error";
+import { getCachedNextly } from "../init";
+import type { EmailProviderService } from "../services/email/email-provider-service";
+
+import { requireAuthHeader } from "./auth-header-only";
+import { respondAction } from "./response-shapes";
+import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
+interface RouteContext {
+  params: Promise<{ id: string }>;
+}
+
+async function getEmailProviderService(): Promise<EmailProviderService> {
+  await getCachedNextly();
+  return container.get<EmailProviderService>("emailProviderService");
+}
+
+const testProviderSchema = z.object({
+  // Optional; when omitted the service falls back to the provider's fromEmail.
+  email: z.string().email("A valid test email address is required").optional(),
+});
+
+/**
+ * POST handler for testing an email provider.
+ *
+ * Sends a test email through the specified provider to verify that
+ * the configuration (credentials, host, etc.) is correct.
+ *
+ * Requires authentication. Provider must be active.
+ *
+ * Request Body (optional):
+ * - email: Email address to send the test email to (optional; falls back
+ *   to the provider's `fromEmail`)
+ *
+ * Response Codes:
+ * - 200 OK: Test completed (check `success` field for result)
+ * - 400 Bad Request: Invalid input
+ * - 401 Unauthorized: Authentication required
+ * - 404 Not Found: Provider with ID does not exist
+ * - 500 Internal Server Error: Test failed
+ *
+ * Response: `{ "data": { "success": boolean, "error"?: string } }`
+ */
+export const POST = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
+
+    const { id } = await context.params;
+    const service = await getEmailProviderService();
+
+    // Body is optional: the legacy handler treated a missing JSON body as `{}`
+    // so callers could omit the request body entirely. Preserve that.
+    let body: unknown = {};
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      try {
+        body = await request.json();
+      } catch {
+        throw new NextlyError({
+          code: "VALIDATION_ERROR",
+          publicMessage: "Validation failed.",
+          publicData: {
+            errors: [
+              {
+                path: "",
+                code: "invalid_json",
+                message: "Request body is not valid JSON.",
+              },
+            ],
+          },
+          logContext: { reason: "invalid-json-body" },
+        });
+      }
+    }
+
+    let validated: z.infer<typeof testProviderSchema>;
+    try {
+      validated = testProviderSchema.parse(body);
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
+
+    // `email` is optional; the service falls back to provider.fromEmail.
+    const result = await service.testProvider(id, validated.email);
+
+    // testProvider always returns 200 at the request layer (per-attempt
+    // delivery success rides in `result.success`). Match the dispatcher
+    // wire shape so REST + dispatcher surfaces stay aligned.
+    return respondAction("Test email dispatched.", { result });
+  }
+);

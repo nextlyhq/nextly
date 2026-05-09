@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+pnpm-lock.yaml
+
+# Build outputs
+dist/
+build/
+.next/
+.turbo/
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+
+# Environment files
+.env*
+
+# Generated files
+*.tsbuildinfo
+*.d.ts
+
+# Template files (contain {{placeholder}} markers that aren't valid syntax)
+packages/create-nextly-app/templates/

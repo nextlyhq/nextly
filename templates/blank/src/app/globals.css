@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/**
+ * Blank-template global styles.
+ *
+ * Overrides templates/base/src/app/globals.css so the branded landing
+ * page renders with its supporting decorations: a subtle 56px grid
+ * backdrop, the corner brackets, the pulsing "Localhost / Development"
+ * dot, and a hover-invert helper for the secondary button.
+ *
+ * Tailwind base tokens still apply — these rules are additive.
+ */
+
+:root {
+  --color-background: #f9fafb;
+  --color-foreground: #0f172a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #0b0f19;
+    --color-foreground: #f9fafb;
+  }
+}
+
+.dark {
+  --color-background: #0b0f19;
+  --color-foreground: #f9fafb;
+}
+
+@theme {
+  --color-background: var(--color-background);
+  --color-foreground: var(--color-foreground);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  overflow-x: hidden;
+}
+
+.pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  background: #10b981;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #10b981;
+  animation: nextly-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes nextly-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+}
+
+.btn-primary {
+  @apply inline-flex items-center gap-2.5 rounded-none bg-foreground px-6 py-3.5 text-sm font-semibold text-background transition-all hover:opacity-90 active:scale-95;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center gap-2.5 rounded-none border border-foreground/10 bg-transparent px-6 py-3.5 text-sm font-medium text-foreground transition-all hover:bg-foreground/5 active:scale-95;
+}

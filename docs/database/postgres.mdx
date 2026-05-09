@@ -1,0 +1,275 @@
+---
+title: PostgreSQL
+description: Set up Nextly with PostgreSQL. Covers installation, connection strings, provider auto-detection (Neon, Supabase), pool tuning, SSL, migrations, local Docker, and production checklist.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+PostgreSQL is the recommended production database for Nextly. The adapter uses the standard [`pg`](https://node-postgres.com/) driver and ships the full feature set: JSONB, arrays, `RETURNING`, `ILIKE`, savepoints, full-text search, and serialization-failure / deadlock retry. It also auto-detects [Neon](https://neon.tech) and [Supabase](https://supabase.com) connection strings and applies provider-appropriate defaults.
+
+> **Minimum version: PostgreSQL 15.0.** Older versions hard-fail at connect with a clear upgrade pointer. See [database support](/docs/database/support) for cloud-provider compatibility.
+
+## Installation
+
+Install the adapter alongside the `pg` driver:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @nextlyhq/adapter-postgres pg
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @nextlyhq/adapter-postgres pg
+```
+
+</Tab>
+<Tab value="yarn">
+
+```bash
+yarn add @nextlyhq/adapter-postgres pg
+```
+
+</Tab>
+<Tab value="bun">
+
+```bash
+bun add @nextlyhq/adapter-postgres pg
+```
+
+</Tab>
+</Tabs>
+
+## Configuration
+
+Set `DB_DIALECT=postgresql` and `DATABASE_URL` in your environment. Nextly's runtime factory loads the adapter for you on first request -- no explicit wiring required.
+
+```bash title=".env"
+DB_DIALECT=postgresql
+DATABASE_URL=postgres://nextly:nextly@localhost:5432/nextly_dev
+```
+
+### Programmatic usage
+
+If you need an adapter outside the request pipeline (a script, a background worker, a test harness), create one directly:
+
+```typescript title="src/db.ts"
+import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
+
+const adapter = createPostgresAdapter({
+  url: process.env.DATABASE_URL!,
+});
+
+await adapter.connect();
+```
+
+You can also pass discrete connection fields instead of a URL:
+
+```typescript
+const adapter = createPostgresAdapter({
+  host: "localhost",
+  port: 5432,
+  database: "nextly_dev",
+  user: "nextly",
+  password: "nextly",
+});
+```
+
+## Connection string
+
+Vanilla PostgreSQL:
+
+```
+postgres://user:password@host:port/database
+```
+
+[Neon](https://neon.tech) -- pooled connection from the project dashboard, e.g.:
+
+```
+postgres://user:password@ep-cool-name-123456-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require
+```
+
+[Supabase](https://supabase.com) -- the connection string from **Project Settings -> Database**, e.g.:
+
+```
+postgres://postgres.<project-ref>:password@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+```
+
+### Provider auto-detection
+
+When the adapter connects, it inspects `DATABASE_URL` and applies provider-aware defaults:
+
+| Detected provider | Triggered by URL containing | Defaults applied |
+|---|---|---|
+| `neon` | `.neon.tech` or `neon.` | `ssl: true`, `poolMax: 5`, `poolMin: 0`, `idleTimeoutMs: 10000`, `connectionTimeoutMs: 20000`, `statementTimeoutMs: 30000`, `retryAttempts: 5` (cold-start tolerance) |
+| `supabase` | `.supabase.` or `supabase.` | `ssl: true`, `poolMax: 5`, `poolMin: 0`, `idleTimeoutMs: 30000`, `connectionTimeoutMs: 15000`, `statementTimeoutMs: 15000`, `retryAttempts: 3` |
+| `standard` | anything else | `ssl: false`, `poolMax: 10`, `poolMin: 0`, `idleTimeoutMs: 30000`, `connectionTimeoutMs: 15000`, `statementTimeoutMs: 15000`, `retryAttempts: 3` |
+
+Override the detection with the `DB_PROVIDER` env var (`neon`, `supabase`, or `standard`). User-provided config (`pool`, `ssl`, `statementTimeout`) always wins over provider defaults.
+
+## SSL / TLS
+
+For Neon and Supabase, SSL is on by default with `rejectUnauthorized: true`. For self-hosted PostgreSQL the default is no SSL -- enable it explicitly:
+
+```typescript
+const adapter = createPostgresAdapter({
+  url: process.env.DATABASE_URL!,
+  ssl: { rejectUnauthorized: true, ca: process.env.CA_CERT },
+});
+```
+
+Pass `ssl: true` for a quick default, or an `SslConfig` object for full control:
+
+| Option | Type | Notes |
+|---|---|---|
+| `rejectUnauthorized` | `boolean` | Default `true`. Setting to `false` disables certificate verification and logs a warning -- unsafe on untrusted networks. Provide a trusted `ca` cert instead. |
+| `ca` | `string` | PEM-encoded CA certificate. |
+| `cert` | `string` | Client certificate (mTLS). |
+| `key` | `string` | Client private key (mTLS). |
+
+## Connection pool
+
+The adapter uses `pg.Pool`. Resolution order: **user config > provider defaults > hardcoded defaults** (`min: 0`, `max: 5`, `idleTimeoutMs: 30000`, `connectionTimeoutMs: 15000`).
+
+| Option | Hardcoded default | Description |
+|---|---|---|
+| `pool.min` | `0` | Minimum connections. Stays at 0 to avoid eager creation while a serverless DB (Neon) is waking. |
+| `pool.max` | `5` | Maximum connections. Conservative to stay under cloud limits. Next.js can spawn up to ~7 build workers; multiply your `pool.max` by that to sanity-check against your provider's connection cap. |
+| `pool.idleTimeoutMs` | `30000` | Close idle connections after 30 s. |
+| `pool.connectionTimeoutMs` | `15000` | Wait at most 15 s for a free connection from the pool. |
+| `pool.maxLifetimeMs` | (driver default) | Recycle connections older than this. |
+
+```typescript
+const adapter = createPostgresAdapter({
+  url: process.env.DATABASE_URL!,
+  pool: {
+    min: 2,
+    max: 20,
+    idleTimeoutMs: 30000,
+    connectionTimeoutMs: 10000,
+  },
+});
+```
+
+TCP keepalive is always enabled with a 10-second initial delay, which prevents serverless databases from silently dropping idle connections between the pool smoke-test and the first real query.
+
+## PostgreSQL-specific options
+
+| Option | Type | Description |
+|---|---|---|
+| `applicationName` | `string` | Identifies your app in `pg_stat_activity`. Useful for debugging connection issues. |
+| `statementTimeout` | `number` (ms) | Per-statement timeout. Queries exceeding this are cancelled by PostgreSQL. |
+| `queryTimeout` | `number` (ms) | Driver-level query timeout. |
+| `preparedStatements` | `boolean` | Default `true`. Disable for poolers that block extended-protocol prepares. |
+| `queryTimeoutMs` | `number` (ms) | Default `15000`. Used by the adapter's internal timeout helpers. |
+
+```typescript
+const adapter = createPostgresAdapter({
+  url: process.env.DATABASE_URL!,
+  applicationName: "my-nextly-app",
+  statementTimeout: 30000,
+});
+```
+
+## Connect-time retry
+
+Transient connection errors retry with linear backoff (1 s, 2 s, 3 s, ...) up to the provider's `retryAttempts` (5 for Neon, 3 elsewhere). Retryable Node.js error codes: `ETIMEDOUT`, `ECONNREFUSED`, `ECONNRESET`, `ENOTFOUND`, `EAI_AGAIN`. This handles serverless cold-starts, brief network hiccups, and DNS races during build parallelism.
+
+Per-query retries kick in on `ETIMEDOUT`, `ECONNRESET`, `ECONNREFUSED` (up to 3 attempts, 500 ms / 1 s / 1.5 s backoff). Transactions automatically retry serialization failures (`40001`) and deadlocks (`40P01`) when you opt in via `transaction(work, { retryCount: 3, retryDelayMs: 100 })`.
+
+## Migrations
+
+Schema changes live as `.sql` files in your repo. Nextly's runtime never auto-applies them; you ship them with the migration CLI:
+
+```bash
+pnpm nextly migrate:create --name=add-posts-table   # scaffold a new migration
+pnpm nextly migrate:status                          # show applied / pending / failed
+pnpm nextly migrate:check                           # CI gate: integrity + drift, no DB connection
+pnpm nextly migrate                                 # apply pending migrations
+pnpm nextly migrate:fresh                           # destructive: drop all tables and re-apply
+```
+
+> **Forward-only.** There is no `migrate:rollback` or `migrate:down`. To undo an applied change, write a NEW corrective migration that reverses it. See [production migrations](/docs/guides/production-migrations).
+
+`migrate:fresh` is destructive and prompts for confirmation -- use `--force` to skip the prompt in scripted local-dev flows. It is CLI-only and refuses to import from runtime code; never invoke it from a deployed app.
+
+## Local development with Docker
+
+Nextly ships a `docker-compose.yml` at the repo root with a Postgres service. The simplest way to run Postgres locally for a Nextly app:
+
+```yaml title="docker-compose.yml"
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nextly_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev_password_change_in_production
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+```
+
+```bash
+docker compose up -d postgres
+```
+
+```bash title=".env"
+DB_DIALECT=postgresql
+DATABASE_URL=postgres://postgres:dev_password_change_in_production@localhost:5432/nextly_dev
+```
+
+To stop and remove:
+
+```bash
+docker compose down
+```
+
+## Production checklist
+
+- **Use a managed provider with SSL on by default** (Neon, Supabase, AWS RDS, Cloud SQL, Railway). For self-hosted, set `ssl: { rejectUnauthorized: true, ca: process.env.CA_CERT }` explicitly.
+- **Cap `pool.max` against your provider's connection limit.** Neon free tier allows ~25-30 simultaneous connections; with 7 Next.js build workers, `pool.max: 5` already lands at 35.
+- **Use a connection pooler** for serverless / edge runtimes that fan out many short-lived workers: PgBouncer for self-hosted, Neon's pooler endpoint, Supabase's Supavisor pooler. Pick the transaction-mode pooler if you don't need session features (advisory locks, prepared statements, `LISTEN`/`NOTIFY`).
+- **Set `applicationName`** so you can identify your app's connections in `pg_stat_activity`.
+- **Set `statementTimeout`** (e.g., 30 s) to prevent runaway queries from holding connections.
+- **Run migrations from CI** before each deploy, not from the deployed app. See [production migrations](/docs/guides/production-migrations).
+- **Back up your database.** Most managed providers do this automatically; verify retention and restore procedure in staging.
+
+## Capabilities
+
+The adapter reports the following capabilities at runtime:
+
+```typescript
+{
+  dialect: "postgresql",
+  supportsJsonb: true,
+  supportsJson: true,
+  supportsArrays: true,
+  supportsGeneratedColumns: true,
+  supportsFts: true,
+  supportsIlike: true,
+  supportsReturning: true,
+  supportsSavepoints: true,
+  supportsOnConflict: true,
+  maxParamsPerQuery: 65535,
+  maxIdentifierLength: 63,
+}
+```
+
+## Next steps
+
+- [Database overview](/docs/database) -- compare all supported databases
+- [Database support](/docs/database/support) -- minimum versions and cloud-provider compatibility
+- [Production migrations](/docs/guides/production-migrations) -- forward-only deploy patterns
+- [Environment variables](/docs/configuration/environment) -- full env var reference
+- [MySQL setup](/docs/database/mysql) -- alternative dialect
+- [SQLite setup](/docs/database/sqlite) -- local demo only

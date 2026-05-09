@@ -1,0 +1,1 @@
+# @nextlyhq/adapter-sqlite

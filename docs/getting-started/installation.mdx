@@ -1,0 +1,359 @@
+---
+title: Installation
+description: Install Nextly in a new or existing Next.js project with step-by-step instructions.
+---
+
+There are two ways to install Nextly: scaffold a new project with the CLI, or add Nextly to an existing Next.js app manually. Both paths take a few minutes.
+
+## Option A: Create a New Project (Recommended)
+
+The `create-nextly-app` CLI scaffolds a complete Nextly project with your choice of database and template. Storage defaults to local disk, so you don't need to configure cloud storage to get started.
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app my-app
+```
+</Tab>
+<Tab value="npm">
+```bash
+npx create-nextly-app@latest my-app
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn create nextly-app my-app
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun create nextly-app my-app
+```
+</Tab>
+</Tabs>
+
+The CLI will prompt you to:
+
+1. **Project name** -- defaults to the directory name. Use `.` to scaffold into the current folder.
+2. **Template** -- `Blank` (empty config) or `Blog` (a complete blog with posts, authors, categories, and frontend pages). See [Templates](/docs/templates) for what each one ships with.
+3. **Schema approach** (only for templates that support both) -- `code-first` (default for Blog) or `visual` (Visual Schema Builder).
+4. **Database** -- `SQLite` (default), `PostgreSQL`, or `MySQL`.
+5. **Database connection string** -- skipped for SQLite (defaults to `file:./data/nextly.db`); required for PostgreSQL/MySQL.
+
+Once the CLI completes, change into the project and start the dev server:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+cd my-app
+pnpm dev
+```
+</Tab>
+<Tab value="npm">
+```bash
+cd my-app
+npm run dev
+```
+</Tab>
+<Tab value="yarn">
+```bash
+cd my-app
+yarn dev
+```
+</Tab>
+<Tab value="bun">
+```bash
+cd my-app
+bun run dev
+```
+</Tab>
+</Tabs>
+
+### Create the super admin
+
+The first time you run the dev server, the database is empty -- there's no admin account yet. Open the setup page to create one:
+
+```
+http://localhost:3000/admin/setup
+```
+
+Enter an email, password, and name. The first user is bootstrapped with a `Super Admin` role that has every permission. After that, you'll be redirected to the login screen at `/admin`.
+
+### Default storage is local disk
+
+Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served by Next.js as static assets. When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
+
+## Option B: Add to an Existing Next.js Project
+
+### 1. Install Packages
+
+Install the runtime, admin panel, and database adapter:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm add nextly @nextlyhq/admin
+```
+</Tab>
+<Tab value="npm">
+```bash
+npm install nextly @nextlyhq/admin
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn add nextly @nextlyhq/admin
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun add nextly @nextlyhq/admin
+```
+</Tab>
+</Tabs>
+
+Then install your database driver:
+
+<Tabs items={["PostgreSQL", "MySQL", "SQLite"]}>
+<Tab value="PostgreSQL">
+```bash
+pnpm add @nextlyhq/adapter-postgres pg
+```
+</Tab>
+<Tab value="MySQL">
+```bash
+pnpm add @nextlyhq/adapter-mysql mysql2
+```
+</Tab>
+<Tab value="SQLite">
+```bash
+pnpm add @nextlyhq/adapter-sqlite better-sqlite3
+```
+</Tab>
+</Tabs>
+
+Cloud storage is optional -- Nextly's default is local disk under `./public/uploads/`. Install a storage adapter only if you need one:
+
+<Tabs items={["S3 / R2 / DigitalOcean Spaces", "Vercel Blob", "Uploadthing"]}>
+<Tab value="S3 / R2 / DigitalOcean Spaces">
+```bash
+pnpm add @nextlyhq/storage-s3
+```
+</Tab>
+<Tab value="Vercel Blob">
+```bash
+pnpm add @nextlyhq/storage-vercel-blob
+```
+</Tab>
+<Tab value="Uploadthing">
+```bash
+pnpm add @nextlyhq/storage-uploadthing
+```
+</Tab>
+</Tabs>
+
+### 2. Create `nextly.config.ts`
+
+Create a `nextly.config.ts` file in your project root:
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  collections: [],
+  singles: [],
+
+  typescript: {
+    outputFile: "./src/types/generated/nextly-types.ts",
+  },
+});
+```
+
+### 3. Update `next.config.ts`
+
+Add `serverExternalPackages` so Next.js doesn't try to bundle server-only dependencies:
+
+```typescript title="next.config.ts"
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  serverExternalPackages: [
+    "nextly",
+    "@nextlyhq/adapter-drizzle",
+    "@nextlyhq/adapter-postgres",
+    "@nextlyhq/adapter-mysql",
+    "@nextlyhq/adapter-sqlite",
+    "drizzle-orm",
+    "drizzle-kit",
+    "pg",
+    "mysql2",
+    "better-sqlite3",
+    "bcryptjs",
+    "sharp",
+    "esbuild",
+  ],
+};
+
+export default nextConfig;
+```
+
+Drop adapters and drivers your project doesn't actually use.
+
+### 4. Set Up Admin Routes
+
+Create the admin panel page and layout:
+
+```tsx title="src/app/admin/[[...params]]/page.tsx"
+"use client";
+
+import "@nextlyhq/admin/style.css";
+import { RootLayout, QueryProvider, ErrorBoundary } from "@nextlyhq/admin";
+
+export default function AdminPage() {
+  return (
+    <ErrorBoundary
+      onError={(error, errorInfo) => {
+        console.error("Admin error:", error, errorInfo);
+      }}
+    >
+      <QueryProvider>
+        <RootLayout />
+      </QueryProvider>
+    </ErrorBoundary>
+  );
+}
+```
+
+```tsx title="src/app/admin/[[...params]]/layout.tsx"
+import { getBrandingCss } from "nextly/config";
+
+import config from "../../../../nextly.config";
+
+const brandingCss = getBrandingCss(config.admin?.branding);
+
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      {brandingCss && (
+        <style dangerouslySetInnerHTML={{ __html: brandingCss }} />
+      )}
+      {children}
+    </>
+  );
+}
+```
+
+Create the admin API catch-all route:
+
+```typescript title="src/app/admin/api/[[...params]]/route.ts"
+import { createDynamicHandlers, getNextly } from "nextly";
+
+import nextlyConfig from "../../../../../nextly.config";
+
+const handlers = createDynamicHandlers({ config: nextlyConfig });
+
+export const GET = handlers.GET;
+export const POST = handlers.POST;
+export const PUT = handlers.PUT;
+export const PATCH = handlers.PATCH;
+export const DELETE = handlers.DELETE;
+export const OPTIONS = handlers.OPTIONS;
+```
+
+### 5. Set Up Environment Variables
+
+Create a `.env` file with your database and auth configuration:
+
+```bash title=".env"
+# Database
+DB_DIALECT=postgresql
+DATABASE_URL=postgresql://user:password@localhost:5432/nextly
+
+# Authentication (REQUIRED, min 32 chars)
+# Generate with: openssl rand -base64 32
+NEXTLY_SECRET=change-me-generate-a-secure-secret
+
+# Application URL
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+That's the minimum. For storage, email, and other optional settings see [Environment Variables](/docs/configuration/environment).
+
+### 6. Run Migrations
+
+Initialize the database schema. Nextly seeds default RBAC roles and permissions on first run:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm nextly migrate
+```
+</Tab>
+<Tab value="npm">
+```bash
+npx nextly migrate
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn nextly migrate
+```
+</Tab>
+<Tab value="bun">
+```bash
+bunx nextly migrate
+```
+</Tab>
+</Tabs>
+
+In development, Nextly auto-syncs schema changes when you save `nextly.config.ts`, so you usually only need `nextly migrate` for initial setup and production deploys. See [Production migrations](/docs/guides/production-migrations) for the production flow.
+
+### 7. Verify
+
+Start the development server:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+```bash
+pnpm dev
+```
+</Tab>
+<Tab value="npm">
+```bash
+npm run dev
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn dev
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun run dev
+```
+</Tab>
+</Tabs>
+
+Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first super admin account, then log in at [http://localhost:3000/admin](http://localhost:3000/admin).
+
+## Requirements
+
+| Requirement | Version |
+| --- | --- |
+| Node.js | 20 or later |
+| Next.js | 16+ (App Router required) |
+| React | 19+ |
+| TypeScript | 5+ |
+| Database | PostgreSQL (recommended for production), MySQL, or SQLite (local demo only) |
+
+## Next Steps
+
+- [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
+- [Project Structure](/docs/getting-started/project-structure) -- Understand the file layout
+- [Configuration](/docs/configuration) -- Full configuration reference
+- [Environment Variables](/docs/configuration/environment) -- All environment variables explained

@@ -1,0 +1,14 @@
+{
+  "name": "blog",
+  "label": "Blog",
+  "description": "A complete blog with posts, authors, and categories",
+  "hint": "Posts, authors, categories, clean design",
+  "approaches": ["code-first", "visual"],
+  "defaultApproach": "code-first",
+  "collections": ["posts", "categories", "tags"],
+  "singles": ["site-settings"],
+  "hasDemoData": true,
+  "hasFrontendPages": true,
+  "recommendedDatabase": "any",
+  "release": "alpha"
+}

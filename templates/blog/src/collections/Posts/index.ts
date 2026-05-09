@@ -1,0 +1,106 @@
+/**
+ * Posts collection: the core content type for the blog.
+ *
+ * Content fields (title, content, featuredImage, excerpt) plus editorial
+ * controls (author, categories, tags, featured) plus computed fields
+ * (readingTime, wordCount) plus a per-post SEO group for rich social
+ * previews and search-engine overrides. Draft/Published lifecycle is
+ * provided by Nextly's built-in `status: true` on the collection.
+ */
+import {
+  defineCollection,
+  text,
+  textarea,
+  richText,
+  date,
+  checkbox,
+  number,
+  upload,
+  relationship,
+  group,
+} from "nextly/config";
+
+// Relative imports (not `@/*` alias) because Nextly's CLI loads the
+// root nextly.config.ts via Node.js, which pulls this file transitively
+// through Node's module resolver - no TypeScript path-alias support.
+import { anyone } from "../../access/anyone";
+import { authenticated } from "../../access/authenticated";
+import { isAuthorOrEditor } from "../../access/is-author-or-editor";
+import { autoSlug } from "../../hooks/auto-slug";
+
+import { computeReadingTime } from "./hooks/reading-time";
+import { requireFeaturedAlt } from "./hooks/require-featured-alt";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  labels: { singular: "Post", plural: "Posts" },
+  fields: [
+    text({ name: "title", required: true }),
+    text({ name: "slug", required: true, unique: true }),
+    richText({ name: "content" }),
+    upload({ name: "featuredImage", relationTo: "media" }),
+    // Author: the post belongs to a user. Public-facing author profile
+    // at `/authors/[slug]` resolves to a user by their `slug` extension
+    // field. See blog/configs/codefirst.config.ts for the user extension.
+    relationship({ name: "author", relationTo: "users" }),
+    relationship({
+      name: "categories",
+      relationTo: "categories",
+      hasMany: true,
+    }),
+    // Tags: granular cross-cutting topics. Posts can have categories,
+    // tags, or both: writers pick the taxonomy that fits the content.
+    relationship({
+      name: "tags",
+      relationTo: "tags",
+      hasMany: true,
+    }),
+    textarea({ name: "excerpt" }),
+    date({ name: "publishedAt" }),
+    // Editorial pinning: homepage picks a featured post for the hero slot,
+    // falling back to the latest post when nothing is marked featured.
+    checkbox({ name: "featured", defaultValue: false }),
+    // Per-post SEO overrides. All optional; metadata API falls back to
+    // title / excerpt / featuredImage when fields are blank.
+    group({
+      name: "seo",
+      fields: [
+        text({ name: "metaTitle" }),
+        textarea({ name: "metaDescription" }),
+        upload({ name: "ogImage", relationTo: "media" }),
+        text({ name: "canonical" }),
+        checkbox({ name: "noindex", defaultValue: false }),
+      ],
+    }),
+    // Computed by the computeReadingTime hook - writers don't edit these.
+    number({ name: "readingTime", admin: { readOnly: true } }),
+    number({ name: "wordCount", admin: { readOnly: true } }),
+  ],
+  // Why: enable Nextly's built-in Draft/Published lifecycle. Injects a
+  // NOT NULL `status` system column (default 'draft') and surfaces
+  // separate Save Draft / Publish buttons in the admin entry editor.
+  // Replaces the previous user-defined `select({ name: "status" })` field.
+  // Public Direct API callers must continue to filter explicitly via
+  // `where: { status: { equals: "published" } }` — see lib/queries/*.ts.
+  status: true,
+  admin: {
+    useAsTitle: "title",
+    defaultColumns: ["title", "status", "author", "publishedAt"],
+  },
+  // Access control: reads are public (frontend queries filter by
+  // status=published for visitors); any logged-in user can draft a
+  // post; content-role users (admin/editor/author) can update or
+  // delete. Row-level "authors can only edit their own posts" is
+  // enforced by the RBAC permission rules on the `author` role - the
+  // AccessControlFunction signature does not receive the target doc.
+  access: {
+    read: anyone,
+    create: authenticated,
+    update: isAuthorOrEditor,
+    delete: isAuthorOrEditor,
+  },
+  hooks: {
+    beforeValidate: [autoSlug, requireFeaturedAlt],
+    beforeChange: [computeReadingTime],
+  },
+});

@@ -1,0 +1,79 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+node_modules
+.pnpm-store
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Ignore migrations & schema for local development
+# Ignore all files in migrations and schemas
+apps/playground/src/db/migrations/**/*
+apps/playground/src/db/schemas/**/*
+
+# But keep the folder structure and empty index.ts
+!apps/playground/src/db/migrations/dynamic/
+!apps/playground/src/db/migrations/dynamic/.gitkeep
+!apps/playground/src/db/schemas/dynamic/
+!apps/playground/src/db/schemas/dynamic/.gitkeep
+!apps/playground/src/db/schemas/dynamic/index.ts
+
+# Ignore generated collection schemas (but keep index.ts)
+apps/playground/src/db/schemas/dynamic/*.ts
+!apps/playground/src/db/schemas/dynamic/index.ts
+
+# Claude Code local config
+.claude/
+
+# Testing
+coverage
+
+# Turbo
+.turbo
+
+# Vercel
+.vercel
+
+# Build Outputs
+.next/
+out/
+build
+dist
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+.DS_Store
+*.pem
+*.tsbuildinfo
+
+# VS Code Local History extension
+.history/
+
+# Docker (local overrides and generated files)
+.env.docker.local
+backups/
+docker/postgres/data/
+
+# SQLite database files
+apps/playground/data/
+
+# Bundled templates copied into create-nextly-app during build (build artifact)
+packages/create-nextly-app/templates/
+
+# Kept in the working tree for local reference but never published.
+.internal-docs/
+
+# Personal yalc tooling — kept locally for testing publishable packages
+# in external sandbox apps, not part of the public contributor workflow.
+scripts/yalc-publish.sh
+.yalc/
+yalc.lock

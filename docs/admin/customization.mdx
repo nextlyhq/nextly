@@ -1,0 +1,152 @@
+---
+title: Customization
+description: Configure admin panel behavior, plugin placement, navigation permissions, and per-collection sidebar options.
+---
+
+The admin panel is configured through the `admin` key in your `nextly.config.ts`. This page covers structural customization — sidebar options, navigation permissions, and plugin overrides. For visual customization (logo, colors, favicon), see [Branding](/docs/admin/branding).
+
+## Admin configuration shape
+
+The `admin` block on `defineConfig()` accepts two top-level keys:
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  admin: {
+    branding: {
+      /* logo, colors, favicon — see Branding page */
+    },
+    pluginOverrides: {
+      /* per-plugin sidebar overrides — see below */
+    },
+  },
+});
+```
+
+There is no top-level `admin.sidebar` config today. Sidebar grouping for built-in entries is fixed; per-collection entries are configured on each collection's `admin` block; per-plugin entries are configured in the plugin definition and can be overridden by `admin.pluginOverrides`.
+
+## Per-collection sidebar options
+
+Each collection's `admin` block on `defineCollection()` controls how that collection appears in the sidebar:
+
+```typescript title="src/collections/posts.ts"
+import { defineCollection, text, richText } from "nextly";
+
+export default defineCollection({
+  slug: "posts",
+  labels: { singular: "Post", plural: "Posts" },
+  admin: {
+    icon: "FileText",                            // Lucide icon name
+    group: "Content",                            // Sidebar group label
+    hidden: false,                               // Hide from the sidebar (still reachable by URL)
+    order: 10,                                   // Sort position (lower = higher; default 100)
+    useAsTitle: "title",                         // Field used as the entry title in list views
+    defaultColumns: ["title", "status", "createdAt"],
+    sidebarGroup: "marketing",                   // Optional custom group slug — moves the entry out of "Collections" into a custom inner section
+  },
+  fields: [
+    text({ name: "title", required: true }),
+    richText({ name: "content" }),
+  ],
+});
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `icon` | `string` | `"FileText"` | Lucide icon name shown in the sidebar |
+| `group` | `string` | — | Group label inside the Collections section |
+| `hidden` | `boolean` | `false` | Hide from sidebar navigation |
+| `order` | `number` | `100` | Sort order within the section (lower = higher) |
+| `useAsTitle` | `string` | — | Field name displayed as the entry title in list views |
+| `defaultColumns` | `string[]` | — | Columns shown by default in the list view |
+| `sidebarGroup` | `string` | — | Custom group slug — moves this collection out of `Collections` into its own inner section |
+
+Singles accept the same `admin` shape on `defineSingle()`.
+
+## Plugin overrides
+
+Plugins can register their own admin sidebar entries via `admin.placement` in the plugin definition. From your `nextly.config.ts`, you can override that placement and appearance per-plugin without modifying the plugin's source:
+
+```typescript title="nextly.config.ts"
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  admin: {
+    pluginOverrides: {
+      "form-builder": {
+        placement: "settings",       // Move the plugin's admin pages into Settings
+        order: 80,                   // Sort order within the target section
+        after: "media",              // For STANDALONE plugins: which built-in section to render after
+        appearance: {
+          icon: "FileText",          // Override the sidebar icon (Lucide name)
+        },
+      },
+    },
+  },
+});
+```
+
+The override key is the plugin slug (derived from the plugin name). Overrides use a shallow merge — only the fields you set are replaced; everything else keeps the plugin author's defaults.
+
+### Override fields
+
+| Field | Type | Description |
+|---|---|---|
+| `placement` | `AdminPlacement` | Target sidebar section. One of `"collections"`, `"singles"`, `"users"`, `"settings"`, `"plugins"`, or `"standalone"`. |
+| `order` | `number` | Sort position within the target section. |
+| `after` | `string` | Only meaningful when `placement` is `"standalone"`. Names the built-in top-level section the plugin's icon should appear after: `"dashboard"`, `"collections"`, `"singles"`, `"media"`, `"plugins"`, `"users"`, or `"settings"`. |
+| `appearance` | `Partial<PluginAdminAppearance>` | Shallow-merged override of the plugin's sidebar appearance (icon, label, etc.). |
+
+The `AdminPlacement` constants ship from the package root for autocomplete:
+
+```typescript
+import { AdminPlacement } from "nextly";
+
+AdminPlacement.COLLECTIONS;  // "collections"
+AdminPlacement.SINGLES;      // "singles"
+AdminPlacement.USERS;        // "users"
+AdminPlacement.SETTINGS;     // "settings"
+AdminPlacement.PLUGINS;      // "plugins"
+AdminPlacement.STANDALONE;   // "standalone"
+```
+
+A plugin only contributes admin entries if its definition declares them. Plugin-driven sidebar items appear only when that plugin is registered in `nextly.config.ts`.
+
+## Navigation permissions
+
+The admin sidebar is permission-gated. Items only render for users who have the matching permission on their assigned roles:
+
+| Sidebar item | Required permission |
+|---|---|
+| Dashboard | Always visible |
+| Per-collection entries | Per-collection `read-<slug>` |
+| Per-Single entries | Per-Single `read-<slug>` |
+| Media Library | `read-media` |
+| Users | `read-users` |
+| Roles | `read-roles` |
+| Custom Fields | `manage-settings` |
+| General Settings | `manage-settings` |
+| API Keys | `update-api-keys` |
+| Email Providers / Templates / Layout | `manage-settings` |
+| Image Sizes | `manage-settings` |
+| Plugins overview | `manage-settings` |
+| Builders (Collections / Singles / Components) | Gated by `admin.branding.showBuilder` |
+
+Permissions are stored as `<action>-<resource>` slugs and can be assigned to roles from `/admin/security/roles`. The default seeded roles and permissions are documented in [Admin Panel Overview](/docs/admin#permissions).
+
+## Responsive behaviour
+
+The admin layout adapts automatically to screen size:
+
+- **Desktop** (1024px and above) — dual sidebar (icon strip + inner sidebar).
+- **Tablet / mobile** (below 1024px) — single hamburger drawer.
+
+There is no configuration knob for this; the layout switches based on viewport width.
+
+## Next steps
+
+- [Branding](/docs/admin/branding) — logo, colors, favicon, Builder visibility
+- [Admin Panel Overview](/docs/admin) — full navigation guide and permission map
+- [Visual Schema Builder](/docs/admin/builder) — design content types without writing code
+- [Collections](/docs/configuration/collections) — full collection-level admin options

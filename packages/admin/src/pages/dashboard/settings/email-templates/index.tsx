@@ -1,0 +1,665 @@
+"use client";
+
+import type { Column } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Badge,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  ResponsiveTable,
+  TableSkeleton,
+} from "@nextlyhq/ui";
+import type React from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
+
+import {
+  SettingsLayout,
+  SettingsTableToolbar,
+} from "@admin/components/features/settings";
+import {
+  AlertTriangle,
+  Columns,
+  Copy,
+  Edit,
+  Eye,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Trash2,
+} from "@admin/components/icons";
+import { PageContainer } from "@admin/components/layout/page-container";
+import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { Pagination } from "@admin/components/shared/pagination";
+import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { SearchBar } from "@admin/components/shared/search-bar";
+import { toast } from "@admin/components/ui";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
+import {
+  useEmailTemplates,
+  useDeleteEmailTemplate,
+  usePreviewEmailTemplate,
+} from "@admin/hooks/queries/useEmailTemplates";
+import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { navigateTo } from "@admin/lib/navigation";
+import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+
+// Built-in template slugs that cannot be deleted
+const BUILT_IN_SLUGS = new Set([
+  "welcome",
+  "password-reset",
+  "email-verification",
+]);
+// ============================================================
+// Helper: Format Date
+// ============================================================
+
+function formatDate(dateValue?: string): string {
+  return formatDateWithAdminTimezone(
+    dateValue,
+    {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    },
+    "N/A"
+  );
+}
+
+// ============================================================
+// Delete Dialog Component
+// ============================================================
+
+function TemplateDeleteDialog({
+  open,
+  onOpenChange,
+  template,
+  onConfirm,
+  isLoading,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  template: { id: string; name: string } | null;
+  onConfirm: () => void;
+  isLoading: boolean;
+}) {
+  if (!template) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="sm:max-w-md"
+        aria-describedby="delete-template-description"
+        role="alertdialog"
+      >
+        <DialogHeader>
+          <DialogTitle>Delete Email Template?</DialogTitle>
+          <DialogDescription id="delete-template-description">
+            Are you sure you want to delete <strong>{template.name}</strong>?
+            This action cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isLoading}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Deleting...
+              </>
+            ) : (
+              "Delete"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Preview Dialog Component
+// ============================================================
+
+function TemplatePreviewDialog({
+  open,
+  onOpenChange,
+  template,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  template: { id: string; name: string } | null;
+}) {
+  const { mutate: doPreview, isPending: isLoading } = usePreviewEmailTemplate();
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [previewSubject, setPreviewSubject] = useState("");
+
+  useEffect(() => {
+    if (!open || !template) return;
+    doPreview(
+      {
+        id: template.id,
+        sampleData: {
+          name: "John Doe",
+          email: "john@example.com",
+          url: "https://example.com",
+          token: "sample-token-123",
+          siteName: "My App",
+        },
+      },
+      {
+        onSuccess: result => {
+          setPreviewSubject(result.subject);
+          setPreviewHtml(result.html);
+        },
+        onError: err => {
+          toast.error("Failed to load preview", {
+            description: err instanceof Error ? err.message : "Unknown error",
+          });
+          onOpenChange(false);
+        },
+      }
+    );
+  }, [open, template, doPreview, onOpenChange]);
+
+  if (!template) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Preview: {template.name}</DialogTitle>
+          {previewSubject && (
+            <DialogDescription>Subject: {previewSubject}</DialogDescription>
+          )}
+        </DialogHeader>
+        <div className="flex-1 overflow-auto  border border-primary/5 rounded-none">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-48">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <iframe
+              srcDoc={previewHtml}
+              title={`Preview: ${template.name}`}
+              className="w-full h-[400px] border-0"
+              sandbox=""
+            />
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Template Table Component
+// ============================================================
+
+function EmailTemplateTable() {
+  // Fetch all templates via query hook
+  const {
+    data: templates = [],
+    isLoading,
+    isError,
+    error,
+  } = useEmailTemplates();
+
+  // Mutations
+  const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailTemplate();
+
+  // Pagination state
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+
+  // Search state
+  const [search, setSearch] = useState("");
+
+  // Column visibility state
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  const toggleColumn = (key: string) => {
+    setHiddenColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // Delete dialog state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [templateToDelete, setTemplateToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+
+  // Preview dialog state
+  const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
+  const [templateToPreview, setTemplateToPreview] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+
+  // Client-side filtered + paginated data
+  const filteredTemplates = useMemo(() => {
+    if (!search.trim()) return templates;
+    const term = search.toLowerCase();
+    return templates.filter(
+      t =>
+        t.name.toLowerCase().includes(term) ||
+        t.slug.toLowerCase().includes(term) ||
+        t.subject.toLowerCase().includes(term)
+    );
+  }, [templates, search]);
+
+  const totalItems = filteredTemplates.length;
+  const totalPages = Math.ceil(totalItems / pageSize);
+  const paginatedTemplates = useMemo(
+    () => filteredTemplates.slice(page * pageSize, (page + 1) * pageSize),
+    [filteredTemplates, page, pageSize]
+  );
+
+  // Reset page when search changes
+  useEffect(() => {
+    setPage(0);
+  }, [search]);
+
+  // Action handlers
+  const handleEdit = useCallback((template: EmailTemplateRecord) => {
+    navigateTo(
+      buildRoute(ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT, { id: template.id })
+    );
+  }, []);
+
+  const handleDelete = useCallback((template: EmailTemplateRecord) => {
+    setTemplateToDelete({ id: template.id, name: template.name });
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback(() => {
+    if (!templateToDelete) return;
+    doDelete(templateToDelete.id, {
+      onSuccess: () => {
+        toast.success("Template deleted", {
+          description: `${templateToDelete.name} has been deleted.`,
+        });
+        setDeleteDialogOpen(false);
+        setTemplateToDelete(null);
+      },
+      onError: err => {
+        // Close dialog even on error as template might already be deleted
+        setDeleteDialogOpen(false);
+        setTemplateToDelete(null);
+
+        // Only show error if it's not a "not found" error (already deleted)
+        const errorMessage =
+          err instanceof Error ? err.message : "Unknown error";
+        if (!errorMessage.toLowerCase().includes("not found")) {
+          toast.error("Delete failed", {
+            description: errorMessage,
+          });
+        } else {
+          // Template was already deleted, show success instead
+          toast.success("Template deleted", {
+            description: `${templateToDelete.name} has been deleted.`,
+          });
+        }
+      },
+    });
+  }, [templateToDelete, doDelete]);
+
+  const handlePreview = useCallback((template: EmailTemplateRecord) => {
+    setTemplateToPreview({ id: template.id, name: template.name });
+    setPreviewDialogOpen(true);
+  }, []);
+
+  const handleDuplicate = useCallback((template: EmailTemplateRecord) => {
+    // Navigate to create page with template ID as query parameter
+    navigateTo(
+      `${ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE}?duplicate=${template.id}`
+    );
+  }, []);
+
+  // Page size change handler
+  const handlePageSizeChange = useCallback((newPageSize: number) => {
+    setPageSize(newPageSize);
+    setPage(0);
+  }, []);
+
+  // Table columns
+  const ALWAYS_VISIBLE = new Set(["id", "name"]);
+
+  const columnDefs = useMemo<Column<EmailTemplateRecord>[]>(
+    () => [
+      {
+        key: "name",
+        label: "Name",
+        render: (_value, template) => (
+          <div className="flex items-center gap-2">
+            <span
+              className="font-medium cursor-pointer hover-unified"
+              onClick={() => handleEdit(template)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleEdit(template);
+                }
+              }}
+            >
+              {template.name}
+            </span>
+            {BUILT_IN_SLUGS.has(template.slug) && (
+              <Badge variant="outline">Built-in</Badge>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: "slug",
+        label: "Slug",
+        hideOnMobile: true,
+        render: slug => (
+          <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+            {slug as string}
+          </code>
+        ),
+      },
+      {
+        key: "subject",
+        label: "Subject",
+        render: subject => (
+          <span className="text-sm truncate max-w-[200px] block">
+            {subject as string}
+          </span>
+        ),
+      },
+      {
+        key: "providerId",
+        label: "Provider",
+        hideOnMobile: true,
+        render: providerId => (
+          <Badge variant={providerId ? "primary" : "default"}>
+            {providerId ? "Custom" : "Default"}
+          </Badge>
+        ),
+      },
+      {
+        key: "isActive",
+        label: "Status",
+        hideOnMobile: true,
+        render: (_value, template) => (
+          <div className="flex gap-1.5">
+            {template.isActive ? (
+              <Badge variant="success">Active</Badge>
+            ) : (
+              <Badge variant="warning">Inactive</Badge>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: "createdAt",
+        label: "Created",
+        hideOnMobile: true,
+        render: createdAt => (
+          <span className="text-sm">{formatDate(createdAt as string)}</span>
+        ),
+      },
+      {
+        key: "id",
+        label: "Actions",
+        render: (_value, template) => {
+          const isBuiltIn = BUILT_IN_SLUGS.has(template.slug);
+
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="h-8 w-8 p-0  border border-primary/5"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => handleEdit(template)}
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => handlePreview(template)}
+                >
+                  <Eye className="h-4 w-4" />
+                  Preview
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => {
+                    void handleDuplicate(template);
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                  Duplicate
+                </DropdownMenuItem>
+                {!isBuiltIn && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="cursor-pointer text-destructive focus:text-destructive"
+                      onClick={() => handleDelete(template)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
+      },
+    ],
+    [handleEdit, handlePreview, handleDuplicate, handleDelete]
+  );
+
+  const columns = useMemo(
+    () => columnDefs.filter(col => !hiddenColumns.has(String(col.key))),
+    [columnDefs, hiddenColumns]
+  );
+
+  const toggleableColumns = columnDefs.filter(
+    col => !ALWAYS_VISIBLE.has(String(col.key))
+  );
+
+  // Error state
+  if (isError) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder="Search templates by name, slug, or subject..."
+              isLoading={false}
+              className="w-full bg-background text-foreground border-input"
+            />
+          </div>
+        </div>
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            {error?.message ||
+              "Failed to load email templates. Please try again."}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  // Loading state (initial load only)
+  if (isLoading && templates.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex-1 max-w-md w-full">
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder="Search templates by name, slug, or subject..."
+              isLoading={true}
+              className="w-full bg-background text-foreground border-input"
+            />
+          </div>
+        </div>
+        <TableSkeleton columns={7} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <SettingsTableToolbar
+        search={
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search templates by name, slug, or subject..."
+            isLoading={isLoading}
+            className="w-full bg-background text-foreground border-input"
+          />
+        }
+        columns={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="md" className="bg-background">
+                <Columns className="h-4 w-4" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {toggleableColumns.map(col => (
+                <DropdownMenuCheckboxItem
+                  key={String(col.key)}
+                  checked={!hiddenColumns.has(String(col.key))}
+                  onCheckedChange={() => toggleColumn(String(col.key))}
+                >
+                  {typeof col.label === "string" ? col.label : String(col.key)}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
+      />
+
+      {/* Table */}
+      <div className="table-wrapper rounded-none  border border-primary/5 bg-card overflow-hidden">
+        <ResponsiveTable
+          data={paginatedTemplates}
+          columns={columns}
+          emptyMessage="No email templates found. Add a template to get started."
+          ariaLabel="Email templates table"
+          tableWrapperClassName="border-0 rounded-none shadow-none"
+        />
+        {totalPages > 0 && (
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            isLoading={isLoading}
+            totalItems={totalItems}
+          />
+        )}
+      </div>
+
+      {/* Delete confirmation dialog */}
+      <TemplateDeleteDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        template={templateToDelete}
+        onConfirm={handleConfirmDelete}
+        isLoading={isDeleting}
+      />
+
+      {/* Preview dialog */}
+      <TemplatePreviewDialog
+        open={previewDialogOpen}
+        onOpenChange={setPreviewDialogOpen}
+        template={templateToPreview}
+      />
+    </div>
+  );
+}
+
+// ============================================================
+// Page Component
+// ============================================================
+
+const EmailTemplatesPage: React.FC = () => {
+  return (
+    <QueryErrorBoundary fallback={<PageErrorFallback />}>
+      <PageContainer>
+        <SettingsLayout
+          actions={
+            <Button
+              onClick={() => navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE)}
+            >
+              <Plus className="h-4 w-4" />
+              Create Template
+            </Button>
+          }
+        >
+          <EmailTemplateTable />
+        </SettingsLayout>
+      </PageContainer>
+    </QueryErrorBoundary>
+  );
+};
+
+export default EmailTemplatesPage;

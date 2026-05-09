@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
+  "changelog": ["@changesets/changelog-github", { "repo": "nextlyhq/nextly" }],
+  "commit": false,
+  "fixed": [
+    [
+      "nextly",
+      "create-nextly-app",
+      "@nextlyhq/admin",
+      "@nextlyhq/ui",
+      "@nextlyhq/adapter-drizzle",
+      "@nextlyhq/adapter-postgres",
+      "@nextlyhq/adapter-mysql",
+      "@nextlyhq/adapter-sqlite",
+      "@nextlyhq/storage-s3",
+      "@nextlyhq/storage-uploadthing",
+      "@nextlyhq/storage-vercel-blob",
+      "@nextlyhq/plugin-form-builder"
+    ]
+  ],
+  "linked": [],
+  "access": "public",
+  "baseBranch": "dev",
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}

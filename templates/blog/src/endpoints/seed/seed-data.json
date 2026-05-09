@@ -1,0 +1,850 @@
+{
+  "seedMedia": {
+    "baseUrl": "https://raw.githubusercontent.com/nextlyhq/nextly/main/templates/blog/seed/media/"
+  },
+  "users": [
+    {
+      "name": "Jane Smith",
+      "email": "jane@example.com",
+      "password": "ChangeMe@123",
+      "slug": "jane-smith",
+      "bio": "Tech writer and Next.js enthusiast. Writing about modern web development and open-source tools.",
+      "avatarUrl": "author-jane.svg",
+      "role": "editor"
+    },
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "password": "ChangeMe@123",
+      "slug": "john-doe",
+      "bio": "Full-stack developer and CMS architecture nerd. Building better content experiences.",
+      "avatarUrl": "author-john.svg",
+      "role": "author"
+    },
+    {
+      "name": "Amelia Chen",
+      "email": "amelia@example.com",
+      "password": "ChangeMe@123",
+      "slug": "amelia-chen",
+      "bio": "Developer advocate and technical writer. Writes about databases, testing, and the joy of quiet tooling.",
+      "avatarUrl": "author-amelia.svg",
+      "role": "author"
+    }
+  ],
+  "categories": [
+    {
+      "name": "Engineering",
+      "slug": "engineering",
+      "icon": "engineering",
+      "description": "Deep-dives into systems, APIs, and the trade-offs behind the products we ship."
+    },
+    {
+      "name": "Tutorials",
+      "slug": "tutorials",
+      "icon": "tutorials",
+      "description": "Step-by-step guides and how-to articles."
+    },
+    {
+      "name": "Opinion",
+      "slug": "opinion",
+      "icon": "opinion",
+      "description": "Essays and thoughts on the web ecosystem, tooling, and teams."
+    },
+    {
+      "name": "Product",
+      "slug": "product",
+      "icon": "product",
+      "description": "Design decisions, feature launches, and lessons from building real products."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Next.js",
+      "slug": "nextjs",
+      "description": "Posts about the Next.js framework."
+    },
+    {
+      "name": "React",
+      "slug": "react",
+      "description": "React patterns, components, and architecture."
+    },
+    {
+      "name": "TypeScript",
+      "slug": "typescript",
+      "description": "TypeScript usage, tips, and gotchas."
+    },
+    {
+      "name": "Performance",
+      "slug": "performance",
+      "description": "Web performance techniques and deep-dives."
+    },
+    {
+      "name": "PostgreSQL",
+      "slug": "postgres",
+      "description": "Postgres techniques, indexing, and scaling."
+    },
+    {
+      "name": "Testing",
+      "slug": "testing",
+      "description": "Testing strategies, tools, and philosophy."
+    },
+    {
+      "name": "CSS",
+      "slug": "css",
+      "description": "Modern CSS patterns and layout techniques."
+    },
+    {
+      "name": "SEO",
+      "slug": "seo",
+      "description": "Search engine optimization for modern web apps."
+    }
+  ],
+  "posts": [
+    {
+      "title": "How to Build a Blog with Nextly",
+      "slug": "how-to-build-a-blog-with-nextly",
+      "excerpt": "A complete walkthrough: install Nextly, pick the blog template, and go from empty repo to published blog without writing boilerplate.",
+      "author": "jane-smith",
+      "categories": ["tutorials", "engineering"],
+      "tags": ["nextjs", "typescript"],
+      "featured": true,
+      "seo": {
+        "metaTitle": "Build a Production Blog in 2 Minutes with Nextly",
+        "metaDescription": "The complete walkthrough: install Nextly, pick the blog template, and go from empty repo to published blog without writing boilerplate."
+      },
+      "publishedAt": "2026-04-10T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "build-blog-with-nextly.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Nextly is an open-source CMS built specifically for Next.js. Unlike traditional headless CMS platforms, Nextly runs inside your Next.js application, giving you direct access to your content without any API overhead."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Why Nextly?" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Traditional CMSs force you to make an HTTP round-trip for every content fetch. Nextly sits next to your Next.js app and gives you a typed, in-process API. That means faster pages, fewer moving parts, and the full power of Server Components."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Getting started" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Scaffold a new project with a single command and you are in business: Nextly creates the database schema, wires up the admin panel, and sets up an example blog so you can see everything working end-to-end."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Understanding Server Components",
+      "slug": "understanding-server-components",
+      "excerpt": "React Server Components changed how we think about rendering. Here is a practical look at what changes and what does not.",
+      "author": "jane-smith",
+      "categories": ["engineering", "tutorials"],
+      "tags": ["react", "nextjs", "performance"],
+      "publishedAt": "2026-04-05T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "understanding-server-components.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "React Server Components are a new paradigm that lets components render on the server and stream to the client. In Next.js App Router, components are Server Components by default; client interactivity is opt-in with the 'use client' directive."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Why this matters" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Server Components run once on the server and ship zero JavaScript to the browser. You get faster first-loads, simpler data fetching, and cleaner separation between UI and infrastructure. The mental-model change is real, but once it clicks you do not go back."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "TypeScript Tips I Wish I Knew Earlier",
+      "slug": "typescript-tips-i-wish-i-knew-earlier",
+      "excerpt": "Eight concrete TypeScript techniques that replaced hundreds of lines of runtime defensive coding in our codebase.",
+      "author": "john-doe",
+      "categories": ["tutorials", "engineering"],
+      "tags": ["typescript"],
+      "publishedAt": "2026-03-28T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "typescript-tips-i-wish-i-know-earlier.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "TypeScript is deceptively deep. You can get by with basic types and interfaces, but leaning into the type system (discriminated unions, conditional types, satisfies) turns your compiler into a collaborator that catches design mistakes before you ship them."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Satisfies beats 'as'" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The satisfies operator gives you type-checking against a shape without widening the literal types. It is the quietly-useful feature that replaced almost every 'as' cast in our codebase."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Tailwind CSS: A Practical Guide",
+      "slug": "tailwind-css-a-practical-guide",
+      "excerpt": "When Tailwind shines, when it does not, and the patterns that scale beyond the first hundred components.",
+      "author": "jane-smith",
+      "categories": ["tutorials", "product"],
+      "tags": ["css", "react"],
+      "publishedAt": "2026-03-20T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "tailwindcss-a-prictical-guide.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Tailwind's utility-first approach splits the frontend community cleanly down the middle. Detractors see verbose markup; fans see colocation and consistency. Both are right."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Where it wins" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Tailwind removes the naming problem. You do not write CSS classes like 'card-header-left-inner'; you write layout in markup. Pair it with a small set of component primitives and the result is both fast to build and easy to change."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Why Open-Source CMS Is the Future",
+      "slug": "why-open-source-cms-is-the-future",
+      "excerpt": "A take on why the CMS market is shifting away from proprietary platforms - and what makes an open-source CMS genuinely better.",
+      "author": "john-doe",
+      "categories": ["opinion", "product"],
+      "tags": ["nextjs"],
+      "publishedAt": "2026-03-15T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "why-open-source-is-the-feature.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The CMS landscape has changed. Proprietary platforms that once dominated are being challenged by open-source alternatives with better developer experience and no vendor lock-in."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "Freedom to customize" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "With an open-source CMS, you own your infrastructure. You can modify the admin, extend the API, and deploy anywhere. When the CMS is part of your codebase, not a service, the ceiling is higher."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Postgres at Scale: Small Decisions That Compound",
+      "slug": "postgres-at-scale-small-decisions-that-compound",
+      "excerpt": "After three years and a hundred million rows, these are the index, query, and schema choices that made the biggest difference.",
+      "author": "amelia-chen",
+      "categories": ["engineering"],
+      "tags": ["postgres", "performance"],
+      "publishedAt": "2026-03-10T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "postgres-at-scale-small-decission-that-compound.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Postgres is famously forgiving at small scale and famously unforgiving as your tables cross a hundred million rows. The difference between a well-tuned and a default Postgres shows up in everything from p99 latencies to the quiet dread of schema migrations."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "Indexes are a commitment" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Every index speeds up reads and slows down writes. At scale, that trade-off is visible in production dashboards. Audit your indexes quarterly: remove the ones nobody queries, keep the ones that earn their keep."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The tools that make this easy, pg_stat_statements and pg_stat_user_indexes, are already installed on most managed Postgres offerings. Turn them on and actually read them."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Testing Strategies That Don't Suck",
+      "slug": "testing-strategies-that-dont-suck",
+      "excerpt": "Unit tests, integration tests, end-to-end tests. A pragmatic split that keeps the test suite fast and the confidence high.",
+      "author": "amelia-chen",
+      "categories": ["engineering", "tutorials"],
+      "tags": ["testing", "typescript"],
+      "publishedAt": "2026-03-02T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "testing-strategies-that-dont-suck.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The test pyramid is a useful heuristic, not a law. The right mix depends on your system, and most teams end up with too many unit tests, too few integration tests, and end-to-end tests that flake."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "What to test" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Test behavior, not implementation. Your tests should survive a refactor that does not change what the code does. If renaming a variable breaks a test, the test is testing the wrong thing."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Modern CSS: Container Queries, Cascade Layers, and You",
+      "slug": "modern-css-container-queries-cascade-layers",
+      "excerpt": "The last three years of CSS additions changed what is possible on the frontend. Here is what is worth learning this year.",
+      "author": "jane-smith",
+      "categories": ["tutorials", "product"],
+      "tags": ["css"],
+      "publishedAt": "2026-02-24T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "modern-css-container-quries.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "CSS has been quietly growing up. Container queries, cascade layers, has(), subgrid: features we waited a decade for are suddenly everywhere in 2026. If you last learned CSS for a Bootstrap-era project, your assumptions are due for an update."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Container queries change component design"
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Components can now respond to the width of their container, not the viewport. That sounds small. It is not. It changes how you build reusable layouts: a card can look one way in a sidebar and another way in a feature grid, without prop drilling."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "SEO Essentials for Next.js Apps",
+      "slug": "seo-essentials-for-nextjs-apps",
+      "excerpt": "Title, description, canonical, OG, sitemap, JSON-LD. What you actually need, and in what order, to ship a search-friendly site.",
+      "author": "john-doe",
+      "categories": ["tutorials", "product"],
+      "tags": ["seo", "nextjs"],
+      "publishedAt": "2026-02-18T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "seo-essentials-for-nextjs-apps.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "SEO for a Next.js app is mostly blocking and tackling. You do not need exotic tricks; you need correct titles, correct descriptions, a valid sitemap, and JSON-LD that actually validates. Do those four things and you will clear 90 percent of the technical SEO bar."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "The Metadata API is your friend" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Next.js App Router's generateMetadata function gives you per-route titles, descriptions, OG tags, and canonicals with full TypeScript type safety. If you are still maintaining a head.tsx by hand, you are fighting the framework."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Database Migrations Without the Drama",
+      "slug": "database-migrations-without-the-drama",
+      "excerpt": "A workflow for shipping schema changes that does not involve holding your breath on Friday afternoons.",
+      "author": "amelia-chen",
+      "categories": ["engineering"],
+      "tags": ["postgres"],
+      "publishedAt": "2026-02-12T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "database-migration-without-darama.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Migrations are where most outages are born. A good workflow keeps them boring: additive changes only, backfill in its own deploy, drop columns weeks later, never during a feature launch."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [{ "type": "text", "text": "The rule" }]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Every migration ships in two steps. First add the new shape and write to both old and new. Ship. Verify in production. Then switch reads to the new shape. Only after all that do you drop the old column. Boring, slow, and never takes down the site."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "What I Learned Rewriting Our Developer Experience",
+      "slug": "developer-experience-rewrite",
+      "excerpt": "We cut setup time from four hours to seven minutes. These are the five changes that mattered most.",
+      "author": "john-doe",
+      "categories": ["product", "engineering"],
+      "tags": ["typescript"],
+      "publishedAt": "2026-02-05T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-developer-experience.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "New-hire setup was killing us. New engineers spent their first day fighting the toolchain instead of reading code. A quarter of work later, we have a one-command install and every checkbox on the onboarding doc is green."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "Make the right thing the default" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Nobody reads the README. Bake your conventions into scripts, into lint rules, into the template itself. If your team relies on a PR checklist to catch mistakes, the tooling is doing less than it could."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Shipping Culture: Small Commits, Fast Reviews",
+      "slug": "shipping-culture-small-commits-fast-reviews",
+      "excerpt": "How we went from weekly releases full of dread to a shipping cadence that almost feels boring.",
+      "author": "jane-smith",
+      "categories": ["opinion", "product"],
+      "tags": [],
+      "publishedAt": "2026-01-28T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "shipping-culture-small-commit-fast-review.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Every team says they want to ship faster. Almost none are willing to make the changes that actually matter: smaller PRs, faster reviews, more frequent deploys. Those three behaviors compound."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "The size of a PR predicts its risk" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "A thousand-line PR will always be reviewed less carefully than a fifty-line one. That is not a reviewer failing; it is human. Make the PR small and the review careful. Batch changes into ten small PRs, not one big one."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Design Systems Are a Product",
+      "slug": "design-systems-are-a-product",
+      "excerpt": "A design system is not a Figma library. It is a product with internal users who can, and will, route around it if you let them.",
+      "author": "jane-smith",
+      "categories": ["product", "opinion"],
+      "tags": ["css"],
+      "publishedAt": "2026-01-20T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "post-design-systems.svg",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The mistake most design systems make is treating themselves as infrastructure. They are not. They are products. Their users are the engineers on your product teams, and if you do not make the library easier to use than CSS-from-scratch, people will route around you."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "Measure adoption, not coverage" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "You cannot ship a perfect library. You can ship a library people actually use. Track adoption the same way you track feature adoption: what percentage of new components use the primitives? Where does that number fall off? Fix those first."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Remote Work, Four Years In",
+      "slug": "remote-work-four-years-in",
+      "excerpt": "What changed, what surprised us, and the operating habits that turned out to be worth keeping.",
+      "author": "amelia-chen",
+      "categories": ["opinion"],
+      "tags": [],
+      "publishedAt": "2026-01-12T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "remote-work-your-years-in.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "The remote-vs-office debate feels exhausted. What is more interesting is what the last four years actually taught teams that stayed remote by choice."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Async by default, sync by exception"
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Every meeting that could be a document should be. The inverse is also true: if a written thread is going nowhere after a day, jump on a call. The habit is not 'avoid meetings'; it is 'default to writing and escalate only when writing fails'."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Writing at Work: The Under-Practiced Skill",
+      "slug": "writing-at-work-the-under-practiced-skill",
+      "excerpt": "Why the senior engineers you admire can write a tight Slack message and a clean RFC, and how to get there.",
+      "author": "jane-smith",
+      "categories": ["opinion", "tutorials"],
+      "tags": [],
+      "publishedAt": "2026-01-05T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "writing-at-wrok-the-under-practiced-skill.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "If you plot seniority against writing quality in most engineering orgs, the line goes up and to the right. Senior engineers write cleaner docs, tighter Slack messages, and clearer RFCs. It is not a coincidence."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "Write the thing before the meeting" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Writing is thinking that leaves evidence. The forcing function of 'put it on paper' surfaces holes that a conversation would paper over. The half-hour you spend writing a doc saves the team three hours of meetings."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Debugging: A Process, Not a Skill",
+      "slug": "debugging-a-process-not-a-skill",
+      "excerpt": "Stop guessing. The best debuggers follow the same loop, and you can learn the loop.",
+      "author": "john-doe",
+      "categories": ["engineering", "tutorials"],
+      "tags": ["testing"],
+      "publishedAt": "2025-12-28T10:00:00.000Z",
+      "status": "published",
+      "featuredImage": "debugging-a-process-not-a-skill.webp",
+      "content": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Debugging looks like a magical skill when you watch a senior engineer do it. It is not. It is a process: observe, hypothesize, test, update, repeated fast enough to look like intuition."
+                }
+              ]
+            },
+            {
+              "type": "heading",
+              "tag": "h2",
+              "children": [
+                { "type": "text", "text": "The first move is always the same" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Reproduce it. If you cannot reproduce it, you cannot debug it. A bug you cannot reproduce is a guessing game; a bug you can reproduce on demand is five minutes from being fixed."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "navigation": {
+    "headerLinks": [
+      { "label": "Blog", "href": "/blog", "openInNewTab": false },
+      { "label": "Tags", "href": "/tags", "openInNewTab": false },
+      { "label": "Categories", "href": "/categories", "openInNewTab": false }
+    ],
+    "footerReadLinks": [
+      { "label": "Latest posts", "href": "/blog" },
+      { "label": "All tags", "href": "/tags" },
+      { "label": "All categories", "href": "/categories" },
+      { "label": "RSS feed", "href": "/feed.xml" }
+    ],
+    "showThemeToggle": true,
+    "showSearchIcon": true
+  },
+  "homepage": {
+    "heroTitle": "Ideas on building, shipping, and surviving software.",
+    "heroSubtitle": "Essays and notes from our engineering team. New posts every week.",
+    "showFeaturedPost": true,
+    "featuredSectionTitle": "Featured",
+    "showLatestPosts": true,
+    "latestSectionTitle": "Latest",
+    "latestPostsCount": 3,
+    "showCategoryStrip": true,
+    "showNewsletterCta": true,
+    "newsletterHeading": "Get new posts in your inbox",
+    "newsletterSubheading": "No spam. Unsubscribe anytime."
+  },
+  "siteSettings": {
+    "siteName": "My Blog",
+    "tagline": "Thoughts on web development",
+    "siteDescription": "A blog built with Nextly CMS and Next.js. Explore posts about web development, tutorials, and the open-source ecosystem.",
+    "logo": "logo.svg",
+    "social": {
+      "twitter": "https://twitter.com/nextlyhq",
+      "github": "https://github.com/nextlyhq/nextly"
+    }
+  }
+}

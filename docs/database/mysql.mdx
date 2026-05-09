@@ -1,0 +1,286 @@
+---
+title: MySQL
+description: Set up Nextly with MySQL. Covers installation, connection strings, charset and collation, pool tuning, SSL, deadlock retry, migrations, and gaps versus PostgreSQL.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+MySQL is supported. Use it when you already run MySQL or a MySQL-compatible cloud database. The adapter uses [`mysql2`](https://github.com/sidorares/node-mysql2) and emulates features MySQL lacks (`RETURNING`, `ILIKE`) on top of the shared `DrizzleAdapter` core.
+
+> **MySQL is second-class to PostgreSQL in Nextly.** Some features Nextly relies on -- savepoints, JSONB, array types, native `ILIKE`, native `RETURNING` -- either don't exist or are emulated. PostgreSQL is the recommended production database; pick MySQL only if it is already part of your stack. See the [feature comparison](/docs/database#feature-comparison).
+
+> **Minimum version: MySQL 8.0.** Older real MySQL hard-fails at connect with a clear upgrade pointer. MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) warn and proceed -- see [database support](/docs/database/support) for the variant policy.
+
+## Installation
+
+Install the adapter alongside the `mysql2` driver:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @nextlyhq/adapter-mysql mysql2
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @nextlyhq/adapter-mysql mysql2
+```
+
+</Tab>
+<Tab value="yarn">
+
+```bash
+yarn add @nextlyhq/adapter-mysql mysql2
+```
+
+</Tab>
+<Tab value="bun">
+
+```bash
+bun add @nextlyhq/adapter-mysql mysql2
+```
+
+</Tab>
+</Tabs>
+
+## Configuration
+
+Set `DB_DIALECT=mysql` and `DATABASE_URL` in your environment.
+
+```bash title=".env"
+DB_DIALECT=mysql
+DATABASE_URL=mysql://nextly:nextly@localhost:3306/nextly_dev
+```
+
+### Programmatic usage
+
+```typescript title="src/db.ts"
+import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
+
+const adapter = createMySqlAdapter({
+  url: process.env.DATABASE_URL!,
+});
+
+await adapter.connect();
+```
+
+Or pass discrete fields:
+
+```typescript
+const adapter = createMySqlAdapter({
+  host: "localhost",
+  port: 3306,
+  database: "nextly_dev",
+  user: "nextly",
+  password: "nextly",
+});
+```
+
+## Connection string
+
+```
+mysql://user:password@host:port/database
+```
+
+For example:
+
+```bash title=".env"
+DATABASE_URL=mysql://nextly:nextly@localhost:3306/nextly_dev
+```
+
+## Charset and collation
+
+MySQL's default `utf8` is a 3-byte subset of UTF-8 that doesn't store emoji or many CJK characters. Use `utf8mb4` for everything Nextly stores. The adapter does **not** force a charset by default -- set it on the connection:
+
+```typescript
+const adapter = createMySqlAdapter({
+  url: process.env.DATABASE_URL!,
+  charset: "utf8mb4",
+});
+```
+
+For a freshly created database, configure the server-level defaults too:
+
+```sql
+CREATE DATABASE nextly_dev
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+```
+
+The Docker setup at the repo root already runs MySQL with `--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci`.
+
+## Connection pool
+
+The adapter uses `mysql2`'s built-in pool. Defaults:
+
+| Option | Default | Description |
+|---|---|---|
+| `pool.max` | `10` | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
+| `pool.idleTimeoutMs` | `30000` | Idle connection timeout (`mysql2` `idleTimeout`). |
+| `pool.connectionTimeoutMs` | `10000` | Time to establish a new connection (`mysql2` `connectTimeout`). |
+
+```typescript
+const adapter = createMySqlAdapter({
+  url: process.env.DATABASE_URL!,
+  pool: {
+    max: 20,
+    idleTimeoutMs: 30000,
+    connectionTimeoutMs: 10000,
+  },
+});
+```
+
+The pool is configured with `waitForConnections: true` and an unlimited queue (`queueLimit: 0`) -- callers wait for a free connection rather than failing fast.
+
+## SSL / TLS
+
+For production, enable SSL:
+
+```typescript
+const adapter = createMySqlAdapter({
+  url: process.env.DATABASE_URL!,
+  ssl: { rejectUnauthorized: true, ca: process.env.CA_CERT },
+});
+```
+
+`ssl: true` enables SSL with driver defaults; `ssl: false` (or omitted) disables it. The full `SslConfig` shape (`rejectUnauthorized`, `ca`, `cert`, `key`) is the same as the [PostgreSQL adapter](/docs/database/postgres#ssl-tls).
+
+## MySQL-specific options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `charset` | `string` | (driver default) | Connection charset. Set to `utf8mb4` for full Unicode. |
+| `timezone` | `string` | `'local'` | Timezone for date handling, e.g. `'+00:00'`. |
+| `multipleStatements` | `boolean` | `false` | Allow multiple statements per query. Off for SQL-injection safety; the adapter forces `false`. |
+| `dateStrings` | `boolean` | `false` | Return dates as strings instead of `Date` objects. The adapter forces `false`. |
+| `queryTimeoutMs` | `number` (ms) | `15000` | Default for the adapter's internal timeout helpers. |
+
+```typescript
+const adapter = createMySqlAdapter({
+  url: process.env.DATABASE_URL!,
+  charset: "utf8mb4",
+  timezone: "+00:00",
+});
+```
+
+## Differences from PostgreSQL
+
+The adapter handles each of these automatically, but they are worth knowing:
+
+- **No `RETURNING`.** After `INSERT`, the adapter issues a follow-up `SELECT` (using `insertId` for auto-increment, otherwise filtering by inserted column values) to return the row. Bulk inserts return rows by reading `result.insertId..result.insertId + affectedRows - 1`.
+- **No savepoints.** The MySQL adapter sets `savepoint`, `rollbackToSavepoint`, and `releaseSavepoint` to `undefined` on the transaction context for safety. Nested transactions are not supported.
+- **No native `ILIKE`.** Case-insensitive search is rewritten to `LOWER(column) LIKE LOWER(value)`.
+- **No JSONB.** MySQL has a native `JSON` type but no JSONB-style binary-indexed variant.
+- **No array types.** Store arrays as JSON.
+- **`ON DUPLICATE KEY UPDATE`** instead of `ON CONFLICT DO UPDATE`. The adapter normalizes upserts across both syntaxes.
+- **Backtick identifiers.** MySQL uses `` `name` `` instead of `"name"`.
+- **`?` placeholders.** MySQL uses positional `?` instead of `$1`, `$2`.
+
+See the full feature matrix on the [database overview](/docs/database#feature-comparison).
+
+## Deadlock retry
+
+Transaction failures with MySQL error code 1213 (`ER_LOCK_DEADLOCK`) automatically retry when you opt in via `transaction()` options:
+
+```typescript
+await adapter.transaction(
+  async (tx) => {
+    await tx.insert("orders", orderData);
+    await tx.update("inventory", stockUpdate, where);
+  },
+  {
+    retryCount: 3,
+    retryDelayMs: 100, // exponential backoff: 100ms, 200ms, 300ms
+  },
+);
+```
+
+Lock-wait timeouts (error 1205) and other failures are **not** retried -- they surface immediately so callers can decide what to do.
+
+## Migrations
+
+MySQL uses the same forward-only migration CLI as the other dialects:
+
+```bash
+pnpm nextly migrate:create --name=add-posts-table
+pnpm nextly migrate:status
+pnpm nextly migrate:check
+pnpm nextly migrate
+pnpm nextly migrate:fresh   # destructive, local-dev only
+```
+
+> **Forward-only.** There is no `migrate:rollback` or `migrate:down`. Write a new corrective migration to reverse a change. See [production migrations](/docs/guides/production-migrations).
+
+## Local development with Docker
+
+The repo's `docker-compose.yml` includes a MySQL profile. Start it with:
+
+```bash
+docker compose --profile mysql up -d mysql
+```
+
+That uses the same image and config as below. To run MySQL standalone:
+
+```yaml title="docker-compose.yml"
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: dev_password
+      MYSQL_DATABASE: nextly_dev
+      MYSQL_USER: nextly
+      MYSQL_PASSWORD: dev_password
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
+```
+
+```bash
+docker compose up -d mysql
+```
+
+```bash title=".env"
+DB_DIALECT=mysql
+DATABASE_URL=mysql://nextly:dev_password@localhost:3306/nextly_dev
+```
+
+## Capabilities
+
+The adapter reports the following capabilities at runtime:
+
+```typescript
+{
+  dialect: "mysql",
+  supportsJsonb: false,
+  supportsJson: true,
+  supportsArrays: false,
+  supportsGeneratedColumns: true,
+  supportsFts: true,
+  supportsIlike: false,
+  supportsReturning: false,
+  supportsSavepoints: false,
+  supportsOnConflict: true,
+  maxParamsPerQuery: 65535,
+  maxIdentifierLength: 64,
+}
+```
+
+## Next steps
+
+- [Database overview](/docs/database) -- compare all supported databases
+- [Database support](/docs/database/support) -- minimum versions and the MySQL-compatible variants policy
+- [Production migrations](/docs/guides/production-migrations) -- forward-only deploy patterns
+- [PostgreSQL setup](/docs/database/postgres) -- recommended for production
+- [SQLite setup](/docs/database/sqlite) -- local demo only

@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+:root {
+  --background: 210 20% 98%;
+  --foreground: 222.2 47.4% 11.2%;
+  --primary: 0 0% 0%;
+  --border: 0 0% 0% / 0.05;
+  --input: 240 5% 84%; /* zinc-300, visible field border in light mode */
+  --muted: 0 0% 0% / 0.05;
+  --card: 0 0% 100%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-muted: hsl(var(--muted));
+  --color-card: hsl(var(--card));
+  --radius-none: 0px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+    --input: 240 4% 26%; /* zinc-700, visible field border in dark mode */
+    --border: 240 4% 26%;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}

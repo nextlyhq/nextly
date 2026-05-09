@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -e
+pnpm turbo lint --continue \
+  --filter='./packages/*'
+pnpm run build

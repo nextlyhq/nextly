@@ -1,0 +1,80 @@
+{
+  "categories": [
+    {
+      "title": "Engineering",
+      "slug": "engineering",
+      "description": "Posts about building software, debugging, and technical writing."
+    },
+    {
+      "title": "Product",
+      "slug": "product",
+      "description": "Posts about product thinking and design."
+    }
+  ],
+  "tags": [
+    {
+      "title": "Next.js",
+      "slug": "nextjs",
+      "description": "Posts mentioning Next.js."
+    },
+    {
+      "title": "Open Source",
+      "slug": "open-source",
+      "description": "Posts about open-source work."
+    },
+    {
+      "title": "Tooling",
+      "slug": "tooling",
+      "description": "Posts about developer tooling."
+    }
+  ],
+  "posts": [
+    {
+      "title": "Welcome to Nextly Playground",
+      "slug": "welcome-to-nextly-playground",
+      "excerpt": "A quick tour of the contributor playground and what you can poke at.",
+      "categories": ["engineering"],
+      "tags": ["nextjs", "open-source"],
+      "featuredImage": "sample-1.webp",
+      "publishedAt": "2026-05-07T00:00:00.000Z",
+      "status": "published"
+    },
+    {
+      "title": "Building a CMS in Next.js",
+      "slug": "building-a-cms-in-nextjs",
+      "excerpt": "Notes from building Nextly itself - schema architecture, runtime trade-offs, and the things we got wrong before getting them right.",
+      "categories": ["engineering"],
+      "tags": ["nextjs", "tooling"],
+      "featuredImage": "sample-2.webp",
+      "publishedAt": "2026-05-06T00:00:00.000Z",
+      "status": "published"
+    },
+    {
+      "title": "Designing the Schema Builder",
+      "slug": "designing-the-schema-builder",
+      "excerpt": "How we approached the visual schema builder so non-coders can define collections without giving up code-first power.",
+      "categories": ["product"],
+      "tags": ["tooling"],
+      "publishedAt": "2026-05-05T00:00:00.000Z",
+      "status": "published"
+    },
+    {
+      "title": "Why Code-First and Visual",
+      "slug": "why-code-first-and-visual",
+      "excerpt": "The case for supporting both authoring approaches in the same framework.",
+      "categories": ["product"],
+      "tags": ["open-source"],
+      "publishedAt": "2026-05-04T00:00:00.000Z",
+      "status": "published"
+    },
+    {
+      "title": "Local Dev Without Docker",
+      "slug": "local-dev-without-docker",
+      "excerpt": "How we made SQLite the default for contributors and why that mattered for OSS adoption.",
+      "categories": ["engineering"],
+      "tags": ["tooling", "nextjs"],
+      "publishedAt": "2026-05-03T00:00:00.000Z",
+      "status": "draft"
+    }
+  ]
+}

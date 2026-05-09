@@ -1,0 +1,9 @@
+{
+  "extends": "@nextlyhq/tsconfig/base-bundler.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "src/**/*.test.ts", "src/__tests__/**/*"]
+}

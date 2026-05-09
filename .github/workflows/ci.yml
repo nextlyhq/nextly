@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint / Typecheck / Test / Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+
+      # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
+      # `packages/nextly/package.json` `dependencies` (no caret/tilde,
+      # not in peerDependencies). Cheap check, fails fast.
+      - name: Check drizzle-kit pin
+        run: pnpm check:drizzle-kit-pin
+
+      - name: Build
+        run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Lint
+        run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*'
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Typecheck
+        run: pnpm turbo check-types --continue
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Strict: package.json shape / publish-readiness across all 12 publishable
+      # packages (nextly + create-nextly-app + 10 @nextlyhq/*). Failures here
+      # block the release pipeline.
+      - name: publint
+        run: >-
+          pnpm -r
+          --filter '@nextlyhq/*'
+          --filter 'nextly'
+          --filter 'create-nextly-app'
+          exec publint
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Strict: type-resolution sanity for ESM consumers (Next.js apps).
+      # Three rules ignored as documented structural choices, not bugs:
+      #   - false-esm           (we ship .d.ts as ESM by design)
+      #   - no-resolution       (subpath exports work in node16+; node10 EOL)
+      #   - cjs-resolves-to-esm (CJS consumers unsupported; consumers must use
+      #                          dynamic import())
+      # All other attw rules remain active and would catch real regressions.
+      - name: arethetypeswrong
+        run: >-
+          pnpm -r
+          --filter '@nextlyhq/*'
+          --filter 'nextly'
+          --filter 'create-nextly-app'
+          exec
+          attw --pack . --ignore-rules false-esm no-resolution cjs-resolves-to-esm
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+  # Cross-platform smoke test for the scaffolder. Catches Windows path
+  # separator bugs and macOS-specific issues that only surface in fresh
+  # installs. Runs after the main `ci` job to avoid wasting minutes when
+  # the core tree is broken.
+  scaffold-smoke:
+    name: Scaffold smoke (${{ matrix.os }})
+    needs: [ci]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+
+      - name: Build CLI + nextly core
+        run: pnpm build --filter create-nextly-app --filter nextly
+
+      - name: Pack create-nextly-app
+        shell: bash
+        run: |
+          mkdir -p /tmp/nextly-pack
+          (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      - name: Scaffold blank template from tarball
+        shell: bash
+        run: |
+          mkdir -p /tmp/scaffold-test
+          cd /tmp/scaffold-test
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          npx --yes "$tarball" smoke-app --template blank --skip-install --pm pnpm
+          test -f smoke-app/package.json && echo "scaffold ok"

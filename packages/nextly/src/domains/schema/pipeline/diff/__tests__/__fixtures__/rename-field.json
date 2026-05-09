@@ -1,0 +1,40 @@
+{
+  "name": "rename-field",
+  "description": "Live has body, desired has summary instead. Diff produces a drop_column + add_column pair on the same table — the F4 Option E rename detector will pair them as a candidate.",
+  "dialect": "sqlite",
+  "live": {
+    "tables": [
+      {
+        "name": "dc_posts",
+        "columns": [
+          { "name": "id", "type": "text", "nullable": false },
+          { "name": "title", "type": "text", "nullable": false },
+          { "name": "slug", "type": "text", "nullable": false },
+          { "name": "created_at", "type": "integer", "nullable": true },
+          { "name": "updated_at", "type": "integer", "nullable": true },
+          { "name": "body", "type": "text", "nullable": true }
+        ],
+        "primaryKey": ["id"]
+      }
+    ]
+  },
+  "desired": {
+    "tables": [
+      {
+        "name": "dc_posts",
+        "columns": [
+          { "name": "id", "type": "text", "nullable": false },
+          { "name": "title", "type": "text", "nullable": false },
+          { "name": "slug", "type": "text", "nullable": false },
+          { "name": "created_at", "type": "integer", "nullable": true },
+          { "name": "updated_at", "type": "integer", "nullable": true },
+          { "name": "summary", "type": "text", "nullable": true }
+        ],
+        "primaryKey": ["id"]
+      }
+    ]
+  },
+  "expectedOpTypes": ["drop_column", "add_column"],
+  "expectedDropColumnNames": ["body"],
+  "expectedAddColumnNames": ["summary"]
+}

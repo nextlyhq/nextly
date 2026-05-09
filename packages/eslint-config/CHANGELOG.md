@@ -1,0 +1,1 @@
+# @nextlyhq/eslint-config

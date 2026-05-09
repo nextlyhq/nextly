@@ -1,0 +1,1 @@
+# @nextlyhq/prettier-config

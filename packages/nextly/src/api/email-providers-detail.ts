@@ -1,0 +1,146 @@
+/**
+ * Email Providers Detail API Route Handlers for Next.js
+ *
+ * These route handlers can be re-exported in your Next.js application to provide
+ * individual email provider management endpoints at /api/email-providers/[id].
+ *
+ * Services are auto-initialized on first request using environment variables:
+ * - DB_DIALECT: Database dialect ("postgresql" | "mysql" | "sqlite")
+ * - DATABASE_URL: Database connection string
+ *
+ * @example
+ * ```typescript
+ * // In your Next.js app: app/api/email-providers/[id]/route.ts
+ * export { GET, PATCH, DELETE } from 'nextly/api/email-providers-detail';
+ * ```
+ *
+ * Auth is a header-only presence check; real verification lives downstream.
+ *
+ * @module api/email-providers-detail
+ */
+
+import { container } from "../di";
+import { getCachedNextly } from "../init";
+import type { EmailProviderService } from "../services/email/email-provider-service";
+
+import { requireAuthHeader } from "./auth-header-only";
+import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondDoc,
+  respondMutation,
+} from "./response-shapes";
+import { withErrorHandler } from "./with-error-handler";
+
+interface RouteContext {
+  params: Promise<{ id: string }>;
+}
+
+async function getEmailProviderService(): Promise<EmailProviderService> {
+  await getCachedNextly();
+  return container.get<EmailProviderService>("emailProviderService");
+}
+
+/**
+ * GET handler for retrieving a single email provider by ID.
+ *
+ * Requires authentication. Returns provider with masked configuration.
+ *
+ * Response Codes:
+ * - 200 OK: Provider retrieved successfully
+ * - 401 Unauthorized: Authentication required
+ * - 404 Not Found: Provider with ID does not exist
+ * - 500 Internal Server Error: Failed to fetch provider
+ *
+ * Response: `{ "data": EmailProvider }`
+ */
+export const GET = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
+
+    const { id } = await context.params;
+    const service = await getEmailProviderService();
+    const provider = await service.getProvider(id);
+
+    return respondDoc(provider);
+  }
+);
+
+/**
+ * PATCH handler for updating an email provider.
+ *
+ * Requires authentication. Provider `type` cannot be changed after creation.
+ * Configuration is re-encrypted before storage.
+ *
+ * Request Body (all fields optional):
+ * - name: Display name
+ * - fromEmail: From email address
+ * - fromName: From display name
+ * - configuration: Provider-specific config object
+ * - isActive: Enable/disable provider
+ *
+ * Response Codes:
+ * - 200 OK: Provider updated successfully
+ * - 400 Bad Request: Invalid JSON body
+ * - 401 Unauthorized: Authentication required
+ * - 404 Not Found: Provider with ID does not exist
+ * - 500 Internal Server Error: Update failed
+ *
+ * Response: `{ "data": EmailProvider }`; updated provider with masked
+ * configuration.
+ */
+export const PATCH = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
+
+    const { id } = await context.params;
+    const body = await readJsonBody<Record<string, unknown>>(request);
+
+    // Selective copy: only forward fields the legacy handler accepted, so
+    // unknown keys are silently ignored (matches the pre-migration contract).
+    const updateData: Record<string, unknown> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.type !== undefined) updateData.type = body.type;
+    if (body.fromEmail !== undefined) updateData.fromEmail = body.fromEmail;
+    if (body.fromName !== undefined) updateData.fromName = body.fromName;
+    if (body.configuration !== undefined)
+      updateData.configuration = body.configuration;
+    if (body.isActive !== undefined) updateData.isActive = body.isActive;
+
+    const service = await getEmailProviderService();
+    const provider = await service.updateProvider(id, updateData);
+
+    return respondMutation("Email provider updated.", provider);
+  }
+);
+
+/**
+ * DELETE handler for removing an email provider.
+ *
+ * Requires authentication. Cannot delete the default provider; set another
+ * provider as default first.
+ *
+ * Response Codes:
+ * - 200 OK: Provider deleted successfully
+ * - 401 Unauthorized: Authentication required
+ * - 403 Forbidden: Cannot delete the default provider
+ * - 404 Not Found: Provider with ID does not exist
+ * - 500 Internal Server Error: Deletion failed
+ *
+ * Response: `{ "data": { "success": true } }`
+ */
+export const DELETE = withErrorHandler(
+  async (request: Request, context: RouteContext): Promise<Response> => {
+    requireAuthHeader(request);
+
+    const { id } = await context.params;
+    const service = await getEmailProviderService();
+
+    await service.deleteProvider(id);
+
+    // Service returns void. Echo the deleted id (named `providerId` to
+    // match the dispatcher route's wire shape) so the admin can prune
+    // its local list without a follow-up fetch.
+    return respondAction("Email provider deleted.", { providerId: id });
+  }
+);

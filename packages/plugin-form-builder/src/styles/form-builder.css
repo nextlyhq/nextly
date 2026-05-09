@@ -1,0 +1,1150 @@
+/**
+ * Form Builder Styles
+ *
+ * Styles for the visual drag-and-drop form builder UI.
+ * Layout is now driven by Tailwind utility classes in:
+ *   - FormBuilderView.tsx   (page layout, header, sidebar shell, main tabs)
+ *   - FieldLibrary.tsx      (accordion palette)
+ *   - FormCanvas.tsx        (field rows, empty state)
+ *
+ * This file retains only:
+ *   1. CSS custom properties + dark mode overrides
+ *   2. FieldEditor component styles (.field-editor-*)
+ *   3. FormSettingsTab component styles (.form-settings-*)
+ *   4. FormNotificationsTab component styles (.form-notifications-*, .form-notification-*)
+ *   5. Integration modal / card styles (.form-integration-*)
+ *
+ * @module styles/form-builder
+ * @since 0.1.0
+ */
+
+/* ============================================================================
+   CSS Custom Properties
+   ============================================================================ */
+
+.form-builder-view {
+  --fb-primary: hsl(var(--primary));
+  --fb-primary-hover: hsl(var(--primary) / 0.9);
+  --fb-primary-light: hsl(var(--primary) / 0.1);
+  --fb-danger: #ef4444;
+  --fb-danger-hover: #dc2626;
+  --fb-success: #22c55e;
+  --fb-warning: #f59e0b;
+
+  --fb-bg: #ffffff;
+  --fb-bg-muted: #f8fafc;
+  --fb-bg-hover: #f1f5f9;
+  --fb-border: #e2e8f0;
+  --fb-border-focus: hsl(var(--primary));
+
+  --fb-text: #1e293b;
+  --fb-text-muted: #64748b;
+  --fb-text-light: #94a3b8;
+
+  --fb-radius-sm: 0.375rem; /* 6px */
+  --fb-radius-md: 0.375rem; /* 6px */
+  --fb-radius-lg: 0.375rem; /* 6px */
+
+  --fb-shadow: none;
+  --fb-shadow-md: none;
+  --fb-shadow-lg: none;
+}
+
+/* ============================================================================
+   Dark Mode Overrides
+   ============================================================================ */
+
+.dark .form-builder-view,
+[data-theme="dark"] .form-builder-view {
+  --fb-bg: hsl(222.2, 47.4%, 11.2%);
+  --fb-bg-muted: hsl(217.2, 32.6%, 17.5%);
+  --fb-bg-hover: hsl(215.4, 16.3%, 25.9%);
+  --fb-border: hsl(217.2, 32.6%, 17.5%);
+
+  --fb-text: hsl(210, 40%, 98%);
+  --fb-text-muted: hsl(215, 20.2%, 65.1%);
+  --fb-text-light: hsl(215.3, 25%, 36.7%);
+}
+
+/* ============================================================================
+   Field Editor (Right Panel)
+   ============================================================================ */
+
+.field-editor {
+  padding: 16px;
+}
+
+.field-editor-header {
+  margin-bottom: 20px;
+}
+
+.field-editor-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  margin: 0 0 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-editor-type-badge {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--fb-primary);
+  background: var(--fb-primary-light);
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+
+.field-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.field-editor-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-sm);
+  background: var(--fb-bg);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--fb-text-muted);
+}
+
+.field-editor-action-btn:hover {
+  border-color: var(--fb-text-light);
+  color: var(--fb-text);
+}
+
+.field-editor-action-btn--danger:hover {
+  border-color: var(--fb-danger);
+  color: var(--fb-danger);
+  background: #fef2f2;
+}
+
+.field-editor-section {
+  margin-bottom: 20px;
+}
+
+.field-editor-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--fb-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 12px 0;
+}
+
+.field-editor-row {
+  margin-bottom: 14px;
+}
+
+.field-editor-row:last-child {
+  margin-bottom: 0;
+}
+
+.field-editor-row--checkbox {
+  display: flex;
+  align-items: center;
+}
+
+.field-editor-field {
+  margin-bottom: 16px;
+}
+
+.field-editor-field:last-child {
+  margin-bottom: 0;
+}
+
+.field-editor-label {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--fb-text);
+  margin-bottom: 6px;
+}
+
+.field-editor-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-sm);
+  transition: all 0.15s ease;
+}
+
+.field-editor-input:focus {
+  outline: none;
+  border-color: var(--fb-border-focus);
+}
+
+.field-editor-input::placeholder {
+  color: var(--fb-text-light);
+}
+
+.field-editor-input--small {
+  width: 120px;
+}
+
+.field-editor-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.field-editor-select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-sm);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.field-editor-select:focus {
+  outline: none;
+  border-color: var(--fb-border-focus);
+}
+
+.field-editor-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-editor-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--fb-primary);
+}
+
+.field-editor-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--fb-text);
+}
+
+.field-editor-help {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--fb-text-muted);
+  margin-top: 4px;
+}
+
+.field-editor-warning {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--fb-warning);
+  margin-top: 4px;
+}
+
+.field-editor-info {
+  padding: 10px 14px;
+  background: var(--fb-bg-muted);
+  border-radius: var(--fb-radius-sm);
+  font-size: 0.8125rem;
+  color: var(--fb-text-muted);
+}
+
+.field-editor-options {
+  margin-bottom: 14px;
+}
+
+.field-editor-options-empty {
+  padding: 12px;
+  background: var(--fb-bg-muted);
+  border-radius: var(--fb-radius-sm);
+  font-size: 0.8125rem;
+  color: var(--fb-text-muted);
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.field-editor-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.field-editor-option-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-editor-option-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-sm);
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--fb-text-muted);
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.field-editor-option-remove:hover {
+  color: var(--fb-danger);
+  border-color: var(--fb-danger);
+  background: #fef2f2;
+}
+
+.field-editor-add-option-btn {
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--fb-primary);
+  background: var(--fb-primary-light);
+  border: 1px dashed var(--fb-primary);
+  border-radius: var(--fb-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.field-editor-add-option-btn:hover {
+  background: #dbeafe;
+}
+
+.field-editor-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--fb-bg-muted);
+  border-radius: var(--fb-radius-sm);
+  padding: 3px;
+  margin-bottom: 16px;
+}
+
+.field-editor-tab {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--fb-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.field-editor-tab--active {
+  color: var(--fb-text);
+  background: var(--fb-bg);
+}
+
+.field-editor-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--fb-border);
+}
+
+.field-editor-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-radius: var(--fb-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid var(--fb-border);
+  background: var(--fb-bg);
+  color: var(--fb-text-muted);
+}
+
+.field-editor-btn:hover {
+  color: var(--fb-text);
+  border-color: var(--fb-text-light);
+}
+
+.field-editor-btn--secondary {
+  color: var(--fb-text-muted);
+}
+
+.field-editor-btn--danger {
+  color: var(--fb-danger);
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.field-editor-btn--danger:hover {
+  background: #fee2e2;
+  border-color: var(--fb-danger);
+}
+
+/* ============================================================================
+   Form Settings Tab
+   ============================================================================ */
+
+.form-settings-tab {
+  max-width: 640px;
+}
+
+.form-settings-section {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--fb-border);
+}
+
+.form-settings-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.form-settings-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  margin: 0 0 16px 0;
+}
+
+.form-settings-field {
+  margin-bottom: 16px;
+}
+
+.form-settings-field:last-child {
+  margin-bottom: 0;
+}
+
+.form-settings-field--checkbox {
+  margin-bottom: 12px;
+}
+
+.form-settings-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fb-text);
+  margin-bottom: 6px;
+}
+
+.form-settings-input,
+.form-settings-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 0.875rem;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-md);
+  transition: all 0.15s ease;
+}
+
+.form-settings-input:focus,
+.form-settings-textarea:focus {
+  outline: none;
+  border-color: var(--fb-border-focus);
+}
+
+.form-settings-input::placeholder,
+.form-settings-textarea::placeholder {
+  color: var(--fb-text-light);
+}
+
+.form-settings-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.form-settings-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--fb-text);
+}
+
+.form-settings-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--fb-primary);
+  cursor: pointer;
+}
+
+.form-settings-hint {
+  font-size: 0.75rem;
+  color: var(--fb-text-muted);
+  margin: 6px 0 0 0;
+}
+
+.form-settings-field--checkbox .form-settings-hint {
+  margin-left: 28px;
+}
+
+/* ============================================================================
+   Form Notifications Tab
+   ============================================================================ */
+
+.form-notifications-tab {
+  max-width: 800px;
+}
+
+.form-notifications-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.form-notifications-header-content {
+  flex: 1;
+}
+
+.form-notifications-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  margin: 0 0 4px 0;
+}
+
+.form-notifications-description {
+  font-size: 0.875rem;
+  color: var(--fb-text-muted);
+  margin: 0;
+}
+
+.form-notifications-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.form-notifications-add-btn {
+  padding: 8px 14px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #ffffff;
+  background: var(--fb-primary);
+  border: none;
+  border-radius: var(--fb-radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.form-notifications-add-btn:hover {
+  background: var(--fb-primary-hover);
+}
+
+.form-notifications-add-btn--secondary {
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+}
+
+.form-notifications-add-btn--secondary:hover {
+  background: var(--fb-bg-hover);
+  border-color: var(--fb-text-light);
+}
+
+/* Empty State */
+.form-notifications-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  background: var(--fb-bg-muted);
+  border: 2px dashed var(--fb-border);
+  border-radius: var(--fb-radius-lg);
+  text-align: center;
+}
+
+.form-notifications-empty-icon {
+  font-size: 3rem;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.form-notifications-empty-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  margin: 0 0 8px 0;
+}
+
+.form-notifications-empty-hint {
+  font-size: 0.875rem;
+  color: var(--fb-text-muted);
+  margin: 0 0 20px 0;
+  max-width: 400px;
+}
+
+.form-notifications-empty-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Notifications List */
+.form-notifications-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Notification Card */
+.form-notification-card {
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-lg);
+  overflow: hidden;
+}
+
+.form-notification-card--disabled {
+  opacity: 0.6;
+}
+
+.form-notification-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--fb-bg-muted);
+  border-bottom: 1px solid var(--fb-border);
+}
+
+.form-notification-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Toggle Switch */
+.form-notification-toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.form-notification-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.form-notification-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--fb-border);
+  transition: 0.2s;
+  border-radius: 22px;
+}
+
+.form-notification-toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.2s;
+  border-radius: 50%;
+}
+
+.form-notification-toggle input:checked + .form-notification-toggle-slider {
+  background-color: var(--fb-success);
+}
+
+.form-notification-toggle
+  input:checked
+  + .form-notification-toggle-slider:before {
+  transform: translateX(18px);
+}
+
+.form-notification-name {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid transparent;
+  border-radius: var(--fb-radius-sm);
+  transition: all 0.15s ease;
+}
+
+.form-notification-name:focus {
+  outline: none;
+  border-color: var(--fb-border-focus);
+}
+
+.form-notification-badge {
+  padding: 3px 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.form-notification-badge--admin {
+  color: #7c3aed;
+  background: #ede9fe;
+}
+
+.form-notification-badge--autoReply {
+  color: #059669;
+  background: #d1fae5;
+}
+
+.form-notification-delete {
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--fb-text-muted);
+  background: transparent;
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.form-notification-delete:hover {
+  color: var(--fb-danger);
+  border-color: var(--fb-danger);
+  background: #fef2f2;
+}
+
+.form-notification-body {
+  padding: 16px;
+}
+
+.form-notification-row {
+  margin-bottom: 16px;
+}
+
+.form-notification-row:last-child {
+  margin-bottom: 0;
+}
+
+.form-notification-row--two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-notification-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-notification-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--fb-text);
+}
+
+.form-notification-input,
+.form-notification-textarea {
+  padding: 10px 14px;
+  font-size: 0.875rem;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-md);
+  transition: all 0.15s ease;
+}
+
+.form-notification-input:focus,
+.form-notification-textarea:focus {
+  outline: none;
+  border-color: var(--fb-border-focus);
+}
+
+.form-notification-input::placeholder,
+.form-notification-textarea::placeholder {
+  color: var(--fb-text-light);
+}
+
+.form-notification-textarea {
+  min-height: 120px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.form-notification-hint {
+  font-size: 0.75rem;
+  color: var(--fb-text-muted);
+}
+
+.form-notification-hint p {
+  margin: 0 0 4px 0;
+}
+
+.form-notification-placeholders {
+  margin: 0;
+  padding-left: 16px;
+  list-style: none;
+}
+
+.form-notification-placeholders li {
+  margin-bottom: 2px;
+}
+
+.form-notification-placeholders code {
+  font-size: 0.6875rem;
+  color: var(--fb-primary);
+  background: var(--fb-primary-light);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Help Section */
+.form-notifications-help {
+  margin-top: 32px;
+  padding: 16px 20px;
+  background: var(--fb-bg-muted);
+  border-radius: var(--fb-radius-md);
+}
+
+.form-notifications-help h4 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  margin: 0 0 12px 0;
+}
+
+.form-notifications-help ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.8125rem;
+  color: var(--fb-text-muted);
+  line-height: 1.6;
+}
+
+.form-notifications-help li {
+  margin-bottom: 6px;
+}
+
+.form-notifications-help li:last-child {
+  margin-bottom: 0;
+}
+
+.form-notifications-help strong {
+  color: var(--fb-text);
+}
+
+/* ============================================================================
+   Email Integration Cards
+   ============================================================================ */
+
+.form-integration-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-lg);
+  transition: border-color 0.15s ease;
+}
+
+.form-integration-card:hover {
+  border-color: var(--fb-text-light);
+}
+
+.form-integration-card--disabled {
+  opacity: 0.55;
+}
+
+.form-integration-card-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.form-integration-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.form-integration-card-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.form-integration-provider-badge {
+  font-size: 0.75rem;
+  color: var(--fb-text-muted);
+}
+
+.form-integration-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.form-integration-btn {
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: var(--fb-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid var(--fb-border);
+  background: transparent;
+}
+
+.form-integration-btn--edit {
+  color: var(--fb-text-muted);
+}
+
+.form-integration-btn--edit:hover {
+  color: var(--fb-primary);
+  border-color: var(--fb-primary);
+  background: var(--fb-primary-light);
+}
+
+.form-integration-btn--delete {
+  color: var(--fb-text-muted);
+}
+
+.form-integration-btn--delete:hover {
+  color: var(--fb-danger);
+  border-color: var(--fb-danger);
+  background: #fef2f2;
+}
+
+/* ============================================================================
+   Email Integration Modal
+   ============================================================================ */
+
+.form-integration-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.form-integration-modal {
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-lg);
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.15),
+    0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.form-integration-modal-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--fb-border);
+  flex-shrink: 0;
+}
+
+.form-integration-modal-title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--fb-text);
+  margin: 0;
+}
+
+.form-integration-modal-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+}
+
+.form-integration-modal-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--fb-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Modal select */
+.form-integration-select {
+  padding: 10px 14px;
+  font-size: 0.875rem;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-md);
+  transition: all 0.15s ease;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+  cursor: pointer;
+}
+
+.form-integration-select:focus {
+  outline: none;
+  border-color: var(--fb-border-focus);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Recipient list */
+.form-integration-recipient-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.form-integration-recipient-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--fb-bg-muted);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-sm);
+  font-size: 0.8125rem;
+  color: var(--fb-text);
+}
+
+.form-integration-recipient-remove {
+  background: transparent;
+  border: none;
+  color: var(--fb-text-light);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  transition: color 0.15s ease;
+}
+
+.form-integration-recipient-remove:hover {
+  color: var(--fb-danger);
+}
+
+.form-integration-recipient-add {
+  display: flex;
+  gap: 8px;
+}
+
+.form-integration-recipient-add .form-notification-input {
+  flex: 1;
+}
+
+.form-integration-add-recipient-btn {
+  padding: 10px 14px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.form-integration-add-recipient-btn:hover {
+  background: var(--fb-bg-hover);
+  border-color: var(--fb-text-light);
+}
+
+/* Active row */
+.form-integration-active-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--fb-border);
+}
+
+.form-integration-active-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fb-text);
+}
+
+/* Modal footer buttons */
+.form-integration-cancel-btn {
+  padding: 9px 18px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fb-text);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-radius: var(--fb-radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.form-integration-cancel-btn:hover {
+  background: var(--fb-bg-hover);
+  border-color: var(--fb-text-light);
+}
+
+.form-integration-save-btn {
+  padding: 9px 18px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #ffffff;
+  background: var(--fb-primary);
+  border: none;
+  border-radius: var(--fb-radius-md);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.form-integration-save-btn:hover {
+  background: var(--fb-primary-hover);
+}

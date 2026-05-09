@@ -1,0 +1,206 @@
+---
+title: SQLite
+description: Set up Nextly with SQLite. SQLite is for local demos only -- this page covers when (and when not) to use it, install instructions, file paths, WAL mode, and limitations.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+> **SQLite is for local demos only.** Concurrent writes serialize on a single file lock, the database is fragile across process crashes and shared filesystems, there is no SSL or network access, and you will likely hit issues even during serious local development. Use **PostgreSQL** for any meaningful work -- `docker compose up -d postgres` is a one-liner. Set `DB_DIALECT=postgresql` and point `DATABASE_URL` at it. See the [PostgreSQL setup page](/docs/database/postgres#local-development-with-docker).
+
+The SQLite adapter wraps [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) -- a synchronous C++ binding -- behind the same async `DrizzleAdapter` interface as the other dialects. It is in the codebase so a one-off demo, a quick `npx create-nextly-app` walk-through, or a tiny in-memory test suite Just Works without any infrastructure.
+
+> **Minimum version: SQLite 3.38.** The pinned `better-sqlite3` ships a much newer SQLite (3.45+ at time of writing), so users on this package always pass the version check. See [database support](/docs/database/support).
+
+## Installation
+
+Install the adapter alongside the `better-sqlite3` driver:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+<Tab value="yarn">
+
+```bash
+yarn add @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+<Tab value="bun">
+
+```bash
+bun add @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+</Tabs>
+
+`better-sqlite3` is a native module that compiles on `npm install`. Make sure your platform has a working C++ toolchain (`build-essential` on Linux, Xcode CLT on macOS, Visual Studio Build Tools on Windows).
+
+## Configuration
+
+Set `DB_DIALECT=sqlite` and either `DATABASE_URL` (with a `file:` prefix) or leave both unset to fall back to the default file path.
+
+```bash title=".env"
+DB_DIALECT=sqlite
+DATABASE_URL=file:./data/nextly.db
+```
+
+If you set neither `DATABASE_URL` nor `SQLITE_PATH`, Nextly's runtime adapter factory defaults to `file:./data/nextly.db` and logs a warning in development. The adapter creates the file automatically if it does not exist.
+
+### Programmatic usage
+
+```typescript title="src/db.ts"
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
+
+const adapter = createSqliteAdapter({
+  url: "file:./data/nextly.db",
+});
+
+await adapter.connect();
+```
+
+## File path
+
+The `url` option accepts a path with an optional `file:` prefix. The adapter strips the prefix before opening:
+
+```typescript
+createSqliteAdapter({ url: "file:./data/nextly.db" }); // relative to CWD
+createSqliteAdapter({ url: "/absolute/path/nextly.db" }); // absolute
+createSqliteAdapter({ url: "file:./data/nextly.db" });    // with prefix
+```
+
+If `memory: true` is set, the adapter ignores `url` and opens an in-memory database (`:memory:`).
+
+## In-memory databases
+
+For tests or ephemeral demos:
+
+```typescript
+const adapter = createSqliteAdapter({ memory: true });
+```
+
+In-memory databases are extremely fast but disappear when the process exits. Each adapter instance gets its own database -- they are not shared between processes or workers.
+
+## SQLite-specific options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `wal` | `boolean` | `true` | Enable WAL (Write-Ahead Logging) mode for better concurrent-read performance. Auto-disabled for in-memory and read-only databases. |
+| `busyTimeout` | `number` (ms) | `5000` | How long to wait when the database is locked before throwing `SQLITE_BUSY`. |
+| `foreignKeys` | `boolean` | `true` | Enable `PRAGMA foreign_keys = ON`. SQLite ships with this off by default; the adapter turns it on. |
+| `memory` | `boolean` | `false` | Open an in-memory database. Overrides `url`. |
+| `readonly` | `boolean` | `false` | Open in read-only mode. Disables WAL because changing journal mode requires write access. |
+| `queryTimeoutMs` | `number` (ms) | `15000` | Default for the adapter's internal timeout helpers. |
+
+```typescript
+const adapter = createSqliteAdapter({
+  url: "file:./data/nextly.db",
+  wal: true,
+  foreignKeys: true,
+  busyTimeout: 5000,
+});
+```
+
+## WAL mode
+
+WAL is enabled by default for file-based databases. It allows multiple concurrent readers while a writer is active, significantly reducing read-side contention. WAL is automatically skipped when:
+
+- The database is in-memory (`:memory:` does not need WAL).
+- The database is opened read-only (changing the journal mode requires write access).
+
+WAL mode creates two sidecar files alongside the database: `<name>.db-wal` and `<name>.db-shm`. Don't delete them while the app is running.
+
+## Environment variables
+
+You can configure the database path two ways:
+
+```bash title=".env"
+# Option 1: with a file: prefix in DATABASE_URL
+DB_DIALECT=sqlite
+DATABASE_URL=file:./data/nextly.db
+
+# Option 2: SQLITE_PATH alongside DB_DIALECT (no DATABASE_URL needed)
+DB_DIALECT=sqlite
+SQLITE_PATH=./data/nextly.db
+```
+
+Either is fine; pick one consistently. If both are unset, the runtime defaults to `file:./data/nextly.db`.
+
+## Limitations
+
+SQLite is intentionally simple, and that simplicity is the trade-off:
+
+- **Single writer.** Only one write operation at a time -- writes are globally serialized regardless of WAL mode. Concurrent writes from different processes wait on the busy timeout, then fail. Not viable for any real workload.
+- **No connection pooling.** A single file handle. `getPoolStats()` returns `null`. There is no path to scale write throughput across connections.
+- **No SSL / TLS.** SQLite is a local file; remote access does not exist. If your app is in another container, the file is not.
+- **Fragile across crashes and shared filesystems.** Process crashes during writes can leave WAL files in inconsistent states; running over NFS / SMB / Docker bind mounts can corrupt the database.
+- **Weaker schema operations.** SQLite's `ALTER TABLE` is much more limited than PostgreSQL or MySQL -- some column changes require recreating the table. Nextly's migration model handles this where possible, but you will hit cases the other dialects handle natively.
+- **Weaker types.** SQLite uses dynamic typing with type affinity; numbers, strings, and dates flow through with less validation than PostgreSQL or MySQL provide.
+- **No `ILIKE`.** Case-insensitive search uses `LOWER(column) LIKE LOWER(value)`.
+- **No JSONB.** JSON is stored as TEXT and queried with `json_extract()`. No JSON indexes.
+- **No array types.** Store arrays as JSON text.
+- **999 parameter limit per query.** PostgreSQL and MySQL allow 65,535. Bulk operations may need batching at lower thresholds for SQLite.
+- **No native full-text search by default.** FTS5 ships with `better-sqlite3` but is not wired through Nextly's query builder.
+
+## Implementation notes
+
+- The adapter wraps `better-sqlite3`'s synchronous API in `Promise.resolve(...)` to match the async `DrizzleAdapter` contract.
+- `RETURNING` is supported (SQLite 3.35+) and used automatically for `INSERT` / `UPDATE` / `DELETE`.
+- Placeholders: the base adapter emits `$1`, `$2` -- the SQLite adapter rewrites them to `?` before execution.
+- Transactions use `BEGIN IMMEDIATE` to acquire a write lock at the start, which avoids the upgrade-deadlock pattern where two readers try to become writers concurrently.
+- Savepoints are fully supported for nested transactions.
+- JavaScript values are sanitized before binding: `boolean -> 0/1`, `Date -> ISO string`, plain objects -> `JSON.stringify(...)`, `undefined -> null`.
+
+## Migrations
+
+The migration CLI works the same as for the other dialects:
+
+```bash
+pnpm nextly migrate:create --name=add-posts-table
+pnpm nextly migrate:status
+pnpm nextly migrate:check
+pnpm nextly migrate
+pnpm nextly migrate:fresh   # destructive
+```
+
+> **Forward-only.** No `migrate:rollback` or `migrate:down`. Write a new corrective migration to reverse a change. See [production migrations](/docs/guides/production-migrations).
+
+## Capabilities
+
+The adapter reports the following capabilities at runtime:
+
+```typescript
+{
+  dialect: "sqlite",
+  supportsJsonb: false,
+  supportsJson: true,
+  supportsArrays: false,
+  supportsGeneratedColumns: true,
+  supportsFts: true,
+  supportsIlike: false,
+  supportsReturning: true,
+  supportsSavepoints: true,
+  supportsOnConflict: true,
+  maxParamsPerQuery: 999,
+  maxIdentifierLength: 128,
+}
+```
+
+## Next steps
+
+- [PostgreSQL setup](/docs/database/postgres) -- the database you should use instead
+- [Database overview](/docs/database) -- feature comparison across dialects
+- [Database support](/docs/database/support) -- minimum versions
+- [Production migrations](/docs/guides/production-migrations) -- forward-only deploy patterns

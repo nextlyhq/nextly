@@ -1,0 +1,139 @@
+---
+title: Database
+description: Choose and configure a database for your Nextly application. PostgreSQL is the recommended production database; MySQL is supported; SQLite is for local demos only.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Nextly stores data through a small set of dialect-specific adapter packages built on a shared [Drizzle ORM](https://orm.drizzle.team/) core. Pick the adapter that matches your database, install it as a regular dependency, and Nextly handles dialect differences (placeholders, identifier escaping, RETURNING fallbacks, error classification) automatically.
+
+## Supported databases
+
+| Database | Package | Driver | Use it for |
+|----------|---------|--------|------------|
+| [PostgreSQL](/docs/database/postgres) | `@nextlyhq/adapter-postgres` | `pg` | **Recommended for production.** Full feature set: JSONB, arrays, full-text search, ILIKE, savepoints, RETURNING. |
+| [MySQL](/docs/database/mysql) | `@nextlyhq/adapter-mysql` | `mysql2` | Supported. Use it when you already run MySQL or a MySQL-compatible cloud database. Some features are emulated -- see the page. |
+| [SQLite](/docs/database/sqlite) | `@nextlyhq/adapter-sqlite` | `better-sqlite3` | **Local demos only.** Single-writer, file-based, no SSL. Not recommended for serious local development -- run Postgres in Docker instead. |
+
+For minimum versions, cloud-provider compatibility, and the policy on MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess), see [database support](/docs/database/support).
+
+## Quick recommendation
+
+> **Use PostgreSQL.** It is the recommended production database, the only adapter with the full feature set, and the easiest to run locally with Docker (`docker compose up -d postgres`). Pick MySQL only if you already run it. Pick SQLite only for one-off local demos.
+
+## Installation
+
+Each adapter is a regular npm package. Install the adapter and its peer driver in your project.
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+<Tab value="pnpm">
+
+```bash
+# PostgreSQL (recommended)
+pnpm add @nextlyhq/adapter-postgres pg
+
+# MySQL
+pnpm add @nextlyhq/adapter-mysql mysql2
+
+# SQLite (local demos only)
+pnpm add @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+# PostgreSQL (recommended)
+npm install @nextlyhq/adapter-postgres pg
+
+# MySQL
+npm install @nextlyhq/adapter-mysql mysql2
+
+# SQLite (local demos only)
+npm install @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+<Tab value="yarn">
+
+```bash
+# PostgreSQL (recommended)
+yarn add @nextlyhq/adapter-postgres pg
+
+# MySQL
+yarn add @nextlyhq/adapter-mysql mysql2
+
+# SQLite (local demos only)
+yarn add @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+<Tab value="bun">
+
+```bash
+# PostgreSQL (recommended)
+bun add @nextlyhq/adapter-postgres pg
+
+# MySQL
+bun add @nextlyhq/adapter-mysql mysql2
+
+# SQLite (local demos only)
+bun add @nextlyhq/adapter-sqlite better-sqlite3
+```
+
+</Tab>
+</Tabs>
+
+## Selecting a dialect
+
+Nextly's runtime picks the dialect from environment variables, in this order:
+
+1. **`DB_DIALECT`** -- explicit override. One of `postgresql`, `mysql`, `sqlite`.
+2. **`DATABASE_URL`** protocol -- `postgres://` / `postgresql://` -> PostgreSQL, `mysql://` -> MySQL, `file:` (or `*.db` / `*.sqlite`) -> SQLite.
+3. **Fallback** -- PostgreSQL with a warning. Always set `DB_DIALECT` explicitly to avoid the warning.
+
+Minimal `.env` files for each dialect:
+
+```bash title=".env (PostgreSQL)"
+DB_DIALECT=postgresql
+DATABASE_URL=postgres://nextly:nextly@localhost:5432/nextly_dev
+```
+
+```bash title=".env (MySQL)"
+DB_DIALECT=mysql
+DATABASE_URL=mysql://nextly:nextly@localhost:3306/nextly_dev
+```
+
+```bash title=".env (SQLite, local demo only)"
+DB_DIALECT=sqlite
+DATABASE_URL=file:./data/nextly.db
+```
+
+## Feature comparison
+
+The adapters share a single CRUD API, but underlying dialect capabilities differ. The shared `DrizzleAdapter` base reports per-dialect capabilities at runtime; this table is a quick reference.
+
+| Feature | PostgreSQL | MySQL | SQLite |
+|---------|------------|-------|--------|
+| JSONB columns | Yes | No (JSON only) | No (JSON as TEXT) |
+| Array columns | Yes | No | No |
+| `RETURNING` clause | Yes | No (extra `SELECT` after writes) | Yes (3.35+) |
+| `ILIKE` (case-insensitive) | Native | `LOWER(...) LIKE LOWER(...)` fallback | `LOWER(...) LIKE LOWER(...)` fallback |
+| Savepoints (nested transactions) | Yes | Disabled by adapter | Yes |
+| Full-text search | `tsvector` | `FULLTEXT` indexes | FTS5 (extension) |
+| Upsert syntax | `ON CONFLICT DO UPDATE` | `ON DUPLICATE KEY UPDATE` | `ON CONFLICT DO UPDATE` |
+| Connection pooling | `pg.Pool` | `mysql2` pool | None (single file handle) |
+| Generated columns | Yes | Yes | Yes |
+| Max query parameters | 65,535 | 65,535 | 999 |
+| SSL / TLS | Yes | Yes | N/A (local file) |
+| Deadlock retry | On `40001` / `40P01` (configurable) | On error 1213 (configurable) | N/A |
+| Auto-detected providers | Neon, Supabase, standard | None | None |
+
+## Next steps
+
+- [PostgreSQL setup](/docs/database/postgres) -- recommended for production
+- [MySQL setup](/docs/database/mysql) -- supported with caveats
+- [SQLite setup](/docs/database/sqlite) -- local demos only
+- [Database support](/docs/database/support) -- minimum versions, cloud providers, MySQL variant policy
+- [Environment variables](/docs/configuration/environment) -- canonical env var reference
+- [Production migrations](/docs/guides/production-migrations) -- how schema changes ship to production

@@ -1,0 +1,55 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# turbo
+/.turbo
+
+# Local DB files (SQLite + journals)
+/data/
+
+# env (keep .env.example committed)
+.env
+.env.local
+.env.backup
+!.env.example
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Generated types - regenerated on each boot
+src/types/nextly-types.ts
+
+# Generated schemas + migrations - point at locations Nextly may write
+# to at runtime (see nextly.config.ts db.schemasDir / db.migrationsDir).
+# Re-generated on each boot; safe to ignore.
+src/db/schemas/collections/
+src/db/migrations/
+
+# Uploaded media at runtime (the local-disk storage adapter writes here).
+# Seed media lives at seed/media/ and IS committed.
+public/uploads/
+
+# Nextly runtime logs (migrations, doctor, etc.) — re-generated each boot.
+.nextly/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+.pnpm-debug.log*
+
+# vercel
+.vercel
+
+# coverage
+/coverage

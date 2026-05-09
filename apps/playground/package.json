@@ -1,0 +1,52 @@
+{
+  "name": "playground",
+  "version": "0.1.1",
+  "description": "Nextly contributor playground (internal — not for end users)",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "env:copy": "cp .env.example .env",
+    "db:generate": "pnpm --filter nextly run db:generate",
+    "db:push": "pnpm --filter nextly run db:push",
+    "db:studio": "pnpm --filter nextly run db:studio",
+    "db:seed": "tsx --env-file=.env scripts/seed.ts",
+    "dev:reset": "tsx --env-file=.env scripts/reset.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@nextlyhq/adapter-drizzle": "workspace:^",
+    "@nextlyhq/adapter-mysql": "workspace:^",
+    "@nextlyhq/adapter-postgres": "workspace:^",
+    "@nextlyhq/adapter-sqlite": "workspace:^",
+    "@nextlyhq/admin": "workspace:^",
+    "nextly": "workspace:^",
+    "drizzle-orm": "^0.45.2",
+    "mysql2": "^3.12.0",
+    "next": "16.0.0",
+    "pg": "^8.16.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20",
+    "@types/pg": "^8.15.5",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "better-sqlite3": "^12.5.0",
+    "eslint": "^9",
+    "eslint-config-next": "^16.2.3",
+    "tailwindcss": "^4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

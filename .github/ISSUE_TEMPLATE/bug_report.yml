@@ -1,0 +1,201 @@
+name: Bug Report
+description: Report something that isn't working as expected.
+title: "[Bug]: "
+labels: ["type: bug", "status: needs-triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the form below so we can reproduce and triage quickly.
+
+        Before submitting, please:
+        - Search [existing issues](https://github.com/nextlyhq/nextly/issues?q=is%3Aissue) to avoid duplicates.
+        - Confirm you're on the latest version of the affected package.
+        - For security issues, use the [private advisory form](https://github.com/nextlyhq/nextly/security/advisories/new) instead.
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Affected package
+      description: Which package is affected? Pick the closest match.
+      options:
+        - "nextly"
+        - "@nextlyhq/admin"
+        - "@nextlyhq/ui"
+        - "@nextlyhq/adapter-postgres"
+        - "@nextlyhq/adapter-mysql"
+        - "@nextlyhq/adapter-sqlite"
+        - "@nextlyhq/adapter-drizzle"
+        - "@nextlyhq/storage-s3"
+        - "@nextlyhq/storage-vercel-blob"
+        - "@nextlyhq/storage-uploadthing"
+        - "@nextlyhq/plugin-form-builder"
+        - "create-nextly-app"
+        - "Repo tooling / CI / build"
+        - "Other / not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: package-version
+    attributes:
+      label: Package version
+      description: Version of the affected package (e.g. `0.0.129-alpha.0`). Run `pnpm list <pkg>` if unsure.
+      placeholder: "0.0.129"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: When I do X, Y happens instead of Z.
+    validations:
+      required: true
+
+  - type: input
+    id: reproduction-link
+    attributes:
+      label: Link to a minimal reproduction
+      description: |
+        **Required.** A public Git repo (or StackBlitz / CodeSandbox) that reproduces the issue. Issues without a reproduction may be closed.
+
+        The fastest way to start one: `pnpm create nextly-app@latest`, then push the failing scenario to a fresh repo.
+      placeholder: "https://github.com/your-username/nextly-bug-repro"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, deterministic steps based on the linked reproduction.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: I expected ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, stack traces, screenshots, or logs.
+      placeholder: Instead, ...
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Output of `node -v`. Only LTS versions are supported.
+      placeholder: "20.11.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package-manager
+    attributes:
+      label: Package manager
+      multiple: false
+      options:
+        - pnpm
+        - npm
+        - yarn
+        - bun
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: package-manager-version
+    attributes:
+      label: Package manager version
+      placeholder: "9.15.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: false
+      options:
+        - macOS
+        - Linux (Debian / Ubuntu)
+        - Linux (RedHat / Fedora / CentOS)
+        - Linux (Other)
+        - Windows 10
+        - Windows 11
+        - Windows (WSL)
+        - Docker / Podman
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: database
+    attributes:
+      label: Database
+      description: Select the database driver in use. Pick "Not applicable" if the bug is unrelated to data storage.
+      multiple: false
+      options:
+        - PostgreSQL
+        - MySQL
+        - MariaDB
+        - SQLite
+        - Not applicable
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser (for admin / UI bugs)
+      description: Required only if the bug is in the admin panel or another browser-rendered UI. Pick "Not applicable" otherwise.
+      multiple: false
+      options:
+        - Not applicable
+        - Chrome
+        - Firefox
+        - Safari
+        - Edge
+        - Brave / Arc / other Chromium
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else? Workarounds tried, related issues, recent changes, etc.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I'm using the latest version of the affected package.
+          required: true
+        - label: This is not a security vulnerability (those go to the private advisory form).
+          required: true
+        - label: I provided a minimal reproduction (issues without one may be closed).
+          required: true
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/nextlyhq/nextly/blob/main/CODE_OF_CONDUCT.md).
+          required: true
