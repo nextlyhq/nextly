@@ -690,17 +690,16 @@ const COLLECTIONS_METHODS: Record<
       const rawLimit = p.limit;
 
       // Why: forward the `?status=` URL param so trusted callers (the admin)
-      // can pass `status=all` to see drafts alongside published entries.
-      // Public REST callers omit the param and continue to get the safe
-      // published-only default. Same allowlist as getEntry (Task 7 PR-3) —
-      // any other value is dropped to prevent injection. The status field
+      // HTTP API default returns every entry regardless of status; pass
+      // `?status=published` or `?status=draft` to filter. Same allowlist as
+      // getEntry — any value outside it falls back to "all". The status
       // dropdown in the entry table layers a `where: {status: {equals: ...}}`
-      // clause on top of this; that still works because where-narrowing
-      // happens after the default filter is bypassed.
+      // on top of this; that still works because where-narrowing happens
+      // after the default filter.
       const status =
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
-          : undefined;
+          : "all";
 
       const result = await svc.listEntries({
         collectionName: p.collectionName,
@@ -737,13 +736,12 @@ const COLLECTIONS_METHODS: Record<
     // `{ totalDocs }` internally; we translate at the boundary.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      // Why: same `?status=` forwarding as listEntries, so admin counts
-      // include drafts when the caller passes `status=all`. See the
-      // listEntries comment for full rationale.
+      // Match listEntries: count every entry regardless of status by
+      // default; pass `?status=published` (or `draft`) to filter.
       const status =
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
-          : undefined;
+          : "all";
       const result = await svc.countEntries({
         collectionName: p.collectionName,
         search: p.search,
@@ -790,15 +788,12 @@ const COLLECTIONS_METHODS: Record<
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
-      // can pass `status=all` to bypass the default published-only filter
-      // when re-fetching after Unpublish (otherwise the admin's just-
-      // unpublished entry comes back 404, since its status is now draft
-      // and the public default would hide it). Public callers omit the
-      // param and continue to get the safe published-only default.
+      // HTTP API returns the entry regardless of status by default; pass
+      // `?status=published` (or `draft`) to filter. Matches listEntries.
       const status =
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
-          : undefined;
+          : "all";
       const result = await svc.getEntry({
         collectionName: p.collectionName,
         entryId: p.entryId,
