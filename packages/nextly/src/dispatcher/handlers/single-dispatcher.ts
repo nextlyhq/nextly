@@ -782,7 +782,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
 
-      const currentFields = (single.fields ?? []) as unknown as FieldDefinition[];
+      const currentFields = (single.fields ??
+        []) as unknown as FieldDefinition[];
       const tableName = single.tableName;
 
       const adapter = getAdapterFromDI();
@@ -795,17 +796,27 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         slug,
         tableName,
         fields: fields as DesiredSingle["fields"],
+        // Carry the Draft/Published flag so previewDesiredSchema injects
+        // the `status` column into the desired snapshot.
+        status: single.status === true,
       };
 
-      const pipelinePreview = await previewDesiredSchema({ desired, db, dialect });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
-        tableName,
-        currentFields,
-        newFields: fields as FieldDefinition[],
+      const pipelinePreview = await previewDesiredSchema({
+        desired,
         db,
         dialect,
       });
+
+      const legacyShape = await translatePipelinePreviewToLegacy(
+        pipelinePreview,
+        {
+          tableName,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          db,
+          dialect,
+        }
+      );
 
       const renamed = pipelinePreview.candidates.map(c => ({
         table: c.tableName,
@@ -877,6 +888,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         slug,
         tableName,
         fields: fields as DesiredSingle["fields"],
+        // Mirror previewSingleSchemaChanges so apply diffs against the
+        // same desired schema.
+        status: single.status === true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -885,7 +899,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         legacyBundle
       );
 
-      const migrationJournal = getMigrationJournalFromDI() ?? noopMigrationJournal;
+      const migrationJournal =
+        getMigrationJournalFromDI() ?? noopMigrationJournal;
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
@@ -908,7 +923,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       });
 
       if (!result.success) {
-        throw new Error(result.error?.message ?? "Failed to apply schema changes");
+        throw new Error(
+          result.error?.message ?? "Failed to apply schema changes"
+        );
       }
 
       // Post-apply: update dynamic_singles fields JSON + schema_hash.

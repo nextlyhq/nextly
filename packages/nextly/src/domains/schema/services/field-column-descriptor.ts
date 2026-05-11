@@ -296,6 +296,10 @@ export interface SystemColumnDescriptor {
   length?: number;
   nullable: boolean;
   primaryKey: boolean;
+  // Raw default expression as written in DDL (e.g. "'draft'" for status).
+  // Must match what runtime-schema-generator.ts emits so the diff doesn't
+  // classify ADD COLUMN as an interactive "required field with no default."
+  default?: string;
 }
 
 export function getSystemColumnDescriptors(
@@ -304,17 +308,48 @@ export function getSystemColumnDescriptors(
 ): SystemColumnDescriptor[] {
   const cols: SystemColumnDescriptor[] = [];
   if (dialect === "postgresql") {
-    cols.push({ name: "id", dialectType: "text", nullable: false, primaryKey: true });
+    cols.push({
+      name: "id",
+      dialectType: "text",
+      nullable: false,
+      primaryKey: true,
+    });
     if (!opts.hasTitleField) {
-      cols.push({ name: "title", dialectType: "text", nullable: false, primaryKey: false });
+      cols.push({
+        name: "title",
+        dialectType: "text",
+        nullable: false,
+        primaryKey: false,
+      });
     }
     if (!opts.hasSlugField) {
-      cols.push({ name: "slug", dialectType: "text", nullable: false, primaryKey: false });
+      cols.push({
+        name: "slug",
+        dialectType: "text",
+        nullable: false,
+        primaryKey: false,
+      });
     }
-    cols.push({ name: "created_at", dialectType: "timestamp", nullable: true, primaryKey: false });
-    cols.push({ name: "updated_at", dialectType: "timestamp", nullable: true, primaryKey: false });
+    cols.push({
+      name: "created_at",
+      dialectType: "timestamp",
+      nullable: true,
+      primaryKey: false,
+    });
+    cols.push({
+      name: "updated_at",
+      dialectType: "timestamp",
+      nullable: true,
+      primaryKey: false,
+    });
     if (opts.hasStatus) {
-      cols.push({ name: "status", dialectType: "text", nullable: false, primaryKey: false });
+      cols.push({
+        name: "status",
+        dialectType: "text",
+        nullable: false,
+        primaryKey: false,
+        default: "'draft'",
+      });
     }
   } else if (dialect === "mysql") {
     cols.push({
@@ -361,21 +396,53 @@ export function getSystemColumnDescriptors(
         length: 20,
         nullable: false,
         primaryKey: false,
+        default: "'draft'",
       });
     }
   } else {
     // sqlite
-    cols.push({ name: "id", dialectType: "text", nullable: false, primaryKey: true });
+    cols.push({
+      name: "id",
+      dialectType: "text",
+      nullable: false,
+      primaryKey: true,
+    });
     if (!opts.hasTitleField) {
-      cols.push({ name: "title", dialectType: "text", nullable: false, primaryKey: false });
+      cols.push({
+        name: "title",
+        dialectType: "text",
+        nullable: false,
+        primaryKey: false,
+      });
     }
     if (!opts.hasSlugField) {
-      cols.push({ name: "slug", dialectType: "text", nullable: false, primaryKey: false });
+      cols.push({
+        name: "slug",
+        dialectType: "text",
+        nullable: false,
+        primaryKey: false,
+      });
     }
-    cols.push({ name: "created_at", dialectType: "integer", nullable: true, primaryKey: false });
-    cols.push({ name: "updated_at", dialectType: "integer", nullable: true, primaryKey: false });
+    cols.push({
+      name: "created_at",
+      dialectType: "integer",
+      nullable: true,
+      primaryKey: false,
+    });
+    cols.push({
+      name: "updated_at",
+      dialectType: "integer",
+      nullable: true,
+      primaryKey: false,
+    });
     if (opts.hasStatus) {
-      cols.push({ name: "status", dialectType: "text", nullable: false, primaryKey: false });
+      cols.push({
+        name: "status",
+        dialectType: "text",
+        nullable: false,
+        primaryKey: false,
+        default: "'draft'",
+      });
     }
   }
   return cols;
