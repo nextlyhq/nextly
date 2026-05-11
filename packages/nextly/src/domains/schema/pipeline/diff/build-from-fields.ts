@@ -82,7 +82,9 @@ export function buildDesiredTableFromFields(
       name: reserved.name,
       type: reserved.dialectType,
       nullable: reserved.nullable,
-      default: undefined,
+      // Forward descriptor default so the classifier doesn't flag status as
+      // `add_required_field_no_default` and require TTY confirmation.
+      default: reserved.default,
     });
   }
 
@@ -123,27 +125,117 @@ export function buildDesiredTableFromComponentFields(
 
   // Component system columns — mirrors component-schema-service.ts DDL.
   if (dialect === "postgresql") {
-    columns.push({ name: "id", type: "text", nullable: false, default: undefined });
-    columns.push({ name: "_parent_id", type: "text", nullable: false, default: undefined });
-    columns.push({ name: "_parent_table", type: "varchar", nullable: false, default: undefined });
-    columns.push({ name: "_parent_field", type: "varchar", nullable: false, default: undefined });
-    columns.push({ name: "_order", type: "int4", nullable: true, default: undefined });
-    columns.push({ name: "_component_type", type: "varchar", nullable: true, default: undefined });
+    columns.push({
+      name: "id",
+      type: "text",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_id",
+      type: "text",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_table",
+      type: "varchar",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_field",
+      type: "varchar",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_order",
+      type: "int4",
+      nullable: true,
+      default: undefined,
+    });
+    columns.push({
+      name: "_component_type",
+      type: "varchar",
+      nullable: true,
+      default: undefined,
+    });
   } else if (dialect === "mysql") {
-    columns.push({ name: "id", type: "varchar(36)", nullable: false, default: undefined });
-    columns.push({ name: "_parent_id", type: "varchar(36)", nullable: false, default: undefined });
-    columns.push({ name: "_parent_table", type: "varchar(255)", nullable: false, default: undefined });
-    columns.push({ name: "_parent_field", type: "varchar(255)", nullable: false, default: undefined });
-    columns.push({ name: "_order", type: "int(11)", nullable: true, default: undefined });
-    columns.push({ name: "_component_type", type: "varchar(255)", nullable: true, default: undefined });
+    columns.push({
+      name: "id",
+      type: "varchar(36)",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_id",
+      type: "varchar(36)",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_table",
+      type: "varchar(255)",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_field",
+      type: "varchar(255)",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_order",
+      type: "int(11)",
+      nullable: true,
+      default: undefined,
+    });
+    columns.push({
+      name: "_component_type",
+      type: "varchar(255)",
+      nullable: true,
+      default: undefined,
+    });
   } else {
     // sqlite
-    columns.push({ name: "id", type: "text", nullable: false, default: undefined });
-    columns.push({ name: "_parent_id", type: "text", nullable: false, default: undefined });
-    columns.push({ name: "_parent_table", type: "text", nullable: false, default: undefined });
-    columns.push({ name: "_parent_field", type: "text", nullable: false, default: undefined });
-    columns.push({ name: "_order", type: "integer", nullable: true, default: undefined });
-    columns.push({ name: "_component_type", type: "text", nullable: true, default: undefined });
+    columns.push({
+      name: "id",
+      type: "text",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_id",
+      type: "text",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_table",
+      type: "text",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_parent_field",
+      type: "text",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "_order",
+      type: "integer",
+      nullable: true,
+      default: undefined,
+    });
+    columns.push({
+      name: "_component_type",
+      type: "text",
+      nullable: true,
+      default: undefined,
+    });
   }
 
   // User-defined fields.
@@ -165,14 +257,44 @@ export function buildDesiredTableFromComponentFields(
   // COLUMN_TYPE as returned by introspection. Component DDL uses
   // timestamp({ withTimezone: false }) (pg → "timestamp"), DATETIME (mysql), INTEGER (sqlite).
   if (dialect === "postgresql") {
-    columns.push({ name: "created_at", type: "timestamp", nullable: false, default: undefined });
-    columns.push({ name: "updated_at", type: "timestamp", nullable: false, default: undefined });
+    columns.push({
+      name: "created_at",
+      type: "timestamp",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "updated_at",
+      type: "timestamp",
+      nullable: false,
+      default: undefined,
+    });
   } else if (dialect === "mysql") {
-    columns.push({ name: "created_at", type: "datetime", nullable: false, default: undefined });
-    columns.push({ name: "updated_at", type: "datetime", nullable: false, default: undefined });
+    columns.push({
+      name: "created_at",
+      type: "datetime",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "updated_at",
+      type: "datetime",
+      nullable: false,
+      default: undefined,
+    });
   } else {
-    columns.push({ name: "created_at", type: "integer", nullable: false, default: undefined });
-    columns.push({ name: "updated_at", type: "integer", nullable: false, default: undefined });
+    columns.push({
+      name: "created_at",
+      type: "integer",
+      nullable: false,
+      default: undefined,
+    });
+    columns.push({
+      name: "updated_at",
+      type: "integer",
+      nullable: false,
+      default: undefined,
+    });
   }
 
   return { name: tableName, columns };

@@ -35,8 +35,7 @@ export class DynamicCollectionSchemaService {
   ) {
     this.validationService =
       validationService || new DynamicCollectionValidationService();
-    this.dialect =
-      dialect || env.DB_DIALECT || "postgresql";
+    this.dialect = dialect || env.DB_DIALECT || "postgresql";
   }
 
   /**
@@ -89,7 +88,10 @@ export class DynamicCollectionSchemaService {
     const columns = fields
       .map(f => {
         // Skip many-to-many fields as they don't create columns in the main table
-        if (f.type === "relationship" && f.options?.relationType === "manyToMany") {
+        if (
+          f.type === "relationship" &&
+          f.options?.relationType === "manyToMany"
+        ) {
           return null;
         }
 
@@ -201,16 +203,22 @@ export class DynamicCollectionSchemaService {
 
     // id
     if (this.dialect === "mysql") {
-      allColumnDefs.push(`  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL`);
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL`
+      );
     } else {
-      allColumnDefs.push(`  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL`);
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL`
+      );
     }
 
     // title (only if not user-defined)
     const hasTitleField = fields.some(f => f.name === "title");
     if (!hasTitleField) {
       if (this.dialect === "mysql") {
-        allColumnDefs.push(`  ${this.quoteIdentifier("title")} varchar(255) NOT NULL`);
+        allColumnDefs.push(
+          `  ${this.quoteIdentifier("title")} varchar(255) NOT NULL`
+        );
       } else {
         allColumnDefs.push(`  ${this.quoteIdentifier("title")} text NOT NULL`);
       }
@@ -220,7 +228,9 @@ export class DynamicCollectionSchemaService {
     const hasSlugField = fields.some(f => f.name === "slug");
     if (!hasSlugField) {
       if (this.dialect === "mysql") {
-        allColumnDefs.push(`  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL`);
+        allColumnDefs.push(
+          `  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL`
+        );
       } else {
         allColumnDefs.push(`  ${this.quoteIdentifier("slug")} text NOT NULL`);
       }
@@ -254,7 +264,9 @@ export class DynamicCollectionSchemaService {
 
     // CHECK constraints
     if (checks.length > 0) {
-      allColumnDefs.push(`  CONSTRAINT ${this.quoteIdentifier(`chk_${tableName}_validation`)} CHECK (${checks.join(" AND ")})`);
+      allColumnDefs.push(
+        `  CONSTRAINT ${this.quoteIdentifier(`chk_${tableName}_validation`)} CHECK (${checks.join(" AND ")})`
+      );
     }
 
     // FK constraints (each already indented)
@@ -264,14 +276,26 @@ export class DynamicCollectionSchemaService {
 
     // timestamp columns
     if (this.dialect === "sqlite") {
-      allColumnDefs.push(`  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`);
-      allColumnDefs.push(`  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`);
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
+      );
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
+      );
     } else if (this.dialect === "mysql") {
-      allColumnDefs.push(`  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`);
-      allColumnDefs.push(`  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`);
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
+      );
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
+      );
     } else {
-      allColumnDefs.push(`  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`);
-      allColumnDefs.push(`  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`);
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`
+      );
+      allColumnDefs.push(
+        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`
+      );
     }
 
     let sql = `-- Create dynamic collection: ${tableName}
@@ -296,7 +320,10 @@ ${allColumnDefs.join(",\n")}
 
     // essential for JOIN performance, PostgreSQL does NOT automatically index foreign keys!
     fields.forEach(f => {
-      if (f.type === "relationship" && f.options?.relationType !== "manyToMany") {
+      if (
+        f.type === "relationship" &&
+        f.options?.relationType !== "manyToMany"
+      ) {
         const indexName = `idx_${tableName}_${f.name}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -404,15 +431,18 @@ ${allColumnDefs.join(",\n")}
     // and PostgreSQL all support this. We don't preserve the column when
     // toggling off because the user explicitly opted out of the lifecycle;
     // re-enabling later would re-add the column with default 'draft'.
+    //
+    // DROP fires only on an *explicit* `hasStatus: false`. Undefined is
+    // treated as "leave the column alone" so a missing flag from any
+    // caller can't accidentally strip Draft/Published.
     const wasStatus = options?.wasStatus === true;
     const hasStatus = options?.hasStatus === true;
     if (!wasStatus && hasStatus) {
-      const statusType =
-        this.dialect === "sqlite" ? "text" : "varchar(20)";
+      const statusType = this.dialect === "sqlite" ? "text" : "varchar(20)";
       statements.push(
         `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier("status")} ${statusType} DEFAULT 'draft' NOT NULL;`
       );
-    } else if (wasStatus && !hasStatus) {
+    } else if (wasStatus && options?.hasStatus === false) {
       statements.push(
         `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier("status")};`
       );
@@ -709,10 +739,7 @@ ${allColumnDefs.join(",\n")}
     // handling. The caller's add/drop loop will do drop-junction +
     // add-junction (data loss for the join) — admin UI ideally warns
     // before this kind of edit.
-    if (
-      a.type === "relationship" &&
-      a.options?.relationType === "manyToMany"
-    ) {
+    if (a.type === "relationship" && a.options?.relationType === "manyToMany") {
       return false;
     }
     if (a.type === "relationship") {
@@ -725,12 +752,16 @@ ${allColumnDefs.join(",\n")}
   }
 
   /**
-   * Generate TypeScript/Drizzle schema code for a collection
+   * Generate TypeScript/Drizzle schema code for a collection. Pass
+   * `hasStatus: true` for Draft/Published collections so the generated
+   * file includes the `status` column — without it, `drizzle-kit
+   * pushSchema` later sees the live `status` column as extra and drops it.
    */
   generateSchemaCode(
     tableName: string,
     collectionName: string,
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    options?: { hasStatus?: boolean }
   ): string {
     // Determine dialect-specific imports and table function
     const dialectConfig = this.getDialectConfig();
@@ -773,7 +804,10 @@ ${allColumnDefs.join(",\n")}
     const columns = fields
       .filter(
         f =>
-          !(f.type === "relationship" && f.options?.relationType === "manyToMany")
+          !(
+            f.type === "relationship" &&
+            f.options?.relationType === "manyToMany"
+          )
       )
       .map(f => {
         const drizzleType = this.mapFieldTypeToDrizzleDialectAware(f);
@@ -826,7 +860,8 @@ ${allColumnDefs.join(",\n")}
       .filter(
         f =>
           f.index ||
-          (f.type === "relationship" && f.options?.relationType !== "manyToMany")
+          (f.type === "relationship" &&
+            f.options?.relationType !== "manyToMany")
       )
       .map(
         f =>
@@ -841,6 +876,14 @@ ${allColumnDefs.join(",\n")}
     // Generate dialect-specific timestamp columns
     const timestampColumns = this.generateTimestampColumnsForDialect();
 
+    // Placed between user columns and timestamps to match the CREATE TABLE
+    // SQL column order, so drizzle-kit diffs don't see a fake reorder.
+    const statusColumn = options?.hasStatus
+      ? this.dialect === "sqlite"
+        ? `  status: text('status').notNull().default('draft'),\n`
+        : `  status: varchar('status', { length: 20 }).notNull().default('draft'),\n`
+      : "";
+
     return `${imports}
 
 /**
@@ -852,7 +895,7 @@ export const ${tableName} = ${dialectConfig.tableFunction}('${tableName}', {
   title: text('title').notNull(),
   slug: text('slug').notNull(),
 ${columns}
-${timestampColumns}
+${statusColumn}${timestampColumns}
 }, (table) => ({
   slugIdx: uniqueIndex('idx_${tableName}_slug').on(table.slug),
 ${allIndexes}
