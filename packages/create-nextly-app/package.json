@@ -1,6 +1,6 @@
 {
   "name": "create-nextly-app",
-  "version": "0.0.2-alpha.2",
+  "version": "0.0.2-alpha.3",
   "description": "CLI to scaffold Nextly in your Next.js project",
   "license": "MIT",
   "type": "module",
