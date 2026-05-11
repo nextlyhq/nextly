@@ -18,14 +18,16 @@ jobs:
     # Block publishing from forks
     if: github.repository == 'nextlyhq/nextly'
 
-    # Reads NPM_AUTH_TOKEN + RELEASE_BOT_TOKEN from the Production environment.
-    # Also enables environment protection rules (required reviewers, wait timers).
+    # Reads RELEASE_BOT_TOKEN from the Production environment. Also enables
+    # environment protection rules (required reviewers, wait timers).
+    # The environment name "Production" MUST match the "Environment name"
+    # configured on every package's Trusted Publisher entry at npmjs.com.
     environment: Production
 
     permissions:
       contents: write       # create git tags + GitHub Releases
       pull-requests: write  # open "Version Packages" PR
-      id-token: write       # npm provenance attestation
+      id-token: write       # OIDC token for npm Trusted Publishing (also covers provenance)
 
     steps:
       - name: Checkout
@@ -42,6 +44,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
+          # .nvmrc is pinned at 22.14.0 to satisfy npm Trusted Publishing's
+          # npm CLI >=11.5.1 requirement. Single source of truth for local
+          # dev, CI, and publish.
           node-version-file: .nvmrc
           cache: pnpm
           # Writes ~/.npmrc with the registry URL for publishing
@@ -78,8 +83,6 @@ jobs:
 
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
           TURBO_CACHE_DIR: .turbo
 
       - name: Create consolidated GitHub Release

@@ -12,9 +12,18 @@ concurrency:
 
 jobs:
   ci:
-    name: Lint / Typecheck / Test / Build
+    name: Lint / Typecheck / Test / Build (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    # Verify the package builds + passes checks on both:
+    #   - 20.19.0: the floor we promise via `engines.node: ">=20.0.0"`
+    #   - 22.14.0: the version `release.yml` actually publishes from (.nvmrc)
+    # Catches drift between what's shipped and what consumers can install on.
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.19.0', '22.14.0']
 
     steps:
       - name: Checkout
@@ -28,7 +37,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version-file: .nvmrc
+          node-version: ${{ matrix.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -42,8 +51,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
 
       # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
       # `packages/nextly/package.json` `dependencies` (no caret/tilde,
@@ -126,8 +133,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
 
       - name: Build CLI + nextly core
         run: pnpm build --filter create-nextly-app --filter nextly
