@@ -44,13 +44,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          # .nvmrc is pinned at 22.14.0 to satisfy npm Trusted Publishing's
-          # npm CLI >=11.5.1 requirement. Single source of truth for local
-          # dev, CI, and publish.
+          # .nvmrc is pinned at 22.14.0 (provides Node 22.14, the version
+          # whose bundled npm we then upgrade in the next step).
           node-version-file: .nvmrc
           cache: pnpm
           # Writes ~/.npmrc with the registry URL for publishing
           registry-url: https://registry.npmjs.org
+
+      # Node 22.14.0 ships bundled npm 10.9.x, which supports provenance but
+      # NOT trusted publishing (separate OIDC audiences). Trusted publishing
+      # requires npm >=11.5.1 to exchange the OIDC token at the registry for
+      # publish auth. Without this upgrade the PUT request goes out without
+      # a valid trusted-publisher token and the registry returns 404.
+      - name: Upgrade npm to >=11.5.1 for trusted publishing
+        run: npm install -g npm@latest
 
       - name: Cache Turbo
         uses: actions/cache@v5
