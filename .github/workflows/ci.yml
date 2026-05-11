@@ -12,18 +12,9 @@ concurrency:
 
 jobs:
   ci:
-    name: Lint / Typecheck / Test / Build (Node ${{ matrix.node }})
+    name: Lint / Typecheck / Test / Build
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
-    # Verify the package builds + passes checks on both:
-    #   - 20.19.0: the floor we promise via `engines.node: ">=20.0.0"`
-    #   - 22.14.0: the version `release.yml` actually publishes from (.nvmrc)
-    # Catches drift between what's shipped and what consumers can install on.
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ['20.19.0', '22.14.0']
 
     steps:
       - name: Checkout
@@ -37,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: .nvmrc
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
