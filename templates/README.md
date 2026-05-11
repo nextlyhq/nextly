@@ -19,7 +19,7 @@ The CLI downloads templates from this directory at runtime via GitHub's Codeload
 For local development, use `--local-template` to read from the filesystem:
 
 ```bash
-pnpm create nextly-app my-blog \
+pnpm create nextly-app@alpha my-blog \
   --local-template ./templates \
   --template blog \
   --use-yalc

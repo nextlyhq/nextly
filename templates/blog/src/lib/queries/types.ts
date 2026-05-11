@@ -10,7 +10,7 @@
  * for the generated ones if you want the extra precision.
  *
  * Why hand-maintained types here? Shipping the template with inline
- * types means `npx create-nextly-app` produces a project that typechecks
+ * types means `npx create-nextly-app@alpha` produces a project that typechecks
  * cleanly on first install, without needing a types-regen step.
  */
 

@@ -15,16 +15,16 @@ The official CLI for scaffolding a new Nextly CMS project.
 
 ```bash
 # pnpm
-pnpm create nextly-app my-app
+pnpm create nextly-app@alpha my-app
 
 # npm
-npx create-nextly-app@latest my-app
+npx create-nextly-app@alpha my-app
 
 # yarn
-yarn create nextly-app my-app
+yarn create nextly-app@alpha my-app
 
 # bun
-bun create nextly-app my-app
+bun create nextly-app@alpha my-app
 ```
 
 The CLI walks you through:
@@ -59,13 +59,13 @@ The two approaches are not mutually exclusive: a code-first project can add UI-d
 
 ```bash
 # Blog with code-first approach
-pnpm create nextly-app my-blog --template blog --approach code-first
+pnpm create nextly-app@alpha my-blog --template blog --approach code-first
 
 # Blank project with PostgreSQL
-pnpm create nextly-app my-app --template blank --database postgresql
+pnpm create nextly-app@alpha my-app --template blank --database postgresql
 
 # Skip prompts entirely (defaults: blank, SQLite, local storage)
-pnpm create nextly-app my-app -y
+pnpm create nextly-app@alpha my-app -y
 ```
 
 ## CLI flags
@@ -80,7 +80,7 @@ pnpm create nextly-app my-app -y
 | `--version`         | `-V`  | Print the CLI version                                        |                    |
 | `--help`            | `-h`  | Show help text                                               |                    |
 
-Run `pnpm create nextly-app --help` for the inline reference.
+Run `pnpm create nextly-app@alpha --help` for the inline reference.
 
 <details>
 <summary><strong>Contributor flags</strong> (development only)</summary>

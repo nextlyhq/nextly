@@ -25,7 +25,7 @@ The core Nextly package: collection runtime, database services, REST and Direct 
 The fastest path is the CLI:
 
 ```bash
-pnpm create nextly-app my-app
+pnpm create nextly-app@alpha my-app
 ```
 
 Or add Nextly to an existing Next.js app:
