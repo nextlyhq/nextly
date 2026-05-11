@@ -120,24 +120,32 @@ export async function previewDesiredSchema(
 
   const liveSnapshot = await introspect(db, dialect, managedTableNames);
 
+  // Forward Draft/Published flag — without it the desired snapshot omits
+  // `status`, the diff reports it as removed, and the rename detector pairs
+  // it with the newest user field, surfacing a SchemaChangeDialog that
+  // DROPs the column on confirm.
   const collectionTables = Object.values(desired.collections).map(c =>
     buildDesiredTableFromFields(
       c.tableName,
       c.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
-      dialect
+      dialect,
+      { hasStatus: c.status === true }
     )
   );
   const singleTables = Object.values(desired.singles).map(s =>
     buildDesiredTableFromFields(
       s.tableName,
       s.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
-      dialect
+      dialect,
+      { hasStatus: s.status === true }
     )
   );
   const componentTables = Object.values(desired.components).map(c =>
     buildDesiredTableFromComponentFields(
       c.tableName,
-      c.fields as unknown as Parameters<typeof buildDesiredTableFromComponentFields>[1],
+      c.fields as unknown as Parameters<
+        typeof buildDesiredTableFromComponentFields
+      >[1],
       dialect
     )
   );

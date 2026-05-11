@@ -152,7 +152,8 @@ export class DynamicCollectionService extends BaseService {
     const schemaCode = this.schemaService.generateSchemaCode(
       tableName,
       normalizedName,
-      userDefinedFields
+      userDefinedFields,
+      { hasStatus: data.status === true }
     );
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
@@ -277,7 +278,8 @@ export class DynamicCollectionService extends BaseService {
     const wasStatusForUpdate =
       (collection as { status?: boolean }).status === true;
     const statusFlipped =
-      updates.status !== undefined && (updates.status === true) !== wasStatusForUpdate;
+      updates.status !== undefined &&
+      (updates.status === true) !== wasStatusForUpdate;
 
     if (updates.fields) {
       const normalizedFields = updates.fields.map(f => ({
@@ -323,7 +325,8 @@ export class DynamicCollectionService extends BaseService {
       schemaCode = this.schemaService.generateSchemaCode(
         collection.tableName,
         collectionName,
-        userDefinedFields
+        userDefinedFields,
+        { hasStatus }
       );
       schemaFileName = `${collectionName}.ts`;
 
@@ -402,14 +405,12 @@ export class DynamicCollectionService extends BaseService {
     return this.registryService.listCollections(options);
   }
 
-
   async getCollection(
     name: string
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers index dialect-specific row shapes
   ): Promise<any> {
     return this.registryService.getCollection(name);
   }
-
 
   async unregisterCollection(name: string): Promise<unknown> {
     return this.registryService.unregisterCollection(name);

@@ -109,9 +109,7 @@ function formatToastSummary(summary: {
 }): string {
   const parts: string[] = [];
   if (summary.added) {
-    parts.push(
-      `${summary.added} field${summary.added === 1 ? "" : "s"} added`
-    );
+    parts.push(`${summary.added} field${summary.added === 1 ? "" : "s"} added`);
   }
   if (summary.renamed) parts.push(`${summary.renamed} renamed`);
   if (summary.changed) parts.push(`${summary.changed} changed`);
@@ -162,20 +160,27 @@ const COLLECTIONS_METHODS: Record<
       // Service returns legacy { success, data, meta }. Unwrap throws on
       // failure (which the dispatcher converts to a NextlyError response).
       const data = unwrapServiceResult<unknown>(result);
-      const items = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+      const items = Array.isArray(data)
+        ? (data as Record<string, unknown>[])
+        : [];
 
       // Service meta uses limit/total/totalPages; toPaginationMeta below
       // adds the canonical hasNext/hasPrev fields.
       const serviceMeta = result.meta;
       const baseMeta = {
-        total: typeof serviceMeta?.total === "number" ? serviceMeta.total : items.length,
+        total:
+          typeof serviceMeta?.total === "number"
+            ? serviceMeta.total
+            : items.length,
         page: typeof serviceMeta?.page === "number" ? serviceMeta.page : 1,
         limit:
           typeof serviceMeta?.limit === "number"
             ? serviceMeta.limit
             : items.length,
         totalPages:
-          typeof serviceMeta?.totalPages === "number" ? serviceMeta.totalPages : 1,
+          typeof serviceMeta?.totalPages === "number"
+            ? serviceMeta.totalPages
+            : 1,
       };
 
       const userId = p._authenticatedUserId
@@ -224,7 +229,9 @@ const COLLECTIONS_METHODS: Record<
     // Bare doc body (no { data } wrapper).
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      const result = await svc.getCollection({ collectionName: p.collectionName });
+      const result = await svc.getCollection({
+        collectionName: p.collectionName,
+      });
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
       });
@@ -310,6 +317,9 @@ const COLLECTIONS_METHODS: Record<
         slug: p.collectionName,
         tableName,
         fields: fields as DesiredCollection["fields"],
+        // Carry the Draft/Published flag so previewDesiredSchema injects
+        // the `status` column into the desired snapshot.
+        status: collection.status === true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -455,6 +465,9 @@ const COLLECTIONS_METHODS: Record<
         slug: p.collectionName,
         tableName,
         fields: fields as DesiredCollection["fields"],
+        // Mirror previewSchemaChanges so apply diffs against the same
+        // desired schema preview classified.
+        status: collection.status === true,
       };
 
       // Resolve adapter for the pipeline construction.
