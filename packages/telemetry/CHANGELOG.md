@@ -1,4 +1,4 @@
-# @nextlyhq/prettier-config
+# @nextlyhq/telemetry
 
 ## 0.0.2-alpha.0
 
