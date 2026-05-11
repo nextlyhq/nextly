@@ -144,5 +144,8 @@ jobs:
           # `npx --yes <tarball>` regressed in npm 11 and routes the tarball
           # path through sh, producing "Permission denied" on the tgz file
           # across Linux/macOS/Windows. The explicit form avoids that path.
-          npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --pm pnpm
+          # --yes skips interactive prompts (database, schema approach, etc.);
+          # without it the CLI hangs on the non-TTY CI runner. --skip-install
+          # avoids the multi-minute pnpm install during the smoke check.
+          npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
