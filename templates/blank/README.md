@@ -16,7 +16,7 @@ content already wired up.
 ## Scaffold
 
 ```bash
-pnpm create nextly-app my-app --template blank
+pnpm create nextly-app@alpha my-app --template blank
 ```
 
 ## What you get
