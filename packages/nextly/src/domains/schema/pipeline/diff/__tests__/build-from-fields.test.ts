@@ -366,6 +366,9 @@ describe("buildDesiredTableFromFields with status enabled", () => {
     expect(status).toBeDefined();
     expect(status?.type).toBe("text");
     expect(status?.nullable).toBe(false);
+    // Must match runtime-schema-generator's `.default("draft")` or the
+    // classifier flags ADD COLUMN as needing TTY confirmation.
+    expect(status?.default).toBe("'draft'");
   });
 
   it("adds a status column with MySQL dialect type 'varchar(20)'", () => {
@@ -378,6 +381,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
     const status = findColumn(table.columns, "status");
     expect(status?.type).toBe("varchar(20)");
     expect(status?.nullable).toBe(false);
+    expect(status?.default).toBe("'draft'");
   });
 
   it("adds a status column with SQLite dialect type 'text'", () => {
@@ -390,6 +394,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
     const status = findColumn(table.columns, "status");
     expect(status?.type).toBe("text");
     expect(status?.nullable).toBe(false);
+    expect(status?.default).toBe("'draft'");
   });
 
   it("omits the status column when hasStatus is false or unset", () => {
@@ -409,4 +414,3 @@ describe("buildDesiredTableFromFields with status enabled", () => {
     expect(findColumn(tableFalse.columns, "status")).toBeUndefined();
   });
 });
-
