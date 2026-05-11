@@ -42,8 +42,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
 
       # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
       # `packages/nextly/package.json` `dependencies` (no caret/tilde,
@@ -126,8 +124,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
 
       - name: Build CLI + nextly core
         run: pnpm build --filter create-nextly-app --filter nextly
@@ -144,5 +140,12 @@ jobs:
           mkdir -p /tmp/scaffold-test
           cd /tmp/scaffold-test
           tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
-          npx --yes "$tarball" smoke-app --template blank --skip-install --pm pnpm
+          # `npm exec --package=<tarball> -- <bin-name>` is the explicit form;
+          # `npx --yes <tarball>` regressed in npm 11 and routes the tarball
+          # path through sh, producing "Permission denied" on the tgz file
+          # across Linux/macOS/Windows. The explicit form avoids that path.
+          # --yes skips interactive prompts (database, schema approach, etc.);
+          # without it the CLI hangs on the non-TTY CI runner. --skip-install
+          # avoids the multi-minute pnpm install during the smoke check.
+          npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
