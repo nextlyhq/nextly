@@ -145,11 +145,49 @@ async function main() {
   await applyDialectOverride();
 
   console.log("[nextly] Pre-flight checks...");
-  const { ok, results } = await runAllChecks({
+  let { ok, results } = await runAllChecks({
     nextlyRoot: NEXTLY_ROOT,
     envPath,
     port,
   });
+
+  // Surface auto-fixed steps so the contributor knows what changed.
+  if (results.envFile?.autoCreated) {
+    console.log(
+      `[nextly] ℹ auto-created .env from ${path.basename(results.envFile.copiedFrom)} ` +
+        `(safe defaults: SQLite, dev secrets). Edit ${envPath} to customize.`
+    );
+  }
+
+  // Auto-build workspace packages if the doctor flagged missing dist.
+  // The seed sub-process (and the runtime itself) imports compiled dist
+  // artifacts, so a fresh clone without `pnpm build` crashes seed and
+  // produces HTTP 500s in /admin. Turbo's cache makes this a no-op on
+  // subsequent runs once dist exists, so the cost is paid once.
+  if (!results.buildArtifacts.ok) {
+    console.log(
+      "[nextly] First boot detected (no built dist outputs). " +
+        "Running `pnpm turbo build --filter='./packages/*'`..."
+    );
+    const buildExit = await runChild(
+      "pnpm",
+      ["turbo", "build", "--filter=./packages/*"],
+      NEXTLY_ROOT
+    );
+    if (buildExit !== 0) {
+      console.error(
+        `[nextly] ✗ build exited ${buildExit}. ` +
+          `Aborting — fix the build first, then re-run \`pnpm dev:app\`.`
+      );
+      process.exit(buildExit);
+    }
+    // Re-run doctor to refresh the buildArtifacts result.
+    ({ ok, results } = await runAllChecks({
+      nextlyRoot: NEXTLY_ROOT,
+      envPath,
+      port,
+    }));
+  }
 
   if (!ok) {
     for (const [name, r] of Object.entries(results)) {
