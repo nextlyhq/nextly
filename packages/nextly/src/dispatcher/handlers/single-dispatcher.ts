@@ -394,16 +394,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
-      // admin can pass `status=all` to bypass the default published-only
-      // filter. A freshly-created status-enabled Single auto-creates
-      // its default doc with status='draft'; without this, the admin's
-      // own brand-new Single comes back 404. Public callers omit the
-      // param and continue to get the safe published-only default.
-      // Mirrors the collection-dispatcher fix in PR-3.
+      // HTTP API default returns every document regardless of status; pass
+      // `?status=published` or `?status=draft` to filter. The route requires
+      // auth (see isPublicEndpoint), so this only affects callers who
+      // already have read permission. Anything outside the allowlist falls
+      // back to "all" instead of being silently dropped.
       const status =
         p.status === "all" || p.status === "draft" || p.status === "published"
           ? p.status
-          : undefined;
+          : "all";
       const result = await svc.entry.get(slug, {
         depth: toNumber(p.depth),
         locale: p.locale,
