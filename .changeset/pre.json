@@ -20,5 +20,9 @@
     "@nextlyhq/tsconfig": "0.0.1",
     "@nextlyhq/ui": "0.0.1"
   },
-  "changesets": ["flat-bugs-float", "initial-alpha-release"]
+  "changesets": [
+    "fix-status-column-strip",
+    "flat-bugs-float",
+    "initial-alpha-release"
+  ]
 }
