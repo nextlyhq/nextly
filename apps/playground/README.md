@@ -15,9 +15,12 @@ pnpm install
 pnpm dev:app
 ```
 
-The wrapper at `scripts/dev-playground.mjs` runs pre-flight checks (workspace symlinks, `.env` presence, port availability) and then spawns `next dev`. If anything is wrong, you'll get a specific actionable error before Next.js starts.
+The wrapper at `scripts/dev-playground.mjs` runs pre-flight checks (workspace symlinks, `.env` presence, build artifacts, port availability), auto-fixes what it can, then spawns `next dev`. If something can't be auto-fixed you get a specific actionable error before Next.js starts.
 
-If `.env` doesn't exist, the doctor will tell you to run `cp apps/playground/.env.example apps/playground/.env`.
+On a fresh clone the wrapper will:
+
+- **Auto-create `.env`** by copying `apps/playground/.env.example` (safe defaults: SQLite, dev secrets — edit afterward if you want to customize).
+- **Auto-build workspace packages** with `pnpm turbo build --filter='./packages/*'` if no `dist/` outputs exist yet. This adds ~30s on first boot only; turbo's cache makes subsequent boots a no-op. Without this step the seed sub-process can't import the framework runtime and `/admin` returns HTTP 500.
 
 Visit [http://localhost:3000](http://localhost:3000) - `/` redirects to `/admin`.
 

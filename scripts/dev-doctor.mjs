@@ -50,11 +50,48 @@ export async function checkEnvFile(envPath) {
     await fs.access(envPath);
     return { ok: true };
   } catch {
+    // .env missing. Try auto-creating from .env.example. The example is
+    // a checked-in template with safe defaults (SQLite, dev secrets), so
+    // copying it during a fresh-clone boot is the right default. If even
+    // the example is missing, surface a real failure.
     const exampleSibling = envPath.replace(/\.env$/, ".env.example");
+    try {
+      await fs.access(exampleSibling);
+      await fs.copyFile(exampleSibling, envPath);
+      return { ok: true, autoCreated: true, copiedFrom: exampleSibling };
+    } catch {
+      return {
+        ok: false,
+        reason: `.env missing at ${envPath} and .env.example missing as well`,
+        fix: `create ${envPath} manually with DB_DIALECT, DATABASE_URL, NEXTLY_SECRET, NEXT_PUBLIC_APP_URL`,
+      };
+    }
+  }
+}
+
+// Detects whether workspace packages have been built. The seed sub-process
+// imports compiled dist outputs (e.g. @nextlyhq/adapter-drizzle's
+// version-check.cjs), so a fresh clone with no `pnpm build` will crash the
+// seed step. Using packages/nextly/dist as the sentinel because it is the
+// last package built in the turbo graph -- if it exists, the whole
+// dependency chain compiled.
+export async function checkBuildArtifacts(nextlyRoot) {
+  const sentinel = path.join(nextlyRoot, "packages", "nextly", "dist");
+  try {
+    const entries = await fs.readdir(sentinel);
+    if (entries.length === 0) {
+      return {
+        ok: false,
+        reason: "packages/nextly/dist is empty (workspace not built yet)",
+        fix: "pnpm turbo build --filter='./packages/*'",
+      };
+    }
+    return { ok: true };
+  } catch {
     return {
       ok: false,
-      reason: `.env file missing at ${envPath}`,
-      fix: `cp ${exampleSibling} ${envPath}`,
+      reason: "packages/nextly/dist missing (workspace not built yet)",
+      fix: "pnpm turbo build --filter='./packages/*'",
     };
   }
 }
@@ -87,6 +124,7 @@ export async function runAllChecks({ nextlyRoot, envPath, port }) {
   const results = {
     workspaceLinks: await checkWorkspaceLinks(nextlyRoot),
     envFile: await checkEnvFile(envPath),
+    buildArtifacts: await checkBuildArtifacts(nextlyRoot),
     port: await checkPort(port),
   };
   const ok = Object.values(results).every(r => r.ok);
