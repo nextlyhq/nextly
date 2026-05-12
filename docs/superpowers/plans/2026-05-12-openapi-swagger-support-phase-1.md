@@ -108,6 +108,20 @@ None / <list>
 
 All paths in this plan are relative to repo root: `/home/mobeen/Desktop/sites/Nextly/nextly/`.
 
+### Subpath entry points (caught during T01)
+
+**Whenever a task adds a new top-level `*.ts` file that should be importable as a subpath (e.g. `nextly/openapi` → `src/openapi/index.ts`, or `nextly/api/openapi` → `src/api/openapi.ts`), three places must be updated, not just one:**
+
+1. `packages/nextly/package.json` — add the subpath under `"exports"` (`./<name>` → `./dist/<path>.{d.ts,mjs}`).
+2. `packages/nextly/tsup.config.js` — add the source file to the `serverEntries` array (or `clientEntries` if it's browser-safe and avoids Node shims). Without this, **`tsup` won't emit the `.mjs` runtime file** — only the `.d.ts` is produced by the separate rollup-dts pipeline, and downstream `import` calls fail at runtime.
+3. The source file itself, with at minimum a module docstring so the build pipeline has something to compile.
+
+**Symptom when forgotten:** `pnpm build` reports success and emits `dist/<path>.d.ts`, but `dist/<path>.mjs` is missing, causing `Cannot find module 'nextly/<subpath>'` errors when users try to import it.
+
+**Adding files _inside_ an already-registered subpath** (e.g., a new field mapper inside `src/openapi/mapping/fields/`) does **not** require any `tsup.config.js` change — only new top-level entry points do.
+
+This convention was identified retroactively during T01; T01's step list below incorporates it explicitly. Future tasks creating new subpaths must follow it.
+
 ---
 
 ## Task Dependency Graph
@@ -196,7 +210,7 @@ Tasks within the same row can run in parallel if you have multiple implementers.
   ```
 
 - [ ] **Step 3: Create the api/openapi handler stub**
-      Create `packages/nextly/src/api/openapi.ts`:
+      Create `packages/nextly/src/api/openapi.ts`. Do NOT mark `GET` as `async` here — eslint's `require-await` rule rejects async functions with no `await`. Task 23 will add `async` back when real `await` calls land.
 
   ```ts
   /**
@@ -208,7 +222,7 @@ Tasks within the same row can run in parallel if you have multiple implementers.
    */
 
   export const openApiHandler = {
-    GET: async (_req: Request) =>
+    GET: (_req: Request): Response =>
       new Response(
         JSON.stringify({ error: "openapi handler not yet implemented" }),
         {
@@ -219,18 +233,36 @@ Tasks within the same row can run in parallel if you have multiple implementers.
   };
   ```
 
-- [ ] **Step 4: Add subpath exports to package.json**
-      In `packages/nextly/package.json`, inside the `"exports"` map, add (alphabetically placed near the existing `./api/*` entries):
+- [ ] **Step 4a: Add subpath exports to `packages/nextly/package.json`**
+      Inside the `"exports"` map, add `./openapi` near other top-level subpath entries (e.g., right after `./observability`) and `./api/openapi` at the end of the `./api/*` group (after `./api/storage-upload-url`):
+
+  ```json
+  "./openapi": {
+    "types": "./dist/openapi/index.d.ts",
+    "import": "./dist/openapi/index.mjs"
+  },
+  ```
 
   ```json
   "./api/openapi": {
     "types": "./dist/api/openapi.d.ts",
     "import": "./dist/api/openapi.mjs"
   },
-  "./openapi": {
-    "types": "./dist/openapi/index.d.ts",
-    "import": "./dist/openapi/index.mjs"
-  }
+  ```
+
+- [ ] **Step 4b: Register the new files in `packages/nextly/tsup.config.js`**
+      `package.json` exports alone are NOT enough — tsup builds `.mjs` runtime files from an explicit `serverEntries` array. Without this step, only `.d.ts` files get emitted (from the rollup-dts pipeline) and `import 'nextly/openapi'` will fail at runtime with `Cannot find module`. See "Subpath entry points" in Workflow Conventions above.
+
+      In `packages/nextly/tsup.config.js`, add both source paths to the `serverEntries` array. Place `src/api/openapi.ts` at the end of the `src/api/*` block (after `src/api/storage-upload-url.ts`) and `src/openapi/index.ts` near other top-level subpath entries (e.g., right after `src/observability/index.ts`):
+
+  ```js
+  "src/api/openapi.ts",
+  ```
+
+  ```js
+  // OpenAPI subpath: Phase 1 scaffold; defineOpenApi and override types land
+  // in Task 24. Server-only — generator phases read internal registries.
+  "src/openapi/index.ts",
   ```
 
 - [ ] **Step 5: Add `openapi-types` as a devDependency**
@@ -243,28 +275,36 @@ Tasks within the same row can run in parallel if you have multiple implementers.
 
   ```bash
   pnpm --filter nextly build
+  ls packages/nextly/dist/openapi/index.{d.ts,mjs}
+  ls packages/nextly/dist/api/openapi.{d.ts,mjs}
   ```
 
-  Expected: build completes. Check `packages/nextly/dist/openapi/index.mjs` and `packages/nextly/dist/api/openapi.mjs` exist.
+  Expected: build completes AND all four files exist. If the `.mjs` files are missing, Step 4b was skipped — go back and add the tsup entries.
 
 - [ ] **Step 7: Verify import resolution via a temporary test**
-      Create `packages/nextly/src/openapi/__tests__/scaffold.test.ts`:
+      Create `packages/nextly/src/openapi/__tests__/scaffold.test.ts`. Use bare specifiers (no `.ts` extension) — the codebase convention; vitest resolves them via the tsconfig path/alias map:
 
   ```ts
-  import { describe, it, expect } from "vitest";
+  import { describe, expect, it } from "vitest";
 
   describe("openapi subpath scaffolding", () => {
     it("resolves the nextly/openapi subpath", async () => {
-      const mod = await import("../index.ts");
+      const mod = await import("../index");
       expect(mod.__OPENAPI_SUBPATH_RESERVED__).toBe(true);
     });
 
     it("resolves the nextly/api/openapi subpath", async () => {
-      const mod = await import("../../api/openapi.ts");
+      const mod = await import("../../api/openapi");
       expect(mod.openApiHandler).toBeDefined();
       expect(typeof mod.openApiHandler.GET).toBe("function");
     });
   });
+  ```
+
+  Run with the package-relative path (NOT a repo-absolute path — the test filter is resolved relative to the package):
+
+  ```bash
+  pnpm --filter nextly test src/openapi/__tests__/scaffold.test.ts
   ```
 
 - [ ] **Step 8: Run the full check suite**
