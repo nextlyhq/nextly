@@ -16,6 +16,8 @@ import { mapDateField } from "./date";
 import { mapEmailField } from "./email";
 import { mapNumberField } from "./number";
 import { mapPasswordField } from "./password";
+import { mapRadioField } from "./radio";
+import { mapSelectField } from "./select";
 import { mapTextField } from "./text";
 import { mapTextareaField } from "./textarea";
 import type { FieldMapper } from "./types";
@@ -28,6 +30,8 @@ export const fieldMappers: Partial<Record<FieldConfig["type"], FieldMapper>> = {
   email: mapEmailField as FieldMapper,
   number: mapNumberField as FieldMapper,
   password: mapPasswordField as FieldMapper,
+  radio: mapRadioField as FieldMapper,
+  select: mapSelectField as FieldMapper,
   text: mapTextField as FieldMapper,
   textarea: mapTextareaField as FieldMapper,
 };
