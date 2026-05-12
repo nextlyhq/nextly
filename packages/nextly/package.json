@@ -35,6 +35,10 @@
       "types": "./dist/observability/index.d.ts",
       "import": "./dist/observability/index.mjs"
     },
+    "./openapi": {
+      "types": "./dist/openapi/index.d.ts",
+      "import": "./dist/openapi/index.mjs"
+    },
     "./database": {
       "types": "./dist/database/index.d.ts",
       "import": "./dist/database/index.mjs"
@@ -151,6 +155,10 @@
       "types": "./dist/api/storage-upload-url.d.ts",
       "import": "./dist/api/storage-upload-url.mjs"
     },
+    "./api/openapi": {
+      "types": "./dist/api/openapi.d.ts",
+      "import": "./dist/api/openapi.mjs"
+    },
     "./actions": {
       "types": "./dist/actions/index.d.ts",
       "import": "./dist/actions/index.mjs"
@@ -214,6 +222,7 @@
     "acorn-walk": "^8.3.4",
     "better-sqlite3": "^12.5.0",
     "eslint": "^9.34.0",
+    "openapi-types": "^12.1.3",
     "rimraf": "^6.1.3",
     "rollup": "^4.60.1",
     "rollup-plugin-dts": "^6.4.1",

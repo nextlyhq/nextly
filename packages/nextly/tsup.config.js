@@ -41,6 +41,7 @@ const serverEntries = [
   "src/api/email-send-template.ts",
   "src/api/uploads.ts",
   "src/api/storage-upload-url.ts",
+  "src/api/openapi.ts",
   "src/actions/index.ts",
   "src/cli/nextly.ts",
   "src/cli/utils/index.ts",
@@ -48,6 +49,9 @@ const serverEntries = [
   // Unified error system entry points
   "src/errors/index.ts",
   "src/observability/index.ts",
+  // OpenAPI subpath: Phase 1 scaffold; defineOpenApi and override types land
+  // in Task 24. Server-only — generator phases read internal registries.
+  "src/openapi/index.ts",
   "src/database/index.ts",
   // Bootstrap seeders subpath. Internal docs at database/index.ts:23
   // pointed callers at `nextly/database/seeders` for years; finally
