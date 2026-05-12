@@ -2,33 +2,34 @@
 
 **Active plan:** [`docs/superpowers/plans/2026-05-12-openapi-swagger-support-phase-1.md`](docs/superpowers/plans/2026-05-12-openapi-swagger-support-phase-1.md)
 **Design spec:** [`docs/superpowers/specs/2026-05-12-openapi-swagger-support-design.md`](docs/superpowers/specs/2026-05-12-openapi-swagger-support-design.md)
-**Active feature branch:** `feat/openapi-swagger-support` (off `main`)
+**Active feature branch:** `feat/openapi-swagger-support` (off `main`, local-only)
+**Workflow mode:** **Local-only — no sub-task branches, no PRs per task.** Implementer commits each task directly to `feat/openapi-swagger-support`. The feature branch is not pushed to origin during Phase 1; the only PR is the final integration PR `feat/openapi-swagger-support` → `main` when all phases are complete.
 
 ---
 
-## Plan-Driven Execution Mode
+## Plan-Driven Execution Mode (local-only)
 
-This prompt is currently configured for **plan-driven execution** of the OpenAPI/Swagger support work. The design, competitor research, and architecture decisions are already complete and frozen in the spec; the plan breaks the work into 25 self-contained tasks (Phase 1) that must be executed in order.
+This prompt is currently configured for **plan-driven local execution** of the OpenAPI/Swagger support work. The design, competitor research, and architecture decisions are already complete and frozen in the spec; the plan breaks the work into 25 self-contained tasks (Phase 1) that must be executed in order. Each task lands as one commit directly on the feature branch — no sub-task branches, no PRs until final integration.
 
 ### What this means for the workflow below
 
-| Generic phase                | Plan-driven override                                                                                                                                                                                                                                                             |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Phase 1 — Understand**     | Read the **task section in the plan** (find your assigned `Task NN`) AND the spec sections it cross-references. Do NOT re-do competitor research — it's already in spec §3.3. Ask clarifying questions only if the task's intent is unclear, not to relitigate design decisions. |
-| **Phase 2 — Design & Plan**  | **SKIP entirely.** The brainstorming and writing-plans skills have already run. Re-running them would re-litigate frozen decisions. The plan's task section IS the design.                                                                                                       |
-| **Phase 3 — Implement**      | Branch off `feat/openapi-swagger-support` (the active feature branch), **not** `main`. Branch name pattern: `task-NN/openapi-<short-desc>` per the plan. Follow the exact steps in the plan's task section.                                                                      |
-| **Phase 4 — Review & Merge** | Open PRs **into `feat/openapi-swagger-support`**, NOT `main`. Each task = one PR into the feature branch. Squash-merge into the feature branch on approval. `main` stays untouched until the entire feature (Phases 1–3 of the spec) is complete.                                |
-| **Phase 5 — Complete**       | Run only after Task 25 (end of Phase 1) and again after Phases 2 + 3 plans land. Then proceed to "Plan Completion & Integration" below.                                                                                                                                          |
+| Generic phase                | Plan-driven override (local-only)                                                                                                                                                                                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Phase 1 — Understand**     | Read the **task section in the plan** (find your assigned `Task NN`) AND the spec sections it cross-references. Do NOT re-do competitor research — it's already in spec §3.3. Ask clarifying questions only if the task's intent is unclear, not to relitigate design decisions.                                                       |
+| **Phase 2 — Design & Plan**  | **SKIP entirely.** The brainstorming and writing-plans skills have already run. Re-running them would re-litigate frozen decisions. The plan's task section IS the design.                                                                                                                                                             |
+| **Phase 3 — Implement**      | **Stay on `feat/openapi-swagger-support`.** Do NOT create a sub-task branch. Ignore the plan's "Step 1: Branch" steps (they assume the PR workflow). Run all other steps in the task: TDD, code, tests, full check suite.                                                                                                              |
+| **Phase 4 — Review & Merge** | **No PR.** Add the changeset per the task, then `git commit` directly onto `feat/openapi-swagger-support` with the task's Conventional Commit message. Run `superpowers:requesting-code-review` inline (self-review) before each commit if desired, but no GitHub PR is opened. `main` stays untouched until the final integration PR. |
+| **Phase 5 — Complete**       | Run only after Task 25 (end of Phase 1) and again after Phases 2 + 3 plans land. Then proceed to "Plan Completion & Integration" below.                                                                                                                                                                                                |
 
 ### How to invoke this prompt for a single task
 
 Tell your implementer:
 
-> Execute **Task T<NN>** from the active plan. Skip Phases 1–2 (already done). Read the plan's task section + any spec sections it references. Run Phases 3–4 per the plan's step list. PR target is the active feature branch.
+> Execute **Task T<NN>** from the active plan in local-only mode. You are already on `feat/openapi-swagger-support`. Skip Phases 1–2. Skip the "Step 1: Branch" step in the task (no sub-task branch). Implement all other task steps. After tests pass and the changeset is added, `git commit` directly to `feat/openapi-swagger-support` using the task's Conventional Commit message. No `git push`, no PR.
 
 ### When NOT in plan-driven mode
 
-If a task arrives that is unrelated to the OpenAPI plan (e.g., an unrelated bug fix), revert to the generic flow: Phase 1 includes brainstorming + writing-plans, Phase 3 branches off `main`, Phase 4 targets `main`. The plan-driven overrides apply only while implementing the OpenAPI plan.
+If a task arrives that is unrelated to the OpenAPI plan (e.g., an unrelated bug fix), revert to the generic flow: Phase 1 includes brainstorming + writing-plans, Phase 3 branches off `main`, Phase 4 opens a PR to `main`. The plan-driven local-only overrides apply only while implementing the OpenAPI plan.
 
 ---
 
@@ -154,16 +155,16 @@ Follow these phases in strict order. Each gate MUST be completed before proceedi
 
 For each sub-task in the approved plan:
 
-1. Create a task branch from the appropriate base:
+1. Confirm or set the active branch:
 
-   **Plan-driven mode (OpenAPI work, current default):** branch off the active feature branch `feat/openapi-swagger-support`:
+   **Plan-driven local mode (OpenAPI work, current default):** stay on the feature branch. NO sub-task branch is created.
 
    ```
-   git checkout feat/openapi-swagger-support && git pull origin feat/openapi-swagger-support
-   git checkout -b task-{NN}/openapi-{short-desc}
+   git checkout feat/openapi-swagger-support
+   git status   # verify clean working tree before starting
    ```
 
-   The `feat/openapi-swagger-support` branch was created off `main` at the start of this work and accumulates all OpenAPI tasks until the full feature is ready to integrate.
+   The `feat/openapi-swagger-support` branch was created off `main` at the start of this work and accumulates all OpenAPI tasks as direct commits until the full feature is ready to integrate. Local-only — do NOT push during Phase 1 task execution.
 
    **Generic mode (non-OpenAPI work):** branch off `main` (this repo has no `dev` branch):
 
@@ -233,32 +234,37 @@ For each sub-task in the approved plan:
    chore(deps): bump drizzle-orm to 0.44.x
    ```
 
-3. **Push and open a PR. Target depends on mode:**
+3. **Commit. Push/PR depends on mode:**
 
-   **Plan-driven mode (OpenAPI work):** PR targets the active feature branch, NOT `main`.
+   **Plan-driven local mode (OpenAPI work, current default):** commit directly to the feature branch. NO push, NO PR.
 
    ```
-   git push -u origin <branch-name>
-   gh pr create --base feat/openapi-swagger-support --title "Task {NN}: {description}" --body "..."
+   # Conventional Commit message exactly as specified in the task section of the plan.
+   git commit -m "feat(openapi): <subject from task>"
+   git log --oneline -1   # verify the commit landed
    ```
 
-   **Generic mode (non-OpenAPI work):** PR targets `main`.
+   The integration PR (`feat/openapi-swagger-support` → `main`) is created later, once all Phase 1–3 tasks are complete. See "Plan Completion & Integration" below.
+
+   **Generic mode (non-OpenAPI work):** push and open a PR to `main`.
 
    ```
    git push -u origin <branch-name>
    gh pr create --base main --title "Task {N} Subtask {ID}: {description}" --body "..."
    ```
 
-   PR body MUST include:
+   For Generic-mode PRs, the PR body MUST include:
    - Summary of the change (what + why)
    - Test plan (what you ran, what you verified)
    - Changeset confirmation: "Changeset added: yes (patch/minor/major)" or "Changeset skipped: <reason>"
    - Pre-existing check failures, if any, listed explicitly so they aren't confused with regressions
-   - Spec/plan reference (plan-driven mode only): cite the task and spec section being implemented
+   - Spec/plan reference if applicable: cite the task and spec section being implemented
 
-4. Use `/superpowers:requesting-code-review` to review the PR.
+4. **Review step depends on mode:**
 
-5. If issues found → fix, push, re-review. **Do NOT auto-merge** — I merge manually. When I merge:
+   **Plan-driven local mode (OpenAPI work, current default):** run `/superpowers:requesting-code-review` inline as a self-review of the commit you just made. If issues found, fix in a follow-up commit on the same feature branch (`fix(openapi): <subject>`). No merge step — the commit is already on the feature branch.
+
+   **Generic mode (non-OpenAPI work):** run `/superpowers:requesting-code-review` against the open PR. If issues found → fix, push, re-review. **Do NOT auto-merge** — I merge manually. When I merge:
 
    ```
    gh pr merge --squash --delete-branch
@@ -266,9 +272,9 @@ For each sub-task in the approved plan:
 
    The squash commit message must also follow Conventional Commits (no Claude attribution footer).
 
-6. Return to Phase 3 for the next sub-task.
+5. Return to Phase 3 for the next sub-task.
 
-**⛔ GATE: Do NOT start the next sub-task until the current one is merged.**
+**⛔ GATE: Do NOT start the next sub-task until the current one is committed, all checks pass, and (in generic mode) the PR is merged.**
 
 ### Phase 5: Complete
 
@@ -281,20 +287,19 @@ For each sub-task in the approved plan:
 
 ## Plan Completion & Integration (plan-driven mode only)
 
-After every task in a plan has been merged into the active feature branch:
+After every task in a plan has been committed onto the active feature branch (~25 commits for OpenAPI Phase 1):
 
-1. **Sync the feature branch with `main`** to catch any drift from unrelated merges:
+1. **Sync the feature branch with `main`** to catch any drift from unrelated merges. Until now the feature branch has been local-only, so this is also the first push to origin:
 
    ```
    git checkout feat/openapi-swagger-support
-   git pull origin feat/openapi-swagger-support
    git fetch origin main
    git rebase origin/main
    # resolve any conflicts; never use --skip on commits with real changes
-   git push --force-with-lease
+   git push -u origin feat/openapi-swagger-support
    ```
 
-   Use `--force-with-lease` (not `--force`) so you don't clobber a teammate's push.
+   If you've already pushed in a previous integration cycle (e.g., between phases), use `git push --force-with-lease` after the rebase. Use `--force-with-lease` (not `--force`) so you don't clobber a teammate's push.
 
 2. **Run the full check suite on the rebased feature branch:**
 
@@ -326,10 +331,10 @@ After every task in a plan has been merged into the active feature branch:
 
 5. **Integration PR body MUST include:**
    - Link to the design spec and plan
-   - Summary of all tasks merged (one bullet per task)
+   - Summary of all tasks committed (one bullet per task, derived from `git log main..feat/openapi-swagger-support --oneline`)
    - Cumulative changeset list (output of `pnpm release:status`)
-   - Confirmation that all 25 task PRs were reviewed and squash-merged
-   - Test plan: full suite run, e2e smoke test results, Playwright screenshots from T25
+   - Confirmation that all 25 task commits passed their full check suite at commit time
+   - Test plan: full suite run on the rebased feature branch, e2e smoke test results, Playwright screenshots from T25
    - Any pre-existing failures explicitly noted
    - "Spec deferrals" section listing what was intentionally NOT built (per spec Open Questions §18) so reviewers don't flag them as gaps
 
@@ -339,7 +344,7 @@ After every task in a plan has been merged into the active feature branch:
    gh pr merge --merge --delete-branch  # standard merge, keeps task history
    ```
 
-   The squash strategy used for sub-task PRs into the feature branch is appropriate there because each task is one logical change. The integration PR is different: it bundles 25 logical changes, and squashing them into one giant commit would erase useful history.
+   In local-only mode there were no sub-task PRs, so every per-task commit lives directly on the feature branch and is preserved on `main` after the merge. Squashing the integration PR would erase 25 useful Conventional Commits into one giant blob — don't do it.
 
 7. **Subsequent Phase 2 / Phase 3 work** of the OpenAPI feature starts a new feature branch (`feat/openapi-swagger-support-phase-2`) off the newly-merged `main`. The plan-driven mode of this prompt then points at the Phase 2 plan.
 
