@@ -17,10 +17,12 @@ import { mapEmailField } from "./email";
 import { mapNumberField } from "./number";
 import { mapPasswordField } from "./password";
 import { mapRadioField } from "./radio";
+import { mapRelationshipField } from "./relationship";
 import { mapSelectField } from "./select";
 import { mapTextField } from "./text";
 import { mapTextareaField } from "./textarea";
 import type { FieldMapper } from "./types";
+import { mapUploadField } from "./upload";
 
 export const fieldMappers: Partial<Record<FieldConfig["type"], FieldMapper>> = {
   checkbox: mapCheckboxField as FieldMapper,
@@ -31,9 +33,11 @@ export const fieldMappers: Partial<Record<FieldConfig["type"], FieldMapper>> = {
   number: mapNumberField as FieldMapper,
   password: mapPasswordField as FieldMapper,
   radio: mapRadioField as FieldMapper,
+  relationship: mapRelationshipField as FieldMapper,
   select: mapSelectField as FieldMapper,
   text: mapTextField as FieldMapper,
   textarea: mapTextareaField as FieldMapper,
+  upload: mapUploadField as FieldMapper,
 };
 
 export type { FieldMapper, FieldMapperResult, MappingContext } from "./types";
