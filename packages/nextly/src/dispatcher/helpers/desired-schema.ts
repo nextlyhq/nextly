@@ -41,6 +41,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           slug: c.slug,
           tableName: c.tableName,
           fields: c.fields ?? [],
+          status: (c as { status?: boolean }).status === true,
         };
       }
     } catch {
@@ -58,6 +59,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           slug: s.slug,
           tableName: s.tableName,
           fields: s.fields ?? [],
+          status: (s as { status?: boolean }).status === true,
         };
       }
     } catch {
