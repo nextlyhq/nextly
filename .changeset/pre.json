@@ -24,6 +24,7 @@
     "api-default-all-statuses",
     "fix-status-column-strip",
     "flat-bugs-float",
-    "initial-alpha-release"
+    "initial-alpha-release",
+    "single-document-cache-invalidation"
   ]
 }
