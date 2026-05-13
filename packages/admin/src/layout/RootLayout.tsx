@@ -46,6 +46,7 @@ function AdminAppContent() {
       void queryClient.invalidateQueries({ queryKey: ["collections"] });
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
       void queryClient.invalidateQueries({ queryKey: ["singles"] });
+      void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
       void queryClient.invalidateQueries({ queryKey: ["components"] });
     };
     window.addEventListener("nextly:schema-updated", handler);
