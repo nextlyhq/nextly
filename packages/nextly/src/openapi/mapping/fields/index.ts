@@ -14,10 +14,13 @@ import { mapChipsField } from "./chips";
 import { mapCodeField } from "./code";
 import { mapDateField } from "./date";
 import { mapEmailField } from "./email";
+import { mapGroupField } from "./group";
+import { mapJsonField } from "./json";
 import { mapNumberField } from "./number";
 import { mapPasswordField } from "./password";
 import { mapRadioField } from "./radio";
 import { mapRelationshipField } from "./relationship";
+import { mapRepeaterField } from "./repeater";
 import { mapSelectField } from "./select";
 import { mapTextField } from "./text";
 import { mapTextareaField } from "./textarea";
@@ -30,10 +33,13 @@ export const fieldMappers: Partial<Record<FieldConfig["type"], FieldMapper>> = {
   code: mapCodeField as FieldMapper,
   date: mapDateField as FieldMapper,
   email: mapEmailField as FieldMapper,
+  group: mapGroupField as FieldMapper,
+  json: mapJsonField as FieldMapper,
   number: mapNumberField as FieldMapper,
   password: mapPasswordField as FieldMapper,
   radio: mapRadioField as FieldMapper,
   relationship: mapRelationshipField as FieldMapper,
+  repeater: mapRepeaterField as FieldMapper,
   select: mapSelectField as FieldMapper,
   text: mapTextField as FieldMapper,
   textarea: mapTextareaField as FieldMapper,
