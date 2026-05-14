@@ -410,21 +410,13 @@ function readRequireEmailVerification(
   getService: (name: string) => unknown
 ): boolean {
   try {
-    const config = getService("config");
-    if (config && typeof config === "object" && "auth" in config) {
-      const auth = (config as { auth?: unknown }).auth;
-      if (
-        auth &&
-        typeof auth === "object" &&
-        "requireEmailVerification" in auth
-      ) {
-        return (
-          (auth as { requireEmailVerification?: unknown })
-            .requireEmailVerification === true
-        );
-      }
-    }
-    return false;
+    const config = getService("config") as {
+      auth?: {
+        requireEmailVerification?: boolean;
+      };
+    };
+
+    return config?.auth?.requireEmailVerification === true;
   } catch {
     return false;
   }
