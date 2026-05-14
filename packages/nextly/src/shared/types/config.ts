@@ -502,7 +502,7 @@ export interface AuthConfig {
   /**
    * Whether login requires the user's email to be verified.
    *
-   * Default: `false`. If true, users who have not verified their email
+   * Default: `true`. If false, users who have not verified their email
    * (emailVerified is null) will receive an AUTH_INVALID_CREDENTIALS error
    * when trying to log in.
    */
@@ -515,7 +515,7 @@ export interface AuthConfig {
 export interface SanitizedAuthConfig {
   /** Whether to reveal duplicate-email registrations on the wire. Defaults to false. */
   revealRegistrationConflict: boolean;
-  /** Whether email verification is required to log in. Defaults to false. */
+  /** Whether email verification is required to log in. Defaults to true. */
   requireEmailVerification: boolean;
 }
 
@@ -524,7 +524,7 @@ export interface SanitizedAuthConfig {
  */
 export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
-  requireEmailVerification: false,
+  requireEmailVerification: true,
 };
 
 // ============================================================
