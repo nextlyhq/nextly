@@ -41,12 +41,35 @@ function escape(value: string): string {
  */
 const SCALAR_CDN_URL = "https://cdn.jsdelivr.net/npm/@scalar/api-reference";
 
+// Strips Scalar's vendor surfaces so the standalone reference is reduced
+// to "just the API docs":
+//   - `agent.disabled` blocks the Scalar Agent chat (enabled on localhost
+//     by default; would otherwise appear unprompted in user dev).
+//   - `customCss` hides two undocumented Scalar surfaces:
+//       • `.scalar-mcp-layer` — bottom-left sidebar panel with "VS Code",
+//         "Cursor", and "Generate MCP" launchers (all link to scalar.com).
+//       • `.api-reference-toolbar` — top toolbar with "Developer Tools",
+//         "Configure", "Share", "Deploy". Verified empirically to contain
+//         only those four buttons in @scalar/api-reference@1.55 (no search
+//         or theme toggle lives there — those are in the sidebar).
+//     Neither has a documented config flag as of v1.55; the class names
+//     are the stable handles. If Scalar later ships real flags, drop the
+//     CSS in favor of them.
+// The "Powered by Scalar" footer stays — MIT has no NOTICE clause, but
+// attributing OSS we ship unchanged is a goodwill norm.
+const SCALAR_CONFIG = {
+  agent: { disabled: true },
+  customCss:
+    ".scalar-mcp-layer, .api-reference-toolbar { display: none !important; }",
+} as const;
+
 export const scalarRenderer: DocsUiRenderer = {
   name: "scalar",
   render: ({ specUrl, title, theme = "auto", cspNonce }) => {
     const safeTitle = escape(title);
     const safeUrl = escape(specUrl);
     const safeTheme = escape(theme);
+    const safeConfig = escape(JSON.stringify(SCALAR_CONFIG));
     // When a CSP nonce is supplied, thread it onto both inline + CDN script
     // tags so they pass `script-src 'nonce-...'`. Deployments without a
     // nonce policy can omit it entirely.
@@ -58,7 +81,7 @@ export const scalarRenderer: DocsUiRenderer = {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>${safeTitle}</title>
 </head><body>
-<script id="api-reference" data-url="${safeUrl}"${nonceAttr}></script>
+<script id="api-reference" data-url="${safeUrl}" data-configuration="${safeConfig}"${nonceAttr}></script>
 <script src="${SCALAR_CDN_URL}"${nonceAttr}></script>
 </body></html>`;
     return { html };

@@ -27,6 +27,27 @@ describe("scalarRenderer", () => {
     expect(html).toContain('id="api-reference"');
   });
 
+  it("disables Scalar's Agent chat via data-configuration", () => {
+    const { html } = scalarRenderer.render({
+      specUrl: "https://example.com/spec.json",
+      title: "API",
+    });
+    expect(html).toContain("&quot;agent&quot;:{&quot;disabled&quot;:true}");
+  });
+
+  it("hides Scalar's vendor surfaces (sidebar integrations + top toolbar) via customCss", () => {
+    const { html } = scalarRenderer.render({
+      specUrl: "https://example.com/spec.json",
+      title: "API",
+    });
+    // `.scalar-mcp-layer` = sidebar VS Code / Cursor / Generate MCP panel.
+    // `.api-reference-toolbar` = top Developer Tools / Configure / Share /
+    // Deploy bar. Both in @scalar/api-reference@1.55.
+    expect(html).toContain(
+      ".scalar-mcp-layer, .api-reference-toolbar { display: none !important; }"
+    );
+  });
+
   it("loads the Scalar bundle from jsdelivr CDN", () => {
     const { html } = scalarRenderer.render({
       specUrl: "https://example.com/spec.json",
