@@ -412,20 +412,18 @@ function readRequireEmailVerification(
   try {
     const config = getService("config");
     if (config && typeof config === "object" && "auth" in config) {
-      const auth = (config as { auth?: unknown }).auth;
+      const auth = config.auth;
       if (
         auth &&
         typeof auth === "object" &&
         "requireEmailVerification" in auth
       ) {
-        return (
-          (auth as { requireEmailVerification?: unknown })
-            .requireEmailVerification === true
-        );
+        return auth.requireEmailVerification === true;
       }
     }
     return false;
   } catch {
+    // DI container not initialised yet — fall back to the safe default.
     return false;
   }
 }
