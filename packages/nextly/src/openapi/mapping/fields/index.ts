@@ -21,6 +21,7 @@ import { mapPasswordField } from "./password";
 import { mapRadioField } from "./radio";
 import { mapRelationshipField } from "./relationship";
 import { mapRepeaterField } from "./repeater";
+import { mapRichTextField } from "./rich-text";
 import { mapSelectField } from "./select";
 import { mapTextField } from "./text";
 import { mapTextareaField } from "./textarea";
@@ -40,6 +41,7 @@ export const fieldMappers: Partial<Record<FieldConfig["type"], FieldMapper>> = {
   radio: mapRadioField as FieldMapper,
   relationship: mapRelationshipField as FieldMapper,
   repeater: mapRepeaterField as FieldMapper,
+  richText: mapRichTextField as FieldMapper,
   select: mapSelectField as FieldMapper,
   text: mapTextField as FieldMapper,
   textarea: mapTextareaField as FieldMapper,
