@@ -862,6 +862,9 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.18.3
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
       zod:
         specifier: ^4.1.12
         version: 4.1.12
