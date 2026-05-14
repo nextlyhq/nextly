@@ -39,6 +39,7 @@ import type { CollectionConfig } from "../collections/config/define-collection";
 import type { ComponentConfig } from "../components/config/types";
 import { getService, isServicesRegistered } from "../di";
 import { NextlyError } from "../errors/nextly-error";
+import { getCachedNextly } from "../init";
 import type { OpenApiConfig } from "../openapi";
 import type { Registries } from "../openapi/generator/collect";
 import { generate } from "../openapi/generator/pipeline";
@@ -185,11 +186,26 @@ async function handleSpec(
   format: "json" | "yaml",
   config: OpenApiConfig
 ): Promise<Response> {
+  // Mirror the pattern used by media.ts / email-providers.ts: call
+  // getCachedNextly() so the handler works alongside the catch-all
+  // routeHandler (which is the typical Nextly deployment). The cached
+  // singleton path succeeds whenever either `getNextly({ config })`
+  // (instrumentation.ts) or `createDynamicHandlers({ config })` (the
+  // standard Next.js mount) has run at least once in this worker.
+  // Falls through to the original 503 when neither path has fired —
+  // the user's openapi route file should wrap with `getNextly({ config })`
+  // for true cold-boot scenarios.
   if (!isServicesRegistered()) {
-    throw NextlyError.serviceUnavailable({
-      logMessage:
-        "openapi handler called before registerServices() / getNextly()",
-    });
+    try {
+      await getCachedNextly();
+    } catch {
+      throw NextlyError.serviceUnavailable({
+        logMessage:
+          "openapi handler called before registerServices() / getNextly(). " +
+          "Either mount via the standard /admin/api/[[...params]] catch-all, " +
+          "or wrap this route's GET with `await getNextly({ config })`.",
+      });
+    }
   }
 
   const registries = buildRegistriesFromContainer();
