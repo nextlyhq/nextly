@@ -19,16 +19,13 @@
  * Schema notes:
  *   - `AuthUser` is the lean user payload echoed by auth responses
  *     (id / email / name / image / roleIds). The full user schema lives
- *     in the `users` module (T19); the pipeline lets later modules
+ *     in the `users` module; the pipeline lets later modules
  *     override schemas, so once `users` is registered its richer `User`
  *     supersedes nothing here — `AuthUser` is a distinct, narrower name
  *     by design.
  *   - CSRF tokens travel via cookie + (optional) body / header echo. The
  *     request body schemas accept an optional `csrfToken` to document
  *     the body-echo form without making it mandatory.
- *
- * Spec: §8.1 (module inventory), §11.6 (auth module), §13.1-§13.4
- * (anti-enumeration response shapes).
  *
  * @module nextly/openapi/modules/auth
  */

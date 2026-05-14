@@ -15,8 +15,6 @@
  * `hasMany` flips the schema to an array; `min`/`max` apply to items,
  * `minRows`/`maxRows` apply to the array length (`minItems`/`maxItems`).
  *
- * Spec: §7.1 row "number".
- *
  * @module nextly/openapi/mapping/fields/number
  */
 

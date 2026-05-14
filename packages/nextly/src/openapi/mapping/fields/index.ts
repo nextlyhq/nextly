@@ -1,7 +1,7 @@
 /**
  * Field mapper registry — keyed by `FieldConfig.type`.
  *
- * Tasks T03–T09 each plug their mapper into this map. Keep entries
+ * Each field-type mapper plugs into this map. Keep entries
  * alphabetized by field-type key for diff hygiene.
  *
  * @module nextly/openapi/mapping/fields

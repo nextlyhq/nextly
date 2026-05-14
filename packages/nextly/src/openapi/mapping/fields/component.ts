@@ -19,8 +19,6 @@
  * because OAS 3.1 does not allow sibling keywords next to `$ref` reliably
  * across tooling.
  *
- * Spec: §7.1 row "component".
- *
  * @module nextly/openapi/mapping/fields/component
  */
 

@@ -17,8 +17,6 @@
  *     name `<BaseName>__<FieldName>Item`. Recurses into groups, components
  *     (named slot variants), and nested repeaters.
  *
- * Spec: §7.2 (system fields) and §7.3 (derived schemas + naming).
- *
  * @module nextly/openapi/mapping/derive-schemas
  */
 
@@ -127,8 +125,6 @@ export function deriveCollectionSchemas(
  * schema includes system fields (id, createdAt, updatedAt, and _status
  * when status: true). SingleConfig has no `timestamps` toggle, so
  * createdAt/updatedAt are always present on the Read schema.
- *
- * Spec: §3 (Singles), §7.3.
  */
 export function deriveSingleSchemas(single: SingleConfig): DerivedSchemas {
   const baseName = collectionSchemaName(single.slug, single.label?.singular);

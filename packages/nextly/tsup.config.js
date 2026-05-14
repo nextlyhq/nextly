@@ -49,8 +49,8 @@ const serverEntries = [
   // Unified error system entry points
   "src/errors/index.ts",
   "src/observability/index.ts",
-  // OpenAPI subpath: Phase 1 scaffold; defineOpenApi and override types land
-  // in Task 24. Server-only — generator phases read internal registries.
+  // OpenAPI subpath: exposes `defineOpenApi` and override types.
+  // Server-only — generator phases read internal registries.
   "src/openapi/index.ts",
   "src/database/index.ts",
   // Bootstrap seeders subpath. Internal docs at database/index.ts:23

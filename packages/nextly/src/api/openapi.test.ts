@@ -225,8 +225,8 @@ describe("openApiHandler", () => {
     });
 
     it("falls back to the dependency-free renderer for non-scalar ui choices", async () => {
-      // `swagger-ui` / `redoc` adapters land in Phase 2 — until then,
-      // selecting them falls through to the fallback.
+      // `swagger-ui` / `redoc` adapters are planned (future work) — until
+      // then, selecting them falls through to the fallback.
       fixture.config = { openapi: { ui: "swagger-ui" } };
       const res = await openApiHandler.GET(
         new Request("http://localhost/admin/api/openapi/")

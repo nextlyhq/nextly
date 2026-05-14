@@ -39,20 +39,18 @@
  * `PaginationMeta`) come from the shared envelope components — this module
  * `$ref`s them rather than redefining them.
  *
- * Spec: §8.1 (module inventory), §11.6 (media module).
- *
  * @module nextly/openapi/modules/media
  */
 
 import { defineModule } from "../generator/define-module";
-import type { OperationIR, SecurityRequirementIR } from "../ir/types";
+import type { OperationIR } from "../ir/types";
 import type { OpenAPISchema } from "../types";
 
-const STANDARD_SECURITY: readonly SecurityRequirementIR[] = [
-  { bearerAuth: [] },
-  { cookieAuth: [] },
-  { apiKeyAuth: [] },
-];
+import {
+  NOT_FOUND_RESPONSE,
+  STANDARD_ERROR_RESPONSES,
+  STANDARD_SECURITY,
+} from "./_shared";
 
 const PATH_ID = {
   name: "id",
@@ -69,18 +67,6 @@ const PATH_SLUG = {
   description: "Collection slug.",
   schema: { type: "string" } satisfies OpenAPISchema,
 };
-
-const STANDARD_ERROR_RESPONSES = {
-  "400": { $ref: "#/components/responses/ValidationError" },
-  "401": { $ref: "#/components/responses/Unauthorized" },
-  "403": { $ref: "#/components/responses/Forbidden" },
-  "429": { $ref: "#/components/responses/RateLimited" },
-  "500": { $ref: "#/components/responses/InternalServerError" },
-} as const;
-
-const NOT_FOUND_RESPONSE = {
-  "404": { $ref: "#/components/responses/NotFound" },
-} as const;
 
 // ────────────────────────────────────────────────────────────────────
 // Schemas

@@ -2,7 +2,7 @@
  * Built-in module: `/api/singles/*`.
  *
  * Schema-Builder REST surface for UI-managed singles. Distinct from the
- * code-defined singles emitted by `inferFromSingles` (T14) — those are
+ * code-defined singles emitted by `inferFromSingles` — those are
  * declared via `defineConfig({ singles })` and live in the generator's
  * collection-driven envelope, while these endpoints expose the
  * Schema-Builder CRUD + preview/apply migration flow.

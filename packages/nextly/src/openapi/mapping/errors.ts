@@ -5,8 +5,6 @@
  * adding a new canonical error code in `errors/error-codes.ts` automatically
  * flows into the generated OpenAPI spec — no separate hand-mirrored list.
  *
- * Spec: §8.2 (envelopes + errors).
- *
  * @module nextly/openapi/mapping/errors
  */
 

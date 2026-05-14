@@ -8,8 +8,6 @@
  * `buildDocumentReferenceSchemas` to guarantee both mappers stay in lock
  * step over time.
  *
- * Spec: §7.1 row "upload".
- *
  * @module nextly/openapi/mapping/fields/upload
  */
 

@@ -6,16 +6,15 @@
  * the dep stays *optional*: deployments that don't install Scalar fall
  * back to the dependency-free fallback renderer in `./fallback.ts`.
  *
- * Phase 1 ships the Scalar bundle from `cdn.jsdelivr.net` to keep this
- * package wire-light. Phase 2 will switch to bundled-asset serving via
+ * Ships the Scalar bundle from `cdn.jsdelivr.net` to keep this package
+ * wire-light. Future work will switch to bundled-asset serving via
  * `assets()` for offline and strict-CSP environments — that's the
- * intended end-state described in spec §11.4. For now, deployments
- * with a strict CSP can either:
+ * intended end-state. For now, deployments with a strict CSP can either:
  *
  *   1. Stick with the fallback renderer (`defineOpenApi({ ui: undefined })`
  *      doesn't choose scalar — actually setting `ui: "swagger-ui"` is the
- *      cleaner opt-out and lands in Phase 2; until then, omitting the
- *      peer dep is the easiest path).
+ *      cleaner opt-out and is planned; until then, omitting the peer dep
+ *      is the easiest path).
  *   2. Allow `cdn.jsdelivr.net` in `script-src`.
  *
  * @module nextly/openapi/renderer/scalar

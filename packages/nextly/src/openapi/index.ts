@@ -8,11 +8,10 @@
  *   - `OpenApiConfig` and friends — the user-facing config shape.
  *   - `DocsUiRenderer` — the renderer plug-point. The default fallback
  *     renderer is mounted automatically when no real renderer is
- *     installed; T25 wires Scalar in as the default.
+ *     installed; the Scalar adapter is wired in as the default when
+ *     available.
  *   - Curated OAS type re-exports for callers writing inline schema
  *     overrides.
- *
- * Spec: §6.
  *
  * @module nextly/openapi
  */
@@ -28,7 +27,7 @@ import type { OpenAPIV3_1 } from "openapi-types";
  *
  * The literal values cover the common cases ("admin" = any authenticated
  * user, "public" = no auth required); custom predicates land in
- * Phase 2's middleware layer.
+ * a future middleware layer.
  */
 export interface OpenApiAccessConfig {
   /** Who can fetch `openapi.json` / `openapi.yaml`. */
@@ -70,7 +69,7 @@ export interface OpenApiConfig {
   /**
    * Which docs UI renderer to mount. `"scalar"` is the default once
    * `@scalar/api-reference` is installed; Swagger UI and Redoc adapters
-   * land in Phase 2.
+   * are planned.
    */
   ui?: "scalar" | "swagger-ui" | "redoc";
   /**

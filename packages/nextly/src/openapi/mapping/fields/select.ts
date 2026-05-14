@@ -9,8 +9,6 @@
  * on `hasMany` (`minRows`/`maxRows` don't exist here), so the mapper has
  * fewer knobs than `text` or `number`.
  *
- * Spec: §7.1 row "select".
- *
  * @module nextly/openapi/mapping/fields/select
  */
 

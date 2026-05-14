@@ -24,12 +24,10 @@
  *      ▼
  *   serialize() → cache.set() → formatResult
  *
- * The `schemaHash` is supplied by the route handler (T23). That keeps the
+ * The `schemaHash` is supplied by the route handler. That keeps the
  * pipeline pure — no second registry roundtrip purely to fingerprint
  * input. Tests can pass any string; production passes a hash derived from
  * registry change events.
- *
- * Spec: §5.3 (data flow), §12 (caching).
  *
  * @module nextly/openapi/generator/pipeline
  */

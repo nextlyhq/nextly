@@ -13,8 +13,6 @@
  *     `allOf`-generics because most downstream tooling (including
  *     Scalar's Try-It panel) renders the mangled names better.
  *
- * Spec: §8.2.
- *
  * @module nextly/openapi/mapping/envelopes
  */
 
@@ -165,7 +163,8 @@ function makeBulkResponse(name: string): OpenAPISchema {
 /**
  * Per-collection envelopes: emits `ListResponse<Name>`, `MutationResponse<Name>`,
  * `BulkResponse<Name>` for each provided schema name. The `<Name>` must already
- * be registered as a `components/schemas` entry (T11/T13 take care of that).
+ * be registered as a `components/schemas` entry (the collection-schema deriver
+ * and collection routes take care of that).
  */
 export function buildCollectionEnvelopes(
   schemaNames: readonly string[]

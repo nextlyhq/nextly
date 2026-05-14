@@ -11,8 +11,6 @@
  * When absent, the schema is the empty object `{}` — OAS shorthand for
  * "any JSON allowed" — plus an optional description.
  *
- * Spec: §7.1 row "json".
- *
  * @module nextly/openapi/mapping/fields/json
  */
 

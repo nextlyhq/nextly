@@ -8,8 +8,6 @@
  * Honors both nested `validation` and legacy flat `minLength`/`maxLength`;
  * nested wins per the `TextareaFieldConfig.validation` JSDoc note.
  *
- * Spec: §7.1 row "textarea".
- *
  * @module nextly/openapi/mapping/fields/textarea
  */
 

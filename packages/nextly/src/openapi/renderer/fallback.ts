@@ -11,8 +11,6 @@
  * Intentionally inline-styled and free of `<script>` tags so it works
  * under the strictest CSP without a nonce.
  *
- * Spec: §11.3.
- *
  * @module nextly/openapi/renderer/fallback
  */
 

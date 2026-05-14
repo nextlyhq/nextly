@@ -15,8 +15,6 @@
  * + localization). Update has no query params; the body is the partial
  * `Update<Name>` schema.
  *
- * Spec: §3 (Singles), §7.3.
- *
  * @module nextly/openapi/generator/infer-singles
  */
 

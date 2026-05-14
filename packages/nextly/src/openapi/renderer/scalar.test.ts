@@ -103,7 +103,7 @@ describe("scalarRenderer", () => {
     expect(html).not.toMatch(/<script>x<\/script>/);
   });
 
-  it("declares no static assets (CDN-served in Phase 1)", () => {
+  it("declares no static assets (CDN-served)", () => {
     expect(scalarRenderer.assets()).toEqual(new Map());
   });
 });

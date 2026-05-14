@@ -16,8 +16,6 @@
  * map to `minimum`/`maximum` only for `format: 'date'`, and the picker
  * itself enforces them — server validation happens via Zod).
  *
- * Spec: §7.1 row "date".
- *
  * @module nextly/openapi/mapping/fields/date
  */
 

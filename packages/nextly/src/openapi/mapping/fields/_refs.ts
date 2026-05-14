@@ -2,9 +2,9 @@
  * Document-reference helpers — shared by relationship + upload mappers.
  *
  * Both field types reference documents in other collections, so they share
- * the same depth-dependent oneOf shape (spec §7.1, decision #8). The
- * inflector used here is intentionally minimal; T11 introduces a proper
- * inflector module (`_inflect.ts`) and may absorb / replace this helper.
+ * the same depth-dependent oneOf shape (the "Honest oneOf" decision). The
+ * inflector used here is intentionally minimal; the proper inflector module
+ * (`_inflect.ts`) may absorb / replace this helper.
  *
  * @module nextly/openapi/mapping/fields/_refs
  */

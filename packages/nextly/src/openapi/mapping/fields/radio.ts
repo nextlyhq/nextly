@@ -5,8 +5,6 @@
  * (unlike `select`). The shape is otherwise identical to a single-value
  * select: an enum of `option.value`s.
  *
- * Spec: §7.1 row "radio".
- *
  * @module nextly/openapi/mapping/fields/radio
  */
 

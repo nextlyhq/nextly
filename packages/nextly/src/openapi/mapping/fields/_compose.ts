@@ -6,7 +6,7 @@
  * and output (response body) variants. Used by:
  *   - `group.ts` — to compose nested-group object schemas
  *   - `repeater.ts` — to compose row-item schemas
- *   - T11's `deriveCollectionSchemas` — to build the per-collection schemas
+ *   - `deriveCollectionSchemas` — to build the per-collection schemas
  *
  * **Unnamed-group flattening:** `GroupFieldConfig.name` is optional. When a
  * group has no `name`, it's a *presentational* group — its fields are stored
@@ -101,9 +101,9 @@ function appendFields(
     }
 
     // Virtual `join` fields are read-only and have no input shape;
-    // they're handled by the collection-level composer in T11. The
-    // mapper registry has no entry for `join` in Phase 1, so we just
-    // skip with a warning instead of crashing.
+    // they're handled by the collection-level composer. The mapper
+    // registry currently has no entry for `join`, so we just skip with
+    // a warning instead of crashing.
     const mapper = fieldMappers[field.type];
     if (!mapper) {
       console.warn(

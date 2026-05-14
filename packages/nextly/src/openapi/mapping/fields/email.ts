@@ -6,8 +6,6 @@
  * `minLength`/`maxLength`/`pattern` fields, so all constraints come from
  * the nested `validation` object.
  *
- * Spec: §7.1 row "email".
- *
  * @module nextly/openapi/mapping/fields/email
  */
 

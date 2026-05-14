@@ -3,15 +3,13 @@
  *
  * The repeater mapper itself only emits the array shape and a $ref to a
  * named item schema (`<Owner>__<FieldName>Item`). The actual item-schema
- * registration happens at the collection level (T11's
+ * registration happens at the collection level (via
  * `deriveNestedItemSchemas`), which walks the field tree and registers a
- * composed object schema for each repeater field. Until T11 lands, the $ref
- * will be dangling in standalone tests — that's expected.
+ * composed object schema for each repeater field. Standalone tests of the
+ * mapper will have a dangling $ref — that's expected.
  *
- * Naming convention (frozen public contract per spec §7.3):
+ * Naming convention (frozen public contract):
  *   <Owner>__<FieldName>Item   e.g.  Post__BlocksItem, Page__SectionsItem
- *
- * Spec: §7.1 row "repeater"; §7.3 naming.
  *
  * @module nextly/openapi/mapping/fields/repeater
  */

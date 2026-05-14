@@ -54,12 +54,12 @@ describe("mapPasswordField", () => {
     expect(input.pattern).toBe("(?=.*[A-Z])(?=.*[a-z])(?=.*\\d).{8,}");
   });
 
-  it("output is symmetric to input (omission from response schema is handled by the collection composer in T11)", () => {
+  it("output is symmetric to input (omission from response schema is handled by the collection composer)", () => {
     const field: PasswordFieldConfig = { name: "password", type: "password" };
     const { input, output } = mapPasswordField(field, baseCtx);
     // The mapper returns a writeOnly output too; the per-collection schema
-    // builder in T11 is responsible for OMITTING password fields from the
-    // read variant entirely. This keeps the mapper itself pure.
+    // builder is responsible for OMITTING password fields from the read
+    // variant entirely. This keeps the mapper itself pure.
     expect(output).toMatchObject({ writeOnly: true });
     expect(input).not.toBe(output);
   });

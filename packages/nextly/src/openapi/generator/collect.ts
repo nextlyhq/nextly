@@ -12,13 +12,11 @@
  *
  * Why a Registries interface (vs importing the concrete services
  * directly): the generator stays decoupled from the runtime registry
- * implementations. T23's route handler is the only place that wires the
+ * implementations. The route handler is the only place that wires the
  * real CollectionRegistryService / SingleRegistryService / etc. to this
  * interface. That keeps the generator pure and easy to unit-test, and
  * lets future variants (e.g. a build-time CLI snapshot) supply their own
  * sources of truth.
- *
- * Spec: §5.3.
  *
  * @module nextly/openapi/generator/collect
  */

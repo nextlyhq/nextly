@@ -14,8 +14,6 @@
  *   3. Verifies the document is round-trip-parseable as both JSON and
  *      YAML, and that the docs UI references the same spec URL we just
  *      fetched.
- *
- * Spec: T25 of the OpenAPI plan.
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

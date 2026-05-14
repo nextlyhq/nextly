@@ -8,8 +8,6 @@
  * `upload` (depth-dependent oneOf), and `richText` (asymmetric Lexical vs
  * HTML+JSON) intentionally differ.
  *
- * Spec: §7 (field-type mapping).
- *
  * @module nextly/openapi/mapping/fields/types
  */
 

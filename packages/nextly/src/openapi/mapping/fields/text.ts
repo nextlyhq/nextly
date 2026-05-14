@@ -5,8 +5,6 @@
  * `minLength`/`maxLength` fields; nested wins when both are set, matching
  * the source-of-truth note on `TextFieldConfig.validation`.
  *
- * Spec: §7.1 row "text".
- *
  * @module nextly/openapi/mapping/fields/text
  */
 

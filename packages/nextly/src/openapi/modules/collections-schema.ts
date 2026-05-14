@@ -2,8 +2,8 @@
  * Built-in module: `/api/collections/schema/*`.
  *
  * Schema-Builder REST surface for UI-managed collections. Distinct from
- * the dynamic CRUD routes that the generator auto-emits per collection
- * (T13); these endpoints expose the *schema metadata* itself, plus an
+ * the dynamic CRUD routes that the generator auto-emits per collection;
+ * these endpoints expose the *schema metadata* itself, plus an
  * export route the admin Schema-Builder uses to render a downloadable
  * `defineConfig({ collections: [...] })` snapshot.
  *

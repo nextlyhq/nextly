@@ -5,9 +5,6 @@
  * merge, transform) operates on a stable internal model. Only `serialize.ts`
  * knows about OAS dialect specifics; everything upstream uses this IR.
  *
- * Spec: §5.1 (module layout), §10.2 (`versions` field reserved for future
- * path-versioning), §11.6 (etag fingerprint inputs).
- *
  * @module nextly/openapi/ir
  */
 
@@ -31,9 +28,8 @@ export interface OperationIR {
   path: string;
   method: HttpMethod;
   /**
-   * Versions this operation is part of. Dormant in Phase 1: defaults to
-   * `["1.0"]` for every operation. Reserved for future path-based versioning
-   * (see spec §10.3).
+   * Versions this operation is part of. Currently dormant: defaults to
+   * `["1.0"]` for every operation. Reserved for future path-based versioning.
    */
   versions: readonly string[];
   /** Unique within the document; used by Scalar for deep-link anchors. */

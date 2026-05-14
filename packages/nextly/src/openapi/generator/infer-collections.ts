@@ -10,10 +10,8 @@
  *   - Nested-repeater item schemas: `<Name>__<Field>Item`
  *
  * Every operation declares the three security schemes (bearer / cookie /
- * api-key); per-operation access enforcement comes in Phase 2 via
+ * api-key); per-operation access enforcement is a follow-up via
  * `x-nextly-access` annotations.
- *
- * Spec: §3 (REST endpoints), §7.3 (derived schemas), §8.2 (envelopes).
  *
  * @module nextly/openapi/generator/infer-collections
  */

@@ -6,8 +6,6 @@
  * renderers can read it to enable per-language syntax highlighting in
  * request/response examples.
  *
- * Spec: §7.1 row "code".
- *
  * @module nextly/openapi/mapping/fields/code
  */
 

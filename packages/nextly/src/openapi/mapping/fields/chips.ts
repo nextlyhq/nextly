@@ -9,8 +9,6 @@
  * generic `validation.minRows` / `maxRows`. The field has no nested
  * `validation` object.
  *
- * Spec: §7.1 row "chips".
- *
  * @module nextly/openapi/mapping/fields/chips
  */
 

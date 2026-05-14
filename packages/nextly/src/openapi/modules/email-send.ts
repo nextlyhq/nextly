@@ -20,22 +20,10 @@
  */
 
 import { defineModule } from "../generator/define-module";
-import type { OperationIR, SecurityRequirementIR } from "../ir/types";
+import type { OperationIR } from "../ir/types";
 import type { OpenAPISchema } from "../types";
 
-const STANDARD_SECURITY: readonly SecurityRequirementIR[] = [
-  { bearerAuth: [] },
-  { cookieAuth: [] },
-  { apiKeyAuth: [] },
-];
-
-const STANDARD_ERROR_RESPONSES = {
-  "400": { $ref: "#/components/responses/ValidationError" },
-  "401": { $ref: "#/components/responses/Unauthorized" },
-  "403": { $ref: "#/components/responses/Forbidden" },
-  "429": { $ref: "#/components/responses/RateLimited" },
-  "500": { $ref: "#/components/responses/InternalServerError" },
-} as const;
+import { STANDARD_ERROR_RESPONSES, STANDARD_SECURITY } from "./_shared";
 
 // ────────────────────────────────────────────────────────────────────
 // Schemas

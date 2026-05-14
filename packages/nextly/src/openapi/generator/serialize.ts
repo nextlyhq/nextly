@@ -11,12 +11,10 @@
  * registered `Foo`). Catching them at serialization time produces a clear
  * error during generation rather than silent rendering of a broken doc.
  *
- * Only `schemas` and `responses` namespaces are validated in Phase 1; the
+ * Only `schemas` and `responses` namespaces are currently validated; the
  * other component types (parameters, requestBodies, examples, headers,
  * callbacks, links) pass through verbatim and rely on downstream
- * validators (`@apidevtools/openapi-schemas` in T16+).
- *
- * Spec: §11.7 (YAML), §14.4 (validation).
+ * validators (via a follow-up validator integration).
  *
  * @module nextly/openapi/generator/serialize
  */
@@ -34,10 +32,22 @@ import type {
 
 export type SerializeFormat = "json" | "yaml";
 
+// `aliasDuplicateObjects: false` tells the YAML serializer to inline
+// every duplicate object reference instead of emitting anchors / aliases.
+// We rely on this because module-level constants (e.g. shared error-
+// response maps) are referenced across many operations; emitting them
+// as YAML aliases produces output that other parsers can reject under
+// their `maxAliasCount` anti-billion-laughs guards. Inlining yields
+// slightly larger output but is portable everywhere and easier for
+// humans to read top-to-bottom.
+const YAML_STRINGIFY_OPTIONS = { aliasDuplicateObjects: false } as const;
+
 export function serialize(doc: DocumentIR, format: SerializeFormat): Buffer {
   validateRefs(doc);
   const oas = irToOas(doc);
-  if (format === "yaml") return Buffer.from(YAML.stringify(oas), "utf8");
+  if (format === "yaml") {
+    return Buffer.from(YAML.stringify(oas, YAML_STRINGIFY_OPTIONS), "utf8");
+  }
   return Buffer.from(JSON.stringify(oas, null, 2), "utf8");
 }
 
@@ -257,7 +267,7 @@ function checkRef(
     return;
   }
   // Other namespaces (parameters, requestBodies, examples, ...) pass
-  // through unvalidated in Phase 1.
+  // through unvalidated.
 }
 
 function isRefObject(v: unknown): v is { $ref: string } {

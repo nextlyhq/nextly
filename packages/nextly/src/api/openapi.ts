@@ -148,9 +148,9 @@ async function computeSchemaHash(registries: Registries): Promise<string> {
  * Resolve the configured docs renderer.
  *
  * `"scalar"` (and the default `undefined` choice) tries to dynamically
- * import `../openapi/renderer/scalar`. When the module isn't built yet
- * (Phase 1) or `@scalar/api-reference` isn't installed, the fallback
- * renderer takes over. Swagger UI / Redoc adapters land in Phase 2;
+ * import `../openapi/renderer/scalar`. When the module isn't available
+ * or `@scalar/api-reference` isn't installed, the fallback renderer
+ * takes over. Swagger UI / Redoc adapters are planned (future work);
  * for now those values also fall back so the page still renders.
  */
 async function resolveRenderer(
@@ -158,9 +158,10 @@ async function resolveRenderer(
 ): Promise<DocsUiRenderer> {
   if (name === undefined || name === "scalar") {
     // The scalar adapter is loaded dynamically so the peer dep stays
-    // optional. T25 ships the module; until then this import throws and
-    // we land on the fallback. The specifier is held in a variable so
-    // TS doesn't try to statically resolve it at compile time.
+    // optional. When the module or `@scalar/api-reference` is missing,
+    // this import throws and we land on the fallback. The specifier is
+    // held in a variable so TS doesn't try to statically resolve it at
+    // compile time.
     const specifier = "../openapi/renderer/scalar";
     try {
       const mod = (await import(specifier)) as {

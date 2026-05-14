@@ -1,17 +1,15 @@
 /**
  * Pluggable docs-UI renderer interface.
  *
- * Phase 1 ships two implementations:
+ * Ships two implementations:
  *   - `fallbackRenderer` — tiny inline HTML with install instructions.
- *   - `scalarRenderer`   — wraps `@scalar/api-reference` (T25, dynamic
+ *   - `scalarRenderer`   — wraps `@scalar/api-reference` (dynamic
  *                          import; peer-dep optional).
  *
- * Phase 2 adds Swagger UI and Redoc adapters. The interface is kept
+ * Swagger UI and Redoc adapters are planned. The interface is kept
  * minimal on purpose: every renderer ships a single page of HTML plus
  * an optional static-asset map (favicons, vendored JS bundles, etc.)
  * served from a renderer-controlled base path.
- *
- * Spec: §11.1.
  *
  * @module nextly/openapi/renderer
  */

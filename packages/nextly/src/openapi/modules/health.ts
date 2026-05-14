@@ -11,8 +11,6 @@
  * monitoring scrapers don't need an auth token to verify the service is
  * up.
  *
- * Spec: §8.1 (module inventory), §11.6 (health module).
- *
  * @module nextly/openapi/modules/health
  */
 

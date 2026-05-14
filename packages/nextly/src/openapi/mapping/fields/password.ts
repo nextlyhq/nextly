@@ -3,15 +3,13 @@
  *
  * Mapper-level: passwords are write-only on the wire. The mapper produces a
  * symmetric writeOnly schema for both input and output; the per-collection
- * schema builder (T11) is responsible for OMITTING password fields entirely
- * from response schemas. Keeping this layer pure means downstream code never
+ * schema builder is responsible for OMITTING password fields entirely from
+ * response schemas. Keeping this layer pure means downstream code never
  * has to reason about whether a "password field's read view exists" — the
  * answer is always no, enforced one level up.
  *
  * Default `minLength: 8` per the `PasswordFieldConfig` JSDoc. Authors can
  * override via either the flat `minLength` or nested `validation.minLength`.
- *
- * Spec: §7.1 row "password".
  *
  * @module nextly/openapi/mapping/fields/password
  */

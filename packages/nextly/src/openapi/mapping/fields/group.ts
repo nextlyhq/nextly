@@ -10,8 +10,6 @@
  * `properties` and `required` are produced by `composeFieldsToObjectSchema`,
  * which also handles nested groups, repeaters, and password omission.
  *
- * Spec: §7.1 row "group".
- *
  * @module nextly/openapi/mapping/fields/group
  */
 

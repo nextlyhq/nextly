@@ -2,7 +2,7 @@
  * Map `richText` fields to asymmetric input / output OpenAPI schemas.
  *
  * Rich text is the one field type whose request shape and response shape
- * intentionally differ (spec §7.1, asymmetric row):
+ * intentionally differ (asymmetric row):
  *
  *   input (POST/PATCH body): Lexical JSON state — modeled as an opaque
  *     object with an `x-nextly-richtext` extension carrying the editor
@@ -17,8 +17,6 @@
  *
  * Both shapes carry the same `x-nextly-richtext` extension so codegen
  * tools see consistent metadata regardless of direction.
- *
- * Spec: §7.1 row "richText".
  *
  * @module nextly/openapi/mapping/fields/rich-text
  */

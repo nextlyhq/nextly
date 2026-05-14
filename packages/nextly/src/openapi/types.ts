@@ -5,9 +5,9 @@
  * override slots — NOT the entire OAS 3.1 type universe. Keeps the public
  * type surface small and stable; internal IR types stay in `./ir/types`.
  *
- * Phase 1: used internally only. Phase 2 (Task 24) re-exports a subset
- * from the public `nextly/openapi` entry for `defineOpenApi`,
- * `contribute()`, and `transform()` consumers.
+ * Internal types used by the OpenAPI generator. A curated subset is
+ * re-exported from `nextly/openapi` for `defineOpenApi`, `contribute()`,
+ * and `transform()` consumers.
  *
  * @module nextly/openapi/types
  */

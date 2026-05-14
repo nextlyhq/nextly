@@ -9,8 +9,6 @@
  * Not using an external LRU library for ~4 entries — Map's insertion order
  * combined with delete-then-set gives the same semantics in ~30 lines.
  *
- * Spec: §12.4.
- *
  * @module nextly/openapi/generator/cache
  */
 

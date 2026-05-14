@@ -313,7 +313,7 @@ describe("serialize — $ref validation", () => {
 
   it("ignores non-schema/responses ref namespaces (forward-compatible)", () => {
     // OAS supports many $ref types (parameters, requestBodies, examples,
-    // headers, links, callbacks). Phase 1 only validates schemas + responses;
+    // headers, links, callbacks). Currently only validates schemas + responses;
     // others pass through so downstream validators handle them.
     const doc: DocumentIR = {
       ...minimalDoc,
@@ -324,8 +324,8 @@ describe("serialize — $ref validation", () => {
               name: "id",
               in: "path",
               required: true,
-              // Pretend this is a $ref to a parameter component — Phase 1
-              // doesn't validate that namespace.
+              // Pretend this is a $ref to a parameter component — that
+              // namespace is currently not validated here.
               schema: { $ref: "#/components/examples/SampleId" },
             },
           ],

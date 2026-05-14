@@ -1,8 +1,8 @@
 /**
  * Map `relationship` fields to OpenAPI document-reference schemas.
  *
- * Per spec §7.1 decision #8 ("Honest oneOf"), the response shape declares
- * the depth-dependent form truthfully: unpopulated returns the ID (or
+ * Per the "Honest oneOf" decision, the response shape declares the
+ * depth-dependent form truthfully: unpopulated returns the ID (or
  * polymorphic { relationTo, value }), populated returns the full document.
  *
  *   non-poly single:   input string,                output oneOf [string, $ref]
@@ -11,8 +11,6 @@
  *
  * Polymorphic schemas also carry an `x-nextly-relation-to` extension so
  * downstream tooling can list valid targets without parsing oneOf.
- *
- * Spec: §7.1 rows "relationship" (single / hasMany / polymorphic).
  *
  * @module nextly/openapi/mapping/fields/relationship
  */

@@ -4,8 +4,6 @@
  * `CheckboxFieldConfig` does NOT support `hasMany` (unlike text/number);
  * it's always a single boolean. Earlier plan revisions misclassified this.
  *
- * Spec: §7.1 row "checkbox".
- *
  * @module nextly/openapi/mapping/fields/checkbox
  */
 

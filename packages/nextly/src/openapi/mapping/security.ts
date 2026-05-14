@@ -8,8 +8,6 @@
  * Operations select one or more of these via their `security` requirement;
  * Scalar's Try-It panel exposes input boxes for whichever schemes appear.
  *
- * Spec: §9.1.
- *
  * @module nextly/openapi/mapping/security
  */
 
