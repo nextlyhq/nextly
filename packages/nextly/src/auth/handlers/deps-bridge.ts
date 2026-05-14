@@ -35,7 +35,7 @@ export function buildAuthRouterDeps(
     maxLoginAttempts: 5,
     lockoutDurationSeconds: 15 * 60, // 15 minutes
     loginStallTimeMs: 500,
-    requireEmailVerification: true,
+    requireEmailVerification: readRequireEmailVerification(getService),
     // Spec §13.2: read the host-app's auth.revealRegistrationConflict flag
     // from the registered NextlyConfig. Defaults to false (silent-success on
     // email conflict) when config is not yet initialised or the flag is
@@ -402,6 +402,35 @@ function readRevealRegistrationConflict(
 }
 
 /**
+ * Read `auth.requireEmailVerification` from the NextlyConfig registered in
+ * the DI container. Returns the spec default (false) when the container is
+ * not yet initialised or the flag is unset.
+ */
+function readRequireEmailVerification(
+  getService: (name: string) => unknown
+): boolean {
+  try {
+    const config = getService("config");
+    if (config && typeof config === "object" && "auth" in config) {
+      const auth = (config as { auth?: unknown }).auth;
+      if (
+        auth &&
+        typeof auth === "object" &&
+        "requireEmailVerification" in auth
+      ) {
+        return (
+          (auth as { requireEmailVerification?: unknown })
+            .requireEmailVerification === true
+        );
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read `admin.devAutoLogin` from the NextlyConfig registered in the DI
  * container. Returns `false` when the container isn't initialised, the
  * field is unset, or the field's shape is invalid. The runtime check in
@@ -447,10 +476,12 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
     const config = getService("config");
     if (config && typeof config === "object" && "security" in config) {
       const security = (config as { security?: unknown }).security;
-      if (security && typeof security === "object" && "trustProxy" in security) {
-        return (
-          (security as { trustProxy?: unknown }).trustProxy === true
-        );
+      if (
+        security &&
+        typeof security === "object" &&
+        "trustProxy" in security
+      ) {
+        return (security as { trustProxy?: unknown }).trustProxy === true;
       }
     }
     return false;
@@ -464,9 +495,10 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
  * DI container. Falls back to the default 30 req/IP/hour, 1-hour window
  * when unset or the container is not yet initialised.
  */
-function readAuthRateLimit(
-  getService: (name: string) => unknown
-): { requestsPerHour: number; windowMs: number } {
+function readAuthRateLimit(getService: (name: string) => unknown): {
+  requestsPerHour: number;
+  windowMs: number;
+} {
   const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
   try {
     const config = getService("config");
