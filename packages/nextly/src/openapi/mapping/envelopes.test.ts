@@ -29,6 +29,21 @@ describe("buildEnvelopeComponents", () => {
     });
   });
 
+  it("emits DeleteResponse with item.id only (not the full doc)", () => {
+    expect(schemas.DeleteResponse).toMatchObject({
+      type: "object",
+      required: ["message", "item"],
+      properties: {
+        message: { type: "string" },
+        item: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+      },
+    });
+  });
+
   it("emits BulkItemError with id/code/message", () => {
     expect(schemas.BulkItemError).toMatchObject({
       type: "object",

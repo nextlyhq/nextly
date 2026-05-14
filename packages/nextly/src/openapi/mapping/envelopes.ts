@@ -51,6 +51,22 @@ export function buildEnvelopeComponents(): EnvelopeBundle {
     description: "Returned by `GET /api/{collection}/count`.",
   };
 
+  // Delete returns `{ message, item: { id } }` — only the id, not the full
+  // document body. Reused across all collections (no name mangling needed).
+  const DeleteResponse: OpenAPISchema = {
+    type: "object",
+    required: ["message", "item"],
+    properties: {
+      message: { type: "string" },
+      item: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+      },
+    },
+    description: "Returned by `DELETE /api/{collection}/{id}`.",
+  };
+
   // Per-item error for id-keyed bulk ops (delete-by-ids, update-by-ids).
   // Mirrors `PerItemError` in api/response-shapes.ts:132.
   const BulkItemError: OpenAPISchema = {
@@ -96,6 +112,7 @@ export function buildEnvelopeComponents(): EnvelopeBundle {
     schemas: {
       PaginationMeta,
       CountResponse,
+      DeleteResponse,
       BulkItemError,
       BulkUploadItemError,
     },
