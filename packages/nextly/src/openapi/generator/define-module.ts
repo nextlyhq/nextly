@@ -1,5 +1,5 @@
 /**
- * Type contract for built-in API module contributors.
+ * Type contract + helper for built-in API module contributors.
  *
  * Each built-in module (auth, users, media, email, …) ships as a
  * `ModuleContributor` value: a small bundle of operations + supporting
@@ -7,8 +7,10 @@
  * these alongside collection / single / component configs and merges
  * everything into the final OpenAPI document.
  *
- * T17 adds the `defineModule()` identity helper used by individual module
- * files. T12 only needs the type; modules themselves land in T17–T22.
+ * `defineModule()` is an identity function that exists purely for type
+ * inference at module call sites — it lets module files declare their
+ * contribution in a single `defineModule({ … })` expression while keeping
+ * the `ModuleContributor` shape statically checked.
  *
  * @module nextly/openapi/generator/define-module
  */
@@ -25,4 +27,12 @@ export interface ModuleContributor {
   operations: readonly OperationIR[];
   /** Supporting `components/schemas` entries. */
   schemas?: Readonly<Record<string, OpenAPISchema>>;
+}
+
+/**
+ * Identity helper for declaring built-in modules. Exists for type inference;
+ * the runtime returns its argument verbatim.
+ */
+export function defineModule(m: ModuleContributor): ModuleContributor {
+  return m;
 }
