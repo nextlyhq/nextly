@@ -206,20 +206,32 @@ describe("openApiHandler", () => {
         new Request("https://example.com/admin/api/openapi")
       );
       const html = await res.text();
+      // The configured renderer (scalar by default) embeds the .json URL;
+      // the fallback embeds both .json and .yaml. Both pages must carry the
+      // .json URL — that's the contract every renderer satisfies.
       expect(html).toContain(
         "https://example.com/admin/api/openapi/openapi.json"
       );
-      expect(html).toContain(
-        "https://example.com/admin/api/openapi/openapi.yaml"
-      );
     });
 
-    it("falls back to the dependency-free renderer when scalar is not installed", async () => {
+    it("mounts the Scalar renderer by default when its module resolves", async () => {
       const res = await openApiHandler.GET(
         new Request("http://localhost/admin/api/openapi/")
       );
       const html = await res.text();
-      // The fallback page advertises the install command.
+      // Scalar embeds two specific tags that the fallback never emits.
+      expect(html).toContain('id="api-reference"');
+      expect(html).toContain("cdn.jsdelivr.net/npm/@scalar/api-reference");
+    });
+
+    it("falls back to the dependency-free renderer for non-scalar ui choices", async () => {
+      // `swagger-ui` / `redoc` adapters land in Phase 2 — until then,
+      // selecting them falls through to the fallback.
+      fixture.config = { openapi: { ui: "swagger-ui" } };
+      const res = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi/")
+      );
+      const html = await res.text();
       expect(html).toContain("pnpm add @scalar/api-reference");
     });
   });

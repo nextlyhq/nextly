@@ -236,6 +236,7 @@
     "@nextlyhq/adapter-mysql": "workspace:*",
     "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
+    "@scalar/api-reference": "^1.55.0",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0"
   },
   "peerDependenciesMeta": {
@@ -246,6 +247,9 @@
       "optional": true
     },
     "@nextlyhq/adapter-sqlite": {
+      "optional": true
+    },
+    "@scalar/api-reference": {
       "optional": true
     }
   },
