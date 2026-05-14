@@ -9,6 +9,8 @@
  * we delegate directly. For new operations (refresh tokens, brute-force tracking),
  * we use the database adapter directly.
  */
+import type { SanitizedNextlyConfig } from "@nextly/collections";
+
 import { getDialectTables } from "../../database/index";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
@@ -410,13 +412,8 @@ function readRequireEmailVerification(
   getService: (name: string) => unknown
 ): boolean {
   try {
-    const config = getService("config") as {
-      auth?: {
-        requireEmailVerification?: boolean;
-      };
-    };
-
-    return config?.auth?.requireEmailVerification === true;
+    const config = getService("config") as SanitizedNextlyConfig;
+    return config.auth.requireEmailVerification;
   } catch {
     return false;
   }
