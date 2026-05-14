@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCollectionEnvelopes, buildEnvelopeComponents } from "./envelopes";
+import {
+  buildCollectionEnvelopes,
+  buildEnvelopeComponents,
+  buildSingleEnvelopes,
+} from "./envelopes";
 
 describe("buildEnvelopeComponents", () => {
   const { schemas } = buildEnvelopeComponents();
@@ -124,6 +128,35 @@ describe("buildCollectionEnvelopes", () => {
 
   it("emits nothing when given an empty array", () => {
     const { schemas } = buildCollectionEnvelopes([]);
+    expect(Object.keys(schemas)).toEqual([]);
+  });
+});
+
+describe("buildSingleEnvelopes", () => {
+  it("emits ONLY MutationResponse<Name> per single (no List, no Bulk)", () => {
+    const { schemas } = buildSingleEnvelopes(["SiteSettings"]);
+    expect(Object.keys(schemas)).toEqual(["MutationResponseSiteSettings"]);
+    expect(schemas.MutationResponseSiteSettings).toMatchObject({
+      type: "object",
+      required: ["message", "item"],
+      properties: {
+        message: { type: "string" },
+        item: { $ref: "#/components/schemas/SiteSettings" },
+      },
+    });
+  });
+
+  it("emits one MutationResponse per name passed in", () => {
+    const { schemas } = buildSingleEnvelopes(["Site", "Header", "Footer"]);
+    expect(Object.keys(schemas).sort()).toEqual([
+      "MutationResponseFooter",
+      "MutationResponseHeader",
+      "MutationResponseSite",
+    ]);
+  });
+
+  it("returns no schemas for an empty array", () => {
+    const { schemas } = buildSingleEnvelopes([]);
     expect(Object.keys(schemas)).toEqual([]);
   });
 });

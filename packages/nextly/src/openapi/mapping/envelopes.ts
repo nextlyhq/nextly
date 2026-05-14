@@ -119,6 +119,49 @@ export function buildEnvelopeComponents(): EnvelopeBundle {
   };
 }
 
+function makeMutationResponse(name: string): OpenAPISchema {
+  return {
+    type: "object",
+    required: ["message", "item"],
+    properties: {
+      message: { type: "string" },
+      item: { $ref: `#/components/schemas/${name}` },
+    },
+  };
+}
+
+function makeListResponse(name: string): OpenAPISchema {
+  return {
+    type: "object",
+    required: ["items", "meta"],
+    properties: {
+      items: {
+        type: "array",
+        items: { $ref: `#/components/schemas/${name}` },
+      },
+      meta: { $ref: "#/components/schemas/PaginationMeta" },
+    },
+  };
+}
+
+function makeBulkResponse(name: string): OpenAPISchema {
+  return {
+    type: "object",
+    required: ["message", "items", "errors"],
+    properties: {
+      message: { type: "string" },
+      items: {
+        type: "array",
+        items: { $ref: `#/components/schemas/${name}` },
+      },
+      errors: {
+        type: "array",
+        items: { $ref: "#/components/schemas/BulkItemError" },
+      },
+    },
+  };
+}
+
 /**
  * Per-collection envelopes: emits `ListResponse<Name>`, `MutationResponse<Name>`,
  * `BulkResponse<Name>` for each provided schema name. The `<Name>` must already
@@ -129,40 +172,25 @@ export function buildCollectionEnvelopes(
 ): EnvelopeBundle {
   const schemas: Record<string, OpenAPISchema> = {};
   for (const name of schemaNames) {
-    schemas[`ListResponse${name}`] = {
-      type: "object",
-      required: ["items", "meta"],
-      properties: {
-        items: {
-          type: "array",
-          items: { $ref: `#/components/schemas/${name}` },
-        },
-        meta: { $ref: "#/components/schemas/PaginationMeta" },
-      },
-    };
-    schemas[`MutationResponse${name}`] = {
-      type: "object",
-      required: ["message", "item"],
-      properties: {
-        message: { type: "string" },
-        item: { $ref: `#/components/schemas/${name}` },
-      },
-    };
-    schemas[`BulkResponse${name}`] = {
-      type: "object",
-      required: ["message", "items", "errors"],
-      properties: {
-        message: { type: "string" },
-        items: {
-          type: "array",
-          items: { $ref: `#/components/schemas/${name}` },
-        },
-        errors: {
-          type: "array",
-          items: { $ref: "#/components/schemas/BulkItemError" },
-        },
-      },
-    };
+    schemas[`ListResponse${name}`] = makeListResponse(name);
+    schemas[`MutationResponse${name}`] = makeMutationResponse(name);
+    schemas[`BulkResponse${name}`] = makeBulkResponse(name);
+  }
+  return { schemas };
+}
+
+/**
+ * Per-single envelopes: emits ONLY `MutationResponse<Name>` per provided
+ * name. Singles have no list / count / bulk variants (there's exactly one
+ * document per Single), so we don't generate `ListResponse<Name>` or
+ * `BulkResponse<Name>` — those would be dead weight in the spec.
+ */
+export function buildSingleEnvelopes(
+  schemaNames: readonly string[]
+): EnvelopeBundle {
+  const schemas: Record<string, OpenAPISchema> = {};
+  for (const name of schemaNames) {
+    schemas[`MutationResponse${name}`] = makeMutationResponse(name);
   }
   return { schemas };
 }

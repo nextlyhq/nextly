@@ -24,6 +24,7 @@
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
+import type { SingleConfig } from "../../singles/config/types";
 import type { OpenAPISchema } from "../types";
 
 import { collectionSchemaName, pascalize } from "./_inflect";
@@ -119,6 +120,78 @@ export function deriveCollectionSchemas(
 }
 
 /**
+ * Derive Read + Update schemas for a Single.
+ *
+ * Singles are singletons: there is no Create variant (the runtime
+ * auto-initializes the document on first read) and no Delete. The Read
+ * schema includes system fields (id, createdAt, updatedAt, and _status
+ * when status: true). SingleConfig has no `timestamps` toggle, so
+ * createdAt/updatedAt are always present on the Read schema.
+ *
+ * Spec: §3 (Singles), §7.3.
+ */
+export function deriveSingleSchemas(single: SingleConfig): DerivedSchemas {
+  const baseName = collectionSchemaName(single.slug, single.label?.singular);
+  const ctx: MappingContext = {
+    schemaRef: n => ({ $ref: `#/components/schemas/${n}` }),
+    ownerSlug: baseName,
+    fieldPath: `singles.${single.slug}`,
+  };
+
+  const composed = composeFieldsToObjectSchema(single.fields, ctx);
+
+  // Read schema: user fields + system fields (timestamps always; _status conditional).
+  const readProperties: Record<string, OpenAPISchema> = {
+    ...((composed.output as { properties?: Record<string, OpenAPISchema> })
+      .properties ?? {}),
+  };
+  readProperties.id = { type: "string", readOnly: true };
+  readProperties.createdAt = {
+    type: "string",
+    format: "date-time",
+    readOnly: true,
+  };
+  readProperties.updatedAt = {
+    type: "string",
+    format: "date-time",
+    readOnly: true,
+  };
+  if (single.status === true) {
+    readProperties._status = {
+      type: "string",
+      enum: ["draft", "published"],
+      readOnly: true,
+    };
+  }
+
+  const ReadSchema: OpenAPISchema = {
+    type: "object",
+    properties: readProperties,
+  };
+  const readRequired = (composed.output as { required?: string[] }).required;
+  if (readRequired && readRequired.length > 0) {
+    ReadSchema.required = readRequired;
+  }
+
+  // Update schema: user fields only, all optional (partial update).
+  const inputProperties =
+    (composed.input as { properties?: Record<string, OpenAPISchema> })
+      .properties ?? {};
+  const UpdateSchema: OpenAPISchema = {
+    type: "object",
+    properties: { ...inputProperties },
+  };
+
+  return {
+    schemas: {
+      [baseName]: ReadSchema,
+      [`Update${baseName}`]: UpdateSchema,
+    },
+    baseName,
+  };
+}
+
+/**
  * Walk the field tree and register one schema per repeater. Each registered
  * schema is the row body (composed via the standard composer) under the name
  * `<BaseName>__<FieldName>Item`.
@@ -127,17 +200,17 @@ export function deriveCollectionSchemas(
  * nested structures are fully covered.
  */
 export function deriveNestedItemSchemas(
-  collection: CollectionConfig,
+  owner: { slug: string; fields: readonly FieldConfig[] },
   baseName: string
 ): Record<string, OpenAPISchema> {
   const schemas: Record<string, OpenAPISchema> = {};
   const baseCtx: MappingContext = {
     schemaRef: n => ({ $ref: `#/components/schemas/${n}` }),
     ownerSlug: baseName,
-    fieldPath: `collections.${collection.slug}`,
+    fieldPath: owner.slug,
   };
 
-  walkFields(collection.fields, baseCtx.fieldPath, (field, path) => {
+  walkFields(owner.fields, baseCtx.fieldPath, (field, path) => {
     if (field.type !== "repeater") return;
     const repeater = field as {
       name: string;
