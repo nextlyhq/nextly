@@ -19,11 +19,13 @@ const fixture: {
   singles: SingleConfig[];
   components: ComponentConfig[];
   servicesRegistered: boolean;
+  config: { openapi?: unknown } | null;
 } = {
   collections: [],
   singles: [],
   components: [],
   servicesRegistered: true,
+  config: null,
 };
 
 vi.mock("../di", () => ({
@@ -38,6 +40,12 @@ vi.mock("../di", () => ({
     if (name === "componentRegistryService") {
       return { getAllComponents: async () => fixture.components };
     }
+    if (name === "config") {
+      if (!fixture.config) {
+        throw new Error("config not registered");
+      }
+      return fixture.config;
+    }
     throw new Error(`Unexpected DI lookup in test: ${name}`);
   },
 }));
@@ -50,6 +58,7 @@ beforeEach(() => {
   fixture.singles = [];
   fixture.components = [];
   fixture.servicesRegistered = true;
+  fixture.config = null;
 });
 
 describe("openApiHandler", () => {
@@ -180,14 +189,105 @@ describe("openApiHandler", () => {
     });
   });
 
-  describe("unknown paths", () => {
-    it("returns 404 when the request path does not end in .json/.yaml/.yml", async () => {
+  describe("docs UI route", () => {
+    it("any non-.json/.yaml suffix renders the docs page", async () => {
       const res = await openApiHandler.GET(
-        new Request("http://localhost/admin/api/openapi/spec")
+        new Request("http://localhost/admin/api/openapi")
       );
-      expect(res.status).toBe(404);
-      const body = (await res.json()) as { error: { code: string } };
-      expect(body.error.code).toBe("NOT_FOUND");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      const html = await res.text();
+      expect(html).toContain("<!doctype html>");
+      expect(html).toContain("Nextly API");
+    });
+
+    it("derives the spec URL from the request URL (same mount path)", async () => {
+      const res = await openApiHandler.GET(
+        new Request("https://example.com/admin/api/openapi")
+      );
+      const html = await res.text();
+      expect(html).toContain(
+        "https://example.com/admin/api/openapi/openapi.json"
+      );
+      expect(html).toContain(
+        "https://example.com/admin/api/openapi/openapi.yaml"
+      );
+    });
+
+    it("falls back to the dependency-free renderer when scalar is not installed", async () => {
+      const res = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi/")
+      );
+      const html = await res.text();
+      // The fallback page advertises the install command.
+      expect(html).toContain("pnpm add @scalar/api-reference");
+    });
+  });
+
+  describe("config overrides via OpenApiConfig", () => {
+    it("info.title flows into the spec and the docs page", async () => {
+      fixture.config = {
+        openapi: {
+          info: { title: "Acme API", version: "9.9.9" },
+        },
+      };
+
+      const json = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi/openapi.json")
+      );
+      const body = (await json.json()) as {
+        info: { title: string; version: string };
+      };
+      expect(body.info.title).toBe("Acme API");
+      expect(body.info.version).toBe("9.9.9");
+
+      const ui = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi")
+      );
+      const html = await ui.text();
+      expect(html).toContain("<title>Acme API</title>");
+    });
+
+    it("servers flow through to the generated document", async () => {
+      fixture.config = {
+        openapi: {
+          servers: [
+            { url: "https://api.acme.com", description: "prod" },
+            { url: "https://staging.acme.com" },
+          ],
+        },
+      };
+
+      const res = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi/openapi.json")
+      );
+      const body = (await res.json()) as {
+        servers: { url: string; description?: string }[];
+      };
+      expect(body.servers).toEqual([
+        { url: "https://api.acme.com", description: "prod" },
+        { url: "https://staging.acme.com" },
+      ]);
+    });
+
+    it("cache.maxAgeSeconds is reflected in the cache-control header", async () => {
+      fixture.config = { openapi: { cache: { maxAgeSeconds: 3600 } } };
+
+      const res = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi/openapi.json")
+      );
+      expect(res.headers.get("cache-control")).toBe(
+        "public, max-age=3600, must-revalidate"
+      );
+    });
+
+    it("cache.enabled=false emits `no-store`", async () => {
+      fixture.config = { openapi: { cache: { enabled: false } } };
+
+      const res = await openApiHandler.GET(
+        new Request("http://localhost/admin/api/openapi/openapi.json")
+      );
+      expect(res.headers.get("cache-control")).toBe("no-store");
     });
   });
 

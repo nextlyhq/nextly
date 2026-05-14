@@ -80,10 +80,9 @@ async function ensureServicesInitialized(): Promise<void> {
       if (nextlyConfig.users) serviceConfig.users = nextlyConfig.users;
       if (nextlyConfig.admin) serviceConfig.admin = nextlyConfig.admin;
       if (nextlyConfig.auth) serviceConfig.auth = nextlyConfig.auth;
-      if (nextlyConfig.security)
-        serviceConfig.security = nextlyConfig.security;
-      if (nextlyConfig.apiKeys)
-        serviceConfig.apiKeys = nextlyConfig.apiKeys;
+      if (nextlyConfig.security) serviceConfig.security = nextlyConfig.security;
+      if (nextlyConfig.apiKeys) serviceConfig.apiKeys = nextlyConfig.apiKeys;
+      if (nextlyConfig.openapi) serviceConfig.openapi = nextlyConfig.openapi;
       if (nextlyConfig.db) {
         const dbConfig = nextlyConfig.db as Record<string, unknown>;
         if (dbConfig.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;
@@ -229,7 +228,7 @@ export async function handleAuthRequest(
   const authPath = params.slice(1).join("/");
 
   // Build deps from DI container and route to the appropriate handler
-   
+
   const deps = buildAuthRouterDeps(getService as (name: string) => unknown);
   const response = await routeAuthRequest(req, authPath, deps);
 

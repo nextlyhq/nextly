@@ -47,6 +47,7 @@ import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import type { OpenApiConfig } from "../openapi";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -183,6 +184,13 @@ export interface NextlyServiceConfig {
    * Same rationale as admin: carried through so handlers can read it.
    */
   auth?: AuthConfig;
+
+  /**
+   * OpenAPI configuration carried through from `nextly.config.ts`. The
+   * `nextly/api/openapi` handler reads `info`, `servers`, `ui`, `cache`,
+   * etc. from this slot.
+   */
+  openapi?: OpenApiConfig;
 }
 
 // ============================================================
@@ -633,7 +641,6 @@ async function initializeSchemaRegistry(
   }
 }
 
-
 /**
  * Register every code-first collection and single from the config as a
  * runtime Drizzle schema in the resolver. Complements `loadDynamicTables`
@@ -717,7 +724,6 @@ async function registerConfigTablesInResolver(
     }
   }
 }
-
 
 function logStorageConfiguration(
   mediaStorage: MediaStorage,
@@ -930,8 +936,7 @@ async function syncCodeFirstCollections(
         slug: collection.slug,
         tableName,
         fields: collection.fields ?? [],
-        status:
-          (collection as { status?: boolean }).status === true,
+        status: (collection as { status?: boolean }).status === true,
       };
       slugsAfterFilter.push(collection.slug);
     }
@@ -1306,8 +1311,7 @@ async function reconcileSingleTablesForBoot(
         let hasStatus = false;
         if (codeFirstConfig) {
           fields = codeFirstConfig.fields as unknown as FieldDefinition[];
-          hasStatus =
-            (codeFirstConfig as { status?: boolean }).status === true;
+          hasStatus = (codeFirstConfig as { status?: boolean }).status === true;
         } else {
           const record = await singleRegistry.getSingleBySlug(single.slug);
           if (!record) {
@@ -1361,10 +1365,7 @@ async function reconcileSingleTablesForBoot(
             const resolver = (
               adapter as unknown as {
                 tableResolver?: {
-                  registerDynamicSchema?: (
-                    name: string,
-                    t: unknown
-                  ) => void;
+                  registerDynamicSchema?: (name: string, t: unknown) => void;
                 };
               }
             ).tableResolver;

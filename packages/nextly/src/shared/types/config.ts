@@ -15,6 +15,7 @@ import type { ComponentConfig } from "../../components/config/types";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
+import type { OpenApiConfig } from "../../openapi";
 import type { AdminPlacement } from "../../plugins/admin-placement";
 import type {
   PluginAdminAppearance,
@@ -582,6 +583,16 @@ export interface NextlyConfig {
 
   /** Admin UI customization. */
   admin?: AdminConfig;
+
+  /**
+   * OpenAPI spec + docs-UI configuration.
+   *
+   * Slots into the `nextly/api/openapi` handler so user-supplied
+   * `info`, `servers`, `ui`, `access`, and `cache` settings flow through
+   * to both `/openapi.json|yaml` and the docs page. Build the value with
+   * `defineOpenApi(...)` for type inference at the call site.
+   */
+  openapi?: OpenApiConfig;
 }
 
 /**
@@ -645,6 +656,12 @@ export interface SanitizedNextlyConfig {
 
   /** Admin UI customization config. */
   admin?: AdminConfig;
+
+  /**
+   * OpenAPI configuration. Carried through from `defineConfig()` so the
+   * `nextly/api/openapi` handler can pick up user-supplied overrides.
+   */
+  openapi?: OpenApiConfig;
 }
 
 // ============================================================

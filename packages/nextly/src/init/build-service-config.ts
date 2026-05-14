@@ -151,6 +151,13 @@ export function buildServiceConfig(
     if (!serviceConfig.auth && nextlyConfig?.auth) {
       serviceConfig.auth = nextlyConfig.auth;
     }
+
+    // OpenAPI config (info, servers, ui renderer, cache) - carry through
+    // so the `nextly/api/openapi` handler can pick up user-supplied
+    // overrides from `defineConfig({ openapi: defineOpenApi({...}) })`.
+    if (!serviceConfig.openapi && nextlyConfig?.openapi) {
+      serviceConfig.openapi = nextlyConfig.openapi;
+    }
   }
 
   // Ensure imageProcessor is always provided

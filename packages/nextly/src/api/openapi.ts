@@ -1,8 +1,8 @@
 /**
- * Route handler for `admin/api/openapi/openapi.json` and `.yaml`.
+ * Route handler for `admin/api/openapi/*` — spec + docs UI.
  *
  * Re-export from your Next.js app under whatever path you mount the
- * OpenAPI docs at:
+ * OpenAPI surface at:
  *
  * @example
  * ```ts
@@ -13,16 +13,22 @@
  * // app/admin/api/openapi/openapi.yaml/route.ts
  * import { openApiHandler } from "nextly/api/openapi";
  * export const GET = openApiHandler.GET;
+ *
+ * // app/admin/api/openapi/route.ts   <- docs UI
+ * import { openApiHandler } from "nextly/api/openapi";
+ * export const GET = openApiHandler.GET;
  * ```
  *
- * The handler dispatches based on the request path suffix
- * (`.json` vs `.yaml`), serves both representations from the same cache,
- * and supports conditional GET via the `If-None-Match` header.
+ * The handler dispatches on the request path suffix:
+ *   /openapi.json  → JSON spec
+ *   /openapi.yaml  → YAML spec
+ *   /openapi.yml   → YAML spec (alias)
+ *   anything else  → docs UI page (HTML)
  *
- * Phase 1 deliberately keeps the document `info` field bound to hardcoded
- * defaults (`Nextly API` / `1.0.0`). T24 introduces `defineOpenApi()`,
- * which threads user-supplied `info` / `servers` / module-list overrides
- * through this handler.
+ * It pulls `info`, `servers`, `cache`, and `ui` overrides from the
+ * `openapi` slot in `defineConfig({...})`; missing values fall back to
+ * the package defaults (`"Nextly API"` / `"1.0.0"`, default cache
+ * windows, Scalar UI when installed).
  *
  * @module nextly/api/openapi
  */
@@ -33,9 +39,12 @@ import type { CollectionConfig } from "../collections/config/define-collection";
 import type { ComponentConfig } from "../components/config/types";
 import { getService, isServicesRegistered } from "../di";
 import { NextlyError } from "../errors/nextly-error";
+import type { OpenApiConfig } from "../openapi";
 import type { Registries } from "../openapi/generator/collect";
 import { generate } from "../openapi/generator/pipeline";
 import { builtinModules } from "../openapi/modules";
+import { fallbackRenderer } from "../openapi/renderer/fallback";
+import type { DocsUiRenderer } from "../openapi/renderer/interface";
 import type { SingleConfig } from "../singles/config/types";
 
 const FORMAT_BY_SUFFIX: Record<string, "json" | "yaml"> = {
@@ -49,6 +58,19 @@ function detectFormat(pathname: string): "json" | "yaml" | null {
     if (pathname.endsWith(suffix)) return format;
   }
   return null;
+}
+
+function readOpenApiConfig(): OpenApiConfig {
+  try {
+    const cfg = getService("config");
+    return cfg.openapi ?? {};
+  } catch {
+    // DI "config" service may not be registered in lightweight contexts
+    // (e.g. direct dispatcher tests). Fall back to package defaults
+    // rather than throwing — the spec endpoint still works without
+    // any user overrides.
+    return {};
+  }
 }
 
 /**
@@ -121,23 +143,48 @@ async function computeSchemaHash(registries: Registries): Promise<string> {
   return createHash("sha1").update(parts.join("\n")).digest("hex");
 }
 
-async function handleGet(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const format = detectFormat(url.pathname);
-  if (!format) {
-    return new Response(
-      JSON.stringify({
-        error: {
-          code: "NOT_FOUND",
-          message:
-            "OpenAPI document not found. Mount the handler at " +
-            "`/openapi.json` or `/openapi.yaml`.",
-        },
-      }),
-      { status: 404, headers: { "content-type": "application/json" } }
-    );
+/**
+ * Resolve the configured docs renderer.
+ *
+ * `"scalar"` (and the default `undefined` choice) tries to dynamically
+ * import `../openapi/renderer/scalar`. When the module isn't built yet
+ * (Phase 1) or `@scalar/api-reference` isn't installed, the fallback
+ * renderer takes over. Swagger UI / Redoc adapters land in Phase 2;
+ * for now those values also fall back so the page still renders.
+ */
+async function resolveRenderer(
+  name?: OpenApiConfig["ui"]
+): Promise<DocsUiRenderer> {
+  if (name === undefined || name === "scalar") {
+    // The scalar adapter is loaded dynamically so the peer dep stays
+    // optional. T25 ships the module; until then this import throws and
+    // we land on the fallback. The specifier is held in a variable so
+    // TS doesn't try to statically resolve it at compile time.
+    const specifier = "../openapi/renderer/scalar";
+    try {
+      const mod = (await import(specifier)) as {
+        scalarRenderer?: DocsUiRenderer;
+      };
+      if (mod.scalarRenderer) return mod.scalarRenderer;
+    } catch {
+      // Module missing or `@scalar/api-reference` peer dep not installed.
+    }
   }
+  return fallbackRenderer;
+}
 
+function makeCacheControl(cache: OpenApiConfig["cache"]): string {
+  const enabled = cache?.enabled !== false;
+  if (!enabled) return "no-store";
+  const maxAge = Math.max(0, Math.floor(cache?.maxAgeSeconds ?? 60));
+  return `public, max-age=${maxAge}, must-revalidate`;
+}
+
+async function handleSpec(
+  req: Request,
+  format: "json" | "yaml",
+  config: OpenApiConfig
+): Promise<Response> {
   if (!isServicesRegistered()) {
     throw NextlyError.serviceUnavailable({
       logMessage:
@@ -152,9 +199,11 @@ async function handleGet(req: Request): Promise<Response> {
     registries,
     modules: [...builtinModules],
     info: {
-      title: "Nextly API",
-      version: "1.0.0",
+      title: config.info?.title ?? "Nextly API",
+      version: config.info?.version ?? "1.0.0",
+      ...(config.info ?? {}),
     },
+    servers: config.servers,
     schemaHash,
     format,
   });
@@ -167,9 +216,6 @@ async function handleGet(req: Request): Promise<Response> {
     });
   }
 
-  // `result.body` is a Node `Buffer`. The project's TS lib config doesn't
-  // include Buffer in `BodyInit`, so decode to UTF-8 string here — the
-  // generator only ever emits text payloads (JSON / YAML).
   const body = result.body.toString("utf8");
 
   return new Response(body, {
@@ -177,10 +223,47 @@ async function handleGet(req: Request): Promise<Response> {
     headers: {
       "content-type": result.contentType,
       etag: result.etag,
-      "cache-control": "public, max-age=60, must-revalidate",
+      "cache-control": makeCacheControl(config.cache),
       vary: "accept, accept-encoding",
     },
   });
+}
+
+async function handleDocsUi(
+  req: Request,
+  config: OpenApiConfig
+): Promise<Response> {
+  const url = new URL(req.url);
+  // Drop a trailing slash and append the JSON spec sibling so the
+  // renderer can fetch it directly from the same mount point.
+  const pathname = url.pathname.replace(/\/$/, "");
+  const specUrl = new URL(`${pathname}/openapi.json`, url).toString();
+
+  const renderer = await resolveRenderer(config.ui);
+  const { html } = renderer.render({
+    specUrl,
+    title: config.info?.title ?? "Nextly API",
+  });
+
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": makeCacheControl(config.cache),
+    },
+  });
+}
+
+async function handleGet(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const config = readOpenApiConfig();
+  const format = detectFormat(url.pathname);
+
+  if (format) {
+    return handleSpec(req, format, config);
+  }
+
+  return handleDocsUi(req, config);
 }
 
 export const openApiHandler = {
