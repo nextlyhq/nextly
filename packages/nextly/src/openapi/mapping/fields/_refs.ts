@@ -10,32 +10,20 @@
  */
 
 import type { OpenAPISchema } from "../../types";
+import { collectionSchemaName } from "../_inflect";
 
 /**
  * Convert a collection slug to its OAS schema name.
  *
- * Naive English-pluralization rules — good enough for `users → User`,
- * `categories → Category`, `media → Media`. T11 will replace with the
- * proper inflector that honors `collection.labels.singular`.
+ * Delegates to `collectionSchemaName` in `_inflect.ts`. Kept as a thin
+ * alias so `relationship.ts` and `upload.ts` (which were written before
+ * the inflector module existed) don't need import-path churn. Callers
+ * that want to honor `collection.labels.singular` should import
+ * `collectionSchemaName` directly from `../_inflect` and pass the label
+ * — `slugToSchemaName` only sees the slug.
  */
 export function slugToSchemaName(slug: string): string {
-  let singular = slug;
-  if (singular.endsWith("ies")) {
-    singular = `${singular.slice(0, -3)}y`;
-  } else if (
-    singular.endsWith("ses") ||
-    singular.endsWith("xes") ||
-    singular.endsWith("zes")
-  ) {
-    singular = singular.slice(0, -2);
-  } else if (singular.endsWith("s") && !singular.endsWith("ss")) {
-    singular = singular.slice(0, -1);
-  }
-  return singular
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join("");
+  return collectionSchemaName(slug);
 }
 
 /**
