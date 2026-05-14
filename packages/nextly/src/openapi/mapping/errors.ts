@@ -11,13 +11,14 @@
  */
 
 import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
-import type { OpenAPIResponse, OpenAPISchema } from "../types";
+import type { ResponseIR } from "../ir/types";
+import type { OpenAPISchema } from "../types";
 
 const ERROR_CODES: readonly string[] = Object.keys(NEXTLY_ERROR_STATUS);
 
 export interface ErrorBundle {
   schemas: Record<string, OpenAPISchema>;
-  responses: Record<string, OpenAPIResponse>;
+  responses: Record<string, ResponseIR>;
 }
 
 export function buildErrorComponents(): ErrorBundle {
@@ -60,7 +61,7 @@ export function buildErrorComponents(): ErrorBundle {
       "Canonical error envelope. Every 4xx / 5xx response uses this shape.",
   };
 
-  const mkResponse = (description: string): OpenAPIResponse => ({
+  const mkResponse = (description: string): ResponseIR => ({
     description,
     content: {
       "application/json": { schema: { $ref: "#/components/schemas/Error" } },
