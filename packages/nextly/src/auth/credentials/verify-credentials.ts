@@ -109,11 +109,15 @@ export async function verifyCredentials(
   }
   if (deps.requireEmailVerification && !user.emailVerified) {
     throw NextlyError.invalidCredentials({
+      code: "AUTH_UNVERIFIED",
+      publicMessage: "Please verify your email to log in.",
       logContext: { userId: user.id, reason: "unverified" },
     });
   }
   if (!user.isActive) {
     throw NextlyError.invalidCredentials({
+      code: "AUTH_INACTIVE",
+      publicMessage: "Your account is inactive. Please contact support.",
       logContext: { userId: user.id, reason: "inactive" },
     });
   }
