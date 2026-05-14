@@ -12,6 +12,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { mapCheckboxField } from "./checkbox";
 import { mapChipsField } from "./chips";
 import { mapCodeField } from "./code";
+import { mapComponentField } from "./component";
 import { mapDateField } from "./date";
 import { mapEmailField } from "./email";
 import { mapGroupField } from "./group";
@@ -32,6 +33,7 @@ export const fieldMappers: Partial<Record<FieldConfig["type"], FieldMapper>> = {
   checkbox: mapCheckboxField as FieldMapper,
   chips: mapChipsField as FieldMapper,
   code: mapCodeField as FieldMapper,
+  component: mapComponentField as FieldMapper,
   date: mapDateField as FieldMapper,
   email: mapEmailField as FieldMapper,
   group: mapGroupField as FieldMapper,
