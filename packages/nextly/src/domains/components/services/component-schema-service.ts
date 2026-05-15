@@ -81,7 +81,7 @@ const SQL_COLUMN_TYPES: Record<
     boolean: "BOOLEAN",
     integer: "INTEGER",
     real: "REAL",
-    timestamp: "TIMESTAMP WITH TIME ZONE",
+    timestamp: "TIMESTAMP",
     json: "JSONB",
   },
   mysql: {
@@ -123,8 +123,7 @@ export class ComponentSchemaService {
   private readonly q: string;
 
   constructor(dialect?: SupportedDialect) {
-    this.dialect =
-      dialect || env.DB_DIALECT || "postgresql";
+    this.dialect = dialect || env.DB_DIALECT || "postgresql";
     this.q = QUOTE_CHAR[this.dialect];
   }
 
@@ -988,7 +987,11 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (isNumberField(field)) imports.add("double");
         if (isCheckboxField(field)) imports.add("boolean");
         if (isDateField(field)) imports.add("timestamp");
-        if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+        if (
+          isRepeaterField(field) ||
+          isGroupField(field) ||
+          isJSONField(field)
+        ) {
           imports.add("json");
         }
       } else {
@@ -1004,7 +1007,11 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
         if (isNumberField(field)) imports.add("doublePrecision");
         if (isCheckboxField(field)) imports.add("boolean");
         if (isDateField(field)) imports.add("timestamp");
-        if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
+        if (
+          isRepeaterField(field) ||
+          isGroupField(field) ||
+          isJSONField(field)
+        ) {
           imports.add("jsonb");
         }
       }

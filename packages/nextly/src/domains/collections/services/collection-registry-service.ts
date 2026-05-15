@@ -126,6 +126,8 @@ export class CollectionRegistryService extends BaseRegistryService<
   protected readonly tableNamePrefix = "dc_";
 
   private permissionSeedService?: PermissionSeedService;
+  /** Invoked when code-first sync resolves a new `tableName` for an existing slug. */
+  private onTableNameChanged?: (slug: string) => void;
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -138,6 +140,11 @@ export class CollectionRegistryService extends BaseRegistryService<
   /** Set the PermissionSeedService for auto-seeding permissions on collection sync. */
   setPermissionSeedService(service: PermissionSeedService): void {
     this.permissionSeedService = service;
+  }
+
+  /** Register a callback fired when sync resolves a new `tableName` for a slug. */
+  setOnTableNameChanged(callback: (slug: string) => void): void {
+    this.onTableNameChanged = callback;
   }
 
   async getCollectionBySlug(
@@ -347,6 +354,10 @@ export class CollectionRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    // Writeable so code-first sync can reconcile a changed `dbName`.
+    if (data.tableName !== undefined) {
+      updateData.table_name = this.ensureTableNamePrefix(data.tableName);
+    }
 
     try {
       const results = await this.adapter.update<DynamicCollectionRecord>(
@@ -423,12 +434,15 @@ export class CollectionRegistryService extends BaseRegistryService<
       try {
         const existing = await this.getCollectionBySlug(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
+        const desiredTableName = config.tableName
+          ? this.ensureTableNamePrefix(config.tableName)
+          : this.generateTableName(config.slug);
 
         if (!existing) {
           await this.registerCollection({
             slug: config.slug,
             labels: config.labels,
-            tableName: config.tableName ?? this.generateTableName(config.slug),
+            tableName: desiredTableName,
             description: config.description,
             fields: config.fields,
             timestamps: config.timestamps ?? true,
@@ -445,11 +459,19 @@ export class CollectionRegistryService extends BaseRegistryService<
           await this.seedPermissionsForCollection(config.slug);
         } else if (
           !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.status === true) !== (existing.status === true)
+          (config.status === true) !== (existing.status === true) ||
+          desiredTableName !== existing.tableName
         ) {
-          // Either fields changed or the status toggle flipped — both warrant
-          // a write so dynamic_collections.status stays in sync with the
-          // code-first config.
+          // Fields changed, status toggle flipped, or `dbName` resolved to a
+          // new physical table — all three need to be written through.
+          if (desiredTableName !== existing.tableName) {
+            await this.renamePhysicalTableIfPossible(
+              existing.tableName,
+              desiredTableName,
+              config.slug
+            );
+            this.onTableNameChanged?.(config.slug);
+          }
           await this.updateCollection(
             config.slug,
             {
@@ -462,6 +484,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               schemaHash,
               locked: true,
               status: config.status === true,
+              tableName: desiredTableName,
             },
             { source: "code" }
           );
@@ -613,6 +636,47 @@ export class CollectionRegistryService extends BaseRegistryService<
     );
 
     return this.deserializeRecord(result);
+  }
+
+  /**
+   * Rename the physical table when a code-first collection's `dbName` changes.
+   * Renames only when old exists and new doesn't; warns when both exist; no-op
+   * otherwise (boot auto-create handles the missing-table case).
+   */
+  private async renamePhysicalTableIfPossible(
+    oldTableName: string,
+    newTableName: string,
+    slug: string
+  ): Promise<void> {
+    let oldExists: boolean;
+    let newExists: boolean;
+    try {
+      oldExists = await this.adapter.tableExists(oldTableName);
+      newExists = await this.adapter.tableExists(newTableName);
+    } catch (error) {
+      this.logger.warn(
+        `Skipping rename for collection "${slug}": table introspection failed (${error instanceof Error ? error.message : String(error)}). Boot pipeline will reconcile.`
+      );
+      return;
+    }
+
+    if (oldExists && !newExists) {
+      try {
+        const { dialect } = this.adapter.getCapabilities();
+        const q = dialect === "mysql" ? "`" : '"';
+        await this.adapter.executeQuery(
+          `ALTER TABLE ${q}${oldTableName}${q} RENAME TO ${q}${newTableName}${q}`
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to rename physical table for collection "${slug}" (${oldTableName} → ${newTableName}): ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    } else if (oldExists && newExists) {
+      this.logger.warn(
+        `Cannot rename physical table for collection "${slug}": both "${oldTableName}" and "${newTableName}" exist. Resolve manually (drop one or copy rows).`
+      );
+    }
   }
 
   private async seedPermissionsForCollection(slug: string): Promise<void> {

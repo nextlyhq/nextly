@@ -263,6 +263,11 @@ export class CollectionMetadataService extends BaseService {
     this.fileManager.registerSchemas(schemas);
   }
 
+  /** Drop the cached Drizzle schema for one slug so the next load rebuilds it. */
+  invalidateSchemaForSlug(collectionName: string): void {
+    this.fileManager.invalidateSchemaForSlug(collectionName);
+  }
+
   /**
    * Create a new collection.
    * Generates schema, migration files, and registers the collection.
