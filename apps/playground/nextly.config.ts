@@ -19,6 +19,7 @@
  */
 
 import { defineConfig } from "nextly/config";
+import { defineOpenApi } from "nextly/openapi";
 
 import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
@@ -37,6 +38,13 @@ export default defineConfig({
     },
   },
   collections: [Posts, Categories, Tags],
+  openapi: defineOpenApi({
+    info: { title: "Nextly Playground API", version: "1.0.0" },
+    // The admin API is mounted under `/admin`, so the spec's `/api/...`
+    // paths resolve against this base. Without it Scalar's "Test
+    // Request" would POST to `/api/...` (404) instead of `/admin/api/...`.
+    servers: [{ url: "http://localhost:3000/admin", description: "Local dev" }],
+  }),
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },

@@ -814,5 +814,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     plugins: config.plugins ?? [],
     security: config.security,
     admin: config.admin,
+    // Passed through verbatim (no defaults applied here): the
+    // `nextly/api/openapi` handler resolves its own per-field defaults.
+    // Must be in this allowlist or `defineConfig({ openapi })` is
+    // silently dropped before it ever reaches the handler.
+    openapi: config.openapi,
   };
 }
