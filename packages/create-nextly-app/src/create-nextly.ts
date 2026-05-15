@@ -19,10 +19,7 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
-import {
-  templateHasApproaches,
-  getDefaultApproach,
-} from "./lib/templates";
+import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
 import { isExistingNextProject } from "./prompts/project-name";
@@ -400,7 +397,8 @@ export async function createNextly(
         projectInfo,
         database,
         useYalc,
-        isFreshProject
+        isFreshProject,
+        projectType
       );
       s.stop("Dependencies installed");
       telemetry.capture("install_completed", {
