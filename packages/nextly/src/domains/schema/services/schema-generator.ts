@@ -666,10 +666,7 @@ export class SchemaGenerator {
       lines.push(`}, (table) => [`);
       for (const field of indexedFields) {
         if (!isDataField(field)) continue;
-        const indexDef = this.generateIndexDefinition(
-          field,
-          tableName
-        );
+        const indexDef = this.generateIndexDefinition(field, tableName);
         if (indexDef) {
           lines.push(indexDef);
         }
@@ -734,8 +731,8 @@ export class SchemaGenerator {
     }
 
     return [
-      `  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),`,
-      `  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),`,
+      `  createdAt: timestamp("created_at", { withTimezone: false }).notNull().defaultNow(),`,
+      `  updatedAt: timestamp("updated_at", { withTimezone: false }).notNull().defaultNow().$onUpdate(() => new Date()),`,
     ].join("\n");
   }
 
@@ -1154,7 +1151,7 @@ export class SchemaGenerator {
       return `  updatedAt: ${tsType.fn}("updated_at"${tsOptions}).notNull().$defaultFn(() => new Date()).$onUpdate(() => new Date()),`;
     }
 
-    return `  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),`;
+    return `  updatedAt: timestamp("updated_at", { withTimezone: false }).notNull().defaultNow().$onUpdate(() => new Date()),`;
   }
 
   // ============================================================

@@ -52,6 +52,7 @@ import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
   getMigrationJournalFromDI,
+  getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -115,6 +116,8 @@ async function executeMigrationStatements(
   }
 }
 
+// Refresh the cached Drizzle table so the next entry query joining this
+// component uses the new column layout without a server restart.
 function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
@@ -130,6 +133,13 @@ function registerComponentRuntimeSchema(
       fields
     );
 
+    const registry = getSchemaRegistryFromDI();
+    if (registry) {
+      registry.registerDynamicSchema(tableName, runtimeTable);
+      return;
+    }
+
+    // Fallback for paths where DI isn't wired (tests, CLI).
     const resolver = (
       adapter as unknown as {
         tableResolver?: {
@@ -137,12 +147,23 @@ function registerComponentRuntimeSchema(
         };
       }
     ).tableResolver;
-
     if (resolver && typeof resolver.registerDynamicSchema === "function") {
       resolver.registerDynamicSchema(tableName, runtimeTable);
+      return;
     }
-  } catch {
-    // Non-fatal: schema will be registered on next server restart.
+
+    console.warn(
+      `[registerComponentRuntimeSchema] No SchemaRegistry available for ` +
+        `'${tableName}'. Component queries may reference old column names ` +
+        `until next server restart.`
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[registerComponentRuntimeSchema] In-memory schema refresh failed for ` +
+        `'${tableName}': ${msg}. Component queries may reference old ` +
+        `column names until next server restart.`
+    );
   }
 }
 
@@ -325,10 +346,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         }
       }
 
-      const updated = await svc.registry.updateComponent(
-        slug,
-        updateData
-      );
+      const updated = await svc.registry.updateComponent(slug, updateData);
 
       return respondMutation(`Component "${slug}" updated.`, updated);
     },
@@ -350,7 +368,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
 
-      const currentFields = (component.fields ?? []) as unknown as FieldDefinition[];
+      const currentFields = (component.fields ??
+        []) as unknown as FieldDefinition[];
       const tableName = component.tableName;
 
       const adapter = getAdapterFromDI();
@@ -365,15 +384,22 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         fields: fields as DesiredComponent["fields"],
       };
 
-      const pipelinePreview = await previewDesiredSchema({ desired, db, dialect });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
-        tableName,
-        currentFields,
-        newFields: fields as FieldDefinition[],
+      const pipelinePreview = await previewDesiredSchema({
+        desired,
         db,
         dialect,
       });
+
+      const legacyShape = await translatePipelinePreviewToLegacy(
+        pipelinePreview,
+        {
+          tableName,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          db,
+          dialect,
+        }
+      );
 
       const renamed = pipelinePreview.candidates.map(c => ({
         table: c.tableName,
@@ -455,7 +481,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         legacyBundle
       );
 
-      const migrationJournal = getMigrationJournalFromDI() ?? noopMigrationJournal;
+      const migrationJournal =
+        getMigrationJournalFromDI() ?? noopMigrationJournal;
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
@@ -478,7 +505,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       });
 
       if (!result.success) {
-        throw new Error(result.error?.message ?? "Failed to apply schema changes");
+        throw new Error(
+          result.error?.message ?? "Failed to apply schema changes"
+        );
       }
 
       // Post-apply: update dynamic_components fields JSON + schema_hash directly
@@ -507,7 +536,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // so the registered table includes component system columns
       // (_parent_id, _parent_table, _parent_field, _order, _component_type)
       // instead of collection columns (title, slug).
-      registerComponentRuntimeSchema(adapter, dialect, tableName, fields as FieldConfig[]);
+      registerComponentRuntimeSchema(
+        adapter,
+        dialect,
+        tableName,
+        fields as FieldConfig[]
+      );
 
       // Pipeline (PipelineResult) does not carry per-slug schema versions;
       // those live on createApplyDesiredSchema's ApplyResult wrapper. Bump by

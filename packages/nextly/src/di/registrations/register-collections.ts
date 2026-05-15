@@ -64,10 +64,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       try {
         const result = await adapter.selectOne<{
           fields: string;
-          table_name: string;
-          // Why: forward the Draft/Published flag so the FileManager's
-          // that includes the `status` column. SQLite returns 0/1; PG
-          // returns booleans; coerce both shapes below.
+          tableName: string;
           status: boolean | number | null;
         }>("dynamic_collections", {
           where: {
@@ -82,7 +79,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
               : result.fields;
           return {
             fields,
-            tableName: result.table_name,
+            tableName: result.tableName,
+            // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
             status: result.status === true || result.status === 1,
           };
         }

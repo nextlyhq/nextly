@@ -28,9 +28,7 @@ export interface FileManagerConfig {
  * the column from `dynamic_collections` / `dynamic_singles` and forwards
  * a coerced boolean to FileManager's runtime generation.
  */
-export type CollectionMetadataFetcher = (
-  collectionName: string
-) => Promise<{
+export type CollectionMetadataFetcher = (collectionName: string) => Promise<{
   fields: FieldDefinition[];
   tableName: string;
   status?: boolean;
@@ -71,10 +69,7 @@ export class CollectionFileManager {
   }
 
   registerSchema(collectionName: string, schema: unknown): void {
-    this.schemaRegistry.set(
-      `dc_${collectionName.replace(/-/g, "_")}`,
-      schema
-    );
+    this.schemaRegistry.set(`dc_${collectionName.replace(/-/g, "_")}`, schema);
   }
 
   registerSchemas(schemas: Record<string, unknown>): void {
@@ -105,6 +100,16 @@ export class CollectionFileManager {
   // (built from the apply payload's `fields` list).
   refreshSchema(tableName: string, freshTable: unknown): void {
     this.schemaRegistry.set(tableName, freshTable);
+  }
+
+  /**
+   * Drop the slug-keyed cache entry so the lazy fetcher rebuilds the Drizzle
+   * table from current `dynamic_collections` state. See `refreshSchema` for
+   * the tableName-keyed variant used when the new table is already built.
+   */
+  invalidateSchemaForSlug(collectionName: string): void {
+    const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
+    this.schemaRegistry.delete(schemaKey);
   }
 
   async saveArtifacts(artifacts: CollectionArtifacts): Promise<void> {
@@ -275,8 +280,7 @@ export class CollectionFileManager {
         if (metadata && metadata.fields) {
           const dialect = this.adapter.dialect;
           const tableName =
-            metadata.tableName ||
-            `dc_${collectionName.replace(/-/g, "_")}`;
+            metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;
 
           console.log(
             "[FileManager] Generating runtime schema for:",

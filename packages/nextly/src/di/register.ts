@@ -633,7 +633,6 @@ async function initializeSchemaRegistry(
   }
 }
 
-
 /**
  * Register every code-first collection and single from the config as a
  * runtime Drizzle schema in the resolver. Complements `loadDynamicTables`
@@ -718,7 +717,6 @@ async function registerConfigTablesInResolver(
   }
 }
 
-
 function logStorageConfiguration(
   mediaStorage: MediaStorage,
   storagePlugins: StoragePlugin[] | undefined,
@@ -759,6 +757,23 @@ async function syncCodeFirstCollections(
   const collectionRegistry = container.get<CollectionRegistryService>(
     "collectionRegistryService"
   );
+
+  // Wire schema-cache invalidation before sync so a dbName change drops the
+  // stale Drizzle table from CollectionFileManager on the next request.
+  if (container.has("collectionService")) {
+    try {
+      const collectionService = container.get<{
+        invalidateSchemaForSlug: (slug: string) => void;
+      }>("collectionService");
+      collectionRegistry.setOnTableNameChanged((slug: string) => {
+        collectionService.invalidateSchemaForSlug(slug);
+      });
+    } catch (err) {
+      logger.warn?.(
+        `[registerServices] Could not wire tableName-change cache invalidation: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
 
   const codeFirstConfigs: CodeFirstCollectionConfig[] =
     transformedConfig.collections.map(collection => ({
@@ -834,8 +849,17 @@ async function syncCodeFirstCollections(
   ];
 
   // Also check unchanged collections that might be missing their tables.
+  // Resolve via the config's dbName (falling back to slug) so dbName-using
+  // collections check the correct physical table.
+  const collectionsBySlug = new Map(
+    (transformedConfig.collections ?? []).map(c => [c.slug, c])
+  );
   for (const slug of syncResult.unchanged) {
-    const tableName = `dc_${slug.replace(/-/g, "_")}`;
+    const collection = collectionsBySlug.get(slug);
+    const baseTableName = collection?.dbName ?? slug.replace(/-/g, "_");
+    const tableName = baseTableName.startsWith("dc_")
+      ? baseTableName
+      : `dc_${baseTableName}`;
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -930,8 +954,7 @@ async function syncCodeFirstCollections(
         slug: collection.slug,
         tableName,
         fields: collection.fields ?? [],
-        status:
-          (collection as { status?: boolean }).status === true,
+        status: (collection as { status?: boolean }).status === true,
       };
       slugsAfterFilter.push(collection.slug);
     }
@@ -1306,8 +1329,7 @@ async function reconcileSingleTablesForBoot(
         let hasStatus = false;
         if (codeFirstConfig) {
           fields = codeFirstConfig.fields as unknown as FieldDefinition[];
-          hasStatus =
-            (codeFirstConfig as { status?: boolean }).status === true;
+          hasStatus = (codeFirstConfig as { status?: boolean }).status === true;
         } else {
           const record = await singleRegistry.getSingleBySlug(single.slug);
           if (!record) {
@@ -1361,10 +1383,7 @@ async function reconcileSingleTablesForBoot(
             const resolver = (
               adapter as unknown as {
                 tableResolver?: {
-                  registerDynamicSchema?: (
-                    name: string,
-                    t: unknown
-                  ) => void;
+                  registerDynamicSchema?: (name: string, t: unknown) => void;
                 };
               }
             ).tableResolver;
