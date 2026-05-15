@@ -26,6 +26,7 @@
     "fix-status-column-strip",
     "flat-bugs-float",
     "initial-alpha-release",
+    "scope-form-builder-to-blog",
     "single-document-cache-invalidation"
   ]
 }
