@@ -465,7 +465,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           // Fields changed, status toggle flipped, or `dbName` resolved to a
           // new physical table — all three need to be written through.
           if (desiredTableName !== existing.tableName) {
-            await this.renamePhysicalTableIfPossible(
+            await this.renamePhysicalTable(
               existing.tableName,
               desiredTableName,
               config.slug
@@ -643,7 +643,7 @@ export class CollectionRegistryService extends BaseRegistryService<
    * Renames only when old exists and new doesn't; warns when both exist; no-op
    * otherwise (boot auto-create handles the missing-table case).
    */
-  private async renamePhysicalTableIfPossible(
+  private async renamePhysicalTable(
     oldTableName: string,
     newTableName: string,
     slug: string
