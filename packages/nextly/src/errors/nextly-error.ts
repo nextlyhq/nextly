@@ -218,8 +218,8 @@ export class NextlyError extends Error {
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
-      code: opts?.code || "AUTH_INVALID_CREDENTIALS",
-      publicMessage: opts?.publicMessage || "Invalid email or password.",
+      code: opts?.code || "",
+      publicMessage: opts?.publicMessage || "",
       logMessage: "Login failed",
       logContext: opts?.logContext,
     });
