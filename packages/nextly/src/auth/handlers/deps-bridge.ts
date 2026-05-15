@@ -9,7 +9,6 @@
  * we delegate directly. For new operations (refresh tokens, brute-force tracking),
  * we use the database adapter directly.
  */
-import type { SanitizedNextlyConfig } from "@nextly/collections";
 
 import { getDialectTables } from "../../database/index";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
@@ -37,7 +36,7 @@ export function buildAuthRouterDeps(
     maxLoginAttempts: 5,
     lockoutDurationSeconds: 15 * 60, // 15 minutes
     loginStallTimeMs: 500,
-    requireEmailVerification: readRequireEmailVerification(getService),
+    requireEmailVerification: true,
     // Spec §13.2: read the host-app's auth.revealRegistrationConflict flag
     // from the registered NextlyConfig. Defaults to false (silent-success on
     // email conflict) when config is not yet initialised or the flag is
@@ -399,22 +398,6 @@ function readRevealRegistrationConflict(
     return false;
   } catch {
     // DI container not initialised yet — fall back to the safe default.
-    return false;
-  }
-}
-
-/**
- * Read `auth.requireEmailVerification` from the NextlyConfig registered in
- * the DI container. Returns the spec default (false) when the container is
- * not yet initialised or the flag is unset.
- */
-function readRequireEmailVerification(
-  getService: (name: string) => unknown
-): boolean {
-  try {
-    const config = getService("config") as SanitizedNextlyConfig;
-    return config.auth.requireEmailVerification;
-  } catch {
     return false;
   }
 }

@@ -498,15 +498,6 @@ export interface AuthConfig {
    * email enumeration (e.g. a closed admin tool with controlled signup).
    */
   revealRegistrationConflict?: boolean;
-
-  /**
-   * Whether login requires the user's email to be verified.
-   *
-   * Default: `true`. If false, users who have not verified their email
-   * (emailVerified is null) will receive an AUTH_INVALID_CREDENTIALS error
-   * when trying to log in.
-   */
-  requireEmailVerification?: boolean;
 }
 
 /**
@@ -515,8 +506,6 @@ export interface AuthConfig {
 export interface SanitizedAuthConfig {
   /** Whether to reveal duplicate-email registrations on the wire. Defaults to false. */
   revealRegistrationConflict: boolean;
-  /** Whether email verification is required to log in. Defaults to true. */
-  requireEmailVerification: boolean;
 }
 
 /**
@@ -524,7 +513,6 @@ export interface SanitizedAuthConfig {
  */
 export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
-  requireEmailVerification: true,
 };
 
 // ============================================================
@@ -804,9 +792,6 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       revealRegistrationConflict:
         config.auth?.revealRegistrationConflict ??
         DEFAULT_AUTH_CONFIG.revealRegistrationConflict,
-      requireEmailVerification:
-        config.auth?.requireEmailVerification ??
-        DEFAULT_AUTH_CONFIG.requireEmailVerification,
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],
