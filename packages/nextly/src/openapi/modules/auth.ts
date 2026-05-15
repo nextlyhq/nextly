@@ -9,9 +9,10 @@
  *   POST /api/auth/register         — public signup (silent-success by default)
  *   POST /api/auth/forgot-password  — anti-enumeration password-reset request
  *   POST /api/auth/reset-password   — consume reset token, set new password
+ *   GET  /api/auth/csrf             — issue a CSRF double-submit token
  *
- * `login`, `register`, `forgot-password`, and `reset-password` are
- * deliberately public (no security requirement). `logout` and `refresh`
+ * `login`, `register`, `forgot-password`, `reset-password`, and `csrf`
+ * are deliberately public (no security requirement). `logout` and `refresh`
  * accept any of the three configured auth schemes (bearer / cookie /
  * apiKey); in practice both rely on the refresh-token cookie, but the
  * envelope is the same as authenticated CRUD operations for consistency.
@@ -274,6 +275,35 @@ const resetPasswordOp: OperationIR = {
   extensions: {},
 };
 
+const csrfOp: OperationIR = {
+  path: "/api/auth/csrf",
+  method: "GET",
+  versions: ["1.0"],
+  operationId: "auth.csrf",
+  tags: ["Auth"],
+  summary: "Issue a CSRF token",
+  description:
+    "Returns a fresh CSRF token and sets the matching `nextly_csrf` " +
+    "double-submit cookie. Browser clients call this before any mutating " +
+    "request, then echo the token back via the `x-csrf-token` header or " +
+    "the `csrfToken` body field so the server can verify cookie ↔ value " +
+    "agreement. Public and side-effect-free apart from the cookie.",
+  parameters: [],
+  responses: {
+    "200": {
+      description: "Token issued (also set as the `nextly_csrf` cookie).",
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/CsrfResponse" },
+        },
+      },
+    },
+    ...COMMON_PUBLIC_ERROR_RESPONSES,
+  },
+  security: PUBLIC_SECURITY,
+  extensions: {},
+};
+
 const AuthUser: OpenAPISchema = {
   type: "object",
   required: ["id", "email"],
@@ -448,6 +478,23 @@ const ResetPasswordResponse: OpenAPISchema = {
   },
 };
 
+const CsrfResponse: OpenAPISchema = {
+  type: "object",
+  required: ["token"],
+  properties: {
+    token: {
+      type: "string",
+      description:
+        "Fresh CSRF token: 32 random bytes, hex-encoded (64 chars). The " +
+        "same value is set as the `nextly_csrf` cookie; echo it on " +
+        "mutating requests via the `x-csrf-token` header or the body " +
+        "`csrfToken` field.",
+      example:
+        "3f8a1c9e0b7d4f2a6e5c8b1d0a9f7e3c2b4d6a8f1e0c9b7d5a3f2e1c0b9d8a7f",
+    },
+  },
+};
+
 export const authModule = defineModule({
   name: "auth",
   tag: {
@@ -462,6 +509,7 @@ export const authModule = defineModule({
     registerOp,
     forgotPasswordOp,
     resetPasswordOp,
+    csrfOp,
   ],
   schemas: {
     AuthUser,
@@ -476,5 +524,6 @@ export const authModule = defineModule({
     ForgotPasswordResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
+    CsrfResponse,
   },
 });

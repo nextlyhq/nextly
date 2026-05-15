@@ -15,11 +15,12 @@ describe("authModule", () => {
     });
   });
 
-  it("declares the six spec-required operations on /api/auth/*", () => {
+  it("declares the auth operations on /api/auth/*", () => {
     const summary = authModule.operations
       .map(o => `${o.method} ${o.path}`)
       .sort();
     expect(summary).toEqual([
+      "GET /api/auth/csrf",
       "POST /api/auth/forgot-password",
       "POST /api/auth/login",
       "POST /api/auth/logout",
@@ -32,6 +33,7 @@ describe("authModule", () => {
   it("operationIds follow the auth.<verb> pattern", () => {
     const ids = authModule.operations.map(o => o.operationId).sort();
     expect(ids).toEqual([
+      "auth.csrf",
       "auth.forgotPassword",
       "auth.login",
       "auth.logout",
@@ -47,6 +49,7 @@ describe("authModule", () => {
       "/api/auth/register",
       "/api/auth/forgot-password",
       "/api/auth/reset-password",
+      "/api/auth/csrf",
     ])("%s has no security requirement", path => {
       const op = authModule.operations.find(o => o.path === path)!;
       expect(op.security).toEqual([]);
@@ -236,6 +239,41 @@ describe("authModule", () => {
     });
   });
 
+  describe("GET /api/auth/csrf", () => {
+    const op = authModule.operations.find(o => o.path === "/api/auth/csrf")!;
+
+    it("is a GET with no request body", () => {
+      expect(op.method).toBe("GET");
+      expect(op.requestBody).toBeUndefined();
+    });
+
+    it("200 references CsrfResponse", () => {
+      const schema = (
+        op.responses["200"] as {
+          content?: { "application/json"?: { schema?: unknown } };
+        }
+      ).content?.["application/json"]?.schema;
+      expect(schema).toEqual({
+        $ref: "#/components/schemas/CsrfResponse",
+      });
+    });
+
+    it("declares the canonical public error responses", () => {
+      expect(op.responses["400"]).toEqual({
+        $ref: "#/components/responses/ValidationError",
+      });
+      expect(op.responses["403"]).toEqual({
+        $ref: "#/components/responses/Forbidden",
+      });
+      expect(op.responses["429"]).toEqual({
+        $ref: "#/components/responses/RateLimited",
+      });
+      expect(op.responses["500"]).toEqual({
+        $ref: "#/components/responses/InternalServerError",
+      });
+    });
+  });
+
   describe("registered schemas", () => {
     const schemas = authModule.schemas ?? {};
 
@@ -243,6 +281,7 @@ describe("authModule", () => {
       const names = Object.keys(schemas).sort();
       expect(names).toEqual([
         "AuthUser",
+        "CsrfResponse",
         "ForgotPasswordRequest",
         "ForgotPasswordResponse",
         "LoginRequest",
