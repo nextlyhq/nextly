@@ -195,6 +195,32 @@ describe("copyTemplate", () => {
     ).rejects.toThrow('Directory "my-app" already exists');
   });
 
+  // Regression: when the installer has already negotiated a non-empty
+  // target with the user (cancel / remove / ignore prompt), it sets
+  // allowExistingTarget so the internal "already exists" guard is
+  // bypassed. Before this opt-in flag the "remove" recovery path
+  // would empty the dir, then crash on this guard because
+  // emptyDirectory leaves the directory itself in place.
+  it("should not error on existing target when allowExistingTarget is true", async () => {
+    mockPathExists.mockImplementation((async (pathArg: unknown) => {
+      const s = String(pathArg);
+      if (s === "/test/my-app") return true; // target exists
+      if (s.endsWith(path.join("templates", "base"))) return true;
+      if (s.endsWith(path.join("templates", "blank"))) return true;
+      return false;
+    }) as never);
+
+    await expect(
+      copyTemplate({
+        projectName: "my-app",
+        projectType: "blank",
+        targetDir: "/test/my-app",
+        database: pgDatabase,
+        allowExistingTarget: true,
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it("should error if base template is missing", async () => {
     // target dir doesn't exist
     mockPathExists.mockResolvedValueOnce(false as never);
