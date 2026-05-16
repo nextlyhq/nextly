@@ -5,6 +5,21 @@ import fs from "fs-extra";
 
 import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
 
+/**
+ * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
+ * plugin (and its admin imports) only ship with these scaffolds — every
+ * other template gets a leaner package.json and an admin page without the
+ * plugin imports so dev never fails with "Cannot find package
+ * '@nextlyhq/plugin-form-builder'".
+ */
+const PROJECT_TYPES_WITH_FORM_BUILDER: ReadonlySet<ProjectType> = new Set([
+  "blog",
+]);
+
+export function projectUsesFormBuilder(projectType: ProjectType): boolean {
+  return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
+}
+
 // ============================================================
 // Text File Extensions (for placeholder replacement)
 // ============================================================
@@ -268,11 +283,14 @@ async function resolveRuntimeVersions(): Promise<Record<string, string>> {
  * @param projectName - The project name (used as package name)
  * @param database - Database configuration (adapter + driver)
  * @param useYalc - When true, omits @nextlyhq/* packages (they'll be yalc-added)
+ * @param projectType - Selected template. Determines optional plugin deps
+ *   (e.g. `@nextlyhq/plugin-form-builder` ships only with `blog`).
  */
 export async function generatePackageJson(
   projectName: string,
   database: DatabaseConfig,
-  useYalc: boolean = false
+  useYalc: boolean = false,
+  projectType: ProjectType = "blank"
 ): Promise<string> {
   // Fetch latest Next.js (and eslint-config-next) version from npm
   const runtimeVersions = await resolveRuntimeVersions();
@@ -295,12 +313,15 @@ export async function generatePackageJson(
     dependencies["@nextlyhq/adapter-drizzle"] =
       versions["@nextlyhq/adapter-drizzle"];
     dependencies[database.adapter] = versions[database.adapter] || "latest";
-    // Form builder plugin ships with every scaffold so templates that
-    // want it (e.g. the blog template's Newsletter form) work out of
-    // the box. It's a small dep and unused templates simply don't
-    // import it - no runtime cost.
-    dependencies["@nextlyhq/plugin-form-builder"] =
-      versions["@nextlyhq/plugin-form-builder"] || "latest";
+    // Form builder plugin is only included for templates that register
+    // it in nextly.config.ts (currently just `blog`). Including it in
+    // the blank scaffold would leave imports in the admin page that
+    // resolve to an uninstalled package — `next dev` would then fail
+    // with "Cannot find package '@nextlyhq/plugin-form-builder'".
+    if (projectUsesFormBuilder(projectType)) {
+      dependencies["@nextlyhq/plugin-form-builder"] =
+        versions["@nextlyhq/plugin-form-builder"] || "latest";
+    }
   }
 
   // DB drivers are regular deps of their respective adapter packages and
@@ -373,6 +394,13 @@ export interface CopyTemplateOptions {
   approach?: ProjectApproach;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
+  /**
+   * Suppress the internal "directory already exists" guard. Set by the
+   * installer when it has already negotiated a directory conflict with
+   * the user (cwd install, or the "remove"/"ignore" choices from the
+   * directory-conflict prompt).
+   */
+  allowExistingTarget?: boolean;
 }
 
 /**
@@ -400,10 +428,18 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
+    allowExistingTarget = false,
   } = options;
 
-  // Check target directory doesn't already exist (skip for cwd installation)
-  if (targetDir !== process.cwd() && (await fs.pathExists(targetDir))) {
+  // Guard against silently overwriting an existing subdirectory. Skip
+  // when targeting cwd (the installer handles emptiness checks there)
+  // or when the installer explicitly opted in via allowExistingTarget
+  // (after a user-confirmed remove/ignore choice).
+  if (
+    !allowExistingTarget &&
+    targetDir !== process.cwd() &&
+    (await fs.pathExists(targetDir))
+  ) {
     throw new Error(
       `Directory "${path.basename(targetDir)}" already exists. Please choose a different name.`
     );
@@ -524,7 +560,8 @@ export async function copyTemplate(
   const packageJsonContent = await generatePackageJson(
     projectName,
     database,
-    useYalc
+    useYalc,
+    projectType
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),

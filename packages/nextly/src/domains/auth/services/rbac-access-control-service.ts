@@ -17,7 +17,7 @@
  * and `registerSingleAccess()`. The service auto-resolves them during `checkAccess()`
  * when no explicit `codeAccess` parameter is provided.
  *
- * @module services/auth/rbac-access-control-service
+ * @module domains/auth/services/rbac-access-control-service
  * @since 1.0.0
  *
  * @example

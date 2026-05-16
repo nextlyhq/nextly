@@ -3,7 +3,7 @@
 import * as telemetry from "@nextlyhq/telemetry";
 import { Command } from "commander";
 
-import { resolveProjectArg } from "./cli-args";
+import { resolveProjectArg, validateProjectName } from "./cli-args";
 import { createNextly } from "./create-nextly";
 import type { DatabaseType, ProjectApproach, ProjectType } from "./types";
 
@@ -20,10 +20,14 @@ program
     "Scaffold a new Nextly CMS project or add Nextly to an existing Next.js app"
   )
   .version("0.1.0")
+  // No default value here on purpose: when the user omits the argument we
+  // want `directory` to arrive as `undefined` so the interactive prompt
+  // can ask for a folder name. The earlier default of "." caused no-arg
+  // invocations to be silently treated as "install in cwd" and then abort
+  // when the cwd was non-empty.
   .argument(
     "[directory]",
-    "Project name or '.' to install in the current directory",
-    "."
+    "Project name or '.' to install in the current directory (omit to be prompted)"
   )
   .option(
     "-y, --yes",
@@ -49,16 +53,19 @@ program
     "after",
     `
 Examples:
+  $ npx create-nextly-app@alpha             (prompts for folder name)
   $ npx create-nextly-app@alpha my-project
   $ npx create-nextly-app@alpha my-project -y
   $ npx create-nextly-app@alpha my-blog -t blog -a code-first
   $ npx create-nextly-app@alpha my-project --database postgresql
-  $ npx create-nextly-app@alpha .
+  $ npx create-nextly-app@alpha .           (install in the current directory)
 `
   )
   .action(
     async (
-      directory: string,
+      // commander now passes `undefined` when the positional is omitted
+      // (we dropped the "." default above). Reflect that in the type.
+      directory: string | undefined,
       options: {
         yes?: boolean;
         template?: string;
@@ -79,6 +86,17 @@ Examples:
       try {
         const cwd = process.cwd();
         const { projectName, installInCwd } = resolveProjectArg(directory);
+
+        // Reject malformed positional arguments up-front so the user sees the
+        // error before the interactive flow starts. The interactive prompt
+        // applies the same validator, so the two entry points stay in sync.
+        if (projectName) {
+          const nameError = validateProjectName(projectName);
+          if (nameError) {
+            console.error(`Error: Invalid project name '${projectName}'. ${nameError}.`);
+            process.exit(1);
+          }
+        }
 
         const projectType = options.template as ProjectType | undefined;
 

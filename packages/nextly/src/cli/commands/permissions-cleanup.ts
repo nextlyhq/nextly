@@ -1,7 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { Command } from "commander";
 
-import { PermissionSeedService } from "../../services/auth/permission-seed-service";
+import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { createContext } from "../program";
 import {
   createAdapter,

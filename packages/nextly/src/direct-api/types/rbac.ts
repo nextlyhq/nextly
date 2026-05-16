@@ -10,7 +10,7 @@ import type {
   ApiKeyMeta,
   ApiKeyTokenType,
   ExpiresIn,
-} from "../../services/auth/api-key-service";
+} from "../../domains/auth/services/api-key-service";
 
 import type { DirectAPIConfig } from "./shared";
 

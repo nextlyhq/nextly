@@ -5,13 +5,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
 import { container } from "../di/container";
+import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { AccessControlService } from "./access";
-import type { PermissionSeedService } from "./auth/permission-seed-service";
 import { CollectionFileManager } from "./collection-file-manager";
 import {
   CollectionEntryService,
@@ -79,11 +79,7 @@ export class CollectionsHandler {
       try {
         const result = await adapter.selectOne<{
           fields: string;
-          table_name: string;
-          // Why: forward the Draft/Published flag so the FileManager's
-          // runtime schema fallback generates a descriptor
-          // that includes the `status` column. SQLite returns 0/1; PG
-          // returns booleans; coerce both shapes below.
+          tableName: string;
           status: boolean | number | null;
         }>("dynamic_collections", {
           where: {
@@ -98,7 +94,8 @@ export class CollectionsHandler {
               : result.fields;
           return {
             fields,
-            tableName: result.table_name,
+            tableName: result.tableName,
+            // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
             status: result.status === true || result.status === 1,
           };
         }

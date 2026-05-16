@@ -19,13 +19,15 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
-import {
-  templateHasApproaches,
-  getDefaultApproach,
-} from "./lib/templates";
+import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
-import { isExistingNextProject } from "./prompts/project-name";
+import {
+  DEFAULT_PROJECT_NAME,
+  isExistingNextProject,
+  promptDirectoryConflict,
+  promptForProjectName,
+} from "./prompts/project-name";
 import {
   getTemplatePromptOptions,
   isValidTemplateSelection,
@@ -38,7 +40,25 @@ import type {
   ProjectType,
 } from "./types";
 import { detectProject } from "./utils/detect";
+import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { copyTemplate } from "./utils/template";
+
+/**
+ * Pick a safe project name when the user has chosen "install in cwd".
+ *
+ * `path.basename("/")` returns `""`, which would silently propagate through
+ * the scaffold (the `isFreshProject && projectName` guard later in this
+ * file evaluates false on empty strings) and leave the user with a half-
+ * scaffolded directory. Also defends against directory names that aren't
+ * valid as the `package.json` "name" field (npm forbids uppercase, etc).
+ */
+function cwdProjectName(cwd: string): string {
+  const basename = path.basename(cwd);
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(basename)) {
+    return DEFAULT_PROJECT_NAME;
+  }
+  return basename;
+}
 
 /**
  * Main entry point for scaffolding Nextly in a Next.js project.
@@ -62,8 +82,10 @@ export async function createNextly(
     defaults = false,
     skipInstall = false,
     useYalc = false,
-    installInCwd = false,
   } = options;
+  // installInCwd may flip to true at the interactive prompt when the user
+  // answers with "." or "./", so it has to be mutable.
+  let installInCwd = options.installInCwd ?? false;
   let { cwd = process.cwd() } = options;
 
   let isFreshProject = false;
@@ -98,37 +120,72 @@ export async function createNextly(
     }
   } else if (installInCwd) {
     // "." was passed but it's not a Next.js project - scaffold in cwd
-    projectName = path.basename(cwd);
+    projectName = cwdProjectName(cwd);
     isFreshProject = true;
   } else {
     // Interactive or defaults: get project name
     if (options.projectNameFromArg) {
       projectName = options.projectNameFromArg;
     } else if (!defaults) {
-      const name = await p.text({
-        message: "What should your project be called?",
-        placeholder: "my-nextly-app",
-        defaultValue: "my-nextly-app",
-        validate: value => {
-          // Empty input uses the default value (handled by @clack/prompts defaultValue)
-          if (!value || !value.trim()) return undefined;
-          if (!/^[a-z0-9][a-z0-9._-]*$/.test(value)) {
-            return "Use lowercase letters, numbers, hyphens, dots, or underscores";
-          }
-        },
-      });
-
-      if (p.isCancel(name)) {
+      // Single source of truth for the project-name prompt. The helper
+      // funnels the user's answer through the same resolver as the
+      // positional CLI argument so "." / "./" / "./foo" / "foo/" behave
+      // identically on the command line and at the prompt.
+      const result = await promptForProjectName();
+      if (result.kind === "cancelled") {
         p.cancel("Cancelled.");
         return;
       }
-
-      projectName = name;
+      if (result.value.installInCwd) {
+        installInCwd = true;
+        projectName = cwdProjectName(cwd);
+      } else {
+        projectName = result.value.projectName ?? DEFAULT_PROJECT_NAME;
+      }
     } else {
-      projectName = "my-nextly-app";
+      projectName = DEFAULT_PROJECT_NAME;
     }
 
     isFreshProject = true;
+  }
+
+  // --- Step 1b: Directory-conflict recovery ---
+  //
+  // Resolve any "directory already has files" conflict NOW, before the user
+  // wastes time answering template / approach / database prompts. The
+  // original bug (silent fall-through to a cwd install that aborted after
+  // five answered prompts) is the reason this check exists; running it
+  // late would partially re-create that bad UX.
+  //
+  // `allowExistingTarget` is captured here and reused by the scaffold step
+  // below. It's only meaningful when `isFreshProject` is true; for the
+  // "install into existing Next project" path, the user has already
+  // consented to using their current directory.
+  let allowExistingTarget = false;
+  if (isFreshProject && projectName) {
+    const conflictTargetDir = installInCwd ? cwd : path.join(cwd, projectName);
+    if (await isDirectoryNotEmpty(conflictTargetDir)) {
+      const targetLabel = installInCwd
+        ? "the current directory"
+        : `"${projectName}"`;
+      const choice = await promptDirectoryConflict(targetLabel);
+      if (choice === "cancel") {
+        p.cancel("Cancelled. No changes were made.");
+        return;
+      }
+      // Both "remove" and "ignore" tell copyTemplate the conflict has
+      // already been negotiated with the user. emptyDirectory only
+      // empties the directory (it preserves `.git`), so the dir still
+      // exists afterwards — copyTemplate's "directory already exists"
+      // guard would still trip on the subdirectory path unless we
+      // flip the flag here.
+      allowExistingTarget = true;
+      if (choice === "remove") {
+        await emptyDirectory(conflictTargetDir);
+      }
+      // "ignore" falls through — overlay the template on top of
+      // existing files (fs.copy overwrites by default).
+    }
   }
 
   // --- Step 2: Template selection ---
@@ -277,6 +334,8 @@ export async function createNextly(
   // --- Scaffold project from template ---
 
   if (isFreshProject && projectName) {
+    const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
+
     const s = p.spinner();
     let templateSource: TemplateSource | undefined;
 
@@ -300,50 +359,38 @@ export async function createNextly(
         s.start("Scaffolding project...");
       }
 
-      // When installInCwd is true, scaffold directly into cwd (no subdirectory)
-      const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
+      await copyTemplate({
+        projectName,
+        projectType,
+        targetDir,
+        database,
+        databaseUrl,
+        useYalc,
+        approach,
+        templateSource,
+        // Suppress copyTemplate's "directory already exists" guard when the
+        // installer has already negotiated the conflict with the user
+        // (either by emptying the dir or accepting an overlay). Without
+        // this, the "ignore" path would still throw on the subdirectory
+        // case where the target was non-empty.
+        allowExistingTarget,
+      });
 
-      if (installInCwd) {
-        // For cwd installation, check if directory is empty enough
-        const entries = await fs.readdir(cwd);
-        const nonHidden = entries.filter(e => !e.startsWith("."));
-        if (nonHidden.length > 0) {
-          s.stop("Directory not empty");
-          p.cancel(
-            "Directory is not empty. Remove existing files or use a project name to create a subdirectory."
-          );
-          return;
-        }
-        await copyTemplate({
-          projectName,
-          projectType,
-          targetDir: cwd,
-          database,
-          databaseUrl,
-          useYalc,
-          approach,
-          templateSource,
-        });
-      } else {
-        await copyTemplate({
-          projectName,
-          projectType,
-          targetDir,
-          database,
-          databaseUrl,
-          useYalc,
-          approach,
-          templateSource,
-        });
-        cwd = targetDir;
-      }
+      if (!installInCwd) cwd = targetDir;
 
       s.stop("Project scaffolded");
     } catch (error) {
       s.stop("Scaffolding failed");
-      if (!installInCwd) {
-        // Clean up partial copy
-        const targetDir = path.join(cwd, projectName);
+      // Roll back only when this CLI run created the target subdirectory
+      // from scratch (`allowExistingTarget === false`). Skip rollback when:
+      //   - installInCwd: the user owns their cwd; never delete it.
+      //   - allowExistingTarget: the target pre-existed (user picked
+      //     "remove" or "ignore"). In the "remove" case `.git` was
+      //     preserved by emptyDirectory(); rolling back here would
+      //     `fs.remove(targetDir)` and destroy it. In the "ignore" case a
+      //     partial scaffold on top of user files is still better than
+      //     losing the user's files.
+      if (!installInCwd && !allowExistingTarget) {
         if (await fs.pathExists(targetDir)) {
           await fs.remove(targetDir);
         }
@@ -400,7 +447,8 @@ export async function createNextly(
         projectInfo,
         database,
         useYalc,
-        isFreshProject
+        isFreshProject,
+        projectType
       );
       s.stop("Dependencies installed");
       telemetry.capture("install_completed", {

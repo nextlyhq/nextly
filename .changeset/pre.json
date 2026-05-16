@@ -22,9 +22,13 @@
   },
   "changesets": [
     "api-default-all-statuses",
+    "collection-dbname-and-component-schema-refresh",
+    "consolidate-auth-services-shim",
+    "fix-cli-prompt-for-folder-when-missing",
     "fix-status-column-strip",
     "flat-bugs-float",
     "initial-alpha-release",
+    "scope-form-builder-to-blog",
     "single-document-cache-invalidation"
   ]
 }

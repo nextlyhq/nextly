@@ -4,19 +4,13 @@ import fs from "fs-extra";
 
 import type { ProjectInfo } from "../types";
 
-// Plugin-side admin imports. Every scaffold ships @nextlyhq/plugin-form-builder
-// as a dependency (see template.ts and installers/dependencies.ts). These three
-// lines register the plugin's custom admin field components and load its CSS so
-// the Forms collection's drag-and-drop field builder and Submissions filter UI
-// render correctly. Without them, the Forms sidebar item still shows but the
-// builder falls back to plain JSON/text inputs. Mirror any future plugin-X the
-// CLI installs by default (keep in sync with TEMPLATE_PLUGIN_PACKAGES).
+// Existing-project installs scaffold a blank-equivalent setup: generateConfig
+// only emits the blank template, so no plugins are registered and no plugin-
+// side admin imports are needed. Templates that register plugins (e.g. blog)
+// supply their own admin page that overlays this one via copyTemplate.
 const ADMIN_PAGE_TEMPLATE = `"use client";
 
 import "@nextlyhq/admin/style.css";
-import "@nextlyhq/plugin-form-builder/admin";
-import "@nextlyhq/plugin-form-builder/styles/builder.css";
-import "@nextlyhq/plugin-form-builder/styles/submissions-filter.css";
 import { RootLayout, QueryProvider, ErrorBoundary } from "@nextlyhq/admin";
 
 export default function AdminPage() {

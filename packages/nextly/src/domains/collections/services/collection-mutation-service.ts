@@ -144,6 +144,14 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
+  /** Resolve the physical table for a collection, honoring `dbName` overrides. */
+  private resolveTableName(collection: unknown, slug: string): string {
+    return (
+      ((collection as Record<string, unknown>)?.tableName as string) ||
+      getTableName(slug)
+    );
+  }
+
   /**
    * Wrapper around checkFieldUniqueness that matches the QueryDatabaseParams
    * signature expected by CollectionHookService.buildPrebuiltHookContext.
@@ -309,6 +317,11 @@ export class CollectionMutationService extends BaseService {
         [];
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
       );
 
       // Shared context between all hooks in this request
@@ -603,11 +616,9 @@ export class CollectionMutationService extends BaseService {
       // a component save failure rolls back the entry — no partial state.
       const entry: Record<string, unknown> = {};
       await this.adapter.transaction(async tx => {
-        const rawEntry = await tx.insert<unknown>(
-          getTableName(params.collectionName),
-          entryData,
-          { returning: "*" }
-        );
+        const rawEntry = await tx.insert<unknown>(tableName, entryData, {
+          returning: "*",
+        });
 
         // Convert snake_case keys from DB response back to camelCase field names
         // so hooks and the API response use the original field names.
@@ -624,7 +635,7 @@ export class CollectionMutationService extends BaseService {
         ) {
           await this.componentDataService.saveComponentDataInTransaction(tx, {
             parentId: entry.id as string,
-            parentTable: getTableName(params.collectionName),
+            parentTable: tableName,
             fields: fields as unknown as FieldConfig[],
             data: componentFieldData,
           });
@@ -798,6 +809,11 @@ export class CollectionMutationService extends BaseService {
         [];
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
       );
 
       // Shared context between all hooks in this request
@@ -1092,7 +1108,6 @@ export class CollectionMutationService extends BaseService {
       // a component save failure rolls back the entry update — no partial state.
       // tx.execute() is used for the UPDATE so it runs on the same DB client
       // as the transaction (unlike tx.update() which delegates to the pool).
-      const tableName = getTableName(params.collectionName);
       await this.adapter.transaction(async tx => {
         const updatePayload = { ...finalData, updatedAt: new Date() };
 
@@ -1314,6 +1329,11 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
+      );
+
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
 
@@ -1368,7 +1388,7 @@ export class CollectionMutationService extends BaseService {
           []) as FieldConfig[];
         await this.componentDataService.deleteComponentData({
           parentId: params.entryId,
-          parentTable: getTableName(params.collectionName),
+          parentTable: tableName,
           fields: collectionFields,
         });
       }
@@ -1467,8 +1487,6 @@ export class CollectionMutationService extends BaseService {
         return accessDenied;
       }
 
-      const tableName = getTableName(params.collectionName);
-
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -1483,6 +1501,11 @@ export class CollectionMutationService extends BaseService {
         [];
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
       );
 
       // Shared context between all hooks in this request
@@ -1684,7 +1707,26 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      const tableName = getTableName(params.collectionName);
+      // Get collection metadata and hooks first
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const fields =
+        ((
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields as FieldDefinition[]) ||
+        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
+        [];
+      const storedHooks = this.hookService.getStoredHooks(
+        collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
+      );
 
       // Fetch existing entry first (needed for access control)
       const existingEntry = await tx.selectOne<Record<string, unknown>>(
@@ -1714,22 +1756,6 @@ export class CollectionMutationService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
-
-      // Get collection metadata and hooks
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = {};
@@ -1951,7 +1977,18 @@ export class CollectionMutationService extends BaseService {
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     try {
-      const tableName = getTableName(params.collectionName);
+      // Get collection metadata and stored hooks
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const storedHooks = this.hookService.getStoredHooks(
+        collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
+      );
 
       // Fetch entry first (needed for access control and hooks)
       const entry = await tx.selectOne<Record<string, unknown>>(tableName, {
@@ -1974,14 +2011,6 @@ export class CollectionMutationService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
-
-      // Get collection metadata and stored hooks
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = {};
@@ -2125,8 +2154,6 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      const tableName = getTableName(params.collectionName);
-
       // Get collection metadata to identify relation fields
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -2141,6 +2168,11 @@ export class CollectionMutationService extends BaseService {
         [];
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
       );
 
       let currentData: Record<string, unknown> = { ...body };
@@ -2366,7 +2398,26 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
     try {
-      const tableName = getTableName(params.collectionName);
+      // Get collection metadata to identify relation fields
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const fields =
+        ((
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields as FieldDefinition[]) ||
+        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
+        [];
+      const storedHooks = this.hookService.getStoredHooks(
+        collection as Record<string, unknown>
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
+      );
 
       // When update access is `owner-only`, fold the ownership
       // predicate into the SQL WHERE clause of the initial fetch. A
@@ -2379,7 +2430,10 @@ export class CollectionMutationService extends BaseService {
         params.user
       );
       const fetchWhere = ownerConstraint
-        ? this.whereAnd({ id: entryId, [ownerConstraint.field]: ownerConstraint.value })
+        ? this.whereAnd({
+            id: entryId,
+            [ownerConstraint.field]: ownerConstraint.value,
+          })
         : this.whereEq("id", entryId);
 
       // Fetch existing entry first (needed for owner checks and hooks)
@@ -2402,9 +2456,6 @@ export class CollectionMutationService extends BaseService {
       // that fires only if a future refactor accidentally weakens the
       // fetch query — at which point we'd rather return 403 than
       // silently let a non-owner through.
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
       const accessRules = this.accessService.getAccessRules(
         collection as Record<string, unknown>
       );
@@ -2421,19 +2472,6 @@ export class CollectionMutationService extends BaseService {
           };
         }
       }
-
-      // Get collection metadata to identify relation fields
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
 
       let currentData: Record<string, unknown> = { ...body };
 
@@ -2677,7 +2715,15 @@ export class CollectionMutationService extends BaseService {
     skipHooks: boolean
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     try {
-      const tableName = getTableName(params.collectionName);
+      // Get collection metadata early
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+
+      const tableName = this.resolveTableName(
+        collection,
+        params.collectionName
+      );
 
       // When delete access is `owner-only`, fold the ownership
       // predicate into the SQL WHERE clause of the initial fetch.
@@ -2689,7 +2735,10 @@ export class CollectionMutationService extends BaseService {
         params.user
       );
       const fetchWhere = ownerConstraint
-        ? this.whereAnd({ id: entryId, [ownerConstraint.field]: ownerConstraint.value })
+        ? this.whereAnd({
+            id: entryId,
+            [ownerConstraint.field]: ownerConstraint.value,
+          })
         : this.whereEq("id", entryId);
 
       // Fetch entry first (needed for owner checks and hooks)
@@ -2709,9 +2758,6 @@ export class CollectionMutationService extends BaseService {
       // See updateSingleEntryInTransaction for the rationale:
       // WHERE-clause filter is load-bearing, this comparison is the
       // safety net.
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
       const accessRules = this.accessService.getAccessRules(
         collection as Record<string, unknown>
       );
