@@ -394,6 +394,13 @@ export interface CopyTemplateOptions {
   approach?: ProjectApproach;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
+  /**
+   * Suppress the internal "directory already exists" guard. Set by the
+   * installer when it has already negotiated a directory conflict with
+   * the user (cwd install, or the "remove"/"ignore" choices from the
+   * directory-conflict prompt).
+   */
+  allowExistingTarget?: boolean;
 }
 
 /**
@@ -421,10 +428,18 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
+    allowExistingTarget = false,
   } = options;
 
-  // Check target directory doesn't already exist (skip for cwd installation)
-  if (targetDir !== process.cwd() && (await fs.pathExists(targetDir))) {
+  // Guard against silently overwriting an existing subdirectory. Skip
+  // when targeting cwd (the installer handles emptiness checks there)
+  // or when the installer explicitly opted in via allowExistingTarget
+  // (after a user-confirmed remove/ignore choice).
+  if (
+    !allowExistingTarget &&
+    targetDir !== process.cwd() &&
+    (await fs.pathExists(targetDir))
+  ) {
     throw new Error(
       `Directory "${path.basename(targetDir)}" already exists. Please choose a different name.`
     );
