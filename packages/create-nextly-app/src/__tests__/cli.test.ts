@@ -4,7 +4,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { resolveProjectArg, resolveProjectNameFromArg } from "../cli-args";
+import {
+  resolveProjectArg,
+  resolveProjectNameFromArg,
+  validateProjectName,
+} from "../cli-args";
 
 // ============================================================
 // resolveProjectNameFromArg (deprecated, kept for backwards compat)
@@ -81,5 +85,54 @@ describe("resolveProjectArg", () => {
   it("returns basename when given a trailing slash", () => {
     const result = resolveProjectArg("foo/");
     expect(result).toEqual({ projectName: "foo", installInCwd: false });
+  });
+
+  // Treat "./" the same as ".": commander/users frequently type either form
+  // when they mean "install in the current directory".
+  it("returns installInCwd: true when './' is passed", () => {
+    const result = resolveProjectArg("./");
+    expect(result).toEqual({ projectName: undefined, installInCwd: true });
+  });
+
+  // "./foo" is a relative path; we still want the basename as the project
+  // name and a subdirectory install, matching `create-next-app` and
+  // `create-astro` semantics.
+  it("returns basename for a leading './' path", () => {
+    const result = resolveProjectArg("./foo");
+    expect(result).toEqual({ projectName: "foo", installInCwd: false });
+  });
+
+  // Whitespace-only input should behave like an empty argument so that a
+  // user mashing the spacebar at the prompt doesn't accidentally trigger
+  // a cwd install.
+  it("returns no project name and no cwd flag for whitespace-only input", () => {
+    const result = resolveProjectArg("   ");
+    expect(result).toEqual({ projectName: undefined, installInCwd: false });
+  });
+});
+
+// ============================================================
+// validateProjectName
+// ============================================================
+
+describe("validateProjectName", () => {
+  it("accepts a normal lowercase name", () => {
+    expect(validateProjectName("my-project")).toBeUndefined();
+  });
+
+  it("accepts names with digits, dots, and underscores", () => {
+    expect(validateProjectName("my.app_2")).toBeUndefined();
+  });
+
+  it("rejects names starting with a dash", () => {
+    expect(validateProjectName("-bad")).toBeDefined();
+  });
+
+  it("rejects names with uppercase letters", () => {
+    expect(validateProjectName("MyApp")).toBeDefined();
+  });
+
+  it("rejects names with spaces", () => {
+    expect(validateProjectName("my app")).toBeDefined();
   });
 });

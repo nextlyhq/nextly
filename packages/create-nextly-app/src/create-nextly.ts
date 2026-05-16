@@ -22,7 +22,11 @@ import {
 import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
-import { isExistingNextProject } from "./prompts/project-name";
+import {
+  isExistingNextProject,
+  promptDirectoryConflict,
+  promptForProjectName,
+} from "./prompts/project-name";
 import {
   getTemplatePromptOptions,
   isValidTemplateSelection,
@@ -35,6 +39,7 @@ import type {
   ProjectType,
 } from "./types";
 import { detectProject } from "./utils/detect";
+import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { copyTemplate } from "./utils/template";
 
 /**
@@ -59,8 +64,10 @@ export async function createNextly(
     defaults = false,
     skipInstall = false,
     useYalc = false,
-    installInCwd = false,
   } = options;
+  // installInCwd may flip to true at the interactive prompt when the user
+  // answers with "." or "./", so it has to be mutable.
+  let installInCwd = options.installInCwd ?? false;
   let { cwd = process.cwd() } = options;
 
   let isFreshProject = false;
@@ -102,25 +109,21 @@ export async function createNextly(
     if (options.projectNameFromArg) {
       projectName = options.projectNameFromArg;
     } else if (!defaults) {
-      const name = await p.text({
-        message: "What should your project be called?",
-        placeholder: "my-nextly-app",
-        defaultValue: "my-nextly-app",
-        validate: value => {
-          // Empty input uses the default value (handled by @clack/prompts defaultValue)
-          if (!value || !value.trim()) return undefined;
-          if (!/^[a-z0-9][a-z0-9._-]*$/.test(value)) {
-            return "Use lowercase letters, numbers, hyphens, dots, or underscores";
-          }
-        },
-      });
-
-      if (p.isCancel(name)) {
+      // Single source of truth for the project-name prompt. The helper
+      // funnels the user's answer through the same resolver as the
+      // positional CLI argument so "." / "./" / "./foo" / "foo/" behave
+      // identically on the command line and at the prompt.
+      const result = await promptForProjectName();
+      if (result.kind === "cancelled") {
         p.cancel("Cancelled.");
         return;
       }
-
-      projectName = name;
+      if (result.value.installInCwd) {
+        installInCwd = true;
+        projectName = path.basename(cwd);
+      } else {
+        projectName = result.value.projectName ?? "my-nextly-app";
+      }
     } else {
       projectName = "my-nextly-app";
     }
@@ -274,6 +277,32 @@ export async function createNextly(
   // --- Scaffold project from template ---
 
   if (isFreshProject && projectName) {
+    const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
+
+    // Negotiate any "directory already has files" conflict BEFORE we
+    // start spinners / downloads. Mirrors create-vite's three-option
+    // recovery prompt (cancel / remove / ignore) so the user has an
+    // in-CLI escape hatch instead of needing to `rm -rf` and re-run.
+    // `.git` is preserved on "remove" so a freshly `git init`-ed
+    // directory keeps its history.
+    let allowExistingTarget = false;
+    if (await isDirectoryNotEmpty(targetDir)) {
+      const targetLabel = installInCwd
+        ? "the current directory"
+        : `"${projectName}"`;
+      const choice = await promptDirectoryConflict(targetLabel);
+      if (choice === "cancel") {
+        p.cancel("Cancelled. No changes were made.");
+        return;
+      }
+      if (choice === "remove") {
+        await emptyDirectory(targetDir);
+      } else {
+        // "ignore" — overlay the template on top of existing files.
+        allowExistingTarget = true;
+      }
+    }
+
     const s = p.spinner();
     let templateSource: TemplateSource | undefined;
 
@@ -297,50 +326,32 @@ export async function createNextly(
         s.start("Scaffolding project...");
       }
 
-      // When installInCwd is true, scaffold directly into cwd (no subdirectory)
-      const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
+      await copyTemplate({
+        projectName,
+        projectType,
+        targetDir,
+        database,
+        databaseUrl,
+        useYalc,
+        approach,
+        templateSource,
+        // Suppress copyTemplate's "directory already exists" guard when the
+        // installer has already negotiated the conflict with the user
+        // (either by emptying the dir or accepting an overlay). Without
+        // this, the "ignore" path would still throw on the subdirectory
+        // case where the target was non-empty.
+        allowExistingTarget,
+      });
 
-      if (installInCwd) {
-        // For cwd installation, check if directory is empty enough
-        const entries = await fs.readdir(cwd);
-        const nonHidden = entries.filter(e => !e.startsWith("."));
-        if (nonHidden.length > 0) {
-          s.stop("Directory not empty");
-          p.cancel(
-            "Directory is not empty. Remove existing files or use a project name to create a subdirectory."
-          );
-          return;
-        }
-        await copyTemplate({
-          projectName,
-          projectType,
-          targetDir: cwd,
-          database,
-          databaseUrl,
-          useYalc,
-          approach,
-          templateSource,
-        });
-      } else {
-        await copyTemplate({
-          projectName,
-          projectType,
-          targetDir,
-          database,
-          databaseUrl,
-          useYalc,
-          approach,
-          templateSource,
-        });
-        cwd = targetDir;
-      }
+      if (!installInCwd) cwd = targetDir;
 
       s.stop("Project scaffolded");
     } catch (error) {
       s.stop("Scaffolding failed");
-      if (!installInCwd) {
-        // Clean up partial copy
-        const targetDir = path.join(cwd, projectName);
+      // Only roll back the target directory when WE created it from
+      // scratch. If the user accepted an overlay ("ignore"), preserve
+      // whatever they already had there.
+      if (!installInCwd && !allowExistingTarget) {
         if (await fs.pathExists(targetDir)) {
           await fs.remove(targetDir);
         }
