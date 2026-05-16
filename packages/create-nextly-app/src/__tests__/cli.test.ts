@@ -6,54 +6,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveProjectArg,
-  resolveProjectNameFromArg,
   validateProjectName,
+  validateProjectNamePromptInput,
 } from "../cli-args";
 
 // ============================================================
-// resolveProjectNameFromArg (deprecated, kept for backwards compat)
-// ============================================================
-
-describe("resolveProjectNameFromArg", () => {
-  it("returns undefined when no directory argument was passed", () => {
-    expect(resolveProjectNameFromArg(undefined)).toBeUndefined();
-  });
-
-  it("returns undefined when directory is '.' (commander default)", () => {
-    expect(resolveProjectNameFromArg(".")).toBeUndefined();
-  });
-
-  it("returns undefined when directory is an empty string", () => {
-    expect(resolveProjectNameFromArg("")).toBeUndefined();
-  });
-
-  it("uses the argument as the project name when given a simple name", () => {
-    expect(resolveProjectNameFromArg("postgres-code-first")).toBe(
-      "postgres-code-first"
-    );
-  });
-
-  it("uses the basename when given a nested path", () => {
-    expect(resolveProjectNameFromArg("some/path/foo")).toBe("foo");
-  });
-
-  it("uses the basename when given a trailing slash", () => {
-    expect(resolveProjectNameFromArg("foo/")).toBe("foo");
-  });
-
-  it("handles single-letter names", () => {
-    expect(resolveProjectNameFromArg("a")).toBe("a");
-  });
-
-  it("passes through names that contain dashes, dots, and underscores", () => {
-    expect(resolveProjectNameFromArg("my-nextly-app")).toBe("my-nextly-app");
-    expect(resolveProjectNameFromArg("my.test.app")).toBe("my.test.app");
-    expect(resolveProjectNameFromArg("my_app_1")).toBe("my_app_1");
-  });
-});
-
-// ============================================================
-// resolveProjectArg (new, replaces resolveProjectNameFromArg)
+// resolveProjectArg
 // ============================================================
 
 describe("resolveProjectArg", () => {
@@ -134,5 +92,46 @@ describe("validateProjectName", () => {
 
   it("rejects names with spaces", () => {
     expect(validateProjectName("my app")).toBeDefined();
+  });
+});
+
+// ============================================================
+// validateProjectNamePromptInput
+// ============================================================
+
+describe("validateProjectNamePromptInput", () => {
+  // Empty string is accepted at the validate step because @clack/prompts
+  // substitutes the `initialValue` / `defaultValue` for empty submissions.
+  // Rejecting it here would block Enter-to-accept-default.
+  it("accepts empty string (default value substitution)", () => {
+    expect(validateProjectNamePromptInput("")).toBeUndefined();
+  });
+
+  it("accepts whitespace-only input", () => {
+    expect(validateProjectNamePromptInput("   ")).toBeUndefined();
+  });
+
+  it("accepts '.' as cwd-install signal", () => {
+    expect(validateProjectNamePromptInput(".")).toBeUndefined();
+  });
+
+  it("accepts './' as cwd-install signal", () => {
+    expect(validateProjectNamePromptInput("./")).toBeUndefined();
+  });
+
+  it("accepts a plain folder name", () => {
+    expect(validateProjectNamePromptInput("my-project")).toBeUndefined();
+  });
+
+  it("accepts a leading './' path", () => {
+    expect(validateProjectNamePromptInput("./my-project")).toBeUndefined();
+  });
+
+  it("rejects an invalid folder name (uppercase)", () => {
+    expect(validateProjectNamePromptInput("MyApp")).toBeDefined();
+  });
+
+  it("rejects '..' (path traversal masquerading as name)", () => {
+    expect(validateProjectNamePromptInput("..")).toBeDefined();
   });
 });
