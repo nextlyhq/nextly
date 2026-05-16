@@ -16,8 +16,8 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import type { HookHandler } from "../../hooks/types";
-import type { SingleAccessControl } from "../../services/auth/access-control-types";
 
 // ============================================================
 // Single Labels
@@ -109,7 +109,7 @@ export interface SingleAdminOptions {
 // Access Control
 // ============================================================
 
-// SingleAccessControl is imported from services/auth/access-control-types
+// SingleAccessControl is imported from domains/auth/services/access-control-types
 // and re-exported from this module for convenience.
 // See access-control-types.ts for the full interface definition.
 

@@ -14,12 +14,12 @@
  * @packageDocumentation
  */
 
-import type { ApiKeyService } from "../../services/auth/api-key-service";
-import type { AuthService } from "../../services/auth/auth-service";
-import type { PermissionService } from "../../services/auth/permission-service";
-import type { RBACAccessControlService } from "../../services/auth/rbac-access-control-service";
-import type { RolePermissionService } from "../../services/auth/role-permission-service";
-import type { RoleService } from "../../services/auth/role-service";
+import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import type { AuthService } from "../../domains/auth/services/auth-service";
+import type { PermissionService } from "../../domains/auth/services/permission-service";
+import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import type { RolePermissionService } from "../../domains/auth/services/role-permission-service";
+import type { RoleService } from "../../domains/auth/services/role-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import type { EmailProviderService } from "../../services/email/email-provider-service";

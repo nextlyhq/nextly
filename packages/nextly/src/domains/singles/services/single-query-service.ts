@@ -23,6 +23,7 @@ import { sql } from "drizzle-orm";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
+import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import {
   buildContext,
   type BuildContextOptions,
@@ -33,7 +34,6 @@ import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import type { RBACAccessControlService } from "../../../services/auth/rbac-access-control-service";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { ComponentDataService } from "../../../services/components/component-data-service";

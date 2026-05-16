@@ -17,11 +17,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
 import { container } from "../../di/container";
-import { NextlyError } from "../../errors/nextly-error";
 import type {
   ApiKeyMeta,
   ApiKeyService,
-} from "../../services/auth/api-key-service";
+} from "../../domains/auth/services/api-key-service";
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   CheckAccessArgs,
   CheckApiKeyArgs,

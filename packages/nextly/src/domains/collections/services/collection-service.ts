@@ -174,6 +174,11 @@ export class CollectionService extends BaseService {
     this.metadataService.registerDynamicSchemas(schemas);
   }
 
+  /** Drop the cached Drizzle schema for one slug so the next load rebuilds it. */
+  invalidateSchemaForSlug(collectionName: string): void {
+    this.metadataService.invalidateSchemaForSlug(collectionName);
+  }
+
   /**
    * Create a new collection
    *

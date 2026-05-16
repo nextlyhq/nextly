@@ -18,10 +18,10 @@
  * domain is registered.
  */
 
+import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import { AccessControlService } from "../../services/access";
-import type { PermissionSeedService } from "../../services/auth/permission-seed-service";
-import type { RBACAccessControlService } from "../../services/auth/rbac-access-control-service";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
@@ -64,10 +64,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       try {
         const result = await adapter.selectOne<{
           fields: string;
-          table_name: string;
-          // Why: forward the Draft/Published flag so the FileManager's
-          // that includes the `status` column. SQLite returns 0/1; PG
-          // returns booleans; coerce both shapes below.
+          tableName: string;
           status: boolean | number | null;
         }>("dynamic_collections", {
           where: {
@@ -82,7 +79,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
               : result.fields;
           return {
             fields,
-            tableName: result.table_name,
+            tableName: result.tableName,
+            // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
             status: result.status === true || result.status === 1,
           };
         }

@@ -19,8 +19,8 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 // are deterministic.
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
+import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { getAuthLogger } from "../../lib/logger";
-import { PermissionCacheService } from "../auth/permission-cache-service";
 import type { Logger } from "../shared";
 
 if (typeof window !== "undefined") {

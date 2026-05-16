@@ -1,13 +1,13 @@
 import { container } from "@nextly/di/container";
 import type { NextlyServiceConfig } from "@nextly/di/register";
-import { env } from "@nextly/lib/env";
 import type {
   AccessControlContext,
   CollectionAccessControl,
   SingleAccessControl,
-} from "@nextly/services/auth/access-control-types";
-import type { ApiKeyService } from "@nextly/services/auth/api-key-service";
-import type { RBACAccessControlService } from "@nextly/services/auth/rbac-access-control-service";
+} from "@nextly/domains/auth/services/access-control-types";
+import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
+import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
+import { env } from "@nextly/lib/env";
 import {
   hasPermission,
   hasAnyPermission,

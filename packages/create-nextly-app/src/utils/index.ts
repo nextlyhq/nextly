@@ -1,2 +1,10 @@
 export { detectProject, detectPackageManager } from "./detect";
-export { ensureDir, pathExists, readJson, writeFile, appendFile } from "./fs";
+export {
+  appendFile,
+  emptyDirectory,
+  ensureDir,
+  isDirectoryNotEmpty,
+  pathExists,
+  readJson,
+  writeFile,
+} from "./fs";

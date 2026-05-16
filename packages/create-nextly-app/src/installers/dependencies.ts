@@ -1,6 +1,12 @@
 import { execa } from "execa";
 
-import type { DatabaseConfig, PackageManager, ProjectInfo } from "../types";
+import type {
+  DatabaseConfig,
+  PackageManager,
+  ProjectInfo,
+  ProjectType,
+} from "../types";
+import { projectUsesFormBuilder } from "../utils/template";
 
 const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
   npm: ["npm", "install"],
@@ -36,16 +42,22 @@ const ALL_ADAPTER_PACKAGES = [
 ];
 
 /**
- * Plugin packages that are shipped with every scaffold. Must stay in sync
- * with the plugin deps added in `generatePackageJson` (template.ts) - both
- * paths scaffold the same project, the only difference is whether deps
- * resolve from npm or yalc. Omitting these from the yalc list caused
- * runtime "Cannot find package '@nextlyhq/plugin-form-builder'" errors
- * in scaffolded projects whose templates import the plugin.
+ * Plugin packages added only for templates that register the plugin in their
+ * `nextly.config.ts`. Must stay in sync with the deps added by
+ * `generatePackageJson` (template.ts) — both paths scaffold the same project,
+ * the only difference is whether deps resolve from npm or yalc. The
+ * existing-project install path generates a blank-equivalent config, so it
+ * never needs these.
  */
-const TEMPLATE_PLUGIN_PACKAGES = [
-  "@nextlyhq/plugin-form-builder",
-];
+const TEMPLATE_PLUGIN_PACKAGES = ["@nextlyhq/plugin-form-builder"];
+
+function templatePluginPackages(
+  projectType: ProjectType | undefined
+): string[] {
+  return projectType && projectUsesFormBuilder(projectType)
+    ? TEMPLATE_PLUGIN_PACKAGES
+    : [];
+}
 
 /**
  * Get all packages that need to be installed for a given configuration.
@@ -67,9 +79,11 @@ export async function installDependencies(
   projectInfo: ProjectInfo,
   database: DatabaseConfig,
   useYalc: boolean = false,
-  isFreshProject: boolean = false
+  isFreshProject: boolean = false,
+  projectType?: ProjectType
 ): Promise<void> {
   const pm = projectInfo.packageManager;
+  const pluginPackages = templatePluginPackages(projectType);
 
   if (isFreshProject) {
     if (useYalc) {
@@ -84,7 +98,7 @@ export async function installDependencies(
           "@nextlyhq/ui",
           "@nextlyhq/adapter-drizzle",
           ...ALL_ADAPTER_PACKAGES,
-          ...TEMPLATE_PLUGIN_PACKAGES,
+          ...pluginPackages,
         ]),
       ];
 
@@ -114,7 +128,7 @@ export async function installDependencies(
           "@nextlyhq/ui",
           "@nextlyhq/adapter-drizzle",
           ...ALL_ADAPTER_PACKAGES,
-          ...TEMPLATE_PLUGIN_PACKAGES,
+          ...pluginPackages,
         ]),
       ];
 
