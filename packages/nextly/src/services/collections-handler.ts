@@ -5,13 +5,13 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
 import { container } from "../di/container";
+import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { AccessControlService } from "./access";
-import type { PermissionSeedService } from "./auth/permission-seed-service";
 import { CollectionFileManager } from "./collection-file-manager";
 import {
   CollectionEntryService,

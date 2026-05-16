@@ -18,6 +18,7 @@ import { toDbError } from "../../../database/errors";
 // PR 4 migration: replaced legacy ServiceError throws with the unified
 // NextlyError API. Public messages follow §13.8 — generic, no identifiers,
 // no constraint hints — and identifying detail moves to logContext.
+import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError } from "../../../errors";
 import type {
   DynamicCollectionInsert,
@@ -25,7 +26,6 @@ import type {
   MigrationStatus,
   CollectionSource,
 } from "../../../schemas/dynamic-collections/types";
-import type { PermissionSeedService } from "../../../services/auth/permission-seed-service";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../services/shared";
 import { BaseRegistryService } from "../../../shared/base-registry-service";

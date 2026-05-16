@@ -8,7 +8,7 @@
  * @example
  * ```typescript
  * import { createTestService } from "../helpers/service-factory";
- * import { RoleQueryService } from "../../services/auth/role/role-query-service";
+ * import { RoleQueryService } from "../../domains/auth/services/role/role-query-service";
  *
  * describe("RoleQueryService", () => {
  *   let ctx: TestServiceContext<RoleQueryService>;

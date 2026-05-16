@@ -3,14 +3,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getDialectTables } from "../database/index";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
+import { AuthService } from "../domains/auth/services/auth-service";
+import { PermissionCheckerService } from "../domains/auth/services/permission-checker-service";
+import { PermissionService } from "../domains/auth/services/permission-service";
+import { RoleInheritanceService } from "../domains/auth/services/role-inheritance-service";
+import { RolePermissionService } from "../domains/auth/services/role-permission-service";
+import { RoleService } from "../domains/auth/services/role-service";
+import { UserRoleService } from "../domains/auth/services/user-role-service";
 
-import { AuthService } from "./auth/auth-service";
-import { PermissionCheckerService } from "./auth/permission-checker-service";
-import { PermissionService } from "./auth/permission-service";
-import { RoleInheritanceService } from "./auth/role-inheritance-service";
-import { RolePermissionService } from "./auth/role-permission-service";
-import { RoleService } from "./auth/role-service";
-import { UserRoleService } from "./auth/user-role-service";
 import { CollectionsHandler } from "./collections-handler";
 import type { EmailService } from "./email/email-service";
 import { MediaService as LegacyMediaService } from "./media";
@@ -94,14 +94,14 @@ export {
   DynamicCollectionRegistryService,
 } from "../domains/dynamic-collections";
 
-export { RoleQueryService, RoleMutationService } from "./auth/role/index";
+export { RoleQueryService, RoleMutationService } from "../domains/auth/services/role/index";
 
-export { RoleService } from "./auth/role-service";
-export { PermissionService } from "./auth/permission-service";
-export { RolePermissionService } from "./auth/role-permission-service";
-export { UserRoleService } from "./auth/user-role-service";
-export { RoleInheritanceService } from "./auth/role-inheritance-service";
-export { PermissionCheckerService } from "./auth/permission-checker-service";
+export { RoleService } from "../domains/auth/services/role-service";
+export { PermissionService } from "../domains/auth/services/permission-service";
+export { RolePermissionService } from "../domains/auth/services/role-permission-service";
+export { UserRoleService } from "../domains/auth/services/user-role-service";
+export { RoleInheritanceService } from "../domains/auth/services/role-inheritance-service";
+export { PermissionCheckerService } from "../domains/auth/services/permission-checker-service";
 
 export {
   SystemTableService,
