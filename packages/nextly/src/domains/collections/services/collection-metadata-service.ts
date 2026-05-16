@@ -8,8 +8,8 @@ import { toDbError } from "../../../database/errors";
 // public method return shape (MetadataServiceResult) is preserved because
 // out-of-scope callers (CollectionService orchestrator, dynamic-collections)
 // still consume the result tuple; only the internal error mapping changed.
+import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError } from "../../../errors";
-import type { PermissionSeedService } from "../../../services/auth/permission-seed-service";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";

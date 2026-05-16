@@ -16,8 +16,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import type { RBACAccessControlService } from "../../../services/auth/rbac-access-control-service";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";

@@ -33,7 +33,7 @@
 
 import type { HookHandler } from "@nextly/hooks/types";
 
-import type { CollectionAccessControl } from "../../services/auth/access-control-types";
+import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { FieldConfig } from "../fields/types";
 
@@ -392,7 +392,7 @@ export interface CollectionAdminOptions {
 // Access Control
 // ============================================================
 
-// CollectionAccessControl is imported from services/auth/access-control-types
+// CollectionAccessControl is imported from domains/auth/services/access-control-types
 // and re-exported from this module for convenience.
 // See access-control-types.ts for the full interface definition.
 

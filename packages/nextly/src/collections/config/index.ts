@@ -66,4 +66,4 @@ export {
   type AccessControlFunction,
   type SingleAccessControl,
   type MinimalUser,
-} from "../../services/auth/access-control-types";
+} from "../../domains/auth/services/access-control-types";

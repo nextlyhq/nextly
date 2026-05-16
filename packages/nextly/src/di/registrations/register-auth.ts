@@ -18,10 +18,10 @@
  * factory because it only exists as a dependency of that one consumer.
  */
 
+import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { AuthService } from "../../domains/auth/services/auth-service";
-import { ApiKeyService } from "../../services/auth/api-key-service";
-import { PermissionSeedService } from "../../services/auth/permission-seed-service";
-import { RBACAccessControlService } from "../../services/auth/rbac-access-control-service";
+import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { EmailService } from "../../services/email/email-service";
 import { container } from "../container";
 

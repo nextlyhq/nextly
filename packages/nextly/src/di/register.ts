@@ -35,7 +35,10 @@ import type { FieldConfig } from "../collections/fields/types";
 import type { ComponentConfig } from "../components/config/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
+import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
+import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import type { MetaService } from "../domains/meta";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
@@ -50,9 +53,6 @@ import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
-import type { ApiKeyService } from "../services/auth/api-key-service";
-import type { PermissionSeedService } from "../services/auth/permission-seed-service";
-import type { RBACAccessControlService } from "../services/auth/rbac-access-control-service";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
