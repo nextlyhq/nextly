@@ -26,10 +26,10 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { CreateApiKeySchema, UpdateApiKeySchema } from "../schemas/api-keys";
-import type { ApiKeyService } from "../services/auth/api-key-service";
 import { isSuperAdmin } from "../services/lib/permissions";
 
 import { readJsonBody } from "./read-json-body";

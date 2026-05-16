@@ -28,7 +28,7 @@
  * Display prefix   : first 16 chars ("nx_live_abcdefgh") for masked UI display
  * ```
  *
- * @module services/auth/api-key-service
+ * @module domains/auth/services/api-key-service
  * @since 1.0.0
  */
 

@@ -32,6 +32,7 @@ import { toDbError } from "../../../database/errors";
 // PR 4 migration: ServiceError throws replaced with NextlyError per spec
 // §13.8 — public messages stay generic ("Resource already exists.", etc.)
 // while identifiers (slug, source, conflicting names) move into logContext.
+import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError } from "../../../errors";
 import type {
   DynamicSingleInsert,
@@ -39,7 +40,6 @@ import type {
   SingleMigrationStatus,
   SingleSource,
 } from "../../../schemas/dynamic-singles/types";
-import type { PermissionSeedService } from "../../../services/auth/permission-seed-service";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import {
   BaseRegistryService,
