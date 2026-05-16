@@ -3,7 +3,7 @@
 import * as telemetry from "@nextlyhq/telemetry";
 import { Command } from "commander";
 
-import { resolveProjectArg } from "./cli-args";
+import { resolveProjectArg, validateProjectName } from "./cli-args";
 import { createNextly } from "./create-nextly";
 import type { DatabaseType, ProjectApproach, ProjectType } from "./types";
 
@@ -86,6 +86,17 @@ Examples:
       try {
         const cwd = process.cwd();
         const { projectName, installInCwd } = resolveProjectArg(directory);
+
+        // Reject malformed positional arguments up-front so the user sees the
+        // error before the interactive flow starts. The interactive prompt
+        // applies the same validator, so the two entry points stay in sync.
+        if (projectName) {
+          const nameError = validateProjectName(projectName);
+          if (nameError) {
+            console.error(`Error: Invalid project name '${projectName}'. ${nameError}.`);
+            process.exit(1);
+          }
+        }
 
         const projectType = options.template as ProjectType | undefined;
 

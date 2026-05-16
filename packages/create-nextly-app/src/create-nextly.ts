@@ -23,6 +23,7 @@ import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
 import {
+  DEFAULT_PROJECT_NAME,
   isExistingNextProject,
   promptDirectoryConflict,
   promptForProjectName,
@@ -41,6 +42,23 @@ import type {
 import { detectProject } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { copyTemplate } from "./utils/template";
+
+/**
+ * Pick a safe project name when the user has chosen "install in cwd".
+ *
+ * `path.basename("/")` returns `""`, which would silently propagate through
+ * the scaffold (the `isFreshProject && projectName` guard later in this
+ * file evaluates false on empty strings) and leave the user with a half-
+ * scaffolded directory. Also defends against directory names that aren't
+ * valid as the `package.json` "name" field (npm forbids uppercase, etc).
+ */
+function cwdProjectName(cwd: string): string {
+  const basename = path.basename(cwd);
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(basename)) {
+    return DEFAULT_PROJECT_NAME;
+  }
+  return basename;
+}
 
 /**
  * Main entry point for scaffolding Nextly in a Next.js project.
@@ -102,7 +120,7 @@ export async function createNextly(
     }
   } else if (installInCwd) {
     // "." was passed but it's not a Next.js project - scaffold in cwd
-    projectName = path.basename(cwd);
+    projectName = cwdProjectName(cwd);
     isFreshProject = true;
   } else {
     // Interactive or defaults: get project name
@@ -120,15 +138,54 @@ export async function createNextly(
       }
       if (result.value.installInCwd) {
         installInCwd = true;
-        projectName = path.basename(cwd);
+        projectName = cwdProjectName(cwd);
       } else {
-        projectName = result.value.projectName ?? "my-nextly-app";
+        projectName = result.value.projectName ?? DEFAULT_PROJECT_NAME;
       }
     } else {
-      projectName = "my-nextly-app";
+      projectName = DEFAULT_PROJECT_NAME;
     }
 
     isFreshProject = true;
+  }
+
+  // --- Step 1b: Directory-conflict recovery ---
+  //
+  // Resolve any "directory already has files" conflict NOW, before the user
+  // wastes time answering template / approach / database prompts. The
+  // original bug (silent fall-through to a cwd install that aborted after
+  // five answered prompts) is the reason this check exists; running it
+  // late would partially re-create that bad UX.
+  //
+  // `allowExistingTarget` is captured here and reused by the scaffold step
+  // below. It's only meaningful when `isFreshProject` is true; for the
+  // "install into existing Next project" path, the user has already
+  // consented to using their current directory.
+  let allowExistingTarget = false;
+  if (isFreshProject && projectName) {
+    const conflictTargetDir = installInCwd ? cwd : path.join(cwd, projectName);
+    if (await isDirectoryNotEmpty(conflictTargetDir)) {
+      const targetLabel = installInCwd
+        ? "the current directory"
+        : `"${projectName}"`;
+      const choice = await promptDirectoryConflict(targetLabel);
+      if (choice === "cancel") {
+        p.cancel("Cancelled. No changes were made.");
+        return;
+      }
+      // Both "remove" and "ignore" tell copyTemplate the conflict has
+      // already been negotiated with the user. emptyDirectory only
+      // empties the directory (it preserves `.git`), so the dir still
+      // exists afterwards — copyTemplate's "directory already exists"
+      // guard would still trip on the subdirectory path unless we
+      // flip the flag here.
+      allowExistingTarget = true;
+      if (choice === "remove") {
+        await emptyDirectory(conflictTargetDir);
+      }
+      // "ignore" falls through — overlay the template on top of
+      // existing files (fs.copy overwrites by default).
+    }
   }
 
   // --- Step 2: Template selection ---
@@ -279,30 +336,6 @@ export async function createNextly(
   if (isFreshProject && projectName) {
     const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
 
-    // Negotiate any "directory already has files" conflict BEFORE we
-    // start spinners / downloads. Mirrors create-vite's three-option
-    // recovery prompt (cancel / remove / ignore) so the user has an
-    // in-CLI escape hatch instead of needing to `rm -rf` and re-run.
-    // `.git` is preserved on "remove" so a freshly `git init`-ed
-    // directory keeps its history.
-    let allowExistingTarget = false;
-    if (await isDirectoryNotEmpty(targetDir)) {
-      const targetLabel = installInCwd
-        ? "the current directory"
-        : `"${projectName}"`;
-      const choice = await promptDirectoryConflict(targetLabel);
-      if (choice === "cancel") {
-        p.cancel("Cancelled. No changes were made.");
-        return;
-      }
-      if (choice === "remove") {
-        await emptyDirectory(targetDir);
-      } else {
-        // "ignore" — overlay the template on top of existing files.
-        allowExistingTarget = true;
-      }
-    }
-
     const s = p.spinner();
     let templateSource: TemplateSource | undefined;
 
@@ -348,9 +381,15 @@ export async function createNextly(
       s.stop("Project scaffolded");
     } catch (error) {
       s.stop("Scaffolding failed");
-      // Only roll back the target directory when WE created it from
-      // scratch. If the user accepted an overlay ("ignore"), preserve
-      // whatever they already had there.
+      // Roll back only when this CLI run created the target subdirectory
+      // from scratch (`allowExistingTarget === false`). Skip rollback when:
+      //   - installInCwd: the user owns their cwd; never delete it.
+      //   - allowExistingTarget: the target pre-existed (user picked
+      //     "remove" or "ignore"). In the "remove" case `.git` was
+      //     preserved by emptyDirectory(); rolling back here would
+      //     `fs.remove(targetDir)` and destroy it. In the "ignore" case a
+      //     partial scaffold on top of user files is still better than
+      //     losing the user's files.
       if (!installInCwd && !allowExistingTarget) {
         if (await fs.pathExists(targetDir)) {
           await fs.remove(targetDir);

@@ -3,7 +3,7 @@ import path from "path";
 import * as p from "@clack/prompts";
 import fs from "fs-extra";
 
-import { resolveProjectArg, validateProjectName } from "../cli-args";
+import { resolveProjectArg, validateProjectNamePromptInput } from "../cli-args";
 import type { ResolvedArg } from "../cli-args";
 
 /**
@@ -53,21 +53,14 @@ export type PromptForProjectNameResult =
 export async function promptForProjectName(): Promise<PromptForProjectNameResult> {
   const answer = await p.text({
     message: "What should your project be called?",
-    // `initialValue` pre-fills the buffer so Enter accepts the default. Using
-    // `placeholder` alone (the previous behavior) returns an empty string on
-    // Enter, which silently fell through to a cwd install — the root cause
-    // of the original bug.
+    // `initialValue` pre-fills the buffer so Enter accepts the default.
+    // The previous version used `placeholder` alone, which returned an
+    // empty string on Enter and silently fell through to a cwd install —
+    // the root cause of the original bug. `placeholder` is omitted here
+    // because clack only shows it when the buffer is empty, and the
+    // initialValue keeps it populated.
     initialValue: DEFAULT_PROJECT_NAME,
-    placeholder: DEFAULT_PROJECT_NAME,
-    validate: value => {
-      if (!value || !value.trim()) {
-        return "Please enter a folder name (or '.' to use the current directory)";
-      }
-      const trimmed = value.trim();
-      if (trimmed === "." || trimmed === "./") return undefined;
-      const projectName = path.basename(trimmed);
-      return validateProjectName(projectName);
-    },
+    validate: validateProjectNamePromptInput,
   });
 
   if (p.isCancel(answer)) {

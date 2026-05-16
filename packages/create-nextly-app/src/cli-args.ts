@@ -34,7 +34,10 @@ export function resolveProjectArg(directory: string | undefined): ResolvedArg {
     return { projectName: undefined, installInCwd: false };
   }
 
-  // path.basename("./") === "" — normalize "./" the same way as "."
+  // path.basename("./") === "." (verified Node 20+), so leaving "./" to
+  // fall through to the basename branch below would set projectName="."
+  // and treat it as a normal subdirectory — wrong. Short-circuit "."
+  // and "./" to the cwd-install path.
   if (trimmed === "." || trimmed === "./") {
     return { projectName: undefined, installInCwd: true };
   }
@@ -60,14 +63,27 @@ export function validateProjectName(name: string): string | undefined {
 }
 
 /**
- * @deprecated Use resolveProjectArg instead. Kept for backwards compatibility
- * with existing tests during migration.
+ * Validate a raw answer from the project-name prompt. Returns an error
+ * string when invalid, or `undefined` when the value is acceptable.
+ *
+ * Unlike `validateProjectName`, this helper accepts the prompt's special
+ * shapes — empty string (which the prompt will replace with the default
+ * value), `"."` / `"./"` (cwd install), and `"./foo"` paths — applying
+ * the strict name regex only to the basename of a free-form folder name.
+ *
+ * Extracted from the prompt's inline `validate` lambda so the logic can
+ * be unit-tested without driving the interactive prompt.
  */
-export function resolveProjectNameFromArg(
-  directory: string | undefined
+export function validateProjectNamePromptInput(
+  value: string | undefined
 ): string | undefined {
-  if (!directory || directory === ".") {
-    return undefined;
-  }
-  return path.basename(directory);
+  // Accept undefined / empty / whitespace-only so @clack/prompts can
+  // substitute the prompt's initialValue. Rejecting them here would block
+  // Enter-to-accept-default.
+  const trimmed = (value ?? "").trim();
+  if (trimmed === "") return undefined;
+  if (trimmed === "." || trimmed === "./") return undefined;
+  const candidate = trimmed.startsWith("./") ? trimmed.slice(2) : trimmed;
+  return validateProjectName(path.basename(candidate));
 }
+
