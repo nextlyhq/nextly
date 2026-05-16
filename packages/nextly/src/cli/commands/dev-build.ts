@@ -11,7 +11,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { PermissionSeedService } from "../../services/auth/permission-seed-service";
+import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {

@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
+import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
@@ -38,7 +39,6 @@ import type {
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
-import type { RBACAccessControlService } from "../auth/rbac-access-control-service";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
 import type { ComponentDataService } from "../components/component-data-service";

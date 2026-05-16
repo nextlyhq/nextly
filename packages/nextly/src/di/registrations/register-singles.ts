@@ -10,10 +10,10 @@
  *   unified RBAC access control service, and a hook registry.
  */
 
+import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
-import type { PermissionSeedService } from "../../services/auth/permission-seed-service";
-import type { RBACAccessControlService } from "../../services/auth/rbac-access-control-service";
 import type { ComponentDataService } from "../../services/components";
 import { container } from "../container";
 

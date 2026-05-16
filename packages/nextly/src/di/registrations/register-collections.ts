@@ -18,10 +18,10 @@
  * domain is registered.
  */
 
+import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import { AccessControlService } from "../../services/access";
-import type { PermissionSeedService } from "../../services/auth/permission-seed-service";
-import type { RBACAccessControlService } from "../../services/auth/rbac-access-control-service";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";

@@ -15,12 +15,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RequestContext } from "@nextly/collections/fields/types/base";
 
+import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type {
   AccessControlService,
   CollectionAccessRules,
   AccessOperation,
 } from "../../../services/access";
-import type { RBACAccessControlService } from "../../../services/auth/rbac-access-control-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";

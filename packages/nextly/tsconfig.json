@@ -13,6 +13,7 @@
       "@nextly/collections/*": ["./src/collections/*"],
       "@nextly/database/*": ["./src/database/*"],
       "@nextly/di/*": ["./src/di/*"],
+      "@nextly/domains/*": ["./src/domains/*"],
       "@nextly/errors": ["./src/errors/index.ts"],
       "@nextly/hooks/*": ["./src/hooks/*"],
       "@nextly/lib/*": ["./src/lib/*"],

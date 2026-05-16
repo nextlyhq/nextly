@@ -40,7 +40,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { SingleAccessControl } from "../../services/auth/access-control-types";
+import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 
 import type {
   SingleConfig,
