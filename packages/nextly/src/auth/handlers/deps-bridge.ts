@@ -9,7 +9,6 @@
  * we delegate directly. For new operations (refresh tokens, brute-force tracking),
  * we use the database adapter directly.
  */
-
 import { getDialectTables } from "../../database/index";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
@@ -448,12 +447,10 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
     const config = getService("config");
     if (config && typeof config === "object" && "security" in config) {
       const security = (config as { security?: unknown }).security;
-      if (
-        security &&
-        typeof security === "object" &&
-        "trustProxy" in security
-      ) {
-        return (security as { trustProxy?: unknown }).trustProxy === true;
+      if (security && typeof security === "object" && "trustProxy" in security) {
+        return (
+          (security as { trustProxy?: unknown }).trustProxy === true
+        );
       }
     }
     return false;
@@ -467,10 +464,9 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
  * DI container. Falls back to the default 30 req/IP/hour, 1-hour window
  * when unset or the container is not yet initialised.
  */
-function readAuthRateLimit(getService: (name: string) => unknown): {
-  requestsPerHour: number;
-  windowMs: number;
-} {
+function readAuthRateLimit(
+  getService: (name: string) => unknown
+): { requestsPerHour: number; windowMs: number } {
   const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
   try {
     const config = getService("config");
