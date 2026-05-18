@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/tsconfig",
-  "version": "0.0.2-alpha.7",
+  "version": "0.0.2-alpha.8",
   "description": "Shared TypeScript configuration for Nextly",
   "private": true,
   "license": "MIT",
