@@ -32,6 +32,7 @@
     "initial-alpha-release",
     "neon-schema-apply-perf",
     "scope-form-builder-to-blog",
-    "single-document-cache-invalidation"
+    "single-document-cache-invalidation",
+    "sync-private-package-versions"
   ]
 }
