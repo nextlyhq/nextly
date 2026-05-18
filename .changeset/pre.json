@@ -28,6 +28,7 @@
     "fix-status-column-strip",
     "flat-bugs-float",
     "initial-alpha-release",
+    "neon-schema-apply-perf",
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation"
   ]
