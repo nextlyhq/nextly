@@ -22,6 +22,7 @@
   },
   "changesets": [
     "absolute-media-urls",
+    "absolutize-media-variants",
     "api-default-all-statuses",
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
