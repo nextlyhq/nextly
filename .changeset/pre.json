@@ -21,6 +21,7 @@
     "@nextlyhq/ui": "0.0.1"
   },
   "changesets": [
+    "absolute-media-urls",
     "api-default-all-statuses",
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
