@@ -137,15 +137,22 @@ function isAbsoluteUrl(url: string): boolean {
 /**
  * Prefix a relative media URL with `baseUrl`. Absolute / protocol-relative
  * URLs are returned unchanged. `null` / `undefined` / `""` pass through.
+ *
+ * `baseUrl` is resolved lazily — the env-backed default fires only when a
+ * relative URL actually needs prefixing. Pass-through cases (absolute
+ * URLs and nullish inputs) do not access the env, so callers in
+ * contexts that have not booted env validation can still rely on the
+ * "absolute URLs pass through" contract.
  */
 export function toAbsoluteMediaUrl<T extends string | null | undefined>(
   url: T,
-  baseUrl: string = getMediaBaseUrl()
+  baseUrl?: string
 ): T {
   if (!url) return url;
   if (isAbsoluteUrl(url)) return url;
+  const resolvedBase = baseUrl ?? getMediaBaseUrl();
   const path = url.startsWith("/") ? url : `/${url}`;
-  return `${baseUrl}${path}` as T;
+  return `${resolvedBase}${path}` as T;
 }
 
 type MediaSizes = Record<
@@ -154,21 +161,53 @@ type MediaSizes = Record<
 > | null;
 
 /**
+ * Coerce whatever shape Drizzle returned for `media.sizes` into an object
+ * (or null). PostgreSQL/MySQL store the column as `jsonb`/`json` and
+ * return an object; SQLite stores it as TEXT and returns a JSON string —
+ * neither `keysToCamelCase` nor the drizzle better-sqlite3 driver parse
+ * it. Return null on absent / unparseable input so callers can branch
+ * cleanly without re-implementing the dialect check.
+ */
+function normalizeSizes(value: unknown): MediaSizes {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as MediaSizes;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as MediaSizes;
+      }
+    } catch {
+      // Unparseable JSON in the DB column — fall through to null.
+    }
+  }
+  return null;
+}
+
+/**
  * Apply `toAbsoluteMediaUrl` to every URL field on a media row, including
  * the nested `sizes` variants. Returns a new object — does not mutate.
+ *
+ * Tolerates `sizes` arriving as a JSON-encoded string (SQLite) and
+ * normalises it to an object in the output so downstream API consumers
+ * see a uniform shape regardless of dialect. `baseUrl` is lazily resolved
+ * for the same reason as `toAbsoluteMediaUrl`.
  */
 export function absolutizeMediaUrls<
   T extends {
     url?: string | null;
     thumbnailUrl?: string | null;
-    sizes?: MediaSizes;
+    sizes?: MediaSizes | string;
   },
->(row: T, baseUrl: string = getMediaBaseUrl()): T {
-  const sizes = row.sizes;
-  let absolutizedSizes: MediaSizes = sizes ?? null;
-  if (sizes && typeof sizes === "object") {
+>(row: T, baseUrl?: string): T {
+  const hasSizesKey = "sizes" in row;
+  const normalizedSizes = normalizeSizes(row.sizes);
+
+  let absolutizedSizes: MediaSizes = normalizedSizes;
+  if (normalizedSizes) {
     absolutizedSizes = Object.fromEntries(
-      Object.entries(sizes).map(([name, variant]) => [
+      Object.entries(normalizedSizes).map(([name, variant]) => [
         name,
         variant && typeof variant === "object"
           ? {
@@ -184,6 +223,6 @@ export function absolutizeMediaUrls<
     ...row,
     url: toAbsoluteMediaUrl(row.url ?? null, baseUrl),
     thumbnailUrl: toAbsoluteMediaUrl(row.thumbnailUrl ?? null, baseUrl),
-    ...(sizes !== undefined ? { sizes: absolutizedSizes } : {}),
+    ...(hasSizesKey ? { sizes: absolutizedSizes } : {}),
   };
 }
