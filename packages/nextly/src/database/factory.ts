@@ -107,8 +107,30 @@ export async function createAdapter(
     );
   }
 
-  // Merge configuration with defaults
-  const adapterConfig = { ...config, url };
+  // Merge configuration with defaults, layering env-driven pool/timeouts
+  // underneath any explicit config the caller passed. The DB_POOL_* env
+  // vars have always been declared in env.ts but were never plumbed
+  // through to the adapter — this restores the documented contract.
+  // Caller-supplied `config.pool` / `config.queryTimeout` win.
+  //
+  // env values fall through to `undefined` when the operator hasn't set
+  // the corresponding env var (the schemas are `.optional()` — see
+  // shared/lib/env.ts). That lets the adapter's `??` cascade keep its
+  // own dialect-specific defaults intact (e.g. the Postgres adapter's
+  // `min: 0` cold-start-friendly default for Neon).
+  const adapterConfig = {
+    ...config,
+    url,
+    pool: {
+      ...(config?.pool ?? {}),
+      max: config?.pool?.max ?? env.DB_POOL_MAX,
+      min: config?.pool?.min ?? env.DB_POOL_MIN,
+      idleTimeoutMs: config?.pool?.idleTimeoutMs ?? env.DB_POOL_IDLE_TIMEOUT,
+    },
+    queryTimeout:
+      (config as { queryTimeout?: number } | undefined)?.queryTimeout ??
+      env.DB_QUERY_TIMEOUT,
+  };
 
   // Load the matching adapter via a literal-string dynamic import per
   // dialect. The previous shape used a runtime variable specifier

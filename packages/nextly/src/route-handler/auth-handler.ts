@@ -80,16 +80,42 @@ async function ensureServicesInitialized(): Promise<void> {
       if (nextlyConfig.users) serviceConfig.users = nextlyConfig.users;
       if (nextlyConfig.admin) serviceConfig.admin = nextlyConfig.admin;
       if (nextlyConfig.auth) serviceConfig.auth = nextlyConfig.auth;
-      if (nextlyConfig.security)
-        serviceConfig.security = nextlyConfig.security;
-      if (nextlyConfig.apiKeys)
-        serviceConfig.apiKeys = nextlyConfig.apiKeys;
+      if (nextlyConfig.security) serviceConfig.security = nextlyConfig.security;
+      if (nextlyConfig.apiKeys) serviceConfig.apiKeys = nextlyConfig.apiKeys;
       if (nextlyConfig.db) {
         const dbConfig = nextlyConfig.db as Record<string, unknown>;
         if (dbConfig.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;
         if (dbConfig.migrationsDir)
           serviceConfig.migrationsDir = dbConfig.migrationsDir;
       }
+    }
+
+    // Warn (dev only) when an app boots through the request path instead
+    // of via Next.js's instrumentation.ts. The request-path boot still
+    // works, but with multiple Next.js workers it multiplies cold-start
+    // introspection + permission seeding by worker count and is a
+    // significant amplifier of Neon connection pressure. The fix is one
+    // line in the user's `instrumentation.ts`. See:
+    // https://nextly.dev/docs/getting-started/instrumentation
+    //
+    // Gate on `=== "development"` (not `!== "production"`) to match
+    // boot-apply.ts and to avoid polluting `test` runs and staging logs
+    // where the audience can't take action on the warning.
+    if (
+      process.env.NODE_ENV === "development" &&
+      // eslint-disable-next-line turbo/no-undeclared-env-vars
+      process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING !== "1"
+    ) {
+      console.warn(
+        "[nextly] Cold-boot triggered by an incoming request — no " +
+          "instrumentation.ts detected. Each Next.js worker will now " +
+          "independently run schema introspection and permission seeding " +
+          "against your database, multiplying connection load. Add an " +
+          "`instrumentation.ts` at your project root (see " +
+          "https://nextly.dev/docs/getting-started/instrumentation) to " +
+          "fold this into a single worker-warmup. Suppress with " +
+          "NEXTLY_DISABLE_INSTRUMENTATION_WARNING=1."
+      );
     }
 
     await registerServices(serviceConfig as unknown as NextlyServiceConfig);
@@ -229,7 +255,7 @@ export async function handleAuthRequest(
   const authPath = params.slice(1).join("/");
 
   // Build deps from DI container and route to the appropriate handler
-   
+
   const deps = buildAuthRouterDeps(getService as (name: string) => unknown);
   const response = await routeAuthRequest(req, authPath, deps);
 

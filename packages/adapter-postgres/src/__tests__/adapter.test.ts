@@ -822,6 +822,50 @@ describe("PostgresAdapter", () => {
     });
   });
 
+  describe("provider defaults applied to Pool", () => {
+    it("applies Neon statement_timeout default when user does not override", async () => {
+      const neonAdapter = new PostgresAdapter({
+        url: "postgres://user:pass@ep-cool-x.us-east-2.aws.neon.tech/db",
+      });
+      await neonAdapter.connect();
+
+      expect(MockPool.lastConfig?.statement_timeout).toBe(30000);
+    });
+
+    it("user statementTimeout overrides provider default", async () => {
+      const neonAdapter = new PostgresAdapter({
+        url: "postgres://user:pass@ep-cool-x.us-east-2.aws.neon.tech/db",
+        statementTimeout: 5000,
+      });
+      await neonAdapter.connect();
+
+      expect(MockPool.lastConfig?.statement_timeout).toBe(5000);
+    });
+
+    it("applies standard provider statement_timeout default (15000) when user does not override", async () => {
+      const stdAdapter = new PostgresAdapter({
+        url: "postgres://user:pass@localhost:5432/db",
+      });
+      await stdAdapter.connect();
+
+      // standard provider's statementTimeoutMs default of 15000 should now apply
+      expect(MockPool.lastConfig?.statement_timeout).toBe(15000);
+    });
+
+    it("statementTimeout: 0 disables the timeout even when the Neon provider default would set 30000", async () => {
+      // PG semantics: statement_timeout = 0 means "no timeout". Verify the
+      // ?? fallback in buildPoolConfig() passes 0 through rather than treating
+      // it as falsy and using the provider default.
+      const adapter = new PostgresAdapter({
+        url: "postgres://user:pass@ep-cool-x.us-east-2.aws.neon.tech/db",
+        statementTimeout: 0,
+      });
+      await adapter.connect();
+
+      expect(MockPool.lastConfig?.statement_timeout).toBe(0);
+    });
+  });
+
   describe("Logger Integration", () => {
     it("should call logger.query on successful query", async () => {
       const logger = {
@@ -901,6 +945,62 @@ describe("PostgresAdapter", () => {
       errorHandler(testError);
 
       expect(logger.error).toHaveBeenCalledWith(testError, expect.any(Object));
+    });
+  });
+
+  describe("Happy Eyeballs cross-region fix", () => {
+    // Why: Node 20+ defaults net.setDefaultAutoSelectFamilyAttemptTimeout to
+    // 250ms. For consumers >250ms RTT from their DB (transcontinental cloud
+    // databases — e.g. Neon Singapore from Pakistan ~310ms) every TCP attempt
+    // gets killed mid-handshake and pg surfaces ETIMEDOUT after exhausting
+    // every resolved address. The adapter bumps the floor to 5000ms on first
+    // connect() so the per-address budget fits a realistic transcontinental
+    // RTT.
+    //
+    // We can't vi.spyOn(net.*) because Node ESM exports are frozen. Instead
+    // we assert the observable global state: after connect(), the Happy
+    // Eyeballs timeout is at least 5000ms.
+    it("raises the Happy Eyeballs per-address timeout to at least 5000ms on first connect()", async () => {
+      const net = await import("node:net");
+
+      // Force the global back down so the patch must fire. Skip the test
+      // entirely on Node versions that lack the API (< 20).
+      if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout !== "function") {
+        return;
+      }
+      net.setDefaultAutoSelectFamilyAttemptTimeout(250);
+
+      // applyHappyEyeballsTimeoutOnce uses a module-scoped flag so the
+      // patch fires once per worker. Reset modules so the next import
+      // starts the flag at false.
+      vi.resetModules();
+      const { PostgresAdapter: FreshAdapter } = await import("../index");
+      const adapter = new FreshAdapter({
+        url: "postgres://user:pass@localhost:5432/db",
+      });
+      await adapter.connect();
+
+      const current = net.getDefaultAutoSelectFamilyAttemptTimeout();
+      expect(current).toBeGreaterThanOrEqual(5000);
+    });
+
+    it("does not lower an already-higher value set by another caller", async () => {
+      const net = await import("node:net");
+      if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout !== "function") {
+        return;
+      }
+      // Pre-set a higher floor than our 5000ms — the patch must leave it.
+      net.setDefaultAutoSelectFamilyAttemptTimeout(10000);
+
+      vi.resetModules();
+      const { PostgresAdapter: FreshAdapter } = await import("../index");
+      const adapter = new FreshAdapter({
+        url: "postgres://user:pass@localhost:5432/db",
+      });
+      await adapter.connect();
+
+      const current = net.getDefaultAutoSelectFamilyAttemptTimeout();
+      expect(current).toBe(10000);
     });
   });
 });

@@ -57,6 +57,8 @@ import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 import { getProductionNotifier } from "../runtime/notifications/index";
 
+import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
+
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
 // Return value is `unknown` because ESLint's no-redundant-type-constituents
@@ -161,16 +163,28 @@ export async function reloadNextlyConfig(opts?: {
   // nextly.config.ts mid-edit with syntax errors during dev. Without this
   // guard, the loader rejection bubbles through getNextly() and turns
   // every subsequent request into a 500.
-  let newConfig: { collections?: CollectionDef[]; singles?: SingleDef[]; components?: ComponentDef[] } | undefined;
+  let newConfig:
+    | {
+        collections?: CollectionDef[];
+        singles?: SingleDef[];
+        components?: ComponentDef[];
+      }
+    | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
     );
     clearConfigCache();
     const result = await loadConfig();
-    newConfig = (result as {
-      config?: { collections?: CollectionDef[]; singles?: SingleDef[]; components?: ComponentDef[] };
-    }).config;
+    newConfig = (
+      result as {
+        config?: {
+          collections?: CollectionDef[];
+          singles?: SingleDef[];
+          components?: ComponentDef[];
+        };
+      }
+    ).config;
   } catch (err) {
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
@@ -296,22 +310,31 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  if (targets.length === 0 && singleTargets.length === 0 && componentTargets.length === 0) return;
+  if (
+    targets.length === 0 &&
+    singleTargets.length === 0 &&
+    componentTargets.length === 0
+  )
+    return;
+
+  // Extracted once so the same list is passed to introspectLiveSnapshot
+  // AND registered in the live-snapshot cache for the pipeline to reuse.
+  const managedTableNames = [
+    ...targets.map(t => t.tableName),
+    ...singleTargets.map(t => t.tableName),
+    ...componentTargets.map(t => t.tableName),
+  ];
+
+  // Cache is meant to dedupe within a single logical apply boundary only —
+  // wipe any stale entry from a previous apply before we start this one.
+  clearLiveSnapshots();
 
   // ONE batched introspect for every managed table the config knows about
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
   let liveSnapshot: NextlySchemaSnapshot;
   try {
-    liveSnapshot = await introspectLiveSnapshot(
-      db,
-      dialect,
-      [
-        ...targets.map(t => t.tableName),
-        ...singleTargets.map(t => t.tableName),
-        ...componentTargets.map(t => t.tableName),
-      ]
-    );
+    liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -320,6 +343,10 @@ export async function reloadNextlyConfig(opts?: {
     );
     return;
   }
+
+  // Register so PushSchemaPipeline.apply can skip its own introspect call
+  // within this apply boundary. See setLiveSnapshot for the contract.
+  setLiveSnapshot(managedTableNames, liveSnapshot);
   const liveByTable = new Map<string, TableSpec>();
   for (const t of liveSnapshot.tables) liveByTable.set(t.name, t);
 
@@ -374,7 +401,6 @@ export async function reloadNextlyConfig(opts?: {
         desiredCollections[target.slug] = entry;
         continue;
       }
-
       hasChanges = true;
       desiredCollections[target.slug] = entry;
     } catch (err) {
@@ -421,7 +447,6 @@ export async function reloadNextlyConfig(opts?: {
         desiredSingles[target.slug] = entry;
         continue;
       }
-
       hasChanges = true;
       desiredSingles[target.slug] = entry;
     } catch (err) {
@@ -466,7 +491,6 @@ export async function reloadNextlyConfig(opts?: {
         desiredComponents[target.slug] = entry;
         continue;
       }
-
       hasChanges = true;
       desiredComponents[target.slug] = entry;
     } catch (err) {
@@ -583,11 +607,11 @@ export async function reloadNextlyConfig(opts?: {
           const labelStr =
             typeof s.label === "string"
               ? s.label
-              : s.label?.singular ??
+              : (s.label?.singular ??
                 s.slug
                   .split(/[-_]/)
                   .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" ");
+                  .join(" "));
           return {
             slug: s.slug,
             label: labelStr,
@@ -633,11 +657,11 @@ export async function reloadNextlyConfig(opts?: {
           const labelStr =
             typeof c.label === "string"
               ? c.label
-              : c.label?.singular ??
+              : (c.label?.singular ??
                 c.slug
                   .split(/[-_]/)
                   .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" ");
+                  .join(" "));
           return {
             slug: c.slug,
             label: labelStr,
@@ -693,7 +717,9 @@ export async function reloadNextlyConfig(opts?: {
     // Refresh SchemaRegistry.dynamicSchemas — used by the adapter's CRUD
     // path (INSERT / UPDATE / DELETE) for dc_*, single_*, and comp_* tables.
     try {
-      const schemaReg = (await resolve("schemaRegistry")) as SchemaRegistrySurface;
+      const schemaReg = (await resolve(
+        "schemaRegistry"
+      )) as SchemaRegistrySurface;
       for (const [tableName, table] of collectionFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
@@ -750,10 +776,7 @@ export async function reloadNextlyConfig(opts?: {
       // a "FAILED" line that reads like a bug.
       const detail = applyResult.error.message
         .replace(/^TTY required for schema confirmation\.\s*/i, "")
-        .replace(
-          /\s*Run from an interactive terminal,.*$/i,
-          ""
-        )
+        .replace(/\s*Run from an interactive terminal,.*$/i, "")
         .trim();
       console.warn(
         `\n[Nextly] Schema change needs your confirmation:\n` +
@@ -775,58 +798,32 @@ export async function reloadNextlyConfig(opts?: {
   }
 }
 
-// Decides whether a collection's ops are safe to auto-apply in code-first.
-// The gate borrows the pipeline's own RegexRenameDetector dialect rules
-// implicitly through the diff so it sees the same drop+add candidates
-// the pipeline + clack dispatcher will.
+// Decides whether a collection's ops can be auto-applied from code-first.
 //
-//   - Pure additive (add_*, change_column_default) -> safe.
-//   - drop_column in a table where the same-table drop count <= add count
-//     -> safe (the dispatcher can pair every drop to at least one
-//     potential rename target; the user confirms or declines per drop).
-//   - drop_column in a table where drops > adds -> unsafe. The dispatcher
-//     can only ever confirm `min(drops, adds)` renames, so the surplus
-//     drops fall through as drop_and_add (silent data loss). Standalone
-//     drops with zero same-table adds are the same case (drops > 0,
-//     adds = 0).
-//   - drop_table, change_column_type, NOT NULL adds -> unsafe (lossy
-//     and no Classifier-driven prompt yet; F5 will refine).
+// Most destructive ops now flow into the pipeline's Classifier +
+// ClackTerminalPromptDispatcher (drop_column → destructive_drop event;
+// rename pairs → shrinking-pool prompt). This gate only catches the
+// shapes for which the pipeline does not yet have an interactive
+// resolution UX:
+//
+//   - drop_table: no destructive-confirm event exists for tables yet.
+//   - change_column_type: only emits a warning, no resolution.
+//   - change_column_nullable (NOT NULL adds on existing rows): pipeline
+//     classifier emits add_not_null_with_nulls + asks the user, BUT
+//     only when there are actually NULL rows. Tables with no NULLs flow
+//     through silently — fine. Tables that DO have NULLs prompt
+//     correctly. This gate is therefore a no-op for the NOT NULL case
+//     today; kept here only as a future-proof slot.
+//
+// Pure-drop, mixed drop+add, type widenings, and additive changes all
+// pass through to the pipeline.
 function classifyForCodeFirst(
   operations: Operation[],
   _dialect: SupportedDialect
 ): { safe: true } | { safe: false; reason: string } {
   if (operations.length === 0) return { safe: true };
 
-  // Per-table drop / add counts. The asymmetry test below is the
-  // load-bearing rename safety check: if every drop has at least one
-  // potential rename target in the same table (drops <= adds) the
-  // dispatcher can ask the user; otherwise some drops would silently
-  // become data loss even after the user confirms.
-  const dropsPerTable = new Map<string, number>();
-  const addsPerTable = new Map<string, number>();
-  for (const op of operations) {
-    if (op.type === "drop_column") {
-      dropsPerTable.set(
-        op.tableName,
-        (dropsPerTable.get(op.tableName) ?? 0) + 1
-      );
-    } else if (op.type === "add_column") {
-      addsPerTable.set(op.tableName, (addsPerTable.get(op.tableName) ?? 0) + 1);
-    }
-  }
-
   const reasons: string[] = [];
-  for (const [t, drops] of dropsPerTable) {
-    const adds = addsPerTable.get(t) ?? 0;
-    if (drops > adds) {
-      const surplus = drops - adds;
-      reasons.push(
-        adds === 0
-          ? `drops ${drops} column(s) from '${t}' with no replacement(s); ${surplus} cannot be renamed without data loss`
-          : `drops ${drops} columns from '${t}' but only ${adds} replacement(s); at least ${surplus} cannot be renamed without data loss`
-      );
-    }
-  }
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
