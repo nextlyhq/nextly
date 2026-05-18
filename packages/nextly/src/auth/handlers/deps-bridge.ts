@@ -9,7 +9,6 @@
  * we delegate directly. For new operations (refresh tokens, brute-force tracking),
  * we use the database adapter directly.
  */
-
 import { getDialectTables } from "../../database/index";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
@@ -250,12 +249,10 @@ export function buildAuthRouterDeps(
     },
 
     createSuperAdmin: async data => {
-      const { seedPermissions } = await import(
-        "../../database/seeders/permissions"
-      );
-      const { seedSuperAdmin } = await import(
-        "../../database/seeders/super-admin"
-      );
+      const { seedPermissions } =
+        await import("../../database/seeders/permissions");
+      const { seedSuperAdmin } =
+        await import("../../database/seeders/super-admin");
       const adapter = getService("adapter");
 
       // Seed permissions first (seedSuperAdmin needs them to assign to the admin)
@@ -292,9 +289,8 @@ export function buildAuthRouterDeps(
     },
 
     seedPermissions: async () => {
-      const { seedPermissions } = await import(
-        "../../database/seeders/permissions"
-      );
+      const { seedPermissions } =
+        await import("../../database/seeders/permissions");
       const adapter = getService("adapter");
       await seedPermissions(adapter, { silent: true });
     },
