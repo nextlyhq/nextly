@@ -364,3 +364,76 @@ describe("RealClassifier — NOT NULL detection (F5)", () => {
     expect(result.events).toHaveLength(0);
   });
 });
+
+describe("RealClassifier — destructive_drop detection", () => {
+  // Standalone drops (no rename candidate) need explicit user confirmation.
+  // The classifier emits a destructive_drop event per drop_column op; the
+  // ClackTerminalPromptDispatcher renders it as a confirm/abort prompt.
+  // Drops that DO have rename candidates are filtered upstream by the
+  // pipeline orchestrator (the shrinking-pool prompt covers them) — see
+  // pushschema-pipeline.ts.
+  it("emits destructive_drop for every drop_column op with the introspected type + row count", async () => {
+    const op: Operation = {
+      type: "drop_column",
+      tableName: "dc_posts",
+      columnName: "excerpt",
+      columnType: "text",
+    };
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [op],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn(),
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "postgresql",
+    });
+    expect(result.level).toBe("interactive");
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    expect(event.kind).toBe("destructive_drop");
+    if (event.kind === "destructive_drop") {
+      expect(event.tableName).toBe("dc_posts");
+      expect(event.columnName).toBe("excerpt");
+      expect(event.columnType).toBe("text");
+      expect(event.tableRowCount).toBe(12);
+      expect(event.applicableResolutions).toEqual(["confirm_drop", "abort"]);
+    }
+  });
+
+  it("emits one destructive_drop per drop_column op across mixed batches", async () => {
+    const ops: Operation[] = [
+      {
+        type: "drop_column",
+        tableName: "dc_posts",
+        columnName: "excerpt",
+        columnType: "text",
+      },
+      {
+        type: "drop_column",
+        tableName: "dc_posts",
+        columnName: "byline",
+        columnType: "text",
+      },
+      {
+        type: "add_table",
+        table: { name: "dc_new", columns: [] },
+      },
+    ];
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: ops,
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn(),
+      countRows: vi.fn().mockResolvedValue(0),
+      dialect: "postgresql",
+    });
+    const drops = result.events.filter(e => e.kind === "destructive_drop");
+    expect(drops).toHaveLength(2);
+    expect(drops.map(d => ("columnName" in d ? d.columnName : ""))).toEqual([
+      "excerpt",
+      "byline",
+    ]);
+  });
+});

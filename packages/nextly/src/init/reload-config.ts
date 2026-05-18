@@ -401,12 +401,6 @@ export async function reloadNextlyConfig(opts?: {
         desiredCollections[target.slug] = entry;
         continue;
       }
-      if (classification.warnings) {
-        for (const w of classification.warnings) {
-          logger?.warn(`[Nextly HMR] '${target.slug}': ${w}`);
-        }
-      }
-
       hasChanges = true;
       desiredCollections[target.slug] = entry;
     } catch (err) {
@@ -453,12 +447,6 @@ export async function reloadNextlyConfig(opts?: {
         desiredSingles[target.slug] = entry;
         continue;
       }
-      if (classification.warnings) {
-        for (const w of classification.warnings) {
-          logger?.warn(`[Nextly HMR] single '${target.slug}': ${w}`);
-        }
-      }
-
       hasChanges = true;
       desiredSingles[target.slug] = entry;
     } catch (err) {
@@ -503,12 +491,6 @@ export async function reloadNextlyConfig(opts?: {
         desiredComponents[target.slug] = entry;
         continue;
       }
-      if (classification.warnings) {
-        for (const w of classification.warnings) {
-          logger?.warn(`[Nextly HMR] component '${target.slug}': ${w}`);
-        }
-      }
-
       hasChanges = true;
       desiredComponents[target.slug] = entry;
     } catch (err) {
@@ -816,81 +798,32 @@ export async function reloadNextlyConfig(opts?: {
   }
 }
 
-// Decides whether a collection's ops are safe to auto-apply in code-first.
-// The gate borrows the pipeline's own RegexRenameDetector dialect rules
-// implicitly through the diff so it sees the same drop+add candidates
-// the pipeline + clack dispatcher will.
+// Decides whether a collection's ops can be auto-applied from code-first.
 //
-//   - Pure additive (add_*, change_column_default) -> safe.
-//   - drop_column in a table where the same-table drop count <= add count
-//     -> safe (the dispatcher can pair every drop to at least one
-//     potential rename target; the user confirms or declines per drop).
-//   - drop_column in a table where drops > adds -> unsafe. The dispatcher
-//     can only ever confirm `min(drops, adds)` renames, so the surplus
-//     drops fall through as drop_and_add (silent data loss). Standalone
-//     drops with zero same-table adds are the same case (drops > 0,
-//     adds = 0).
-//   - drop_table, change_column_type, NOT NULL adds -> unsafe (lossy
-//     and no Classifier-driven prompt yet; F5 will refine).
+// Most destructive ops now flow into the pipeline's Classifier +
+// ClackTerminalPromptDispatcher (drop_column → destructive_drop event;
+// rename pairs → shrinking-pool prompt). This gate only catches the
+// shapes for which the pipeline does not yet have an interactive
+// resolution UX:
+//
+//   - drop_table: no destructive-confirm event exists for tables yet.
+//   - change_column_type: only emits a warning, no resolution.
+//   - change_column_nullable (NOT NULL adds on existing rows): pipeline
+//     classifier emits add_not_null_with_nulls + asks the user, BUT
+//     only when there are actually NULL rows. Tables with no NULLs flow
+//     through silently — fine. Tables that DO have NULLs prompt
+//     correctly. This gate is therefore a no-op for the NOT NULL case
+//     today; kept here only as a future-proof slot.
+//
+// Pure-drop, mixed drop+add, type widenings, and additive changes all
+// pass through to the pipeline.
 function classifyForCodeFirst(
   operations: Operation[],
   _dialect: SupportedDialect
-): { safe: true; warnings?: string[] } | { safe: false; reason: string } {
+): { safe: true } | { safe: false; reason: string } {
   if (operations.length === 0) return { safe: true };
 
-  // Opt-in escape hatch for the code-first delete workflow: when the
-  // operator removes fields from a code-first collection/single/component
-  // definition, the resulting pure-drop ops are otherwise gated to the
-  // admin Schema Builder because they cannot be distinguished from an
-  // accidental edit. Setting NEXTLY_ALLOW_CODE_FIRST_DROPS=1 says
-  // "I treat the config as the source of truth, drop the columns" —
-  // matches Drizzle Kit's --force and Prisma's --accept-data-loss.
-  //
-  // The flag relaxes ONLY pure-drop ops (drops > 0, adds = 0 on the
-  // same table). drop_table, type changes, NOT NULL adds, and mixed
-  // drop+add (rename ambiguity) stay gated unconditionally — they are
-  // either more destructive or have no safe non-interactive resolution.
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
-  const allowPureDrops = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
-
-  // Per-table drop / add bookkeeping. Names are captured (not just counts)
-  // so the force-apply audit log can spell out exactly which columns are
-  // about to be dropped.
-  const dropsPerTable = new Map<string, string[]>();
-  const addsPerTable = new Map<string, number>();
-  for (const op of operations) {
-    if (op.type === "drop_column") {
-      const names = dropsPerTable.get(op.tableName) ?? [];
-      names.push(op.columnName);
-      dropsPerTable.set(op.tableName, names);
-    } else if (op.type === "add_column") {
-      addsPerTable.set(op.tableName, (addsPerTable.get(op.tableName) ?? 0) + 1);
-    }
-  }
-
   const reasons: string[] = [];
-  const warnings: string[] = [];
-  for (const [t, dropNames] of dropsPerTable) {
-    const drops = dropNames.length;
-    const adds = addsPerTable.get(t) ?? 0;
-    if (drops <= adds) continue;
-    // Pure-drop case (no rename ambiguity to resolve): allow when the
-    // operator explicitly opted in. Surface the column names so the
-    // operator sees what's being destroyed in the dev terminal.
-    if (allowPureDrops && adds === 0) {
-      warnings.push(
-        `force-dropping ${drops} column(s) from '${t}' per ` +
-          `NEXTLY_ALLOW_CODE_FIRST_DROPS=1: ${dropNames.join(", ")}`
-      );
-      continue;
-    }
-    const surplus = drops - adds;
-    reasons.push(
-      adds === 0
-        ? `drops ${drops} column(s) from '${t}' with no replacement(s); ${surplus} cannot be renamed without data loss`
-        : `drops ${drops} columns from '${t}' but only ${adds} replacement(s); at least ${surplus} cannot be renamed without data loss`
-    );
-  }
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
@@ -908,5 +841,5 @@ function classifyForCodeFirst(
   if (reasons.length > 0) {
     return { safe: false, reason: reasons.join("; ") };
   }
-  return warnings.length > 0 ? { safe: true, warnings } : { safe: true };
+  return { safe: true };
 }

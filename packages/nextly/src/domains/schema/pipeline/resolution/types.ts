@@ -15,18 +15,27 @@ export type ResolutionKind =
   | "provide_default"
   | "make_optional"
   | "delete_nonconforming"
+  | "confirm_drop"
   | "abort";
 
 export type Resolution =
   | { kind: "provide_default"; eventId: string; value: unknown }
   | { kind: "make_optional"; eventId: string }
   | { kind: "delete_nonconforming"; eventId: string }
+  // The user confirmed a destructive_drop event after seeing the column
+  // name, type, and row count in the prompt. Pipeline keeps the
+  // corresponding drop_column op.
+  | { kind: "confirm_drop"; eventId: string }
   | { kind: "abort"; eventId: string };
 
 export type ClassifierEventKind =
   | "add_not_null_with_nulls"
   | "add_required_field_no_default"
-  | "type_change";
+  | "type_change"
+  // Emitted for every drop_column op the diff produces. Fulfils the
+  // F5 destructive-confirm slot the pipeline anticipated (see
+  // diff/types.ts:130). Dispatched as a confirm/abort prompt.
+  | "destructive_drop";
 
 interface BaseEvent {
   id: string;
@@ -58,10 +67,22 @@ export interface TypeChangeEvent extends BaseEvent {
   perDialectWarning: { pg: string; mysql: string; sqlite: string };
 }
 
+// Emitted for every drop_column op the diff produces (one event per
+// column). Carries the introspected column type and row count so the
+// prompt can show the user the magnitude of the destruction before
+// they confirm.
+export interface DestructiveDropEvent extends BaseEvent {
+  kind: "destructive_drop";
+  columnType: string;
+  tableRowCount: number;
+  applicableResolutions: ResolutionKind[];
+}
+
 export type ClassifierEvent =
   | AddNotNullWithNullsEvent
   | AddRequiredFieldNoDefaultEvent
-  | TypeChangeEvent;
+  | TypeChangeEvent
+  | DestructiveDropEvent;
 
 export interface ClassificationResult {
   level: ClassificationLevel;
@@ -74,6 +95,7 @@ const CLASSIFIER_EVENT_KINDS: ReadonlySet<ClassifierEventKind> = new Set([
   "add_not_null_with_nulls",
   "add_required_field_no_default",
   "type_change",
+  "destructive_drop",
 ]);
 
 // Stable serializable id for an event. Format: "<kind>:<table>.<column>".

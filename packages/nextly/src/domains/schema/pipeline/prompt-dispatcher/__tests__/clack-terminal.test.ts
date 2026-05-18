@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RenameCandidate } from "../../pushschema-pipeline-interfaces";
+import type {
+  RenameCandidate,
+  ResolutionKind,
+} from "../../pushschema-pipeline-interfaces";
 import {
   ClackTerminalPromptDispatcher,
   TTYRequiredError,
@@ -10,6 +13,8 @@ import {
 // We mock the module so tests can drive prompt outcomes deterministically
 // without an actual terminal.
 const mockSelect = vi.fn();
+const mockConfirm = vi.fn();
+const mockNote = vi.fn();
 const mockIntro = vi.fn();
 const mockOutro = vi.fn();
 const mockIsCancel = vi.fn(
@@ -18,6 +23,8 @@ const mockIsCancel = vi.fn(
 
 vi.mock("@clack/prompts", () => ({
   select: (...args: unknown[]) => mockSelect(...args),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+  note: (...args: unknown[]) => mockNote(...args),
   intro: (...args: unknown[]) => mockIntro(...args),
   outro: (...args: unknown[]) => mockOutro(...args),
   isCancel: (value: unknown) => mockIsCancel(value),
@@ -206,6 +213,123 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
     ).toEqual(["title->name", "body->summary"]);
     // Only 2 prompts fired (one per drop), even though there were 4 raw candidates.
     expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
+  let originalStdinIsTTY: boolean | undefined;
+  let originalStdoutIsTTY: boolean | undefined;
+  let originalFlag: string | undefined;
+
+  beforeEach(() => {
+    originalStdinIsTTY = process.stdin.isTTY;
+    originalStdoutIsTTY = process.stdout.isTTY;
+    originalFlag = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process.stdout, "isTTY", {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    delete process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: originalStdinIsTTY,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process.stdout, "isTTY", {
+      value: originalStdoutIsTTY,
+      configurable: true,
+      writable: true,
+    });
+    if (originalFlag === undefined)
+      delete process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    else process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = originalFlag;
+  });
+
+  const dropEvent = (col: string, type = "text", rows = 5) => ({
+    id: `destructive_drop:dc_posts.${col}`,
+    kind: "destructive_drop" as const,
+    tableName: "dc_posts",
+    columnName: col,
+    columnType: type,
+    tableRowCount: rows,
+    applicableResolutions: ["confirm_drop", "abort"] as ResolutionKind[],
+  });
+
+  it("user confirms a single drop; emits one confirm_drop resolution", async () => {
+    mockConfirm.mockResolvedValue(true);
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("excerpt", "text", 5)],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toEqual([
+      { kind: "confirm_drop", eventId: "destructive_drop:dc_posts.excerpt" },
+    ]);
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    // The note rendered above the prompt surfaces the type + row count.
+    expect(mockNote).toHaveBeenCalled();
+  });
+
+  it("user declines a drop; proceed=false and the pipeline aborts", async () => {
+    mockConfirm.mockResolvedValue(false);
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("excerpt")],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(false);
+    expect(result.resolutions).toEqual([]);
+  });
+
+  it("prompts once per destructive_drop event", async () => {
+    mockConfirm.mockResolvedValue(true);
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [
+        dropEvent("excerpt"),
+        dropEvent("byline"),
+        dropEvent("subtitle"),
+      ],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toHaveLength(3);
+    expect(result.resolutions.every(r => r.kind === "confirm_drop")).toBe(true);
+    expect(mockConfirm).toHaveBeenCalledTimes(3);
+  });
+
+  it("NEXTLY_ALLOW_CODE_FIRST_DROPS=1 auto-confirms every drop with no clack interaction", async () => {
+    process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = "1";
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events: [dropEvent("excerpt"), dropEvent("byline")],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(true);
+    expect(result.resolutions).toHaveLength(2);
+    expect(result.resolutions.every(r => r.kind === "confirm_drop")).toBe(true);
+    // Flag path skips the entire intro/confirm/note frame.
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockIntro).not.toHaveBeenCalled();
   });
 });
 
