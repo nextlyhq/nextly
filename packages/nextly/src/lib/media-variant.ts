@@ -1,12 +1,19 @@
+import { getBaseUrl } from "./get-base-url";
+
 /**
  * Media variant helpers
  *
- * Public-facing utility for picking a sized image variant URL from a Media
- * record. Consumers (admin UI, public Next.js apps reading the API) call
- * `getMediaVariant(media, "card")` instead of cracking open the
- * `media.sizes` JSON themselves.
+ * Public-facing utilities for working with Media URLs in API responses:
  *
- * Selection rules (in order):
+ *   - `getMediaVariant(media, "card")` — pick a sized image variant URL
+ *     from a Media record without cracking open the `sizes` JSON.
+ *   - `toAbsoluteMediaUrl(url)` / `absolutizeMediaUrls(row)` — prefix
+ *     storage-relative URLs (`/uploads/...` from the local adapter) with
+ *     `NEXT_PUBLIC_APP_URL` so API consumers (mobile clients, external
+ *     services, edge workers) can resolve them. Cloud-adapter URLs
+ *     (S3/Vercel Blob/R2) are already absolute and pass through unchanged.
+ *
+ * Variant selection rules (in order):
  *   1. If `media.sizes[name]` exists, return its URL.
  *   2. If `media.sizes[fallbackName]` exists, return its URL (when caller
  *      passes one).
@@ -103,4 +110,80 @@ export function getSmallestMediaVariant(
   }
 
   return media.thumbnailUrl ?? media.url;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// URL absolutization
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute the base URL used to absolutize relative media URLs. Thin
+ * wrapper around the shared `getBaseUrl` helper so this module re-exports
+ * a domain-named alias for callers reasoning about media specifically.
+ */
+export function getMediaBaseUrl(): string {
+  return getBaseUrl();
+}
+
+/**
+ * Return `true` when the URL is already absolute (`http(s)://`) or
+ * protocol-relative (`//`). These come from cloud storage adapters and
+ * must not be re-prefixed.
+ */
+function isAbsoluteUrl(url: string): boolean {
+  return /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url);
+}
+
+/**
+ * Prefix a relative media URL with `baseUrl`. Absolute / protocol-relative
+ * URLs are returned unchanged. `null` / `undefined` / `""` pass through.
+ */
+export function toAbsoluteMediaUrl<T extends string | null | undefined>(
+  url: T,
+  baseUrl: string = getMediaBaseUrl()
+): T {
+  if (!url) return url;
+  if (isAbsoluteUrl(url)) return url;
+  const path = url.startsWith("/") ? url : `/${url}`;
+  return `${baseUrl}${path}` as T;
+}
+
+type MediaSizes = Record<
+  string,
+  { url?: string | null; [key: string]: unknown }
+> | null;
+
+/**
+ * Apply `toAbsoluteMediaUrl` to every URL field on a media row, including
+ * the nested `sizes` variants. Returns a new object — does not mutate.
+ */
+export function absolutizeMediaUrls<
+  T extends {
+    url?: string | null;
+    thumbnailUrl?: string | null;
+    sizes?: MediaSizes;
+  },
+>(row: T, baseUrl: string = getMediaBaseUrl()): T {
+  const sizes = row.sizes;
+  let absolutizedSizes: MediaSizes = sizes ?? null;
+  if (sizes && typeof sizes === "object") {
+    absolutizedSizes = Object.fromEntries(
+      Object.entries(sizes).map(([name, variant]) => [
+        name,
+        variant && typeof variant === "object"
+          ? {
+              ...variant,
+              url: toAbsoluteMediaUrl(variant.url ?? null, baseUrl),
+            }
+          : variant,
+      ])
+    );
+  }
+
+  return {
+    ...row,
+    url: toAbsoluteMediaUrl(row.url ?? null, baseUrl),
+    thumbnailUrl: toAbsoluteMediaUrl(row.thumbnailUrl ?? null, baseUrl),
+    ...(sizes !== undefined ? { sizes: absolutizedSizes } : {}),
+  };
 }
