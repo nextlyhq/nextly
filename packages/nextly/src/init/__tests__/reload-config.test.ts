@@ -86,9 +86,7 @@ describe("reloadNextlyConfig", () => {
 
   // Build a service resolver fake. Returns the service or undefined per
   // service name. Tests pass this into reloadNextlyConfig via opts.resolver.
-  function buildResolver(opts?: {
-    withAdapter?: boolean;
-  }) {
+  function buildResolver(opts?: { withAdapter?: boolean }) {
     const withAdapter = opts?.withAdapter ?? true;
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
     const registerDynamicSchemaSpy = vi.fn();
@@ -305,6 +303,89 @@ describe("reloadNextlyConfig", () => {
     expect(warningArg).toContain("dc_users");
     expect(warningArg).toContain("no replacement");
     expect(warningArg).toContain("data loss");
+  });
+
+  it("applies a standalone drop when NEXTLY_ALLOW_CODE_FIRST_DROPS=1 and logs an audit line", async () => {
+    const prev = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = "1";
+    try {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            {
+              slug: "users",
+              tableName: "dc_users",
+              fields: [],
+            },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        liveSnapshot("dc_users", [
+          ...SQLITE_RESERVED,
+          { name: "phone", type: "text", nullable: true },
+          { name: "fax", type: "text", nullable: true },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // Flag opted in -> apply runs (not blocked).
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      // Audit warning names the columns being destroyed.
+      expect(warnSpy).toHaveBeenCalled();
+      const auditLine = warnSpy.mock.calls
+        .map(c => c[0] as string)
+        .find(s => s.includes("force-dropping"));
+      expect(auditLine).toBeDefined();
+      expect(auditLine).toContain("dc_users");
+      expect(auditLine).toContain("phone");
+      expect(auditLine).toContain("fax");
+      expect(auditLine).toContain("NEXTLY_ALLOW_CODE_FIRST_DROPS=1");
+    } finally {
+      if (prev === undefined) delete process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+      else process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = prev;
+    }
+  });
+
+  it("does NOT relax mixed drop+add (rename ambiguity) even with NEXTLY_ALLOW_CODE_FIRST_DROPS=1", async () => {
+    const prev = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+    process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = "1";
+    try {
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            {
+              slug: "users",
+              tableName: "dc_users",
+              // 2 drops (phone, fax) but only 1 add (mobile) -> still
+              // ambiguous (mobile could be a rename of either column).
+              fields: [{ name: "mobile", type: "text" }],
+            },
+          ],
+        },
+      });
+      introspectSpy.mockResolvedValue(
+        liveSnapshot("dc_users", [
+          ...SQLITE_RESERVED,
+          { name: "phone", type: "text", nullable: true },
+          { name: "fax", type: "text", nullable: true },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+      const warning = warnSpy.mock.calls
+        .map(c => c[0] as string)
+        .find(s => s.includes("needs review"));
+      expect(warning).toBeDefined();
+    } finally {
+      if (prev === undefined) delete process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS;
+      else process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS = prev;
+    }
   });
 
   it("skips a column type change and logs a warning", async () => {
@@ -549,7 +630,10 @@ describe("reloadNextlyConfig", () => {
         config: {
           components: [
             { slug: "hero", fields: [{ name: "title", type: "text" }] },
-            { slug: "seo-meta", fields: [{ name: "description", type: "text" }] },
+            {
+              slug: "seo-meta",
+              fields: [{ name: "description", type: "text" }],
+            },
           ],
         },
       });
@@ -564,7 +648,9 @@ describe("reloadNextlyConfig", () => {
       await reloadNextlyConfig({ resolver: buildResolver() });
 
       expect(introspectSpy).toHaveBeenCalledTimes(1);
-      const tableNames = (introspectSpy.mock.calls[0] as [unknown, string, string[]])[2];
+      const tableNames = (
+        introspectSpy.mock.calls[0] as [unknown, string, string[]]
+      )[2];
       expect(tableNames).toContain("comp_hero");
       expect(tableNames).toContain("comp_seo_meta");
     });
@@ -584,7 +670,9 @@ describe("reloadNextlyConfig", () => {
       const { reloadNextlyConfig } = await import("../reload-config");
       await reloadNextlyConfig({ resolver: buildResolver() });
 
-      const tableNames = (introspectSpy.mock.calls[0] as [unknown, string, string[]])[2];
+      const tableNames = (
+        introspectSpy.mock.calls[0] as [unknown, string, string[]]
+      )[2];
       expect(tableNames).toContain("comp_seo_meta");
       expect(tableNames).not.toContain("comp_seo-meta");
     });
