@@ -5,6 +5,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { getDialectTables } from "../../../database";
 import { keysToCamelCase } from "../../../lib/case-conversion";
+import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -1493,7 +1494,15 @@ export class CollectionRelationshipService extends BaseService {
       // Recursively convert snake_case fields to camelCase for API response
       // Database may return snake_case columns (thumbnail_url, mime_type, etc.)
       // This handles nested objects and arrays within media records
-      return rows.map(row => keysToCamelCase(row) as Record<string, unknown>);
+      return rows.map(row => {
+        const camel = keysToCamelCase(row) as Record<string, unknown>;
+        // Local storage adapter stores relative URLs (`/uploads/...`); cloud
+        // adapters store absolute URLs. absolutizeMediaUrls leaves absolute
+        // URLs untouched and prefixes relative ones with NEXT_PUBLIC_APP_URL
+        // so populated media in entry responses is reachable by external
+        // clients.
+        return absolutizeMediaUrls(camel);
+      });
     } catch (error) {
       console.error("Failed to fetch media by IDs:", error);
       return [];
