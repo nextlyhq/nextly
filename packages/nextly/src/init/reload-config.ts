@@ -57,6 +57,8 @@ import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 import { getProductionNotifier } from "../runtime/notifications/index";
 
+import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
+
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
 // Return value is `unknown` because ESLint's no-redundant-type-constituents
@@ -161,16 +163,28 @@ export async function reloadNextlyConfig(opts?: {
   // nextly.config.ts mid-edit with syntax errors during dev. Without this
   // guard, the loader rejection bubbles through getNextly() and turns
   // every subsequent request into a 500.
-  let newConfig: { collections?: CollectionDef[]; singles?: SingleDef[]; components?: ComponentDef[] } | undefined;
+  let newConfig:
+    | {
+        collections?: CollectionDef[];
+        singles?: SingleDef[];
+        components?: ComponentDef[];
+      }
+    | undefined;
   try {
     const { loadConfig, clearConfigCache } = await import(
       "../cli/utils/config-loader"
     );
     clearConfigCache();
     const result = await loadConfig();
-    newConfig = (result as {
-      config?: { collections?: CollectionDef[]; singles?: SingleDef[]; components?: ComponentDef[] };
-    }).config;
+    newConfig = (
+      result as {
+        config?: {
+          collections?: CollectionDef[];
+          singles?: SingleDef[];
+          components?: ComponentDef[];
+        };
+      }
+    ).config;
   } catch (err) {
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
@@ -296,22 +310,31 @@ export async function reloadNextlyConfig(opts?: {
     });
   }
 
-  if (targets.length === 0 && singleTargets.length === 0 && componentTargets.length === 0) return;
+  if (
+    targets.length === 0 &&
+    singleTargets.length === 0 &&
+    componentTargets.length === 0
+  )
+    return;
+
+  // Extracted once so the same list is passed to introspectLiveSnapshot
+  // AND registered in the live-snapshot cache for the pipeline to reuse.
+  const managedTableNames = [
+    ...targets.map(t => t.tableName),
+    ...singleTargets.map(t => t.tableName),
+    ...componentTargets.map(t => t.tableName),
+  ];
+
+  // Cache is meant to dedupe within a single logical apply boundary only —
+  // wipe any stale entry from a previous apply before we start this one.
+  clearLiveSnapshots();
 
   // ONE batched introspect for every managed table the config knows about
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
   let liveSnapshot: NextlySchemaSnapshot;
   try {
-    liveSnapshot = await introspectLiveSnapshot(
-      db,
-      dialect,
-      [
-        ...targets.map(t => t.tableName),
-        ...singleTargets.map(t => t.tableName),
-        ...componentTargets.map(t => t.tableName),
-      ]
-    );
+    liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -320,6 +343,10 @@ export async function reloadNextlyConfig(opts?: {
     );
     return;
   }
+
+  // Register so PushSchemaPipeline.apply can skip its own introspect call
+  // within this apply boundary. See setLiveSnapshot for the contract.
+  setLiveSnapshot(managedTableNames, liveSnapshot);
   const liveByTable = new Map<string, TableSpec>();
   for (const t of liveSnapshot.tables) liveByTable.set(t.name, t);
 
@@ -583,11 +610,11 @@ export async function reloadNextlyConfig(opts?: {
           const labelStr =
             typeof s.label === "string"
               ? s.label
-              : s.label?.singular ??
+              : (s.label?.singular ??
                 s.slug
                   .split(/[-_]/)
                   .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" ");
+                  .join(" "));
           return {
             slug: s.slug,
             label: labelStr,
@@ -633,11 +660,11 @@ export async function reloadNextlyConfig(opts?: {
           const labelStr =
             typeof c.label === "string"
               ? c.label
-              : c.label?.singular ??
+              : (c.label?.singular ??
                 c.slug
                   .split(/[-_]/)
                   .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-                  .join(" ");
+                  .join(" "));
           return {
             slug: c.slug,
             label: labelStr,
@@ -693,7 +720,9 @@ export async function reloadNextlyConfig(opts?: {
     // Refresh SchemaRegistry.dynamicSchemas — used by the adapter's CRUD
     // path (INSERT / UPDATE / DELETE) for dc_*, single_*, and comp_* tables.
     try {
-      const schemaReg = (await resolve("schemaRegistry")) as SchemaRegistrySurface;
+      const schemaReg = (await resolve(
+        "schemaRegistry"
+      )) as SchemaRegistrySurface;
       for (const [tableName, table] of collectionFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
@@ -750,10 +779,7 @@ export async function reloadNextlyConfig(opts?: {
       // a "FAILED" line that reads like a bug.
       const detail = applyResult.error.message
         .replace(/^TTY required for schema confirmation\.\s*/i, "")
-        .replace(
-          /\s*Run from an interactive terminal,.*$/i,
-          ""
-        )
+        .replace(/\s*Run from an interactive terminal,.*$/i, "")
         .trim();
       console.warn(
         `\n[Nextly] Schema change needs your confirmation:\n` +

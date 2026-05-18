@@ -51,46 +51,8 @@ export function ensureHmrListener(): void {
     g.__nextly_hmrWs = new WebSocket(url);
 
     g.__nextly_hmrWs.onmessage = event => {
-      // If a reload is already in flight, drop the event. The in-flight
-      // reload will pick up the latest config when it runs.
-      if (g.__nextly_hmrReload instanceof Promise) return;
       if (typeof event.data !== "string") return;
-
-      let data: unknown;
-      try {
-        data = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      // Defensive: Next.js has shipped both shapes historically.
-      // Next 15 used data.action; Next 16 uses data.type. Accept both.
-      if (typeof data !== "object" || data === null) return;
-      const record = data as { type?: unknown; action?: unknown };
-      const isServerChange =
-        record.type === "serverComponentChanges" ||
-        record.action === "serverComponentChanges";
-
-      if (isServerChange) {
-        // Proactively kick off the config reload so the schema is applied
-        // and browser tabs are reloaded without waiting for an incoming
-        // HTTP request to trigger getNextly(). If a reload is already
-        // in-flight (Promise), skip — the running reload will pick up
-        // the latest config.
-        if (!((g.__nextly_hmrReload as unknown) instanceof Promise)) {
-          const reload = (async () => {
-            try {
-              const { reloadNextlyConfig } = await import(
-                "../init/reload-config"
-              );
-              await reloadNextlyConfig();
-            } catch {
-              // Errors already logged inside reloadNextlyConfig.
-            }
-          })();
-          markHmrReloadInFlight(reload);
-        }
-      }
+      handleHmrMessage(event.data);
     };
 
     g.__nextly_hmrWs.onerror = () => {
@@ -102,6 +64,91 @@ export function ensureHmrListener(): void {
   } catch {
     // Same logic as onerror.
   }
+}
+
+// Debounce window for serverComponentChanges events. Next.js dev server
+// emits one event per server-file save, and bursty editor saves (a save
+// + auto-save chase, e.g. when ESLint --fix runs on save) used to each
+// fire a full reloadNextlyConfig pipeline — including a Neon
+// information_schema.columns roundtrip per HMR cycle. 300ms trailing
+// debounce collapses bursts without making the reload feel laggy.
+const HMR_DEBOUNCE_MS = 300;
+
+// Stores the pending debounce timer so a follow-up event can reset it.
+type HmrDebounceCache = {
+  __nextly_hmrDebounce?: ReturnType<typeof setTimeout>;
+};
+const debounceCache = globalThis as HmrDebounceCache;
+
+// Production reloader — resolved lazily on first use to avoid loading
+// the full schema pipeline at module evaluation time in production.
+// Tests override this via __setReloaderForTest before calling
+// handleHmrMessageForTest, bypassing the need for vi.doMock + dynamic
+// import inside a fake-timer callback (which cannot be awaited
+// predictably under vi.useFakeTimers()).
+let _reloaderFn: (() => Promise<void>) | null = null;
+
+// Gets (or lazily loads) the reloadNextlyConfig function.
+async function getReloader(): Promise<() => Promise<void>> {
+  if (_reloaderFn) return _reloaderFn;
+  const { reloadNextlyConfig } = await import("../init/reload-config");
+  return reloadNextlyConfig;
+}
+
+// Test seam: allows unit tests to inject a mock reloader so they can
+// control the reload function without relying on vi.doMock + dynamic
+// imports inside fake-timer callbacks (which cannot be awaited
+// predictably under vi.useFakeTimers()). Reset to null between tests.
+export function __setReloaderForTest(fn: (() => Promise<void>) | null): void {
+  _reloaderFn = fn;
+}
+
+function scheduleReload(): void {
+  // If a reload is already running, let it complete and pick up the
+  // latest config when it finishes. The previous behaviour (drop the
+  // event) is preserved here for the same reason it was preserved
+  // before.
+  if (g.__nextly_hmrReload instanceof Promise) return;
+
+  // Reset any pending debounce timer.
+  if (debounceCache.__nextly_hmrDebounce) {
+    clearTimeout(debounceCache.__nextly_hmrDebounce);
+  }
+  debounceCache.__nextly_hmrDebounce = setTimeout(() => {
+    delete debounceCache.__nextly_hmrDebounce;
+    if (g.__nextly_hmrReload instanceof Promise) return;
+    const reload = (async () => {
+      try {
+        const reloadFn = await getReloader();
+        await reloadFn();
+      } catch {
+        // Errors already logged inside reloadNextlyConfig.
+      }
+    })();
+    markHmrReloadInFlight(reload);
+  }, HMR_DEBOUNCE_MS);
+}
+
+function handleHmrMessage(raw: string): void {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (typeof data !== "object" || data === null) return;
+  const record = data as { type?: unknown; action?: unknown };
+  const isServerChange =
+    record.type === "serverComponentChanges" ||
+    record.action === "serverComponentChanges";
+  if (isServerChange) scheduleReload();
+}
+
+// Test seam. Production code uses the WS onmessage closure above; tests
+// bypass the WebSocket and invoke the message handler directly.
+// Exporting under a `*ForTest` name keeps the production API stable.
+export function handleHmrMessageForTest(raw: string): void {
+  handleHmrMessage(raw);
 }
 
 // Returns true exactly when HMR signaled a reload since the last call,

@@ -330,22 +330,34 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
       });
     }
+    // Timestamp defaults must mirror runtime-schema-generator's
+    // pgTimestamp(...).defaultNow() — otherwise the diff sees a phantom
+    // change_column_default (now() → undefined) on every apply and routes
+    // around the fast-path DDL emitter.
     cols.push({
       name: "created_at",
       dialectType: "timestamp",
       nullable: true,
       primaryKey: false,
+      default: "now()",
     });
     cols.push({
       name: "updated_at",
       dialectType: "timestamp",
       nullable: true,
       primaryKey: false,
+      default: "now()",
     });
     if (opts.hasStatus) {
+      // Must mirror runtime-schema-generator's
+      // pgVarchar("status", { length: 20 }).notNull().default("draft").
+      // information_schema reports udt_name=varchar for that DDL, so
+      // emitting "text" here would cause a phantom change_column_type
+      // on every apply.
       cols.push({
         name: "status",
-        dialectType: "text",
+        dialectType: "varchar",
+        length: 20,
         nullable: false,
         primaryKey: false,
         default: "'draft'",

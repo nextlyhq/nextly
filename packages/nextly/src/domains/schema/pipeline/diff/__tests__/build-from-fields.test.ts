@@ -355,7 +355,13 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
 // adds it on first enable and drops it on disable. These tests lock the
 // dialect-specific introspection-aligned types.
 describe("buildDesiredTableFromFields with status enabled", () => {
-  it("adds a status column with PG dialect type 'text'", () => {
+  it("adds a status column with PG dialect type 'varchar' (matches runtime DDL)", () => {
+    // Must mirror runtime-schema-generator's
+    // `pgVarchar("status",{length:20}).notNull().default("draft")`.
+    // PG's information_schema.columns.udt_name returns "varchar" for that
+    // column, so the descriptor must emit "varchar" too — otherwise the
+    // diff reports a phantom change_column_type (varchar → text) on every
+    // apply and the fast-path emitter is bypassed.
     const table = buildDesiredTableFromFields(
       "dc_posts",
       [] as never,
@@ -364,10 +370,8 @@ describe("buildDesiredTableFromFields with status enabled", () => {
     );
     const status = findColumn(table.columns, "status");
     expect(status).toBeDefined();
-    expect(status?.type).toBe("text");
+    expect(status?.type).toBe("varchar");
     expect(status?.nullable).toBe(false);
-    // Must match runtime-schema-generator's `.default("draft")` or the
-    // classifier flags ADD COLUMN as needing TTY confirmation.
     expect(status?.default).toBe("'draft'");
   });
 

@@ -1,0 +1,94 @@
+// Tests for normalizeDefault — the function that collapses semantically
+// equivalent default-expression forms so the diff doesn't emit spurious
+// change_column_default ops on every apply.
+//
+// Why this matters: PG's information_schema.column_default returns its
+// canonical normalised form (e.g. `'draft'::character varying`), while
+// the desired-side descriptor writes the human-authored form (e.g.
+// `'draft'`). Without normalisation, every Builder apply emits a
+// change_column_default op for every system column with a default,
+// which blocks the fast-path emitter and routes the apply back to the
+// slow drizzle-kit pushSchema.
+
+import { describe, expect, it } from "vitest";
+
+import { normalizeDefault } from "../normalize-default";
+
+describe("normalizeDefault — PG redundant ::<type> cast stripping", () => {
+  it("strips ::character varying from string literals", () => {
+    // The single most common case: pgVarchar(...).default('draft') round-trips
+    // through PG as 'draft'::character varying. The diff must treat the two
+    // forms as equal.
+    expect(normalizeDefault("'draft'::character varying")).toBe("'draft'");
+  });
+
+  it("strips ::text from string literals", () => {
+    expect(normalizeDefault("'draft'::text")).toBe("'draft'");
+  });
+
+  it("strips ::bpchar (PG's underlying char type)", () => {
+    expect(normalizeDefault("'X'::bpchar")).toBe("'X'");
+  });
+
+  it("strips ::integer from numeric literals", () => {
+    expect(normalizeDefault("42::integer")).toBe("42");
+  });
+
+  it("strips ::numeric from numeric literals", () => {
+    expect(normalizeDefault("0::numeric")).toBe("0");
+  });
+
+  it("strips ::bigint from numeric literals", () => {
+    expect(normalizeDefault("0::bigint")).toBe("0");
+  });
+
+  it("strips ::boolean from true/false", () => {
+    expect(normalizeDefault("true::boolean")).toBe("true");
+    expect(normalizeDefault("false::boolean")).toBe("false");
+  });
+
+  it("does NOT strip ::type that appears INSIDE a string literal", () => {
+    // The cast suffix must be at the end of the expression. A ::-looking
+    // substring inside the quoted literal must not be touched.
+    expect(normalizeDefault("'a::text inside'")).toBe("'a::text inside'");
+  });
+
+  it("preserves expressions with no cast suffix", () => {
+    expect(normalizeDefault("'draft'")).toBe("'draft'");
+    expect(normalizeDefault("42")).toBe("42");
+    expect(normalizeDefault("now()")).toBe("now()");
+  });
+});
+
+describe("normalizeDefault — function calls", () => {
+  it("lowercases simple built-in function calls (defensive)", () => {
+    // PG returns now() lowercase already, but normalising defensively means
+    // the diff is robust if any code path ever emits NOW() or Now().
+    expect(normalizeDefault("NOW()")).toBe("now()");
+    expect(normalizeDefault("Now()")).toBe("now()");
+  });
+
+  it("leaves user-defined function calls (with arguments) unchanged", () => {
+    // Don't aggressively lowercase — function names with arguments may carry
+    // case-sensitive meaning depending on quoting. Only handle the no-arg
+    // builtin case explicitly above.
+    expect(normalizeDefault("gen_random_uuid()")).toBe("gen_random_uuid()");
+    expect(normalizeDefault("md5('x')")).toBe("md5('x')");
+  });
+});
+
+describe("normalizeDefault — passthrough behaviour", () => {
+  it("returns undefined when input is undefined (no default)", () => {
+    expect(normalizeDefault(undefined)).toBeUndefined();
+  });
+
+  it("returns the input unchanged for unrecognised expressions", () => {
+    // Bounded risk: if we don't recognise the shape, pass it through. The
+    // diff will then catch any real default change — better a false-positive
+    // change_column_default than silently swallowing a real one.
+    expect(normalizeDefault("some_unknown_expr(1,2)")).toBe(
+      "some_unknown_expr(1,2)"
+    );
+    expect(normalizeDefault("CURRENT_TIMESTAMP")).toBe("CURRENT_TIMESTAMP");
+  });
+});

@@ -63,3 +63,65 @@ export function setCachedSnapshot(snapshot: unknown): void {
 export function clearCachedSnapshot(): void {
   delete g.__nextly_prevSchemaSnapshot;
 }
+
+// ---------------------------------------------------------------------------
+// Short-lived cache for live-DB snapshots, keyed by the managed-table-name
+// set. Separate from the desired-snapshot dequal cache above: that one
+// short-circuits "nothing changed" applies, this one deduplicates the two
+// `introspectLiveSnapshot` calls that would otherwise fire during a single
+// apply (one in reload-config.ts, one inside PushSchemaPipeline.apply).
+//
+// Lifecycle: caller invokes `clearLiveSnapshots()` at the start of a logical
+// apply boundary (reload-config.ts), `setLiveSnapshot()` after introspecting,
+// and `getLiveSnapshot()` before it would introspect again. Keyed by a sorted
+// table-name string so different managed-table sets don't collide.
+// ---------------------------------------------------------------------------
+
+interface LiveSnapshotCacheBag {
+  __nextly_liveSnapshots?: Map<string, unknown>;
+}
+
+function keyOf(tableNames: readonly string[]): string {
+  // Managed table names are normalised by the framework to [a-z0-9_], so
+  // space is a safe separator (see resolveCollectionTableName). A pathological
+  // user-supplied tableName containing a space can at worst collide and force
+  // a cache miss — never a wrong snapshot, because cache use is also scoped
+  // by the per-apply boundary.
+  return [...tableNames].sort().join(" ");
+}
+
+function bag(): LiveSnapshotCacheBag {
+  return globalThis as LiveSnapshotCacheBag;
+}
+
+/**
+ * Returns the cached live-DB snapshot for the given set of managed table
+ * names, or undefined if nothing is cached for that set. The set order
+ * does not matter — table names are sorted internally before lookup.
+ */
+export function getLiveSnapshot(managedTableNames: readonly string[]): unknown {
+  return bag().__nextly_liveSnapshots?.get(keyOf(managedTableNames));
+}
+
+/**
+ * Stores a live-DB snapshot under the given set of managed table names.
+ * Callers should pair this with `clearLiveSnapshots()` at the start of
+ * their apply boundary so stale entries do not bleed across applies.
+ */
+export function setLiveSnapshot(
+  managedTableNames: readonly string[],
+  snapshot: unknown
+): void {
+  const b = bag();
+  if (!b.__nextly_liveSnapshots) b.__nextly_liveSnapshots = new Map();
+  b.__nextly_liveSnapshots.set(keyOf(managedTableNames), snapshot);
+}
+
+/**
+ * Clears all cached live snapshots. Production callers invoke this at
+ * the start of each logical apply boundary to prevent cross-apply leak.
+ */
+export function clearLiveSnapshots(): void {
+  const b = bag();
+  if (b.__nextly_liveSnapshots) b.__nextly_liveSnapshots.clear();
+}

@@ -156,6 +156,38 @@ describe("runDriftCheck", () => {
     });
   });
 
+  describe("runDriftCheck — bounded concurrency", () => {
+    it("never runs more than 3 previewDesiredSchema calls concurrently", async () => {
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const previewDesiredSchema = vi.fn(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        // Force overlap: hold each call briefly so we can observe concurrency.
+        await new Promise(r => setTimeout(r, 20));
+        inFlight--;
+        return { operations: [], candidates: [] };
+      });
+
+      const collections = Array.from({ length: 10 }, (_, i) => ({
+        slug: `c${i}`,
+        tableName: `t${i}`,
+        fields: [],
+        status: false,
+      }));
+
+      await runDriftCheck({
+        adapter: makeAdapter("postgresql") as never,
+        collections,
+        logger: fakeLogger,
+        deps: { previewDesiredSchema: previewDesiredSchema as never },
+      });
+
+      expect(previewDesiredSchema).toHaveBeenCalledTimes(10);
+      expect(maxInFlight).toBeLessThanOrEqual(3);
+    });
+  });
+
   describe("failure handling", () => {
     it("logs aggregate failure count when previews fail (review #5)", async () => {
       const previewDesiredSchema = vi
