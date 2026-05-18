@@ -50,6 +50,7 @@
 // logContext per §13.8; public messages remain generic and end with a period.
 import { NextlyError } from "../../../errors";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
+import { toAbsoluteMediaUrl } from "../../../lib/media-variant";
 import type { MediaService as LegacyMediaService } from "../../../services/media";
 import type {
   MediaFolderService as LegacyFolderService,
@@ -1015,8 +1016,8 @@ export class MediaService {
       width: data.width,
       height: data.height,
       duration: data.duration,
-      url: data.url,
-      thumbnailUrl: data.thumbnailUrl,
+      url: toAbsoluteMediaUrl(data.url),
+      thumbnailUrl: toAbsoluteMediaUrl(data.thumbnailUrl),
       altText: data.altText,
       caption: data.caption,
       tags: data.tags,

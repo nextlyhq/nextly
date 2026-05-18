@@ -19,10 +19,14 @@ export {
 
 // Re-export other lib modules
 export * from "./env";
+export * from "./get-base-url";
 export * from "./logger";
 export {
   getMediaVariant,
   getSmallestMediaVariant,
+  getMediaBaseUrl,
+  toAbsoluteMediaUrl,
+  absolutizeMediaUrls,
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./media-variant";

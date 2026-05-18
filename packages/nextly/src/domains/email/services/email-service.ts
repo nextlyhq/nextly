@@ -14,7 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors";
-import { env } from "../../../lib/env";
+import { getBaseUrl } from "../../../lib/get-base-url";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -581,17 +581,13 @@ export class EmailService extends BaseService {
   // ============================================================
 
   /**
-   * Get the base URL for email links.
-   * Priority: emailConfig.baseUrl > NEXT_PUBLIC_APP_URL > localhost
+   * Get the base URL for email links. Delegates to the shared `getBaseUrl`
+   * helper so email templates and absolutized media URLs resolve through
+   * the same priority chain (emailConfig.baseUrl > NEXT_PUBLIC_APP_URL >
+   * localhost).
    */
   private getBaseUrl(): string {
-    const url =
-      this.emailConfig?.baseUrl ??
-      env.NEXT_PUBLIC_APP_URL ??
-      "http://localhost:3000";
-
-    // Remove trailing slash
-    return url.replace(/\/$/, "");
+    return getBaseUrl(this.emailConfig?.baseUrl);
   }
 
   /**

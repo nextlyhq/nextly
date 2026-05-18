@@ -40,6 +40,7 @@ import { clampLimit } from "../domains/collections/query/query-parser";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
+import { toAbsoluteMediaUrl } from "../lib/media-variant";
 import {
   UploadService,
   type UploadConfig,
@@ -297,14 +298,16 @@ export const POST = withErrorHandler(
       throwFromUploadResult(result, "upload");
     }
 
-    // Transform to client-expected format.
+    // Transform to client-expected format. Absolutize URLs so the local
+    // storage adapter's relative paths (`/uploads/...`) are reachable by
+    // API consumers; cloud-adapter URLs pass through unchanged.
     const uploadData = {
       id: result.data?.id,
       filename: result.data?.filename,
       mimeType: result.data?.mimeType,
       filesize: result.data?.size,
-      url: result.data?.url,
-      thumbnailUrl: result.data?.thumbnailUrl,
+      url: toAbsoluteMediaUrl(result.data?.url),
+      thumbnailUrl: toAbsoluteMediaUrl(result.data?.thumbnailUrl),
       width: result.data?.width,
       height: result.data?.height,
       createdAt: new Date().toISOString(),
@@ -359,8 +362,8 @@ export const GET = withErrorHandler(
       filename: result.data?.filename || result.data?.originalFilename,
       mimeType: result.data?.mimeType,
       filesize: result.data?.size,
-      url: result.data?.url,
-      thumbnailUrl: result.data?.thumbnailUrl,
+      url: toAbsoluteMediaUrl(result.data?.url),
+      thumbnailUrl: toAbsoluteMediaUrl(result.data?.thumbnailUrl),
       width: result.data?.width,
       height: result.data?.height,
       createdAt: result.data?.createdAt,
