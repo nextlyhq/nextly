@@ -86,9 +86,7 @@ describe("reloadNextlyConfig", () => {
 
   // Build a service resolver fake. Returns the service or undefined per
   // service name. Tests pass this into reloadNextlyConfig via opts.resolver.
-  function buildResolver(opts?: {
-    withAdapter?: boolean;
-  }) {
+  function buildResolver(opts?: { withAdapter?: boolean }) {
     const withAdapter = opts?.withAdapter ?? true;
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
     const registerDynamicSchemaSpy = vi.fn();
@@ -275,14 +273,17 @@ describe("reloadNextlyConfig", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("skips a standalone drop (no replacement add) and logs a warning", async () => {
+  it("passes a standalone drop through to the pipeline (destructive_drop event handled by ClassifierEvent + dispatcher)", async () => {
+    // The HMR gate used to block standalone drops because the pipeline
+    // had no destructive-confirm event for them. Now drop_column
+    // emits a destructive_drop ClassifierEvent that the dispatcher
+    // prompts on, so the HMR layer just hands off.
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
           {
             slug: "users",
             tableName: "dc_users",
-            // No new fields -> phone gets dropped with no replacement.
             fields: [],
           },
         ],
@@ -298,13 +299,42 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
-    const warningArg = warnSpy.mock.calls[0]?.[0] as string;
-    expect(warningArg).toContain("users");
-    expect(warningArg).toContain("dc_users");
-    expect(warningArg).toContain("no replacement");
-    expect(warningArg).toContain("data loss");
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    // No "needs review" warning — the pipeline's dispatcher owns the
+    // confirmation UX now.
+    const blockingWarning = warnSpy.mock.calls
+      .map(c => c[0] as string)
+      .find(s => s.includes("needs review"));
+    expect(blockingWarning).toBeUndefined();
+  });
+
+  it("passes asymmetric drop+add (drops > adds) through to the pipeline", async () => {
+    // Previously gated at the HMR layer. The pipeline's shrinking-pool
+    // prompt now handles the rename ambiguity for the paired columns,
+    // and surplus drops emit destructive_drop events.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "users",
+            tableName: "dc_users",
+            fields: [{ name: "mobile", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_users", [
+        ...SQLITE_RESERVED,
+        { name: "phone", type: "text", nullable: true },
+        { name: "fax", type: "text", nullable: true },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
   });
 
   it("skips a column type change and logs a warning", async () => {
@@ -338,14 +368,17 @@ describe("reloadNextlyConfig", () => {
     expect(warningArg).toContain("type");
   });
 
-  it("skips a table where drops > adds (asymmetric, surplus would lose data)", async () => {
+  it("passes a 3-drop / 1-add asymmetric change through to the pipeline", async () => {
+    // The pipeline's rename detector pairs the 1 add against one of the
+    // drops via the shrinking-pool prompt; the other 2 drops emit
+    // destructive_drop ClassifierEvents that the dispatcher prompts on.
+    // The HMR layer no longer pre-blocks asymmetric edits.
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
           {
             slug: "posts",
             tableName: "dc_posts",
-            // 1 add, but 3 drops below -> 2 drops cannot be renamed.
             fields: [{ name: "summary", type: "text" }],
           },
         ],
@@ -363,13 +396,7 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
-    const warningArg = warnSpy.mock.calls[0]?.[0] as string;
-    expect(warningArg).toContain("dc_posts");
-    expect(warningArg).toContain("3 columns");
-    expect(warningArg).toContain("only 1 replacement");
-    expect(warningArg).toContain("2 cannot be renamed");
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
   });
 
   it("skips collections that have no changes (diff returns empty)", async () => {
@@ -549,7 +576,10 @@ describe("reloadNextlyConfig", () => {
         config: {
           components: [
             { slug: "hero", fields: [{ name: "title", type: "text" }] },
-            { slug: "seo-meta", fields: [{ name: "description", type: "text" }] },
+            {
+              slug: "seo-meta",
+              fields: [{ name: "description", type: "text" }],
+            },
           ],
         },
       });
@@ -564,7 +594,9 @@ describe("reloadNextlyConfig", () => {
       await reloadNextlyConfig({ resolver: buildResolver() });
 
       expect(introspectSpy).toHaveBeenCalledTimes(1);
-      const tableNames = (introspectSpy.mock.calls[0] as [unknown, string, string[]])[2];
+      const tableNames = (
+        introspectSpy.mock.calls[0] as [unknown, string, string[]]
+      )[2];
       expect(tableNames).toContain("comp_hero");
       expect(tableNames).toContain("comp_seo_meta");
     });
@@ -584,7 +616,9 @@ describe("reloadNextlyConfig", () => {
       const { reloadNextlyConfig } = await import("../reload-config");
       await reloadNextlyConfig({ resolver: buildResolver() });
 
-      const tableNames = (introspectSpy.mock.calls[0] as [unknown, string, string[]])[2];
+      const tableNames = (
+        introspectSpy.mock.calls[0] as [unknown, string, string[]]
+      )[2];
       expect(tableNames).toContain("comp_seo_meta");
       expect(tableNames).not.toContain("comp_seo-meta");
     });
@@ -613,7 +647,10 @@ describe("reloadNextlyConfig", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it("skips a standalone drop on a component table and logs a warning", async () => {
+    it("passes a standalone drop on a component table through to the pipeline", async () => {
+      // Same behavior as the collection/single equivalent: the
+      // pipeline classifier emits a destructive_drop event and the
+      // dispatcher prompts the user. HMR layer no longer pre-blocks.
       loadConfigSpy.mockResolvedValue({
         config: {
           components: [
@@ -636,11 +673,11 @@ describe("reloadNextlyConfig", () => {
       const { reloadNextlyConfig } = await import("../reload-config");
       await reloadNextlyConfig({ resolver: buildResolver() });
 
-      expect(pipelineApplySpy).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalled();
-      const msg = warnSpy.mock.calls[0]?.[0] as string;
-      expect(msg).toContain("hero");
-      expect(msg).toContain("data loss");
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      const blockingWarning = warnSpy.mock.calls
+        .map(c => c[0] as string)
+        .find(s => s.includes("needs review"));
+      expect(blockingWarning).toBeUndefined();
     });
 
     it("calls syncCodeFirstComponents after a successful apply", async () => {

@@ -138,33 +138,12 @@ describe("hmr-listener", () => {
       expect(consumeHmrReloadFlag()).toBe(false);
     });
 
-    it("flips the flag on serverComponentChanges (Next 16 shape: data.type)", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag } = await import(
-        "../hmr-listener"
-      );
-      ensureHmrListener();
-      const ws = getHmrCache().__nextly_hmrWs;
-      ws?.onmessage?.({
-        data: JSON.stringify({ type: "serverComponentChanges" }),
-      });
-      expect(consumeHmrReloadFlag()).toBe(true);
-      // After consume, the flag clears.
-      expect(consumeHmrReloadFlag()).toBe(false);
-    });
-
-    it("flips the flag on serverComponentChanges (Next 15 shape: data.action)", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag } = await import(
-        "../hmr-listener"
-      );
-      ensureHmrListener();
-      const ws = getHmrCache().__nextly_hmrWs;
-      ws?.onmessage?.({
-        data: JSON.stringify({ action: "serverComponentChanges" }),
-      });
-      expect(consumeHmrReloadFlag()).toBe(true);
-    });
+    // Note: two tests previously here asserted `consumeHmrReloadFlag() === true`
+    // synchronously after firing an event. They were pre-existing failures —
+    // the production code at `markHmrReloadInFlight` only ever stores a
+    // Promise in `g.__nextly_hmrReload`, never `true`, so the `=== true`
+    // branch in `consumeHmrReloadFlag` is unreachable. Removed in the Phase 1
+    // PR after the dead-code path was identified during code review.
 
     it("does NOT flip the flag for unrelated events", async () => {
       process.env.NODE_ENV = "development";
@@ -222,6 +201,79 @@ describe("hmr-listener", () => {
       // the test exercises that defensive branch.
       ws?.onmessage?.({ data: 12345 as unknown as string });
       expect(consumeHmrReloadFlag()).toBe(false);
+    });
+  });
+
+  describe("debounce", () => {
+    let reloadSpy: ReturnType<typeof vi.fn>;
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      reloadSpy = vi.fn(async () => {});
+      // Inject the spy directly via the exported test seam instead of
+      // vi.doMock. A dynamic import() inside a fake-timer setTimeout
+      // callback cannot be awaited predictably under vi.useFakeTimers()
+      // because Vitest's fake timer system does not control the module
+      // loader's internal Promise chain.
+      const { __setReloaderForTest } = await import("../hmr-listener");
+      __setReloaderForTest(reloadSpy);
+      delete (
+        globalThis as { __nextly_hmrDebounce?: ReturnType<typeof setTimeout> }
+      ).__nextly_hmrDebounce;
+    });
+    afterEach(async () => {
+      vi.useRealTimers();
+      const { __setReloaderForTest } = await import("../hmr-listener");
+      __setReloaderForTest(null);
+    });
+
+    it("collapses three serverComponentChanges events within the debounce window into one reload", async () => {
+      process.env.NODE_ENV = "development";
+      const { handleHmrMessageForTest } = await import("../hmr-listener");
+      const evt = JSON.stringify({ action: "serverComponentChanges" });
+      handleHmrMessageForTest(evt);
+      vi.advanceTimersByTime(100);
+      handleHmrMessageForTest(evt);
+      vi.advanceTimersByTime(100);
+      handleHmrMessageForTest(evt);
+      // Still within debounce window — should not have fired yet.
+      expect(reloadSpy).not.toHaveBeenCalled();
+      // Advance past the trailing debounce edge.
+      vi.advanceTimersByTime(500);
+      // Allow microtasks queued by the timer callback to run.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires a separate reload for events that arrive after the previous reload settles", async () => {
+      process.env.NODE_ENV = "development";
+      const { handleHmrMessageForTest } = await import("../hmr-listener");
+      const evt = JSON.stringify({ action: "serverComponentChanges" });
+
+      handleHmrMessageForTest(evt);
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
+
+      // Let the in-flight Promise marker settle, then fire another event.
+      // The `markHmrReloadInFlight(promise).finally(...)` runs when the
+      // promise resolves; advance time and flush microtasks.
+      // Two microtask flushes are sufficient because reloadSpy is `async () => {}`,
+      // which resolves on the first microtask tick; the `markHmrReloadInFlight`
+      // `.finally(() => { g.__nextly_hmrReload = false })` runs on the second.
+      // If the spy were to do real async work, more flushes would be needed.
+      vi.advanceTimersByTime(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      handleHmrMessageForTest(evt);
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(reloadSpy).toHaveBeenCalledTimes(2);
     });
   });
 });

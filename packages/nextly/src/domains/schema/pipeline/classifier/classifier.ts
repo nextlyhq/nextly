@@ -111,13 +111,35 @@ export class RealClassifier implements Classifier {
             ],
           });
         }
+      } else if (op.type === "drop_column") {
+        // Destructive drop — the data in this column will be lost. The
+        // F4 RegexRenameDetector pairs drop_column + add_column into
+        // rename candidates upstream, so any drop_column that reaches
+        // the classifier is either:
+        //   - a standalone removal from a code-first config (user
+        //     deleted the field from nextly.config.ts), or
+        //   - the user explicitly picked "drop_and_add" on a rename
+        //     candidate.
+        // Either way, prompt to confirm before destroying data. Row
+        // count gives the user the magnitude of the loss.
+        const tableRowCount = await args.countRows(op.tableName);
+        events.push({
+          id: formatEventId("destructive_drop", op.tableName, op.columnName),
+          kind: "destructive_drop",
+          tableName: op.tableName,
+          columnName: op.columnName,
+          columnType: op.columnType,
+          tableRowCount,
+          applicableResolutions: ["confirm_drop", "abort"],
+        });
       }
     }
 
     // Level rules:
-    //   - "interactive" if any event has resolution choices (NOT-NULL kinds)
-    //   - "destructive" if only type_change events (warning-only, no resolutions)
-    //   - "safe" if no events at all
+    //   - "interactive" when any event has user-resolved choices
+    //     (NOT NULL kinds + destructive_drop)
+    //   - "destructive" when only type_change events (warning-only)
+    //   - "safe" when no events
     const hasInteractive = events.some(e => e.kind !== "type_change");
     const level: ClassificationLevel = hasInteractive
       ? "interactive"

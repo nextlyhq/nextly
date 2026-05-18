@@ -10,6 +10,10 @@ import {
   clearCachedSnapshot,
   getCachedSnapshot,
   setCachedSnapshot,
+  // new live-snapshot cache exports
+  clearLiveSnapshots,
+  getLiveSnapshot,
+  setLiveSnapshot,
 } from "../schema-snapshot-cache";
 
 describe("schema-snapshot-cache", () => {
@@ -46,5 +50,49 @@ describe("schema-snapshot-cache", () => {
     setCachedSnapshot({ marker: "before" });
     const fresh = await import("../schema-snapshot-cache");
     expect(fresh.getCachedSnapshot()).toEqual({ marker: "before" });
+  });
+});
+
+describe("live-snapshot cache", () => {
+  afterEach(() => {
+    clearLiveSnapshots();
+  });
+
+  it("returns undefined for an unknown key", () => {
+    expect(getLiveSnapshot(["a", "b"])).toBeUndefined();
+  });
+
+  it("returns stored snapshot for the same managed-table-name set", () => {
+    const tables = ["posts", "tags"];
+    const snap = { tables: [{ name: "posts" }, { name: "tags" }] };
+    setLiveSnapshot(tables, snap);
+    expect(getLiveSnapshot(tables)).toEqual(snap);
+  });
+
+  it("treats different managed-table sets as different cache keys", () => {
+    const snap = { tables: [{ name: "posts" }] };
+    setLiveSnapshot(["posts", "tags"], snap);
+    expect(getLiveSnapshot(["posts"])).toBeUndefined();
+  });
+
+  it("clearLiveSnapshots wipes all entries", () => {
+    setLiveSnapshot(["posts"], { tables: [] });
+    clearLiveSnapshots();
+    expect(getLiveSnapshot(["posts"])).toBeUndefined();
+  });
+
+  it("normalises table-name order so callers needn't sort", () => {
+    const snap = { tables: [] };
+    setLiveSnapshot(["b", "a", "c"], snap);
+    expect(getLiveSnapshot(["a", "b", "c"])).toEqual(snap);
+    expect(getLiveSnapshot(["c", "b", "a"])).toEqual(snap);
+  });
+
+  it("survives across module imports via globalThis (sanity check)", async () => {
+    setLiveSnapshot(["posts"], { tables: [{ marker: "before" }] });
+    const fresh = await import("../schema-snapshot-cache");
+    expect(fresh.getLiveSnapshot(["posts"])).toEqual({
+      tables: [{ marker: "before" }],
+    });
   });
 });
