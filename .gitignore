@@ -77,3 +77,7 @@ packages/create-nextly-app/templates/
 scripts/yalc-publish.sh
 .yalc/
 yalc.lock
+
+# Playwright MCP session artifacts (browser snapshots + console logs).
+# Generated during local debugging sessions, never part of a commit.
+.playwright-mcp/

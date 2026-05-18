@@ -22,9 +22,13 @@
 // block boot. The pipeline's HMR + db:sync paths surface real errors
 // when the user actually edits the schema.
 //
-// Performance (PR 6 review #4): all collection previews run in
-// parallel via Promise.all so a project with 50 collections doesn't
-// cost 50× the per-collection latency.
+// Performance: collection previews run with bounded concurrency
+// (DRIFT_CONCURRENCY workers, default 3). Earlier this used unbounded
+// Promise.all, which on cloud Postgres (e.g. Neon poolMax:5) saturated
+// the pool at boot — 10+ collections immediately queued behind a 20s
+// connectionTimeout. Three workers stays under typical cloud caps
+// while still finishing in ~ceil(N/3)× per-call latency for N
+// collections (vs N× serial).
 
 import type {
   DesiredCollection,
@@ -82,33 +86,48 @@ export async function runDriftCheck(
 
   if (collections.length === 0) return { kind: "clean" };
 
-  // Parallel preview (PR 6 review #4): per-collection previews are
-  // independent reads — running them in series adds wall time without
-  // benefit. Promise.all caps boot delay at ~max-per-collection latency
-  // instead of ~sum.
-  const previewPromises = collections.map(async collection => {
-    try {
-      const preview = await deps.previewDesiredSchema({
-        desired: {
-          collections: {
-            [collection.slug]: collection as unknown as DesiredCollection,
+  // Bounded-parallel preview. Earlier this was `Promise.all` of N parallel
+  // calls, which against a Neon poolMax:5 with 10+ collections instantly
+  // saturated the pool and queued requests behind a 20s connectionTimeout.
+  // Drift check is informational and dev-only — bounded concurrency keeps
+  // the boot path responsive without losing the wall-time win over serial.
+  const DRIFT_CONCURRENCY = 3;
+  const results: Array<
+    { ok: true; opCount: number } | { ok: false; error: string }
+  > = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < collections.length) {
+      const myIndex = cursor++;
+      const collection = collections[myIndex];
+      try {
+        const preview = await deps.previewDesiredSchema({
+          desired: {
+            collections: {
+              [collection.slug]: collection as unknown as DesiredCollection,
+            },
+            singles: {},
+            components: {},
           },
-          singles: {},
-          components: {},
-        },
-        db: adapter.getDrizzle(),
-        dialect: adapter.dialect,
-      });
-      return { ok: true as const, opCount: preview.operations.length };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.debug?.(
-        `[nextly] Drift preview failed for '${collection.slug}': ${msg} (continuing).`
-      );
-      return { ok: false as const, error: msg };
+          db: adapter.getDrizzle(),
+          dialect: adapter.dialect,
+        });
+        results[myIndex] = { ok: true, opCount: preview.operations.length };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.debug?.(
+          `[nextly] Drift preview failed for '${collection.slug}': ${msg} (continuing).`
+        );
+        results[myIndex] = { ok: false, error: msg };
+      }
     }
-  });
-  const results = await Promise.all(previewPromises);
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(DRIFT_CONCURRENCY, collections.length) },
+      () => worker()
+    )
+  );
 
   let pendingOps = 0;
   let failureCount = 0;

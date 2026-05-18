@@ -26,6 +26,7 @@
 //      d. change_column_nullable (alphabetical)
 //      e. change_column_default (alphabetical)
 
+import { normalizeDefault } from "./normalize-default";
 import type {
   AddColumnOp,
   AddTableOp,
@@ -142,7 +143,13 @@ function diffColumns(
           toNullable: curC.nullable,
         });
       }
-      if (prevC.default !== curC.default) {
+      // Compare normalised forms — PG's redundant `::<type>` cast suffix
+      // on the live side (e.g. `'draft'::character varying`) must not
+      // masquerade as a default change against the human-authored
+      // `'draft'`. See ./normalize-default.ts for the bounded set of
+      // equivalences. The emitted op carries the original, un-normalised
+      // values so downstream tooling sees what's actually stored.
+      if (normalizeDefault(prevC.default) !== normalizeDefault(curC.default)) {
         defaultChanges.push({
           type: "change_column_default",
           tableName,

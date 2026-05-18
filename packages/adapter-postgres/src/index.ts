@@ -66,6 +66,8 @@
  * @packageDocumentation
  */
 
+import * as net from "node:net";
+
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
 import type {
@@ -198,6 +200,43 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Node 20+ defaults the Happy Eyeballs per-address connection-attempt timeout
+// to 250ms. For consumers connecting from a region with RTT > 250ms to their
+// database (typical transcontinental: Pakistan→Singapore is ~310ms),
+// every TCP attempt is killed mid-handshake and the pg driver reports
+// ETIMEDOUT after exhausting all DNS-resolved addresses — even though the
+// network is fine.
+//
+// We bump the timeout to 5000ms on first adapter connect. This is process-
+// global state but the change is purely permissive (only increases the
+// per-address budget; cannot break anything that worked at 250ms). If the
+// process has already set a higher value, we leave it alone.
+//
+// References:
+//   https://nodejs.org/api/net.html#netsetdefaultautoselectfamilyattempttimeoutvalue
+//   https://www.rfc-editor.org/rfc/rfc8305
+const HAPPY_EYEBALLS_MIN_TIMEOUT_MS = 5000;
+let happyEyeballsTimeoutApplied = false;
+function applyHappyEyeballsTimeoutOnce(): void {
+  if (happyEyeballsTimeoutApplied) return;
+  happyEyeballsTimeoutApplied = true;
+  try {
+    const current =
+      typeof net.getDefaultAutoSelectFamilyAttemptTimeout === "function"
+        ? net.getDefaultAutoSelectFamilyAttemptTimeout()
+        : 0;
+    if (current < HAPPY_EYEBALLS_MIN_TIMEOUT_MS) {
+      net.setDefaultAutoSelectFamilyAttemptTimeout(
+        HAPPY_EYEBALLS_MIN_TIMEOUT_MS
+      );
+    }
+  } catch {
+    // Older Node versions (< 20) don't have these APIs. Swallow — the
+    // 250ms default they have predates Happy Eyeballs anyway, so they
+    // don't suffer this bug.
+  }
+}
+
 /**
  * PostgreSQL database adapter for Nextly.
  *
@@ -289,6 +328,10 @@ export class PostgresAdapter extends DrizzleAdapter {
    * @throws {DatabaseError} If connection fails
    */
   async connect(): Promise<void> {
+    // Fix Node 20+ Happy Eyeballs default before constructing the pool —
+    // see applyHappyEyeballsTimeoutOnce above.
+    applyHappyEyeballsTimeoutOnce();
+
     if (this.connected && this.pool) {
       return;
     }
@@ -788,8 +831,15 @@ export class PostgresAdapter extends DrizzleAdapter {
       config.application_name = this.config.applicationName;
     }
 
-    if (this.config.statementTimeout) {
-      config.statement_timeout = this.config.statementTimeout;
+    // User config beats provider default; both beat "unset".
+    // Why: provider.ts:58 declared a Neon statementTimeoutMs default but the
+    // adapter previously ignored it, leaving stuck queries to pin pool slots
+    // indefinitely. Wire the fallback chain here so the declared defaults
+    // actually fire.
+    const effectiveStatementTimeout =
+      this.config.statementTimeout ?? this.providerDefaults.statementTimeoutMs;
+    if (effectiveStatementTimeout !== undefined) {
+      config.statement_timeout = effectiveStatementTimeout;
     }
 
     if (this.config.queryTimeout) {

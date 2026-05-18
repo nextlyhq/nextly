@@ -27,6 +27,7 @@ import { dequal } from "dequal";
 import { getDialectTables } from "../../../database/index";
 import {
   getCachedSnapshot,
+  getLiveSnapshot,
   setCachedSnapshot,
 } from "../../../init/schema-snapshot-cache";
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
@@ -38,6 +39,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { canEmitWithoutDrizzleKit, emitDdl } from "./ddl-emitter";
 import {
   buildDesiredTableFromFields,
   buildDesiredTableFromComponentFields,
@@ -45,10 +47,7 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
-import {
-  MANAGED_TABLE_PREFIXES_REGEX,
-  isManagedTable,
-} from "./managed-tables";
+import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
 import {
@@ -217,6 +216,45 @@ class DdlExecutionError extends Error {
   }
 }
 
+// Orphan-DROP statement patterns the unsafe-statement filter scans for.
+// Both forms accept an optional schema-qualifier and quote style; the
+// captured group is the bare object name used for owner-table inference.
+const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
+  kind: "SEQUENCE" | "INDEX";
+  re: RegExp;
+}> = [
+  {
+    kind: "SEQUENCE",
+    re: /^DROP\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
+  },
+  {
+    kind: "INDEX",
+    re: /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
+  },
+];
+
+// Gated debug log for which route (`useFastPath`) the apply took. Operators
+// set DEBUG_SCHEMA=1 to enable both this and drizzle-kit's chatter inside
+// withCapturedStdout. The non-additive enumeration on the fallback path
+// makes "why didn't the fast path trigger?" trivially answerable in support.
+function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
+  // eslint-disable-next-line turbo/no-undeclared-env-vars
+  if (process.env.DEBUG_SCHEMA !== "1") return;
+  if (useFastPath) {
+    console.debug(
+      `[nextly] schema apply: fast-path DDL emitter (${ops.length} op(s))`
+    );
+    return;
+  }
+  const nonAdditive = ops
+    .filter(o => o.type !== "add_column" && o.type !== "add_table")
+    .map(o => o.type);
+  console.debug(
+    `[nextly] schema apply: drizzle-kit fallback (${ops.length} op(s); ` +
+      `non-additive: ${nonAdditive.length === 0 ? "<none>" : nonAdditive.join(",")})`
+  );
+}
+
 export interface PushSchemaPipelineDeps {
   executor: DrizzleStatementExecutor;
   renameDetector: RenameDetector;
@@ -260,6 +298,11 @@ export interface PushSchemaPipelineTestHooks {
     ops: Operation[],
     dialect: SupportedDialect
   ) => Promise<number>;
+  // Test seam: inject a pre-built resolvedOps array to bypass the diff +
+  // resolution pipeline. Lets unit tests exercise the scope-reduction and
+  // routing logic with hand-crafted op types (e.g. rename_table) that the
+  // normal diff path cannot produce today.
+  _resolvedOpsOverride?: Operation[];
 }
 
 // F10 PR 2: derive the per-change-kind counts from the pipeline's
@@ -443,14 +486,27 @@ export class PushSchemaPipeline {
         ...Object.values(desired.components).map(c => c.tableName),
       ];
 
-      // Phase A: our diff.
-      const liveSnapshot = this.testHooks._introspectSnapshotOverride
-        ? await this.testHooks._introspectSnapshotOverride(
-            db,
-            dialect,
-            managedTableNames
-          )
-        : await introspectLiveSnapshot(db, dialect, managedTableNames);
+      // Phase A: our diff. Reuse the cached live snapshot when the outer
+      // caller (reload-config.ts) already introspected the exact same
+      // managed-table set within this apply boundary. We do NOT self-fill
+      // the cache on a miss: the Builder UI apply path never calls
+      // clearLiveSnapshots(), so a self-fill here would cause subsequent
+      // Builder applies to serve stale snapshots. The cache exists only
+      // to dedupe the reload-config → pipeline.apply call chain.
+      let liveSnapshot: NextlySchemaSnapshot;
+      if (this.testHooks._introspectSnapshotOverride) {
+        liveSnapshot = await this.testHooks._introspectSnapshotOverride(
+          db,
+          dialect,
+          managedTableNames
+        );
+      } else {
+        const cached = getLiveSnapshot(managedTableNames);
+        liveSnapshot =
+          cached !== undefined
+            ? (cached as NextlySchemaSnapshot)
+            : await introspectLiveSnapshot(db, dialect, managedTableNames);
+      }
 
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
@@ -541,15 +597,74 @@ export class PushSchemaPipeline {
         classificationResult.events
       );
 
-      const resolvedOps = applyResolutionsToOperations(
-        operations,
-        toRenameResolutions(dispatchResult.confirmedRenames, candidates)
-      );
+      const resolvedOps =
+        this.testHooks._resolvedOpsOverride ??
+        applyResolutionsToOperations(
+          operations,
+          toRenameResolutions(dispatchResult.confirmedRenames, candidates)
+        );
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
         : this.buildDrizzleSchema(patchedDesired, dialect);
+
+      // Scope drizzleSchema down to the table(s) actually touched by
+      // resolvedOps. Without this, a Builder save that touches one
+      // collection still forces drizzle-kit to introspect every managed
+      // table inside the pinned transaction (~14 pg_catalog queries per
+      // table per call, which dominates wall-time on a high-RTT pooled
+      // connection like Neon).
+      //
+      // Single-table assumption: we don't walk FK closure today because
+      // Builder operations are effectively single-table — if a future
+      // change ever crosses managed-table FKs the safety net below falls
+      // back to the full schema and drizzle-kit will resolve as before.
+      const affectedTableNames = new Set<string>();
+      for (const op of resolvedOps) {
+        switch (op.type) {
+          case "add_table":
+            affectedTableNames.add(op.table.name);
+            break;
+          case "rename_table":
+            // After pre-resolution the live DB and desired snapshot both
+            // carry the new name — scope by `toName`.
+            affectedTableNames.add(op.toName);
+            break;
+          case "drop_table":
+            // Already applied by pre-resolution; not in drizzleSchema.
+            break;
+          case "add_column":
+          case "drop_column":
+          case "rename_column":
+          case "change_column_type":
+          case "change_column_nullable":
+          case "change_column_default":
+            affectedTableNames.add(op.tableName);
+            break;
+          default: {
+            // Exhaustiveness check: adding a new Operation kind without
+            // handling it here is a compile-time error. The empty-schema
+            // safety net below catches the runtime fallthrough case.
+            const _exhaustive: never = op;
+            void _exhaustive;
+          }
+        }
+      }
+
+      const scopedSchema: Record<string, unknown> = {};
+      for (const [tableName, tableObj] of Object.entries(drizzleSchema)) {
+        if (affectedTableNames.has(tableName)) {
+          scopedSchema[tableName] = tableObj;
+        }
+      }
+      // Empty-schema safety net. Fires when resolvedOps contains only
+      // drop_table entries (already applied by pre-resolution; their
+      // tables aren't in patchedDesired anyway), or when a future op
+      // kind escapes the switch above without contributing to the set.
+      // Passing nothing to drizzle-kit would be a contract violation.
+      const effectiveDrizzleSchema =
+        Object.keys(scopedSchema).length > 0 ? scopedSchema : drizzleSchema;
 
       const kit: DrizzleKitLike = this.testHooks._kitOverride
         ? this.testHooks._kitOverride
@@ -632,35 +747,45 @@ export class PushSchemaPipeline {
         // managed tables. SQLite/MySQL discard this; their data-loss
         // safety relies entirely on `filterUnsafeStatements` below.
         //
-        // Phase 5 (2026-05-01): wrap the call in `withCapturedStdout`
-        // so any chatter drizzle-kit writes to process.stdout / stderr
-        // during introspection gets rerouted to logger.debug instead
-        // of leaking into the dev console. See stdout-capture.ts for
-        // the scope-caveat (we use the sync-return path, not .apply()).
-        const desiredTableNames = Object.keys(drizzleSchema);
-        let pushResult: PushSchemaPassResult;
-        try {
-          // Phase 5: PushSchemaPipelineDeps doesn't currently include a
-          // logger field — drop captured output silently. Operators
-          // wanting drizzle-kit's chatter set DEBUG_SCHEMA=1 (planned
-          // follow-up) or wire a console.debug shim here. Adding a
-          // logger to deps is a contract change; keep it for a separate
-          // PR if real demand surfaces.
-          pushResult = await withCapturedStdout(
-            () => kit.pushSchema(drizzleSchema, tx, desiredTableNames),
-            // eslint-disable-next-line turbo/no-undeclared-env-vars
-            process.env.DEBUG_SCHEMA === "1"
-              ? { debug: (msg: string) => console.debug(msg) }
-              : undefined
-          );
-        } catch (err) {
-          throw new PushSchemaError(
-            err instanceof Error ? err.message : String(err),
-            err
-          );
+        const desiredTableNames = Object.keys(effectiveDrizzleSchema);
+
+        // Route: fast in-memory DDL emission for the common Builder op set
+        // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
+        // or fall back to drizzle-kit's pushSchema for anything outside
+        // that set. Stations 1-7 (diff, rename detect, classifier, prompt,
+        // pre-resolution) are upstream and unaffected either way;
+        // filterUnsafeStatements still runs on the result.
+        const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
+        logApplyRoute(useFastPath, resolvedOps);
+
+        let emittedStatements: string[];
+        if (useFastPath) {
+          emittedStatements = emitDdl(resolvedOps, dialect);
+        } else {
+          let pushResult: PushSchemaPassResult;
+          try {
+            // withCapturedStdout reroutes any chatter drizzle-kit writes to
+            // process.stdout/stderr so it doesn't leak into the dev console.
+            // The sink only forwards when DEBUG_SCHEMA=1 — see
+            // stdout-capture.ts for the scope-caveat (sync-return path).
+            pushResult = await withCapturedStdout(
+              () =>
+                kit.pushSchema(effectiveDrizzleSchema, tx, desiredTableNames),
+              // eslint-disable-next-line turbo/no-undeclared-env-vars
+              process.env.DEBUG_SCHEMA === "1"
+                ? { debug: (msg: string) => console.debug(msg) }
+                : undefined
+            );
+          } catch (err) {
+            throw new PushSchemaError(
+              err instanceof Error ? err.message : String(err),
+              err
+            );
+          }
+          emittedStatements = pushResult.statementsToExecute;
         }
         const safe = this.filterUnsafeStatements(
-          pushResult.statementsToExecute,
+          emittedStatements,
           desiredTableNames
         );
 
@@ -809,36 +934,114 @@ export class PushSchemaPipeline {
     // hit the BLOCK branch. PR #118's "include system tables in
     // desired" change makes system tables hit the ALLOW branch
     // (their DROPs during rebuilds are now intended).
-    const desiredSet = new Set(
-      desiredTableNames.map(t => t.toLowerCase())
-    );
+    //
+    // The same policy extends to DROP SEQUENCE and DROP INDEX.
+    // drizzle-kit's `tablesFilter` restricts which TABLES it inspects but
+    // does NOT suppress its emission of DROP SEQUENCE / DROP INDEX for
+    // "orphan" objects whose owner table isn't in the scoped schema —
+    // e.g. when desired = {posts, categories, tags} but the live DB has
+    // `accounts_id_seq`, drizzle-kit emits `DROP SEQUENCE accounts_id_seq`,
+    // which then fails with PG 2BP01 because `accounts.id` still depends
+    // on it. We infer the owner table from the object name using PG's
+    // default naming conventions:
+    //   SERIAL / IDENTITY sequences: `<table>_<col>_seq`
+    //   Indexes:                     `<table>_<col(s)>_{idx|key|pkey|unique}`
+    // Custom-named objects that don't share a prefix with any managed
+    // table can't be safely identified — block + warn (fail-safe). The
+    // operator can drop such objects manually before re-running if the
+    // block proves a false positive.
+    const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
 
     return statements.filter(stmt => {
+      // ── DROP TABLE ──────────────────────────────────────────────────
       const dropMatch = stmt.match(
         /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
       );
-      if (!dropMatch) return true;
+      if (dropMatch) {
+        const tableName = dropMatch[1] ?? "<unknown>";
+        const isInDesired = desiredSet.has(tableName.toLowerCase());
 
-      const tableName = dropMatch[1] ?? "<unknown>";
-      const isInDesired = desiredSet.has(tableName.toLowerCase());
+        if (isInDesired) {
+          // Intentional drop — rebuild pattern, system-table refresh,
+          // etc. Pass through and let executor run it.
+          return true;
+        }
 
-      if (isInDesired) {
-        // Intentional drop — rebuild pattern, system-table refresh,
-        // etc. Pass through and let executor run it.
-        return true;
+        // Accidental drop — table not in desired schema. Block and
+        // log so operators see the protection.
+        console.warn(
+          `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
+            `drizzle-kit pushSchema (table not in current desired schema). ` +
+            `If this drop was intentional, route it through the ` +
+            `pre-resolution executor with explicit user confirmation. ` +
+            `(managed=${isManagedTable(tableName)})`
+        );
+        return false;
       }
 
-      // Accidental drop — table not in desired schema. Block and
-      // log so operators see the protection.
-      console.warn(
-        `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
-          `drizzle-kit pushSchema (table not in current desired schema). ` +
-          `If this drop was intentional, route it through the ` +
-          `pre-resolution executor with explicit user confirmation. ` +
-          `(managed=${isManagedTable(tableName)})`
-      );
-      return false;
+      // ── DROP SEQUENCE / DROP INDEX ───────────────────────────────────
+      // Block when the inferred owner table is not in desiredSet
+      // (longest-prefix match — see inferOwnerTableFromObjectName).
+      // A matched owner means the drop is intentional (SERIAL rebuild
+      // during a type migration; index rebuild after a column change).
+      for (const { kind, re } of ORPHAN_DROP_PATTERNS) {
+        const m = stmt.match(re);
+        if (!m) continue;
+        const objectName = m[1] ?? "";
+        if (
+          this.inferOwnerTableFromObjectName(objectName, desiredSet) !== null
+        ) {
+          return true;
+        }
+        console.warn(
+          `[Nextly schema] Blocked DROP ${kind} "${objectName}" emitted by ` +
+            `drizzle-kit pushSchema (owner table not in current desired ` +
+            `schema or name is non-conventional). If this drop was ` +
+            `intentional, route it through the pre-resolution executor ` +
+            `with explicit user confirmation, or drop it manually before ` +
+            `re-running if the ${kind.toLowerCase()} name is custom.`
+        );
+        return false;
+      }
+
+      // ── Everything else passes through ──────────────────────────────
+      return true;
     });
+  }
+
+  /**
+   * Infers the owner table of a sequence or index from its name using
+   * Postgres's default naming conventions:
+   *   - SERIAL / IDENTITY sequences: `<table>_<col>_seq`
+   *   - Indexes:                      `<table>_<col(s)>_idx | _key | _pkey | _unique`
+   *
+   * Strategy: walk underscore-delimited prefixes from longest to shortest
+   * and return the first candidate found in `desiredSet`. Longest-first
+   * ensures that multi-word table names like `email_templates` are
+   * preferred over the shorter prefix `email`.
+   *
+   * Examples:
+   *   accounts_id_seq          → "accounts"        (if in desiredSet)
+   *   email_templates_id_seq   → "email_templates" (if in desiredSet)
+   *   dc_posts_title_idx       → "dc_posts"        (if in desiredSet)
+   *   idx_completely_custom    → null              (no prefix matches)
+   *
+   * Returns the matched table name (lowercased) or `null` if no prefix
+   * in `desiredSet` was found. A `null` result means we can't identify
+   * the owner, and the caller should treat the statement as unsafe.
+   */
+  private inferOwnerTableFromObjectName(
+    objectName: string,
+    desiredSet: ReadonlySet<string>
+  ): string | null {
+    const lower = objectName.toLowerCase();
+    const parts = lower.split("_");
+    // Walk from the longest prefix down to a single part.
+    for (let i = parts.length - 1; i > 0; i--) {
+      const candidate = parts.slice(0, i).join("_");
+      if (desiredSet.has(candidate)) return candidate;
+    }
+    return null;
   }
 
   private async runSqlitePragma(db: unknown, pragma: string): Promise<void> {

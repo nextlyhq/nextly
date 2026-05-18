@@ -16,10 +16,16 @@ export const _envSchema = z
     // SQLite-specific path (alternative to DATABASE_URL for SQLite)
     SQLITE_PATH: z.string().optional(),
     // Pooling & timeouts
-    DB_POOL_MAX: z.coerce.number().int().min(1).default(20),
-    DB_POOL_MIN: z.coerce.number().int().min(0).default(2),
-    DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().min(1000).default(30000),
-    DB_QUERY_TIMEOUT: z.coerce.number().int().min(1000).default(15000),
+    // Phase 1 fix: these used to carry zod defaults, but the defaults silently
+    // overrode the adapter's intentional cold-start-friendly defaults (e.g.
+    // the Postgres adapter's `min: 0` for Neon auto-suspend recovery — see
+    // packages/adapter-postgres/src/index.ts:140-148). Make them optional so
+    // the factory's `??` chain can fall through to adapter-level defaults
+    // when the operator hasn't set anything.
+    DB_POOL_MAX: z.coerce.number().int().min(1).optional(),
+    DB_POOL_MIN: z.coerce.number().int().min(0).optional(),
+    DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+    DB_QUERY_TIMEOUT: z.coerce.number().int().min(1000).optional(),
     DB_HEALTHCHECK_INTERVAL_MS: z.coerce
       .number()
       .int()
