@@ -566,19 +566,34 @@ export class PushSchemaPipeline {
         dialect,
       });
 
-      const dispatchResult =
-        candidates.length > 0 || classificationResult.level !== "safe"
-          ? await this.deps.promptDispatcher.dispatch({
-              candidates,
-              events: classificationResult.events,
-              classification: classificationResult.level,
-              channel: promptChannel,
-            })
-          : {
-              confirmedRenames: [] as RenameCandidate[],
-              resolutions: [],
-              proceed: true,
-            };
+      // Drops that have a rename candidate are resolved by the
+      // dispatcher's shrinking-pool prompt — its "drop_and_add" option
+      // already implies user consent to data loss. Filter their
+      // destructive_drop events here so the user isn't asked the same
+      // question twice (once for the rename pair, once for the drop).
+      const dropsCoveredByCandidates = new Set<string>();
+      for (const c of candidates) {
+        dropsCoveredByCandidates.add(`${c.tableName}::${c.fromColumn}`);
+      }
+      const dispatchEvents = classificationResult.events.filter(
+        e =>
+          e.kind !== "destructive_drop" ||
+          !dropsCoveredByCandidates.has(`${e.tableName}::${e.columnName}`)
+      );
+
+      const needsPrompt = candidates.length > 0 || dispatchEvents.length > 0;
+      const dispatchResult = needsPrompt
+        ? await this.deps.promptDispatcher.dispatch({
+            candidates,
+            events: dispatchEvents,
+            classification: classificationResult.level,
+            channel: promptChannel,
+          })
+        : {
+            confirmedRenames: [] as RenameCandidate[],
+            resolutions: [],
+            proceed: true,
+          };
 
       // Honor abort: short-circuit before any DDL fires.
       if (!dispatchResult.proceed) {

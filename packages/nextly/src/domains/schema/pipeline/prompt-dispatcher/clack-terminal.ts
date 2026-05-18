@@ -39,6 +39,17 @@ function hasTTY(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
+// Power-user opt-out: skip the interactive destructive_drop prompt and
+// auto-confirm every drop. Useful for CI/CD or non-interactive workflows
+// where the operator already trusts the config edit and just wants the
+// columns gone. Matches Drizzle Kit's --force / Prisma's
+// --accept-data-loss pattern. Only affects destructive_drop events;
+// other event kinds (type_change, NOT NULL) still prompt.
+function shouldAutoConfirmDrops(): boolean {
+  // eslint-disable-next-line turbo/no-undeclared-env-vars
+  return process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
+}
+
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   async dispatch(args: {
     candidates: RenameCandidate[];
@@ -62,11 +73,18 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
         .join(", ");
       const eventSample = events
         .slice(0, 3)
-        .map(e =>
-          e.kind === "type_change"
-            ? `type change on ${e.tableName}.${e.columnName} (${e.fromType} -> ${e.toType})`
-            : `${e.kind === "add_not_null_with_nulls" ? "NOT NULL on" : "required field"} ${e.tableName}.${e.columnName}`
-        )
+        .map(e => {
+          switch (e.kind) {
+            case "type_change":
+              return `type change on ${e.tableName}.${e.columnName} (${e.fromType} -> ${e.toType})`;
+            case "add_not_null_with_nulls":
+              return `NOT NULL on ${e.tableName}.${e.columnName}`;
+            case "add_required_field_no_default":
+              return `required field ${e.tableName}.${e.columnName}`;
+            case "destructive_drop":
+              return `drop column ${e.tableName}.${e.columnName} (${e.columnType}, ${e.tableRowCount} row(s))`;
+          }
+        })
         .join(", ");
       const parts: string[] = [];
       if (candidates.length > 0) {
@@ -115,9 +133,52 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
     const resolutions: Resolution[] = [];
 
+    // Pre-scan: when the operator has opted in via
+    // NEXTLY_ALLOW_CODE_FIRST_DROPS=1 AND every event in this batch is a
+    // destructive_drop, skip clack entirely and auto-confirm all of them.
+    // The intro/outro frame would be noise for a workflow that explicitly
+    // doesn't want prompts.
+    const autoConfirmDrops = shouldAutoConfirmDrops();
+    const allDestructiveDrops = events.every(
+      e => e.kind === "destructive_drop"
+    );
+    if (autoConfirmDrops && allDestructiveDrops) {
+      for (const event of events) {
+        if (event.kind !== "destructive_drop") continue;
+        resolutions.push({ kind: "confirm_drop", eventId: event.id });
+      }
+      return { resolutions, proceed: true };
+    }
+
     clack.intro("Schema change requires confirmation");
 
     for (const event of events) {
+      if (event.kind === "destructive_drop") {
+        // Mirrors Drizzle Kit's `push` destructive-confirm UX. The note
+        // surfaces column type and row count so the user sees the
+        // magnitude of the loss before answering.
+        clack.note(
+          `Type: ${event.columnType}\nRows affected: ${event.tableRowCount}`,
+          `Drop column "${event.tableName}.${event.columnName}"`
+        );
+        // Per-drop opt-out: power users can still set the flag mid-session
+        // (e.g. from .env, then HMR-restart) to skip every subsequent
+        // drop prompt without touching the rename/type-change UX.
+        if (autoConfirmDrops) {
+          resolutions.push({ kind: "confirm_drop", eventId: event.id });
+          continue;
+        }
+        const proceed = await clack.confirm({
+          message: `Drop "${event.columnName}" from "${event.tableName}"?`,
+          initialValue: false,
+        });
+        if (clack.isCancel(proceed) || proceed === false) {
+          clack.outro("Cancelled");
+          return { resolutions, proceed: false };
+        }
+        resolutions.push({ kind: "confirm_drop", eventId: event.id });
+        continue;
+      }
       if (event.kind === "type_change") {
         // Render the per-dialect warning text and ask Y/N.
         clack.note(
@@ -155,6 +216,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           event.kind === "add_not_null_with_nulls"
             ? `Delete the ${event.nullCount} rows with empty values`
             : "Delete rows that violate the constraint",
+        // Unreachable for NOT-NULL kinds (destructive_drop never lists
+        // these resolutions in applicableResolutions), but Record<K,V>
+        // requires every key. The label only surfaces if a future event
+        // erroneously includes confirm_drop in its applicableResolutions.
+        confirm_drop: "Confirm the drop",
         abort: "Cancel everything",
       };
       const options = event.applicableResolutions.map(kind => ({
