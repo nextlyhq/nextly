@@ -1,5 +1,11 @@
 # @nextlyhq/prettier-config
 
+## 0.0.2-alpha.10
+
+### Patch Changes
+
+- [`7fde28a`](https://github.com/nextlyhq/nextly/commit/7fde28a9dfa4bd454d8ed2eab97b4b7b9f8f23b6) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Bump private internal packages to keep their versions in sync with the public packages in the workspace.
+
 ## 0.0.2-alpha.9
 
 ### Patch Changes
