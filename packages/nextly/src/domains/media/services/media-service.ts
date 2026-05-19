@@ -65,6 +65,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
+import type { UploadValidator } from "../../../services/upload-validation";
 import type { ImageProcessor } from "../../../storage/image-processor";
 import type { IStorageAdapter } from "../../../storage/types";
 import {
@@ -178,6 +179,7 @@ export class MediaService {
       | (() => IStorageAdapter | null)
       | null,
     private readonly imageProcessor: ImageProcessor,
+    private readonly uploadValidator: UploadValidator,
     private readonly logger: Logger = consoleLogger
   ) {}
 
@@ -277,14 +279,41 @@ export class MediaService {
     // Sanitize metadata fields before storage (defense-in-depth)
     sanitizeMediaInput(input);
 
-    const result = await this.legacyMediaService.uploadMedia({
-      file: input.buffer,
+    const validation = await this.uploadValidator.validate({
+      buffer: input.buffer,
       filename: input.filename,
       mimeType: input.mimeType,
-      size: input.size,
-      // null when no user is present (CLI seeds, system imports).
-      // The media.uploaded_by column is nullable to allow this case.
+    });
+    if (!validation.ok) {
+      this.logger.warn("upload.rejected", {
+        event: "nextly.upload.rejected",
+        code: validation.errors[0]?.code,
+        route: "media-service.upload",
+        mimeType: input.mimeType,
+        filename: input.filename,
+        size: input.size,
+      });
+      throw NextlyError.validation({
+        errors: validation.errors,
+        logContext: {
+          ...validation.logContext,
+          operation: "media-service.upload",
+          userId: context.user?.id ?? null,
+        },
+      });
+    }
+    const validated = validation.value;
+
+    const result = await this.legacyMediaService.uploadMedia({
+      file: validated.buffer,
+      filename: validated.filename,
+      mimeType: validated.mimeType,
+      // Use validated buffer length so the DB row matches what's actually
+      // in storage (SVG sanitization can shrink the byte count).
+      size: validated.buffer.length,
+      // Nullable: CLI seeds and system imports run without a user.
       uploadedBy: context.user?.id ?? null,
+      contentDisposition: validated.isSvg ? "attachment" : undefined,
     });
 
     if (!result.success || !result.data) {

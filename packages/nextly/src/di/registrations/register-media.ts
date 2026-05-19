@@ -12,6 +12,8 @@
 import { MediaService as LegacyMediaService } from "../../services/media";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { MediaFolderService } from "../../services/media-folder";
+import { UploadValidator } from "../../services/upload-validation";
+import type { SecurityBlockLike } from "../../services/upload-validation";
 import type { IStorageAdapter } from "../../storage/types";
 import { container } from "../container";
 
@@ -25,8 +27,7 @@ export function registerMediaServices(ctx: RegistrationContext): void {
     const folderService = new MediaFolderService(adapter, logger);
 
     // Late-binding getter so storage plugins registered after initial
-    // service registration (e.g. in Next.js config reload) are still
-    // visible to media operations.
+    // service registration (e.g. Next.js config reload) are still visible.
     const storageGetter = (): IStorageAdapter | null => {
       if (storage) return storage;
       try {
@@ -36,11 +37,17 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       }
     };
 
+    const config = container.has("config")
+      ? container.get<{ security?: SecurityBlockLike }>("config")
+      : undefined;
+    const uploadValidator = new UploadValidator(config?.security);
+
     return new UnifiedMediaService(
       legacyMediaService,
       folderService,
       storageGetter,
       imageProcessor,
+      uploadValidator,
       logger
     );
   });

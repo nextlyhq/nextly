@@ -17,6 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { NextlyError } from "../../../errors";
+import { UploadValidator } from "../../../services/upload-validation";
 import { MediaService } from "../services/media-service";
 import type { UploadMediaInput } from "../services/media-service";
 
@@ -84,6 +85,7 @@ describe("MediaService — Edge Cases", () => {
       mockLegacyFolder as never,
       mockStorage as never,
       mockImageProcessor as never,
+      new UploadValidator(undefined),
       silentLogger
     );
   });
@@ -97,6 +99,7 @@ describe("MediaService — Edge Cases", () => {
         mockLegacyFolder as never,
         null,
         mockImageProcessor as never,
+        new UploadValidator(undefined),
         silentLogger
       );
 
@@ -118,6 +121,7 @@ describe("MediaService — Edge Cases", () => {
         mockLegacyFolder as never,
         () => null,
         mockImageProcessor as never,
+        new UploadValidator(undefined),
         silentLogger
       );
 
@@ -405,6 +409,7 @@ describe("MediaService — Edge Cases", () => {
         mockLegacyFolder as never,
         null,
         mockImageProcessor as never,
+        new UploadValidator(undefined),
         silentLogger
       );
 
@@ -421,6 +426,7 @@ describe("MediaService — Edge Cases", () => {
         mockLegacyFolder as never,
         null,
         mockImageProcessor as never,
+        new UploadValidator(undefined),
         silentLogger
       );
 
