@@ -165,6 +165,33 @@ describe("generatePackageJson", () => {
     expect(result.scripts["db:migrate:reset"]).toBe("nextly migrate:reset");
     expect(result.scripts["types:generate"]).toBe("nextly generate:types");
   });
+
+  // Regression guard: pnpm 10+ blocks dependency install scripts unless the
+  // package is in `pnpm.onlyBuiltDependencies`. Without this list, a fresh
+  // `pnpm dev` crashes for sqlite users (better-sqlite3 has no compiled
+  // binding) and silently degrades for everyone else (sharp falls back to
+  // a slow JS path; esbuild and unrs-resolver warn).
+  it("should allowlist non-sqlite native deps in pnpm.onlyBuiltDependencies", async () => {
+    const result = JSON.parse(await generatePackageJson("test", pgDatabase));
+    expect(result.pnpm.onlyBuiltDependencies).toEqual(
+      expect.arrayContaining(["sharp", "esbuild", "unrs-resolver"])
+    );
+    expect(result.pnpm.onlyBuiltDependencies).not.toContain("better-sqlite3");
+  });
+
+  it("should also allowlist better-sqlite3 when sqlite adapter is selected", async () => {
+    const result = JSON.parse(
+      await generatePackageJson("test", sqliteDatabase)
+    );
+    expect(result.pnpm.onlyBuiltDependencies).toEqual(
+      expect.arrayContaining([
+        "better-sqlite3",
+        "sharp",
+        "esbuild",
+        "unrs-resolver",
+      ])
+    );
+  });
 });
 
 // ============================================================
