@@ -1,21 +1,15 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  serverExternalPackages: [
-    "nextly",
-    "@nextlyhq/adapter-drizzle",
-    "@nextlyhq/adapter-postgres",
-    "@nextlyhq/adapter-mysql",
-    "@nextlyhq/adapter-sqlite",
-    "drizzle-orm",
-    "drizzle-kit",
-    "pg",
-    "mysql2",
-    "better-sqlite3",
-    "bcryptjs",
-    "sharp",
-    "esbuild",
-  ],
-};
+/**
+ * Minimal base `next.config.ts` for bundled templates.
+ *
+ * This file is intentionally left minimal (no adapter whitelist). The
+ * scaffolder will generate or patch a database-specific `next.config.ts`
+ * that includes only the selected adapter and driver in
+ * `serverExternalPackages`. Keeping the base file minimal avoids
+ * advertising adapters the user didn't choose and prevents misleading
+ * generated projects.
+ */
+const nextConfig: NextConfig = {};
 
 export default nextConfig;
