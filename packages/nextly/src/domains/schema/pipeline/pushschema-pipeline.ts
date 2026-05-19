@@ -667,19 +667,26 @@ export class PushSchemaPipeline {
         }
       }
 
+      // Scope-reduction is PostgreSQL-only. drizzle-kit honours
+      // `tablesFilter` on PG so its catalog introspection is limited to
+      // the affected tables, which is where the perf win comes from. On
+      // SQLite/MySQL drizzle-kit ignores `tablesFilter` and walks the
+      // full live DB; handing it a scoped schema makes it flag every
+      // un-scoped system table (users, roles, accounts, sessions, ...)
+      // as a drop and fire its rename-detection TUI, crashing non-TTY
+      // boots. The long-term direction (see DrizzleKitLike comment) is
+      // `generateMigration(prev, cur)` which would let us drop this
+      // gating entirely.
       const scopedSchema: Record<string, unknown> = {};
       for (const [tableName, tableObj] of Object.entries(drizzleSchema)) {
         if (affectedTableNames.has(tableName)) {
           scopedSchema[tableName] = tableObj;
         }
       }
-      // Empty-schema safety net. Fires when resolvedOps contains only
-      // drop_table entries (already applied by pre-resolution; their
-      // tables aren't in patchedDesired anyway), or when a future op
-      // kind escapes the switch above without contributing to the set.
-      // Passing nothing to drizzle-kit would be a contract violation.
       const effectiveDrizzleSchema =
-        Object.keys(scopedSchema).length > 0 ? scopedSchema : drizzleSchema;
+        dialect === "postgresql" && Object.keys(scopedSchema).length > 0
+          ? scopedSchema
+          : drizzleSchema;
 
       const kit: DrizzleKitLike = this.testHooks._kitOverride
         ? this.testHooks._kitOverride
