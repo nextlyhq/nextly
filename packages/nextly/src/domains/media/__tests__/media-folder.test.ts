@@ -116,6 +116,7 @@ describe("MediaService — Folder Operations", () => {
       mockStorage as never,
       mockImageProcessor as never,
       new UploadValidator(undefined),
+      true,
       silentLogger
     );
   });

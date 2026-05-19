@@ -41,6 +41,7 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       ? container.get<{ security?: SecurityBlockLike }>("config")
       : undefined;
     const uploadValidator = new UploadValidator(config?.security);
+    const svgCsp = config?.security?.uploads?.svgCsp ?? true;
 
     return new UnifiedMediaService(
       legacyMediaService,
@@ -48,6 +49,7 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       storageGetter,
       imageProcessor,
       uploadValidator,
+      svgCsp,
       logger
     );
   });

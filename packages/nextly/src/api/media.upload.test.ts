@@ -35,43 +35,44 @@ function makeRequest(
   });
 }
 
-function buildMediaServiceWithStubs(
-  legacyUploadResult: {
-    success: boolean;
-    statusCode: number;
-    message?: string;
-    data?: unknown;
-  } = {
-    success: true,
-    statusCode: 201,
-    data: {
-      id: "media-1",
-      filename: "ok.png",
-      originalFilename: "ok.png",
-      mimeType: "image/png",
-      size: 8,
-      url: "/uploads/ok.png",
-      width: null,
-      height: null,
-      duration: null,
-      thumbnailUrl: null,
-      focalX: null,
-      focalY: null,
-      sizes: null,
-      altText: null,
-      caption: null,
-      tags: null,
-      folderId: null,
-      uploadedBy: TEST_USER_ID,
-      uploadedAt: new Date(),
-      updatedAt: new Date(),
-    },
-  }
-): MediaService {
-  const legacyMediaService = {
-    uploadMedia: vi.fn().mockResolvedValue(legacyUploadResult),
-  };
-  const folderService = {} as never;
+interface StubBundle {
+  service: MediaService;
+  legacyUploadMedia: ReturnType<typeof vi.fn>;
+}
+
+const DEFAULT_LEGACY_RESULT = {
+  success: true,
+  statusCode: 201,
+  data: {
+    id: "media-1",
+    filename: "ok.png",
+    originalFilename: "ok.png",
+    mimeType: "image/png",
+    size: 8,
+    url: "/uploads/ok.png",
+    width: null,
+    height: null,
+    duration: null,
+    thumbnailUrl: null,
+    focalX: null,
+    focalY: null,
+    sizes: null,
+    altText: null,
+    caption: null,
+    tags: null,
+    folderId: null,
+    uploadedBy: TEST_USER_ID,
+    uploadedAt: new Date(),
+    updatedAt: new Date(),
+  },
+};
+
+function buildStubBundle(
+  opts: { svgCsp?: boolean; legacyResult?: typeof DEFAULT_LEGACY_RESULT } = {}
+): StubBundle {
+  const legacyUploadMedia = vi
+    .fn()
+    .mockResolvedValue(opts.legacyResult ?? DEFAULT_LEGACY_RESULT);
   const storage = {
     upload: vi.fn(),
     delete: vi.fn(),
@@ -79,7 +80,6 @@ function buildMediaServiceWithStubs(
     getPublicUrl: vi.fn((p: string) => `/uploads/${p}`),
     getType: () => "test",
   };
-  const imageProcessor = {} as never;
   const logger = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -87,14 +87,17 @@ function buildMediaServiceWithStubs(
     error: vi.fn(),
   };
 
-  return new MediaService(
-    legacyMediaService as never,
-    folderService,
+  const service = new MediaService(
+    { uploadMedia: legacyUploadMedia } as never,
+    {} as never,
     () => storage as never,
-    imageProcessor,
+    {} as never,
     new UploadValidator(undefined),
+    opts.svgCsp ?? true,
     logger as never
   );
+
+  return { service, legacyUploadMedia };
 }
 
 describe("POST /api/media — unified validation pipeline", () => {
@@ -108,8 +111,9 @@ describe("POST /api/media — unified validation pipeline", () => {
   });
 
   it("rejects text/html upload with VALIDATION_ERROR", async () => {
-    container.registerSingleton("mediaService", () =>
-      buildMediaServiceWithStubs()
+    container.registerSingleton(
+      "mediaService",
+      () => buildStubBundle().service
     );
     const { POST } = await import("./media");
 
@@ -128,8 +132,9 @@ describe("POST /api/media — unified validation pipeline", () => {
   });
 
   it("rejects .exe regardless of MIME claim", async () => {
-    container.registerSingleton("mediaService", () =>
-      buildMediaServiceWithStubs()
+    container.registerSingleton(
+      "mediaService",
+      () => buildStubBundle().service
     );
     const { POST } = await import("./media");
 
@@ -140,8 +145,9 @@ describe("POST /api/media — unified validation pipeline", () => {
   });
 
   it("rejects image/svg+xml with PNG bytes (polyglot bypass closed)", async () => {
-    container.registerSingleton("mediaService", () =>
-      buildMediaServiceWithStubs()
+    container.registerSingleton(
+      "mediaService",
+      () => buildStubBundle().service
     );
     const { POST } = await import("./media");
 
@@ -150,5 +156,67 @@ describe("POST /api/media — unified validation pipeline", () => {
     expect(res.status).toBe(400);
     const body = JSON.stringify(await res.json());
     expect(body).toMatch(/MAGIC_BYTE_MISMATCH/);
+  });
+});
+
+describe("MediaService.upload — svgCsp honored", () => {
+  const legitimateSvg = Buffer.from(
+    `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>`,
+    "utf8"
+  );
+
+  const context = {
+    user: {
+      id: TEST_USER_ID,
+      email: "u@x",
+      role: "user",
+      permissions: [],
+    },
+  } as never;
+
+  it("default (svgCsp: true) → legacy upload receives contentDisposition: 'attachment'", async () => {
+    const bundle = buildStubBundle({ svgCsp: true });
+    try {
+      await bundle.service.upload(
+        {
+          buffer: legitimateSvg,
+          filename: "logo.svg",
+          mimeType: "image/svg+xml",
+          size: legitimateSvg.length,
+        },
+        context
+      );
+    } catch {
+      // Success-path response mapping needs NEXT_PUBLIC_APP_URL; the
+      // legacy call still fires before that mapping, so the mock
+      // captures the args we care about either way.
+    }
+    expect(bundle.legacyUploadMedia).toHaveBeenCalledOnce();
+    const args = bundle.legacyUploadMedia.mock.calls[0]?.[0] as {
+      contentDisposition?: string;
+    };
+    expect(args.contentDisposition).toBe("attachment");
+  });
+
+  it("svgCsp: false → legacy upload receives no contentDisposition override", async () => {
+    const bundle = buildStubBundle({ svgCsp: false });
+    try {
+      await bundle.service.upload(
+        {
+          buffer: legitimateSvg,
+          filename: "logo.svg",
+          mimeType: "image/svg+xml",
+          size: legitimateSvg.length,
+        },
+        context
+      );
+    } catch {
+      // see above
+    }
+    expect(bundle.legacyUploadMedia).toHaveBeenCalledOnce();
+    const args = bundle.legacyUploadMedia.mock.calls[0]?.[0] as {
+      contentDisposition?: string;
+    };
+    expect(args.contentDisposition).toBeUndefined();
   });
 });

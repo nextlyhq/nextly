@@ -50,12 +50,17 @@ export interface ValidationConfig {
 /**
  * Narrow shape of the `security` block the validator reads from. Decoupled
  * from the full `SanitizedNextlyConfig` so the validator stays insensitive
- * to unrelated config-schema changes.
+ * to unrelated config-schema changes. The validator itself only uses
+ * `uploads.allowedMimeTypes`, `uploads.additionalMimeTypes`, and
+ * `limits.fileSize`; `uploads.svgCsp` is included so callers that pass
+ * the same block to services like `MediaService` don't need a second
+ * type.
  */
 export interface SecurityBlockLike {
   uploads?: {
     allowedMimeTypes?: string[];
     additionalMimeTypes?: string[];
+    svgCsp?: boolean;
   };
   limits?: {
     fileSize?: string | number;

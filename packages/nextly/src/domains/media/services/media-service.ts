@@ -180,6 +180,12 @@ export class MediaService {
       | null,
     private readonly imageProcessor: ImageProcessor,
     private readonly uploadValidator: UploadValidator,
+    /**
+     * Whether sanitized SVGs are persisted with `Content-Disposition: attachment`.
+     * Mirrors `UploadService`'s `svgCsp` flag — sourced from
+     * `config.security.uploads.svgCsp` (default `true`).
+     */
+    private readonly svgCsp: boolean = true,
     private readonly logger: Logger = consoleLogger
   ) {}
 
@@ -313,7 +319,8 @@ export class MediaService {
       size: validated.buffer.length,
       // Nullable: CLI seeds and system imports run without a user.
       uploadedBy: context.user?.id ?? null,
-      contentDisposition: validated.isSvg ? "attachment" : undefined,
+      contentDisposition:
+        validated.isSvg && this.svgCsp ? "attachment" : undefined,
     });
 
     if (!result.success || !result.data) {

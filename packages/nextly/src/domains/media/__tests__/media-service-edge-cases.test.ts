@@ -86,6 +86,7 @@ describe("MediaService — Edge Cases", () => {
       mockStorage as never,
       mockImageProcessor as never,
       new UploadValidator(undefined),
+      true,
       silentLogger
     );
   });
@@ -100,6 +101,7 @@ describe("MediaService — Edge Cases", () => {
         null,
         mockImageProcessor as never,
         new UploadValidator(undefined),
+        true,
         silentLogger
       );
 
@@ -122,6 +124,7 @@ describe("MediaService — Edge Cases", () => {
         () => null,
         mockImageProcessor as never,
         new UploadValidator(undefined),
+        true,
         silentLogger
       );
 
@@ -410,6 +413,7 @@ describe("MediaService — Edge Cases", () => {
         null,
         mockImageProcessor as never,
         new UploadValidator(undefined),
+        true,
         silentLogger
       );
 
@@ -427,6 +431,7 @@ describe("MediaService — Edge Cases", () => {
         null,
         mockImageProcessor as never,
         new UploadValidator(undefined),
+        true,
         silentLogger
       );
 
