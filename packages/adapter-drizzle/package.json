@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-drizzle",
-  "version": "0.0.2-alpha.11",
+  "version": "0.0.2-alpha.12",
   "description": "Shared Drizzle ORM adapter logic for Nextly database adapters",
   "license": "MIT",
   "type": "module",
