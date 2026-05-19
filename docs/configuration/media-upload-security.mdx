@@ -87,7 +87,7 @@ The SVG case is special: `file-type` returns `application/xml` for SVG (not `ima
 | Adapter                          | Support                                                                                                                                            |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@nextlyhq/storage-s3` / R2 / MinIO | Full — passes through via `PutObjectCommand` `ContentDisposition`.                                                                                |
-| `@nextlyhq/storage-vercel-blob`     | **Refuses SVG and HTML uploads** entirely with a `NextlyError.validation` (code `UNSUPPORTED_FOR_BACKEND`). The platform cannot reliably serve attachment-disposition. Use S3/R2, or convert to a raster format. |
+| `@nextlyhq/storage-vercel-blob`     | **SVG: supported** via Vercel Blob's `downloadUrl` (the file URL with `?download=1` appended). The adapter returns this URL when the upload requests `contentDisposition: "attachment"`, so top-level navigation forces download while `<img src>` still renders the SVG inline. **HTML: refused** with `NextlyError.validation` (code `UNSUPPORTED_FOR_BACKEND`) — HTML is unsafe to host on a shared blob CDN regardless of disposition. |
 | `storage-local` (Next.js static `/public`) | Sanitization runs, but per-file response headers cannot be applied. Self-hosters wanting strict headers should serve through a CDN with a response-header policy. |
 | `@nextlyhq/storage-uploadthing`     | Investigation pending — see adapter README.                                                                                                       |
 
