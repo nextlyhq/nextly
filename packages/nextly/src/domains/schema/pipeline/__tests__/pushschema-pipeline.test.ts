@@ -1388,6 +1388,86 @@ describe("scoped pushSchema (Task 6)", () => {
     expect(tableNames).toContain("dc_articles");
     expect(tableNames).not.toContain("dc_posts");
   });
+
+  it("skips scope-reduction on non-PG dialects so drizzle-kit sees the full schema", async () => {
+    // drizzle-kit ignores `tablesFilter` on SQLite/MySQL upstream, so a
+    // scoped schema would make it flag the system tables that
+    // buildDrizzleSchema injects (users, roles, accounts, ...) as drops
+    // and fire its rename-detection TUI. The pipeline therefore passes
+    // the full drizzleSchema on non-PG dialects.
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [],
+        hasDataLoss: false,
+      });
+
+    const buildDrizzleSchemaImpl = () => ({
+      users: { _sentinel: "users" },
+      roles: { _sentinel: "roles" },
+      accounts: { _sentinel: "accounts" },
+      sessions: { _sentinel: "sessions" },
+      dynamic_collections: { _sentinel: "dynamic_collections" },
+      dc_posts: { _sentinel: "dc_posts" },
+    });
+
+    // change_column_type forces the drizzle-kit fallback so pushSchemaImpl
+    // is actually invoked.
+    const { pipeline } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl,
+      resolvedOpsOverride: [
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "body",
+          fromType: "text",
+          toType: "integer",
+        },
+      ],
+    });
+
+    const result = await pipeline.apply({
+      desired: {
+        collections: {
+          posts: {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "text" }] as never,
+          },
+        },
+        singles: {},
+        components: {},
+      },
+      db: {},
+      dialect: "mysql",
+      source: "ui",
+      promptChannel: "browser",
+    });
+
+    expect(result.success).toBe(true);
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(1);
+
+    const [effectiveSchema] = pushSchemaImpl.mock.calls[0]!;
+    const keys = Object.keys(effectiveSchema);
+    expect(keys).toContain("dc_posts");
+    expect(keys).toContain("users");
+    expect(keys).toContain("roles");
+    expect(keys).toContain("accounts");
+    expect(keys).toContain("sessions");
+    expect(keys).toContain("dynamic_collections");
+  });
 });
 
 // =============================================================================
