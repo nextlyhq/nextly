@@ -31,6 +31,7 @@
     "flat-bugs-float",
     "initial-alpha-release",
     "neon-schema-apply-perf",
+    "preserve-system-tables-in-scope-reduction",
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation",
     "sync-private-package-versions"
