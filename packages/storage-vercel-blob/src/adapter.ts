@@ -28,6 +28,7 @@
  */
 
 import { put, del, head, list } from "@vercel/blob";
+import { NextlyError } from "nextly/errors";
 import type {
   IStorageAdapter,
   UploadOptions,
@@ -124,12 +125,26 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       ext === "xhtml";
     if (isSvg || isHtml) {
       const kind = isSvg ? "SVG" : "HTML";
-      throw new Error(
-        `[nextly/storage-vercel-blob] ${kind} uploads are rejected on Vercel ` +
-          `Blob — the platform cannot serve them with attachment-disposition ` +
-          `or a restrictive CSP, so they would be stored XSS. Use the S3 / R2 ` +
-          `adapter for ${kind} files, or convert to a raster format (PNG/WebP).`
-      );
+      // Surface as `NextlyError.validation` (HTTP 400, stable code) so
+      // route handlers map this consistently with other client-input
+      // rejections. The defense-in-depth rejection itself is
+      // unchanged — see the comment above for why Vercel Blob can't
+      // host these formats safely.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "file",
+            code: "UNSUPPORTED_FOR_BACKEND",
+            message: `${kind} files cannot be hosted on Vercel Blob. Use the S3 or R2 adapter, or convert to a raster format (PNG/WebP).`,
+          },
+        ],
+        logContext: {
+          adapter: "vercel-blob",
+          claimedMimeType: options.mimeType,
+          reason: "vercel-blob-rejects-script-capable-content",
+          filename: options.filename,
+        },
+      });
     }
 
     const pathname = this.buildPathname(options.filename, options.folder);

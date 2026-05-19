@@ -205,7 +205,15 @@ export class MediaService extends BaseService {
    */
   async uploadMedia(input: UploadMediaInput): Promise<MediaResponse> {
     try {
-      const { file, filename, mimeType, size, uploadedBy, folderId } = input;
+      const {
+        file,
+        filename,
+        mimeType,
+        size,
+        uploadedBy,
+        folderId,
+        contentDisposition,
+      } = input;
 
       const sizeValidation = validateFileSize(size);
       if (!sizeValidation.valid) {
@@ -274,6 +282,10 @@ export class MediaService extends BaseService {
             filename,
             mimeType,
             collection: "media",
+            // Forward when set; storage adapters that don't honor
+            // per-object disposition silently no-op (storage-local) or
+            // refuse the upload entirely (storage-vercel-blob).
+            ...(contentDisposition && { contentDisposition }),
           }),
         {
           maxAttempts: 3,
@@ -421,7 +433,9 @@ export class MediaService extends BaseService {
               const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
 
               if (sizeConfigs.length > 0) {
-                const oldSizes = (mediaData as unknown as Record<string, unknown>).sizes;
+                const oldSizes = (
+                  mediaData as unknown as Record<string, unknown>
+                ).sizes;
                 if (oldSizes) {
                   const parsed =
                     typeof oldSizes === "string"
@@ -453,7 +467,9 @@ export class MediaService extends BaseService {
                 updateData.sizes = newSizes;
 
                 if (newSizes && "thumbnail" in newSizes) {
-                  updateData.thumbnailUrl = (newSizes.thumbnail as unknown as { url: string }).url;
+                  updateData.thumbnailUrl = (
+                    newSizes.thumbnail as unknown as { url: string }
+                  ).url;
                 }
 
                 console.log(
@@ -476,10 +492,7 @@ export class MediaService extends BaseService {
         }
       }
 
-      await this.db
-        .update(media)
-        .set(updateData)
-        .where(eq(media.id, mediaId));
+      await this.db.update(media).set(updateData).where(eq(media.id, mediaId));
 
       return {
         success: true,

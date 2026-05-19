@@ -100,6 +100,7 @@
   "pnpm": {
     "overrides": {
       "esbuild": ">=0.25.0",
+      "undici": "^7",
       "next": "^16.2.3",
       "@next/swc-darwin-arm64": "^16.2.3",
       "@next/swc-darwin-x64": "^16.2.3",
@@ -122,7 +123,6 @@
       "@codemirror/state": "6.6.0",
       "@codemirror/commands": "6.10.3",
       "rollup": "^4.59.0",
-      "undici": "^6.24.0",
       "yaml": "^2.8.3",
       "effect": "^3.20.0",
       "brace-expansion@1": "^1.1.13",
