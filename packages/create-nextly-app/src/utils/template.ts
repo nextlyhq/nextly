@@ -342,6 +342,14 @@ export async function generatePackageJson(
     pagefind: "^1.1.0",
   };
 
+  // pnpm 10+ blocks dependency install scripts by default; without this
+  // allowlist better-sqlite3's native binding never builds (sqlite apps
+  // crash at boot) and sharp/esbuild/unrs-resolver silently degrade.
+  const onlyBuiltDependencies = ["sharp", "esbuild", "unrs-resolver"];
+  if (database.type === "sqlite") {
+    onlyBuiltDependencies.push("better-sqlite3");
+  }
+
   const pkg = {
     name: projectName,
     version: "0.1.0",
@@ -374,6 +382,9 @@ export async function generatePackageJson(
     },
     dependencies,
     devDependencies,
+    pnpm: {
+      onlyBuiltDependencies,
+    },
   };
 
   return JSON.stringify(pkg, null, 2) + "\n";
