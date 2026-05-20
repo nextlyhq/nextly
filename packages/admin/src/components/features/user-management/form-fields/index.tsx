@@ -3,7 +3,7 @@
 import { Checkbox, Input, Label } from "@nextlyhq/ui";
 import { useState } from "react";
 import type { Control, FieldErrors, UseFormRegister } from "react-hook-form";
-import { Controller } from "react-hook-form";
+import { Controller, useWatch } from "react-hook-form";
 
 import { UserRoleSelector } from "@admin/components/features/users/UserRoleSelector";
 import { Eye, EyeOff } from "@admin/components/icons";
@@ -75,8 +75,10 @@ interface UserFormFieldsProps {
  * Features:
  * - Full Name, Email, Password inputs
  * - Roles selection with checkboxes
- * - Active Account toggle (create mode)
- * - Send Welcome Email toggle (create mode only)
+ * - Active Account toggle
+ * - Require Email Verification toggle (create mode only). Disabled when
+ *   the account is inactive, and shows an inline note when both flags are
+ *   on so the admin understands login is gated on the verification link.
  * - Conditional password field (required in create, optional in edit)
  * - Loading and error states for roles (edit mode)
  *
@@ -118,6 +120,21 @@ export function UserFormFields({
 }: UserFormFieldsProps) {
   const isCreateMode = mode === "create";
   const [showPassword, setShowPassword] = useState(false);
+
+  // Cross-checkbox interaction (create mode only): "Require email
+  // verification" is meaningless for a disabled account, so we disable it
+  // when "Active" is off. We also surface an inline note when an admin
+  // checks both -- the user will only be able to sign in *after* clicking
+  // the verification link, which the simple "Active" label doesn't telegraph
+  // on its own.
+  const watchedActive = useWatch({ control, name: "active" });
+  const watchedRequireVerification = useWatch({
+    control,
+    name: "requireEmailVerification",
+  });
+  const verificationDisabled = !watchedActive;
+  const showVerificationGateNote =
+    !!watchedActive && !!watchedRequireVerification;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-y-12 md:gap-x-[10rem] w-full">
@@ -264,29 +281,54 @@ export function UserFormFields({
               </div>
             )}
 
-            {/* Send Welcome Email Checkbox (create mode only) */}
+            {/* Require Email Verification (create mode only) */}
             {isCreateMode && (
-              <div className="rounded-none  border border-primary/5 p-3">
-                <label className="flex items-start gap-3 cursor-pointer">
+              <div
+                className={
+                  "rounded-none border border-primary/5 p-3" +
+                  (verificationDisabled ? " opacity-60" : "")
+                }
+              >
+                <label
+                  className={
+                    "flex items-start gap-3 " +
+                    (verificationDisabled
+                      ? "cursor-not-allowed"
+                      : "cursor-pointer")
+                  }
+                >
                   <Controller
                     control={control}
-                    name="sendWelcome"
+                    name="requireEmailVerification"
                     render={({ field }) => (
                       <Checkbox
-                        checked={!!field.value}
+                        checked={!!field.value && !verificationDisabled}
                         onCheckedChange={val => field.onChange(!!val)}
+                        disabled={verificationDisabled}
+                        aria-disabled={verificationDisabled}
                         className="mt-0.5"
                       />
                     )}
                   />
                   <div>
                     <div className="text-sm font-medium">
-                      Send Welcome Email
+                      Require Email Verification
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Send an email with login credentials after account
-                      creation.
+                      {verificationDisabled
+                        ? "Disabled while the account is inactive — verification only matters for accounts that are allowed to sign in."
+                        : "Sends a verification link. The user can sign in only after clicking the link. Uncheck to mark the email as verified immediately."}
                     </p>
+                    {showVerificationGateNote && (
+                      <p
+                        className="text-xs text-amber-700 dark:text-amber-400 mt-2"
+                        role="note"
+                      >
+                        Note: the account is active, but the user will need to
+                        click the link in the verification email before they can
+                        sign in.
+                      </p>
+                    )}
                   </div>
                 </label>
               </div>

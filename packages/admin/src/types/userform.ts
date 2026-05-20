@@ -95,7 +95,13 @@ export function getUserFormSchema(isEdit: boolean) {
         .optional()
         .or(z.literal("")),
       active: z.boolean().optional(),
-      sendWelcome: z.boolean().optional(),
+      // Controls whether the new account must prove email ownership before
+      // it can sign in. When true, the wire payload sets `sendWelcomeEmail`
+      // so the backend leaves `emailVerified` null and dispatches the
+      // verification email; the user is gated at login until they click
+      // the link. When false (default), the backend marks the email as
+      // verified at creation time and the user can sign in immediately.
+      requireEmailVerification: z.boolean().optional(),
       // Roles optional in schema, but validated below
       roles: rolesSchema.optional(),
     })
