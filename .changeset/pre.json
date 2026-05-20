@@ -28,6 +28,7 @@
     "auth-setup-status-fail-closed",
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
+    "date-field-coercion-singles-components",
     "fix-cli-prompt-for-folder-when-missing",
     "fix-status-column-strip",
     "flat-bugs-float",
