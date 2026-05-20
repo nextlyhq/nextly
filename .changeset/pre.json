@@ -35,6 +35,7 @@
     "preserve-system-tables-in-scope-reduction",
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation",
+    "svg-upload-security-unification",
     "sync-private-package-versions"
   ]
 }

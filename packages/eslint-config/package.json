@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/eslint-config",
-  "version": "0.0.2-alpha.12",
+  "version": "0.0.2-alpha.13",
   "description": "Shared ESLint configuration for Nextly",
   "type": "module",
   "private": true,
