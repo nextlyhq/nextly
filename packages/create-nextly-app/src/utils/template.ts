@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 
 import fs from "fs-extra";
 
+import { buildNextConfigTemplate } from "../generators/next-config";
 import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
 
 /**
@@ -587,7 +588,15 @@ export async function copyTemplate(
     await fs.ensureDir(path.join(targetDir, "data"));
   }
 
-  // Step 8: Replace placeholders in all text files
+  // Step 8: Write a database-specific next.config.ts so the scaffold only
+  // externalizes the selected adapter and its driver.
+  await fs.writeFile(
+    path.join(targetDir, "next.config.ts"),
+    buildNextConfigTemplate(database),
+    "utf-8"
+  );
+
+  // Step 9: Replace placeholders in all text files
   // Include approach placeholder for seed scripts
   const placeholders = buildPlaceholderMap({ database, databaseUrl });
   if (approach) {

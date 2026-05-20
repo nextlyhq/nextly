@@ -2,30 +2,66 @@ import path from "path";
 
 import fs from "fs-extra";
 
+import type { DatabaseConfig } from "../types";
+
 /**
- * Database driver packages that must be listed in serverExternalPackages.
+ * Packages that are always externalized by the scaffolded Next.js config.
  *
- * These packages contain native binaries or are only used at runtime on the
- * server. Next.js webpack must skip bundling them so that:
- *   1. Missing optional drivers (e.g. mysql2 when using PostgreSQL) don't
- *      cause "Module not found" build errors.
- *   2. Native addons (better-sqlite3, pg-native) aren't processed by webpack.
+ * These packages are used by Nextly at runtime and should stay out of the
+ * server bundle regardless of the selected database.
  */
-const SERVER_EXTERNAL_PACKAGES = [
+const COMMON_SERVER_EXTERNAL_PACKAGES = [
   "nextly",
   "@nextlyhq/adapter-drizzle",
-  "@nextlyhq/adapter-postgres",
-  "@nextlyhq/adapter-mysql",
-  "@nextlyhq/adapter-sqlite",
   "drizzle-orm",
   "drizzle-kit",
-  "pg",
-  "mysql2",
-  "better-sqlite3",
   "bcryptjs",
   "sharp",
   "esbuild",
 ];
+
+/**
+ * Database-specific packages needed by the selected adapter.
+ */
+const DATABASE_SERVER_EXTERNAL_PACKAGES: Record<
+  DatabaseConfig["type"],
+  string[]
+> = {
+  postgresql: ["@nextlyhq/adapter-postgres", "pg"],
+  mysql: ["@nextlyhq/adapter-mysql", "mysql2"],
+  sqlite: ["@nextlyhq/adapter-sqlite", "better-sqlite3"],
+};
+
+/**
+ * Build the exact list of packages that should be externalized for a chosen
+ * database.
+ */
+export function getServerExternalPackages(database: DatabaseConfig): string[] {
+  return [
+    ...COMMON_SERVER_EXTERNAL_PACKAGES,
+    ...DATABASE_SERVER_EXTERNAL_PACKAGES[database.type],
+  ];
+}
+
+/**
+ * Render a complete next.config.ts file for the selected database.
+ */
+export function buildNextConfigTemplate(database: DatabaseConfig): string {
+  const packagesArray = JSON.stringify(
+    getServerExternalPackages(database),
+    null,
+    2
+  ).replace(/\n/g, "\n  ");
+
+  return `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  serverExternalPackages: ${packagesArray},
+};
+
+export default nextConfig;
+`;
+}
 
 /**
  * Patch the project's next.config file to include serverExternalPackages.
@@ -33,7 +69,10 @@ const SERVER_EXTERNAL_PACKAGES = [
  * Handles both .ts and .mjs config files. If the config already contains
  * serverExternalPackages the file is left untouched.
  */
-export async function patchNextConfig(cwd: string): Promise<void> {
+export async function patchNextConfig(
+  cwd: string,
+  database: DatabaseConfig
+): Promise<void> {
   // Find the next.config file
   const candidates = ["next.config.ts", "next.config.mjs", "next.config.js"];
 
@@ -58,7 +97,11 @@ export async function patchNextConfig(cwd: string): Promise<void> {
     return;
   }
 
-  const packagesArray = JSON.stringify(SERVER_EXTERNAL_PACKAGES, null, 4)
+  const packagesArray = JSON.stringify(
+    getServerExternalPackages(database),
+    null,
+    2
+  )
     // Indent each line by 2 extra spaces so it sits inside the config object
     .replace(/\n/g, "\n  ");
 

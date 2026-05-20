@@ -78,11 +78,7 @@ function cwdProjectName(cwd: string): string {
 export async function createNextly(
   options: CreateNextlyOptions = {}
 ): Promise<void> {
-  const {
-    defaults = false,
-    skipInstall = false,
-    useYalc = false,
-  } = options;
+  const { defaults = false, skipInstall = false, useYalc = false } = options;
   // installInCwd may flip to true at the interactive prompt when the user
   // answers with "." or "./", so it has to be mutable.
   let installInCwd = options.installInCwd ?? false;
@@ -478,7 +474,7 @@ export async function createNextly(
         await generateAdminPage(cwd, projectInfo);
         await generateMediaRoutes(cwd, projectInfo);
         await generateTypesDirectory(cwd, projectInfo);
-        await patchNextConfig(cwd);
+        await patchNextConfig(cwd, database);
       }
 
       // Both flows: generate .env with database URL and NEXTLY_SECRET
