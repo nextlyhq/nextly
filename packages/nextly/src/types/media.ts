@@ -94,6 +94,13 @@ export const UploadMediaInputSchema = z.object({
   // may not have a user to attribute the upload to.
   uploadedBy: z.string().uuid("Invalid user ID").nullable(),
   folderId: z.string().uuid("Invalid folder ID").optional(),
+  // Optional Content-Disposition to set on the stored object. Forwarded
+  // by `LegacyMediaService.uploadMedia` to the storage adapter's
+  // `UploadOptions.contentDisposition`. The unified MediaService sets
+  // this to `"attachment"` for sanitized SVGs when `svgCsp` is on, so
+  // direct URL navigation downloads instead of rendering. Adapters
+  // without per-object disposition support silently ignore.
+  contentDisposition: z.enum(["inline", "attachment"]).optional(),
 });
 
 export type UploadMediaInput = z.infer<typeof UploadMediaInputSchema>;

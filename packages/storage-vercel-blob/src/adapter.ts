@@ -28,6 +28,7 @@
  */
 
 import { put, del, head, list } from "@vercel/blob";
+import { NextlyError } from "nextly/errors";
 import type {
   IStorageAdapter,
   UploadOptions,
@@ -101,12 +102,6 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns Upload result with URL and storage path
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
-    // Hard-reject SVG and HTML uploads on Vercel Blob. The platform
-    // does not support per-object response headers (no Content-
-    // Disposition: attachment, no CSP), so an attacker who can
-    // persuade an admin to upload `evil.svg` (or `.html`) gets a
-    // stored XSS that fires on every viewer hit. S3 / R2 / similar
-    // adapters can enforce attachment-disposition; Vercel Blob cannot.
     const mimeType = (options.contentType || options.mimeType || "")
       .toLowerCase()
       .trim();
@@ -114,23 +109,38 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
     const ext = filename.includes(".")
       ? filename.slice(filename.lastIndexOf(".") + 1)
       : "";
-    const isSvg =
-      mimeType === "image/svg+xml" || ext === "svg" || ext === "svgz";
     const isHtml =
       mimeType === "text/html" ||
       mimeType === "application/xhtml+xml" ||
       ext === "html" ||
       ext === "htm" ||
       ext === "xhtml";
-    if (isSvg || isHtml) {
-      const kind = isSvg ? "SVG" : "HTML";
-      throw new Error(
-        `[nextly/storage-vercel-blob] ${kind} uploads are rejected on Vercel ` +
-          `Blob — the platform cannot serve them with attachment-disposition ` +
-          `or a restrictive CSP, so they would be stored XSS. Use the S3 / R2 ` +
-          `adapter for ${kind} files, or convert to a raster format (PNG/WebP).`
-      );
+    // HTML stays unconditionally rejected. The `downloadUrl` trick that
+    // makes SVG safe (see below) doesn't help HTML — a downloaded HTML
+    // file is still a usable XSS vector when opened from disk, and
+    // Vercel Blob has no equivalent of `Content-Security-Policy` to
+    // defang it.
+    if (isHtml) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "file",
+            code: "UNSUPPORTED_FOR_BACKEND",
+            message:
+              "HTML files cannot be hosted on Vercel Blob. Use the S3 or R2 adapter, or upload as another format.",
+          },
+        ],
+        logContext: {
+          adapter: "vercel-blob",
+          claimedMimeType: options.mimeType,
+          reason: "vercel-blob-rejects-html",
+          filename: options.filename,
+        },
+      });
     }
+
+    const isSvg =
+      mimeType === "image/svg+xml" || ext === "svg" || ext === "svgz";
 
     const pathname = this.buildPathname(options.filename, options.folder);
 
@@ -142,9 +152,21 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       cacheControlMaxAge: this.resolvedConfig.cacheControlMaxAge,
     });
 
-    // Vercel Blob uses the URL as the path identifier
+    // SVGs are served via Vercel Blob's `downloadUrl` (the same URL with
+    // `?download=1` appended) so direct top-level navigation forces an
+    // attachment download instead of rendering. `<img src>` ignores the
+    // `Content-Disposition` header, so legitimate inline rendering still
+    // works. The `@vercel/blob` SDK has no `contentDisposition` input
+    // option on `put()`, so this query-param-driven approach is the
+    // supported mechanism. Caller is responsible for sanitizing SVG
+    // contents upstream (handled by `upload-validation`).
+    const url =
+      isSvg && options.contentDisposition === "attachment"
+        ? result.downloadUrl
+        : result.url;
+
     return {
-      url: result.url,
+      url,
       path: result.url,
     };
   }

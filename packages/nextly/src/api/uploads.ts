@@ -158,19 +158,14 @@ function requireSlug(slug: string): void {
 }
 
 /**
- * Convert an `UploadServiceResult` failure into a thrown `NextlyError`.
+ * Convert a storage-layer `UploadServiceResult` failure (404 / 503 /
+ * 5xx) into a thrown `NextlyError`. Validation failures throw
+ * `NextlyError.validation` directly from `UploadService` and never
+ * reach this mapper.
  *
- * Status-to-code mapping:
- *   400 to `NextlyError.validation` with `errors[]` mapped from
- *       `result.errors` (`{field, message}` to `{path, code, message}`).
- *   404 to `NextlyError.notFound` (canonical "Not found." public message;
- *       the original `result.message` lives in `logContext`).
- *   503 to `NextlyError.serviceUnavailable`.
- *   else to `NextlyError.internal`.
- *
- * The `result.message` and the original status code are preserved in
- * `logContext` so operators can correlate the unified wire payload with
- * the storage adapter's diagnostic.
+ *   404 → `NextlyError.notFound`
+ *   503 → `NextlyError.serviceUnavailable`
+ *   else → `NextlyError.internal`
  */
 function throwFromUploadResult(
   result: UploadServiceResult<unknown>,
@@ -184,24 +179,6 @@ function throwFromUploadResult(
 
   if (result.statusCode === 404) {
     throw NextlyError.notFound({ logContext });
-  }
-
-  if (result.statusCode === 400) {
-    const errors =
-      result.errors && result.errors.length > 0
-        ? result.errors.map(e => ({
-            path: e.field ?? "",
-            code: "INVALID_INPUT",
-            message: e.message,
-          }))
-        : [
-            {
-              path: "",
-              code: "INVALID_INPUT",
-              message: result.message ?? "Invalid input.",
-            },
-          ];
-    throw NextlyError.validation({ errors, logContext });
   }
 
   if (result.statusCode === 503) {

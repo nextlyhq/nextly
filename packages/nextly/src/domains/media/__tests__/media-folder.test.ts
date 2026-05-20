@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { NextlyError } from "../../../errors";
+import { UploadValidator } from "../../../services/upload-validation";
 import { MediaService } from "../services/media-service";
 import type {
   MediaFolder,
@@ -114,6 +115,8 @@ describe("MediaService — Folder Operations", () => {
       mockLegacyFolder as never,
       mockStorage as never,
       mockImageProcessor as never,
+      new UploadValidator(undefined),
+      true,
       silentLogger
     );
   });
