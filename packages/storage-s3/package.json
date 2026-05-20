@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/storage-s3",
-  "version": "0.0.2-alpha.14",
+  "version": "0.0.2-alpha.15",
   "description": "AWS S3 storage adapter for Nextly - supports S3, Cloudflare R2, MinIO",
   "license": "MIT",
   "type": "module",

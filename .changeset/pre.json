@@ -23,6 +23,7 @@
   "changesets": [
     "absolute-media-urls",
     "absolutize-media-variants",
+    "admin-create-user-default-active",
     "api-default-all-statuses",
     "auth-setup-status-fail-closed",
     "collection-dbname-and-component-schema-refresh",
