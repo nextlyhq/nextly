@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/prettier-config",
-  "version": "0.0.2-alpha.12",
+  "version": "0.0.2-alpha.13",
   "description": "Shared Prettier configuration for Nextly",
   "type": "module",
   "private": true,
