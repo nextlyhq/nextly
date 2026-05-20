@@ -98,7 +98,11 @@ export default function CreateUserPage(): ReactElement {
       password: "",
       avatarUrl: "",
       active: true,
-      sendWelcome: true,
+      // Default to skipping verification so the form's "Active + immediate
+      // login" promise actually holds end-to-end. An admin who needs the
+      // user to verify before signing in opts in explicitly via the
+      // "Require email verification" checkbox.
+      requireEmailVerification: false,
       roles: [],
     },
   });
@@ -160,7 +164,19 @@ export default function CreateUserPage(): ReactElement {
         password: values.password, // Transmitted over HTTPS, hashed by backend
         roles,
         image: values.avatarUrl,
-        sendWelcomeEmail: values.sendWelcome,
+        // `isActive` is load-bearing on the backend: self-registered users
+        // depend on the default-false to gate login on email verification,
+        // so an admin-created user has to opt in explicitly. The form
+        // defaults this checkbox to `true` ("Active Account — Default:
+        // Yes") to match the documented UX; an admin can uncheck it to
+        // provision a disabled account.
+        isActive: values.active ?? true,
+        // The UI calls this "Require email verification" because that is
+        // what it actually does -- the backend reads `sendWelcomeEmail`
+        // to decide whether to leave `emailVerified` null and dispatch a
+        // verification email. Map the renamed form field back to the
+        // historical wire shape so existing API consumers keep working.
+        sendWelcomeEmail: values.requireEmailVerification ?? false,
         ...customFields,
       },
       {
