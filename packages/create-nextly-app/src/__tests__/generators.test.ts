@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { generateAdminPage } from "../generators/admin";
 import { generateConfig } from "../generators/config";
 import { generateEnv } from "../generators/env";
+import { patchNextConfig } from "../generators/next-config";
 import { generateRoutes } from "../generators/routes";
 import { generateTypesDirectory } from "../generators/types";
 import type { ProjectInfo, DatabaseConfig } from "../types";
@@ -43,9 +44,7 @@ describe("generateConfig", () => {
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
     const [path, content] = mockWriteFile.mock.calls[0];
     expect(path).toContain("nextly.config.ts");
-    expect(content).toContain(
-      'import { defineConfig } from "nextly/config"'
-    );
+    expect(content).toContain('import { defineConfig } from "nextly/config"');
     expect(content).toContain("collections: []");
     expect(content).toContain("singles: []");
   });
@@ -74,6 +73,45 @@ describe("generateConfig", () => {
     await expect(generateConfig("/test/project", "blank")).rejects.toThrow(
       "nextly.config.ts already exists"
     );
+  });
+});
+
+describe("patchNextConfig", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWriteFile.mockResolvedValue(undefined as never);
+    mockReadFile.mockResolvedValue(
+      'import type { NextConfig } from "next";\n\nconst nextConfig: NextConfig = {};\n\nexport default nextConfig;\n' as never
+    );
+  });
+
+  it("should inject only the selected database packages", async () => {
+    mockPathExists.mockImplementation((async (p: unknown) => {
+      const s = String(p);
+      if (s.endsWith("next.config.ts")) return true;
+      if (s.endsWith("next.config.mjs")) return false;
+      if (s.endsWith("next.config.js")) return false;
+      return false;
+    }) as never);
+
+    const database: DatabaseConfig = {
+      type: "postgresql",
+      adapter: "@nextlyhq/adapter-postgres",
+      databaseDriver: "pg",
+      connectionUrl: "postgresql://localhost/test",
+      envExample: "postgresql://localhost/test",
+    };
+
+    await patchNextConfig("/test/project", database);
+
+    expect(mockWriteFile).toHaveBeenCalledTimes(1);
+    const [, content] = mockWriteFile.mock.calls[0];
+    expect(content).toContain("@nextlyhq/adapter-postgres");
+    expect(content).toContain("pg");
+    expect(content).not.toContain("@nextlyhq/adapter-mysql");
+    expect(content).not.toContain("mysql2");
+    expect(content).not.toContain("@nextlyhq/adapter-sqlite");
+    expect(content).not.toContain("better-sqlite3");
   });
 });
 

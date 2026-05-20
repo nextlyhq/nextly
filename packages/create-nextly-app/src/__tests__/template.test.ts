@@ -336,6 +336,37 @@ describe("copyTemplate", () => {
     expect(content.name).toBe("my-app");
   });
 
+  it("should generate a database-specific next.config.ts", async () => {
+    mockPathExists.mockImplementation((async (p: unknown) => {
+      const s = String(p);
+      if (s.includes("my-app") && !s.includes("templates")) return false;
+      if (s.includes(path.join("templates", "base"))) return true;
+      if (s.includes(path.join("templates", "blank"))) return true;
+      return false;
+    }) as never);
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: "/test/my-app",
+      database: pgDatabase,
+    });
+
+    const writeCall = mockWriteFile.mock.calls.find(
+      call =>
+        (call[0] as string) === path.join("/test/my-app", "next.config.ts")
+    );
+
+    expect(writeCall).toBeDefined();
+    const content = writeCall![1] as string;
+    expect(content).toContain("@nextlyhq/adapter-postgres");
+    expect(content).toContain("pg");
+    expect(content).not.toContain("@nextlyhq/adapter-mysql");
+    expect(content).not.toContain("mysql2");
+    expect(content).not.toContain("@nextlyhq/adapter-sqlite");
+    expect(content).not.toContain("better-sqlite3");
+  });
+
   it("should generate package.json without @nextlyhq packages in yalc mode", async () => {
     mockPathExists.mockImplementation((async (p: unknown) => {
       const s = String(p);
