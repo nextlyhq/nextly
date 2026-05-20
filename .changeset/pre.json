@@ -24,6 +24,7 @@
     "absolute-media-urls",
     "absolutize-media-variants",
     "api-default-all-statuses",
+    "auth-setup-status-fail-closed",
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
     "fix-cli-prompt-for-folder-when-missing",
