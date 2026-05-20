@@ -27,6 +27,7 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import { BaseService } from "../../../shared/base-service";
+import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import type { Logger } from "../../../shared/types";
 import type {
   SingleDocument,
@@ -192,6 +193,12 @@ export class SingleMutationService extends BaseService {
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
       normalizeUploadFields(currentData, fieldConfigs);
+
+      // 6.6. Coerce date-field strings into `Date` objects so Drizzle can
+      // bind them to `timestamp` columns. Without this step the adapter
+      // throws `value.toISOString is not a function` because JSON request
+      // bodies always deliver dates as ISO strings.
+      coerceDateFieldsToDate(currentData, fieldConfigs);
 
       // 7. Serialize JSON fields for storage
       const serializedData = serializeJsonFields(currentData, fieldConfigs);

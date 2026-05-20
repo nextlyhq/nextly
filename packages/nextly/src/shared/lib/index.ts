@@ -15,6 +15,7 @@ export {
   transformFromStorage,
   getSerializedFieldNames,
   requiresTransformation,
+  coerceDateFieldsToDate,
   type TransformOptions,
   transformRichTextFields,
 } from "./field-transform";
