@@ -1,0 +1,135 @@
+---
+title: Media Upload Security
+description: How Nextly validates and sanitizes uploaded media — MIME allowlist, SVG sanitization, polyglot defenses, and per-adapter Content-Disposition trade-offs.
+---
+
+Every file uploaded through `/api/media` or `/admin/api/collections/[slug]/uploads` passes through a unified validation pipeline at `services/upload-validation/`. This page explains what gets checked, what gets stripped, and how to tune the policy for your deployment.
+
+## The validation pipeline
+
+Each upload runs through six checks, in order. The first failure short-circuits the request with a `NextlyError.validation` carrying a stable machine code.
+
+| Step | Code on failure           | Notes                                                                                         |
+| ---- | ------------------------- | --------------------------------------------------------------------------------------------- |
+| 1    | `FILENAME_INVALID`        | empty, > 255 chars, null byte, path separator, all-dots                                       |
+| 2    | `EXTENSION_BLOCKED`       | `.html`, `.js`, `.php`, `.exe`, etc. — rejected regardless of MIME                            |
+| 3    | `MIME_BLOCKED`            | `text/html`, `application/javascript` (hard-block, overrides allowlist)                       |
+| 4    | `MIME_NOT_ALLOWED`        | type not in resolved allowlist                                                                |
+| 5    | `SIZE_EXCEEDED` (overall) | per-file cap — `security.limits.fileSize` (default 10MB), applies to every upload             |
+| 5b   | `SIZE_EXCEEDED` (SVG)     | additional 2MB cap, applied only when the upload claims `image/svg+xml` (XML parser DoS guard) |
+| 6    | `MAGIC_BYTE_MISMATCH`     | sniffed bytes disagree with claimed MIME                                                      |
+| 7    | `SVG_SANITIZATION_FAILED` | sanitizer threw or output was empty                                                           |
+
+For SVG uploads, the bytes that hit storage are the **sanitized** output, never the input — the validator owns that step so call sites can't accidentally persist unsanitized content.
+
+## Customizing the allowlist
+
+```ts
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  security: {
+    uploads: {
+      // Replace the default allowlist entirely.
+      allowedMimeTypes: ["image/png", "image/webp", "application/pdf"],
+
+      // OR: add to the default allowlist.
+      additionalMimeTypes: ["application/zip"],
+
+      // Set Content-Disposition: attachment on SVG uploads (default: true).
+      // The mitigation prevents direct-URL navigation from rendering SVG
+      // inline. Browser <img src> rendering is unaffected (already sandboxed).
+      svgCsp: true,
+    },
+    limits: {
+      // Per-file cap applied to ALL upload paths (default: "10mb").
+      fileSize: "20mb",
+    },
+  },
+});
+```
+
+`text/html`, `application/javascript`, `application/xhtml+xml`, and `text/ecmascript` are **unconditionally blocked** even if explicitly listed in `allowedMimeTypes` — they get stripped at boot with a `console.warn`. The same applies to extensions: `.html`, `.js`, `.php`, `.exe`, etc. are blocked at the extension layer regardless of claimed MIME, so renaming `evil.html` to `evil.png` with `Content-Type: image/png` doesn't help an attacker.
+
+## SVG support and what gets stripped
+
+SVG files are allowed by default but **sanitized** via DOMPurify with an explicit policy on top of `USE_PROFILES: { svg, svgFilters }`. The sanitizer removes anything that can execute, fetch external resources, or trigger script-like behavior in a browser.
+
+| Removed                                  | Kept                                            |
+| ---------------------------------------- | ----------------------------------------------- |
+| `<script>` and all event handlers        | `<path>`, `<rect>`, `<circle>`, shapes          |
+| `<foreignObject>` (HTML escape)          | Gradients, filters, masks, patterns             |
+| `<animate>` / `<animateMotion>` / `<set>` | Internal `<use href="#id">` references          |
+| External `<use href="http…">`            | SVG filter primitives (`feGaussianBlur`, etc.)  |
+| `<image href="http…">`                   | `style="…"` inline attribute styling            |
+| `<style>` blocks (external CSS `@import`) | Embedded text and fonts                        |
+| `data:` URIs in `href`                   | Fragment-only URIs (`#gradient-id`)             |
+| `<!DOCTYPE>` declarations                | —                                               |
+
+Output may differ from input. Designers using Adobe Illustrator's "Embed raster" option will lose embedded raster layers — link them by sanitized URL instead. The `<style>` block ban means CSS animations and `@import`-driven styling are dropped; use `style="…"` attributes on individual elements.
+
+## Magic-byte polyglot defense
+
+The validator sniffs the file's actual bytes via `file-type` and compares against the claimed MIME. Mismatches are rejected:
+
+```text
+Claimed: image/png    Sniffed: text/html      → MAGIC_BYTE_MISMATCH
+Claimed: image/svg+xml Bytes: PNG header      → MAGIC_BYTE_MISMATCH (svg-claim-without-svg-content)
+Claimed: image/png    Bytes: <svg…>           → MAGIC_BYTE_MISMATCH (xml-content-non-svg-claim)
+```
+
+The SVG case is special: `file-type` returns `application/xml` for SVG (not `image/svg+xml`), so the validator treats them as equivalent only when the buffer's first 2KB contains an actual `<svg>` root. This closes a polyglot bypass where an attacker would claim `image/svg+xml` with non-SVG bytes to skip the sanitizer.
+
+## Per-adapter Content-Disposition support
+
+`Content-Disposition: attachment` is the strongest mitigation against direct-navigation script execution (browser `<img>` rendering is already sandboxed; the threat is `<a href>` clicks and address-bar pastes).
+
+| Adapter                          | Support                                                                                                                                            |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@nextlyhq/storage-s3` / R2 / MinIO | Full — passes through via `PutObjectCommand` `ContentDisposition`.                                                                                |
+| `@nextlyhq/storage-vercel-blob`     | **SVG: supported** via Vercel Blob's `downloadUrl` (the file URL with `?download=1` appended). The adapter returns this URL when the upload requests `contentDisposition: "attachment"`, so top-level navigation forces download while `<img src>` still renders the SVG inline. **HTML: refused** with `NextlyError.validation` (code `UNSUPPORTED_FOR_BACKEND`) — HTML is unsafe to host on a shared blob CDN regardless of disposition. |
+| `storage-local` (Next.js static `/public`) | Sanitization runs, but per-file response headers cannot be applied. Self-hosters wanting strict headers should serve through a CDN with a response-header policy. |
+| `@nextlyhq/storage-uploadthing`     | Investigation pending — see adapter README.                                                                                                       |
+
+## Telemetry
+
+Every validation failure emits a structured log event so operators can alert on attack-pattern spikes:
+
+```json
+{
+  "msg": "upload.rejected",
+  "event": "nextly.upload.rejected",
+  "code": "MAGIC_BYTE_MISMATCH",
+  "route": "media-service.upload",
+  "mimeType": "image/svg+xml",
+  "filename": "logo.svg",
+  "size": 12345
+}
+```
+
+The event fires from both upload paths (`upload-service.upload` and `media-service.upload`). Wire an alert on sudden bursts of `MAGIC_BYTE_MISMATCH` or `EXTENSION_BLOCKED` — those usually indicate polyglot probing.
+
+## Error response shape
+
+Validation failures emit the canonical `NextlyError` wire shape:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Validation failed.",
+    "data": {
+      "errors": [
+        {
+          "path": "file",
+          "code": "MAGIC_BYTE_MISMATCH",
+          "message": "File contents do not match the declared type."
+        }
+      ]
+    },
+    "requestId": "req_…"
+  }
+}
+```
+
+Operator-only detail (sniffed type, actual size, internal reason codes) lives in `logContext` and is never serialised to the wire — per the §13.8 rubric.

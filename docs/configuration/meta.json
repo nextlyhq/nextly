@@ -7,6 +7,7 @@
     "singles",
     "components",
     "fields",
-    "environment"
+    "environment",
+    "media-upload-security"
   ]
 }
