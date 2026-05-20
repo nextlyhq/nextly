@@ -16,11 +16,11 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
-
 import {
   jsonResponse,
   stallResponse,
   buildCookieHeaders,
+  buildAuthErrorResponse,
 } from "./handler-utils";
 
 export interface LoginHandlerDeps {
@@ -63,31 +63,6 @@ export interface LoginHandlerDeps {
   trustedProxyIps: string[];
   /** Writer for security-sensitive auth events. */
   auditLog: AuditLogWriter;
-}
-
-/**
- * Serialize a NextlyError to the canonical login error response.
- *
- * Every login failure (CSRF, invalid creds, locked, unverified, inactive,
- * internal) is returned as a NextlyError with the same wire format that
- * withErrorHandler produces: application/problem+json with code, message,
- * and requestId. Account-state codes collapse into
- * AUTH_INVALID_CREDENTIALS per spec §13.1.
- */
-function buildLoginErrorResponse(
-  err: NextlyError,
-  requestId: string
-): Response {
-  return new Response(
-    JSON.stringify({ error: err.toResponseJSON(requestId) }),
-    {
-      status: err.statusCode,
-      headers: {
-        "content-type": "application/problem+json",
-        "x-request-id": requestId,
-      },
-    }
-  );
 }
 
 export async function handleLogin(
@@ -239,9 +214,9 @@ export async function handleLogin(
         : { code: "INTERNAL_ERROR" },
     });
     if (NextlyError.is(err)) {
-      return buildLoginErrorResponse(err, requestId);
+      return buildAuthErrorResponse(err, requestId);
     }
-    return buildLoginErrorResponse(
+    return buildAuthErrorResponse(
       NextlyError.internal({ cause: err as Error }),
       requestId
     );

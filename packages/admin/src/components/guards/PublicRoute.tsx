@@ -4,8 +4,8 @@ import type React from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
-import { publicApi } from "@admin/lib/api/publicApi";
 import { isAuthenticated } from "@admin/lib/auth/session";
+import { checkSetupStatus } from "@admin/lib/auth/setup-status";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface PublicRouteProps {
@@ -24,41 +24,29 @@ export function PublicRoute({ children }: PublicRouteProps) {
     mountedRef.current = true;
 
     const checkAuth = async () => {
-      try {
-        // Check if initial setup has been completed
-        const setupStatus = await publicApi.get<{ isSetup: boolean }>(
-          "/auth/setup-status"
-        );
+      // `checkSetupStatus` swallows its own failures and fail-safes to
+      // "setup complete," so no try/catch is needed here -- the only way
+      // this function returns is with a definitive boolean.
+      const isSetup = await checkSetupStatus();
+      if (!mountedRef.current) return;
 
-        if (!mountedRef.current) return;
+      const currentPath = window.location.pathname;
+      const isOnSetupPage = currentPath === ROUTES.SETUP;
 
-        const currentPath = window.location.pathname;
-        const isOnSetupPage = currentPath === ROUTES.SETUP;
-
-        if (!setupStatus.isSetup) {
-          // No users exist yet — redirect to setup page (unless already there)
-          if (!isOnSetupPage) {
-            navigateTo(ROUTES.SETUP);
-            return;
-          }
-        } else {
-          // Setup is complete — block access to the setup page
-          if (isOnSetupPage) {
-            navigateTo(ROUTES.LOGIN);
-            return;
-          }
-
-          // Existing behavior: redirect authenticated users to dashboard
-          const authenticated = await isAuthenticated();
-          if (!mountedRef.current) return;
-          if (authenticated) {
-            navigateTo(ROUTES.DASHBOARD);
-            return;
-          }
+      if (!isSetup) {
+        // No users exist yet — redirect to setup page (unless already there)
+        if (!isOnSetupPage) {
+          navigateTo(ROUTES.SETUP);
+          return;
         }
-      } catch {
-        if (!mountedRef.current) return;
-        // If setup-status fails, fall back to existing auth check behavior
+      } else {
+        // Setup is complete — block access to the setup page
+        if (isOnSetupPage) {
+          navigateTo(ROUTES.LOGIN);
+          return;
+        }
+
+        // Redirect authenticated users to dashboard
         const authenticated = await isAuthenticated();
         if (!mountedRef.current) return;
         if (authenticated) {

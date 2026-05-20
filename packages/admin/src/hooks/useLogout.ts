@@ -2,10 +2,10 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 
-import { resetSetupStatusCache } from "@admin/components/guards/PrivateRoute";
 import { toast } from "@admin/components/ui";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { invalidateSessionCache } from "@admin/lib/auth/session";
+import { resetSetupStatusCache } from "@admin/lib/auth/setup-status";
 import { navigateTo } from "@admin/lib/navigation";
 
 import { ROUTES } from "../constants/routes";

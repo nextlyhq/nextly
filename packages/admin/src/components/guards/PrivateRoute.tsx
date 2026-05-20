@@ -5,33 +5,9 @@ import type React from "react";
 import { useEffect } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
-import { publicApi } from "@admin/lib/api/publicApi";
 import { isAuthenticated as checkIsAuthenticated } from "@admin/lib/auth/session";
+import { checkSetupStatus } from "@admin/lib/auth/setup-status";
 import { navigateTo } from "@admin/lib/navigation";
-
-// ─── Setup status cache (survives across renders, cleared on session end) ──
-let setupStatusCache: boolean | null = null;
-
-async function checkSetupStatus(): Promise<boolean> {
-  if (setupStatusCache !== null) return setupStatusCache;
-  try {
-    const result = await publicApi.get<{ isSetup: boolean }>(
-      "/auth/setup-status"
-    );
-    setupStatusCache = result.isSetup;
-    return setupStatusCache;
-  } catch {
-    // If setup-status fails (e.g. 429), assume setup is complete and cache it
-    // so we don't hammer the endpoint on every re-render.
-    setupStatusCache = true;
-    return setupStatusCache;
-  }
-}
-
-/** Reset setup cache (call after setup or logout) */
-export function resetSetupStatusCache(): void {
-  setupStatusCache = null;
-}
 
 async function verifyAuth(): Promise<{
   isSetup: boolean;
