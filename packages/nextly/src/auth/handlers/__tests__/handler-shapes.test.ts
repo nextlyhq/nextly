@@ -51,9 +51,7 @@ function makeRequest(
   const csrfToken = extra?.csrfToken ?? "csrf-test-token";
   // Inject a matching csrf cookie so the double-submit check passes
   // unless the caller explicitly overrides the cookie header.
-  const cookie =
-    extra?.cookie ??
-    `nextly_csrf=${csrfToken}`;
+  const cookie = extra?.cookie ?? `nextly_csrf=${csrfToken}`;
   const merged =
     body == null
       ? null
@@ -199,6 +197,58 @@ describe("refresh handler: respondData shape", () => {
     expect(typeof body.refreshToken).toBe("string");
     expect(typeof body.expiresAt).toBe("string");
   });
+
+  // A transient DB failure during the rotation must surface as 503 and
+  // leave the session intact: the old refresh token must not be deleted,
+  // no `Set-Cookie` clears, and the response must carry the canonical
+  // `{ error }` envelope. Logging out the user on a momentary pool hiccup
+  // is the destructive behavior this guards against.
+  it("returns 503 (and does NOT delete old refresh token or clear cookies) when findUserById throws", async () => {
+    const tokenHash = hashRefreshToken("raw-refresh-token");
+    const deleteRefreshToken = vi.fn().mockResolvedValue(undefined);
+    const storeRefreshToken = vi.fn().mockResolvedValue(undefined);
+    const deps = {
+      secret: SECRET,
+      isProduction: false,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      trustProxy: false,
+      trustedProxyIps: [],
+      findRefreshTokenByHash: vi.fn().mockResolvedValue({
+        id: "rt1",
+        userId: "u1",
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+      deleteRefreshToken,
+      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
+      storeRefreshToken,
+      findUserById: vi.fn().mockRejectedValue(new Error("connection lost")),
+      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchCustomFields: vi.fn().mockResolvedValue({}),
+    };
+
+    const req = new Request("http://localhost:3000/admin/api/auth/refresh", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        cookie: `nextly_refresh=${tokenHash}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    const res = await handleRefresh(req, deps);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+    // Cookies must NOT be cleared on a transient failure -- the session
+    // is still valid; the next attempt should be able to rotate.
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).not.toMatch(/nextly_session=;/);
+    expect(setCookie).not.toMatch(/nextly_refresh=;/);
+    // Old token must remain in the DB so the next attempt can find it.
+    expect(deleteRefreshToken).not.toHaveBeenCalled();
+    expect(storeRefreshToken).not.toHaveBeenCalled();
+  });
 });
 
 describe("register handler: respondAction shape", () => {
@@ -277,6 +327,25 @@ describe("setup-status handler: respondData shape", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toEqual({ isSetup: true, requiresInitialUser: false });
   });
+
+  // A transient DB failure during getUserCount must surface as 503, not
+  // collapse to `{ isSetup: false }` -- the bootstrap-gate must never
+  // synthesise a default on incomplete data.
+  it("when getUserCount throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
+    const deps = {
+      getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
+    };
+    const req = new Request(
+      "http://localhost:3000/admin/api/auth/setup-status"
+    );
+    const res = await handleSetupStatus(req, deps);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+    // Client distinguishes "unknown" from "false" by absence of the field.
+    expect(body).not.toHaveProperty("isSetup");
+    expect(body).not.toHaveProperty("requiresInitialUser");
+  });
 });
 
 describe("setup handler: respondAction shape", () => {
@@ -313,6 +382,36 @@ describe("setup handler: respondAction shape", () => {
     expect(typeof body.accessToken).toBe("string");
     expect(typeof body.refreshToken).toBe("string");
     expect(typeof body.expiresAt).toBe("string");
+  });
+
+  // Security: an unknown user count must never be treated as 0 -- a second
+  // super-admin must not be creatable on the assumption that setup is open.
+  it("when getUserCount throws, returns 503 envelope and does NOT create a user", async () => {
+    const createSuperAdmin = vi.fn();
+    const deps = {
+      secret: SECRET,
+      isProduction: false,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
+      createSuperAdmin,
+      fetchRoleIds: vi.fn(),
+      seedPermissions: vi.fn(),
+      storeRefreshToken: vi.fn(),
+    };
+    const req = makeRequest("POST", {
+      email: "a@example.com",
+      password: "Pass1234!",
+      name: "A",
+    });
+    const res = await handleSetup(req, deps);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+    expect(createSuperAdmin).not.toHaveBeenCalled();
   });
 });
 
@@ -411,6 +510,9 @@ describe("change-password handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       changePassword: vi.fn().mockResolvedValue({ success: true }),
       deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
+      auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+      trustProxy: false,
+      trustedProxyIps: [],
     };
     const req = new Request("http://localhost:3000/admin/api/auth/cp", {
       method: "PATCH",
@@ -447,13 +549,10 @@ describe("session handler: respondData shape", () => {
       900
     );
     const deps = { secret: SECRET };
-    const req = new Request(
-      "http://localhost:3000/admin/api/auth/session",
-      {
-        method: "GET",
-        headers: { cookie: `nextly_session=${accessToken}` },
-      }
-    );
+    const req = new Request("http://localhost:3000/admin/api/auth/session", {
+      method: "GET",
+      headers: { cookie: `nextly_session=${accessToken}` },
+    });
     const res = await handleSession(req, deps);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;

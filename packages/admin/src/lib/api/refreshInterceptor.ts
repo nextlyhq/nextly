@@ -86,13 +86,29 @@ export function redirectToLogin(): void {
   window.location.href = loginRedirectPath;
 }
 
-let inFlight: Promise<boolean> | null = null;
+/**
+ * Outcome of a `/auth/refresh` attempt. The tri-state lets `authFetch`
+ * distinguish "session is dead, redirect" from "server hiccupped, keep
+ * the session and surface the error to the caller."
+ *
+ * - `ok`           refresh succeeded; retry the original request.
+ * - `auth_failed`  refresh returned 401 (invalid token, expired refresh
+ *                  token, binding mismatch, ...). Server has already
+ *                  cleared cookies via `clearAndDeny`; redirect to login.
+ * - `transient`    refresh failed for a non-auth reason (5xx, network
+ *                  error). Cookies are intact server-side; do NOT
+ *                  redirect -- the caller's original 401 propagates so
+ *                  the user keeps their session and can retry.
+ */
+export type RefreshResult = "ok" | "auth_failed" | "transient";
+
+let inFlight: Promise<RefreshResult> | null = null;
 
 /**
- * POST `/auth/refresh` and return whether it succeeded. Concurrent callers
- * share a single in-flight request.
+ * POST `/auth/refresh` and report the outcome. Concurrent callers share
+ * a single in-flight request.
  */
-export function refreshAccessToken(): Promise<boolean> {
+export function refreshAccessToken(): Promise<RefreshResult> {
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
@@ -101,9 +117,15 @@ export function refreshAccessToken(): Promise<boolean> {
         method: "POST",
         credentials: "include",
       });
-      return res.ok;
+      if (res.ok) return "ok";
+      // 401 is the only response that means "your session is invalid":
+      // the server's `clearAndDeny` path emits 401 + Set-Cookie clears.
+      // Everything else (503 SERVICE_UNAVAILABLE on DB hiccup, 5xx, ...)
+      // is transient and must not log the user out.
+      return res.status === 401 ? "auth_failed" : "transient";
     } catch {
-      return false;
+      // Network error -- cannot reach the server. Definitively transient.
+      return "transient";
     }
   })().finally(() => {
     inFlight = null;
@@ -138,10 +160,16 @@ export async function authFetch(
   const code = await readAuthErrorCode(res);
 
   if (code === "TOKEN_EXPIRED") {
-    if (await refreshAccessToken()) {
+    const refresh = await refreshAccessToken();
+    if (refresh === "ok") {
       return fetch(input, init);
     }
-    redirectToLogin();
+    if (refresh === "auth_failed") {
+      redirectToLogin();
+    }
+    // "transient": surface the original 401 without redirecting -- the
+    // session is still valid server-side, so logging the user out on a
+    // momentary server hiccup would be destructive.
     return res;
   }
 
