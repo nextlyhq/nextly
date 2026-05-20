@@ -1,7 +1,10 @@
 // CSRF double-submit cookie + origin check. Setup is a one-time but
 // state-changing bootstrap; CSRF guards against a malicious page racing
 // the legitimate first-admin form. See docs/auth/csrf.md.
+import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction, respondData } from "../../api/response-shapes";
+import { NextlyError } from "../../errors";
+import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
@@ -17,8 +20,11 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
-
-import { jsonResponse, buildCookieHeaders } from "./handler-utils";
+import {
+  jsonResponse,
+  buildCookieHeaders,
+  buildAuthErrorResponse,
+} from "./handler-utils";
 
 export interface SetupHandlerDeps {
   secret: string;
@@ -49,25 +55,61 @@ export interface SetupHandlerDeps {
 }
 
 export async function handleSetupStatus(
-  _request: Request,
+  request: Request,
   deps: Pick<SetupHandlerDeps, "getUserCount">
 ): Promise<Response> {
-  const count = await deps.getUserCount();
-  // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both
-  // fields are derived from the user count: `isSetup` is true once a user
-  // exists, `requiresInitialUser` is the inverse so the admin client can
-  // drive the bootstrap-form redirect guard without reinterpreting the
-  // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
-  // respondData payload" rule.
-  const isSetup = count > 0;
-  return respondData({ isSetup, requiresInitialUser: !isSetup });
+  try {
+    const count = await deps.getUserCount();
+    // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both
+    // fields are derived from the user count: `isSetup` is true once a user
+    // exists, `requiresInitialUser` is the inverse so the admin client can
+    // drive the bootstrap-form redirect guard without reinterpreting the
+    // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
+    // respondData payload" rule.
+    const isSetup = count > 0;
+    return respondData({ isSetup, requiresInitialUser: !isSetup });
+  } catch (err) {
+    // Surface a 503 rather than synthesising a default `isSetup` -- the
+    // bootstrap-gate must never claim "no users exist" on incomplete data.
+    const requestId = readOrGenerateRequestId(request);
+    const nextlyErr = NextlyError.is(err)
+      ? err
+      : NextlyError.serviceUnavailable({
+          logMessage: "setup-status: user-count lookup failed",
+          cause: err as Error,
+        });
+    getNextlyLogger().error({
+      kind: "setup-status-failed",
+      ...nextlyErr.toLogJSON(requestId),
+    });
+    return buildAuthErrorResponse(nextlyErr, requestId);
+  }
 }
 
 export async function handleSetup(
   request: Request,
   deps: SetupHandlerDeps
 ): Promise<Response> {
-  const userCount = await deps.getUserCount();
+  // Fail closed: an unknown user count must not be treated as 0, otherwise
+  // a transient DB failure could allow a second super-admin to be created
+  // while the real first user is invisible to the query.
+  let userCount: number;
+  try {
+    userCount = await deps.getUserCount();
+  } catch (err) {
+    const requestId = readOrGenerateRequestId(request);
+    const nextlyErr = NextlyError.is(err)
+      ? err
+      : NextlyError.serviceUnavailable({
+          logMessage: "setup: user-count pre-check failed",
+          cause: err as Error,
+        });
+    getNextlyLogger().error({
+      kind: "setup-precheck-failed",
+      ...nextlyErr.toLogJSON(requestId),
+    });
+    return buildAuthErrorResponse(nextlyErr, requestId);
+  }
   if (userCount > 0) {
     return jsonResponse(403, {
       error: {

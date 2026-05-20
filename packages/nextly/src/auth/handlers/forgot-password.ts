@@ -15,7 +15,11 @@ import { NextlyError } from "../../errors/nextly-error";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse, stallResponse } from "./handler-utils";
+import {
+  jsonResponse,
+  stallResponse,
+  buildAuthErrorResponse,
+} from "./handler-utils";
 
 export interface ForgotPasswordHandlerDeps {
   allowedOrigins: string[];
@@ -71,7 +75,11 @@ function sanitizeRedirectPath(raw: unknown): string | undefined {
   // protocol-relative and resolves to a foreign origin) and live under
   // `/admin`.
   if (raw.startsWith("/") && !raw.startsWith("//")) {
-    if (raw === "/admin" || raw.startsWith("/admin/") || raw.startsWith("/admin?")) {
+    if (
+      raw === "/admin" ||
+      raw.startsWith("/admin/") ||
+      raw.startsWith("/admin?")
+    ) {
       return raw;
     }
     console.warn(
@@ -108,22 +116,6 @@ function sanitizeRedirectPath(raw: unknown): string | undefined {
     `[nextly/auth] Rejected forgot-password redirectPath: host ${host} not in ALLOWED_REDIRECT_HOSTS`
   );
   return undefined;
-}
-
-function buildForgotErrorResponse(
-  err: NextlyError,
-  requestId: string
-): Response {
-  return new Response(
-    JSON.stringify({ error: err.toResponseJSON(requestId) }),
-    {
-      status: err.statusCode,
-      headers: {
-        "content-type": "application/problem+json",
-        "x-request-id": requestId,
-      },
-    }
-  );
 }
 
 export async function handleForgotPassword(
@@ -202,9 +194,9 @@ export async function handleForgotPassword(
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
     if (NextlyError.is(err)) {
-      return buildForgotErrorResponse(err, requestId);
+      return buildAuthErrorResponse(err, requestId);
     }
-    return buildForgotErrorResponse(
+    return buildAuthErrorResponse(
       NextlyError.internal({ cause: err as Error }),
       requestId
     );
