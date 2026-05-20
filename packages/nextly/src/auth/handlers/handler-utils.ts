@@ -1,3 +1,5 @@
+import type { NextlyError } from "../../errors";
+
 /**
  * Create a JSON Response with the given status and body.
  */
@@ -13,6 +15,29 @@ export function jsonResponse(
       ...headers,
     },
   });
+}
+
+/**
+ * Build the canonical singular `{ error }` envelope (spec §6.4) for auth
+ * handler failures: `application/problem+json` body, `x-request-id`
+ * header, and status pulled from the NextlyError. Every auth handler
+ * (login, register, forgot-password, reset-password, setup, ...) routes
+ * its catch branches through this helper to keep the wire shape uniform.
+ */
+export function buildAuthErrorResponse(
+  err: NextlyError,
+  requestId: string
+): Response {
+  return new Response(
+    JSON.stringify({ error: err.toResponseJSON(requestId) }),
+    {
+      status: err.statusCode,
+      headers: {
+        "content-type": "application/problem+json",
+        "x-request-id": requestId,
+      },
+    }
+  );
 }
 
 /**
@@ -59,4 +84,3 @@ export async function parseJsonBody(
     return null;
   }
 }
-

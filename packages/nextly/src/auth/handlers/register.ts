@@ -23,7 +23,11 @@ import { EmailSchema, PasswordSchema } from "../../schemas/validation";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse, stallResponse } from "./handler-utils";
+import {
+  jsonResponse,
+  stallResponse,
+  buildAuthErrorResponse,
+} from "./handler-utils";
 
 /**
  * Structured payload validation at the route layer. Reuses the canonical
@@ -90,22 +94,6 @@ function zodIssueToCode(issue: z.core.$ZodIssue): string {
     default:
       return "INVALID";
   }
-}
-
-function buildRegisterErrorResponse(
-  err: NextlyError,
-  requestId: string
-): Response {
-  return new Response(
-    JSON.stringify({ error: err.toResponseJSON(requestId) }),
-    {
-      status: err.statusCode,
-      headers: {
-        "content-type": "application/problem+json",
-        "x-request-id": requestId,
-      },
-    }
-  );
 }
 
 export async function handleRegister(
@@ -218,9 +206,9 @@ export async function handleRegister(
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
     if (NextlyError.is(err)) {
-      return buildRegisterErrorResponse(err, requestId);
+      return buildAuthErrorResponse(err, requestId);
     }
-    return buildRegisterErrorResponse(
+    return buildAuthErrorResponse(
       NextlyError.internal({ cause: err as Error }),
       requestId
     );

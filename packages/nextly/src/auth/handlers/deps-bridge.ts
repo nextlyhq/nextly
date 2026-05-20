@@ -9,6 +9,7 @@
  * we delegate directly. For new operations (refresh tokens, brute-force tracking),
  * we use the database adapter directly.
  */
+
 import { getDialectTables } from "../../database/index";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
@@ -66,20 +67,22 @@ export function buildAuthRouterDeps(
     },
 
     findUserById: async (userId: string) => {
-      try {
-        const adapter = getService("adapter");
-        const db = adapter.getDrizzle();
-        const schema = getDialectTables();
-        const { eq } = await import("drizzle-orm");
-        const result = await db
-          .select()
-          .from(schema.users)
-          .where(eq(schema.users.id, userId))
-          .limit(1);
-        return result[0] || null;
-      } catch {
-        return null;
-      }
+      // Errors propagate intentionally. The refresh handler relies on this
+      // lookup to decide whether to rotate or `clearAndDeny`; a swallowed
+      // DB error returning `null` was indistinguishable from "user
+      // genuinely missing" and tore down the session on every transient
+      // hiccup. The refresh handler now wraps the lookup and surfaces
+      // failures as a 503 envelope without clearing cookies.
+      const adapter = getService("adapter");
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const { eq } = await import("drizzle-orm");
+      const result = await db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      return result[0] || null;
     },
 
     incrementFailedAttempts: async (userId: string) => {
@@ -236,23 +239,26 @@ export function buildAuthRouterDeps(
     },
 
     getUserCount: async () => {
-      try {
-        const adapter = getService("adapter");
-        const db = adapter.getDrizzle();
-        const schema = getDialectTables();
-        const { count } = await import("drizzle-orm");
-        const result = await db.select({ count: count() }).from(schema.users);
-        return Number(result[0]?.count || 0);
-      } catch {
-        return 0;
-      }
+      // Errors propagate intentionally. The user count gates two
+      // security-relevant decisions (setup-status reporting and the
+      // first-admin pre-check); collapsing an unknown count to 0 would
+      // both lie about setup state and risk a duplicate super-admin.
+      // Callers convert failures to a 503 envelope.
+      const adapter = getService("adapter");
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const { count } = await import("drizzle-orm");
+      const result = await db.select({ count: count() }).from(schema.users);
+      return Number(result[0]?.count || 0);
     },
 
     createSuperAdmin: async data => {
-      const { seedPermissions } =
-        await import("../../database/seeders/permissions");
-      const { seedSuperAdmin } =
-        await import("../../database/seeders/super-admin");
+      const { seedPermissions } = await import(
+        "../../database/seeders/permissions"
+      );
+      const { seedSuperAdmin } = await import(
+        "../../database/seeders/super-admin"
+      );
       const adapter = getService("adapter");
 
       // Seed permissions first (seedSuperAdmin needs them to assign to the admin)
@@ -289,8 +295,9 @@ export function buildAuthRouterDeps(
     },
 
     seedPermissions: async () => {
-      const { seedPermissions } =
-        await import("../../database/seeders/permissions");
+      const { seedPermissions } = await import(
+        "../../database/seeders/permissions"
+      );
       const adapter = getService("adapter");
       await seedPermissions(adapter, { silent: true });
     },
