@@ -65,9 +65,7 @@ export interface TransformOptions {
  * Check if a field type is a layout-only field (no data storage).
  */
 function isLayoutField(field: FieldConfig): boolean {
-  return LAYOUT_FIELD_TYPES.includes(
-    field.type
-  );
+  return LAYOUT_FIELD_TYPES.includes(field.type);
 }
 
 /**
@@ -511,6 +509,39 @@ export function requiresTransformation(fieldType: string): boolean {
     fieldType === "upload" ||
     fieldType === "date"
   );
+}
+
+/**
+ * Coerce string values for `field.type === "date"` columns into `Date`
+ * objects, mutating `data` in place. Drizzle binds `timestamp` columns
+ * by calling `.toISOString()` on the bound value, so an ISO string
+ * travelling through the adapter unmodified surfaces as
+ * `value.toISOString is not a function` at the driver layer. JSON
+ * request bodies always deliver dates as strings, so mutation services
+ * must coerce before handing the row to the adapter.
+ *
+ * Non-string values (existing `Date`, `null`, `undefined`) pass through
+ * untouched, so the function is idempotent and safe to call on rows
+ * that were coerced upstream.
+ *
+ * The `fields` parameter is intentionally structural rather than
+ * `FieldConfig[]`: collections feed their stored `FieldDefinition[]`
+ * (from `schemas/dynamic-collections.ts`) through the same path as
+ * singles' static `FieldConfig[]`. Both shapes carry `name` + `type` as
+ * strings, which is all this routine inspects.
+ */
+export function coerceDateFieldsToDate(
+  data: Record<string, unknown>,
+  fields: ReadonlyArray<{ name?: string; type?: string }>
+): void {
+  for (const field of fields) {
+    if (!field.name) continue;
+    if (field.type !== "date") continue;
+    const value = data[field.name];
+    if (typeof value === "string") {
+      data[field.name] = new Date(value);
+    }
+  }
 }
 
 // ============================================================

@@ -37,6 +37,7 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 
@@ -515,17 +516,10 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // Convert date field strings to Date objects
-      // This is necessary because Drizzle ORM expects Date objects for timestamp fields
-      // (especially SQLite with mode: 'timestamp'), but the API receives ISO strings
-      fields.forEach(field => {
-        if (field.type === "date" && finalData[field.name] != null) {
-          const value = finalData[field.name];
-          if (typeof value === "string") {
-            finalData[field.name] = new Date(value);
-          }
-        }
-      });
+      // Convert date-field strings into `Date` objects so Drizzle can bind
+      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+      // failure mode this guards against.
+      coerceDateFieldsToDate(finalData, fields);
 
       // Generate or validate slug
       // All collections have a slug column in their database table,
@@ -1009,17 +1003,10 @@ export class CollectionMutationService extends BaseService {
 
       this.serializeHasManyRelationships(finalData, fields);
 
-      // Convert date field strings to Date objects
-      // This is necessary because Drizzle ORM expects Date objects for timestamp fields
-      // (especially SQLite with mode: 'timestamp'), but the API receives ISO strings
-      fields.forEach(field => {
-        if (field.type === "date" && finalData[field.name] != null) {
-          const value = finalData[field.name];
-          if (typeof value === "string") {
-            finalData[field.name] = new Date(value);
-          }
-        }
-      });
+      // Convert date-field strings into `Date` objects so Drizzle can bind
+      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+      // failure mode this guards against.
+      coerceDateFieldsToDate(finalData, fields);
 
       // Sanitize slug if provided in update
       // - Dynamic collections (UI-created) always have a slug column
@@ -1613,16 +1600,10 @@ export class CollectionMutationService extends BaseService {
 
       this.serializeHasManyRelationships(finalData, fields);
 
-      // Convert date field strings to Date objects
-      // This is necessary because Drizzle ORM expects Date objects for timestamp fields
-      fields.forEach(field => {
-        if (field.type === "date" && finalData[field.name] != null) {
-          const value = finalData[field.name];
-          if (typeof value === "string") {
-            finalData[field.name] = new Date(value);
-          }
-        }
-      });
+      // Convert date-field strings into `Date` objects so Drizzle can bind
+      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+      // failure mode this guards against.
+      coerceDateFieldsToDate(finalData, fields);
 
       // Prepare entry data
       const nowForTxCreate = new Date();
@@ -1865,16 +1846,10 @@ export class CollectionMutationService extends BaseService {
 
       this.serializeHasManyRelationships(finalData, fields);
 
-      // Convert date field strings to Date objects
-      // This is necessary because Drizzle ORM expects Date objects for timestamp fields
-      fields.forEach(field => {
-        if (field.type === "date" && finalData[field.name] != null) {
-          const value = finalData[field.name];
-          if (typeof value === "string") {
-            finalData[field.name] = new Date(value);
-          }
-        }
-      });
+      // Convert date-field strings into `Date` objects so Drizzle can bind
+      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+      // failure mode this guards against.
+      coerceDateFieldsToDate(finalData, fields);
 
       // Update using transaction context
       // IMPORTANT: Use UTC ISO string for updatedAt to ensure consistent timezone handling
@@ -2290,16 +2265,10 @@ export class CollectionMutationService extends BaseService {
 
       this.serializeHasManyRelationships(finalData, fields);
 
-      // Convert date field strings to Date objects
-      // This is necessary because Drizzle ORM expects Date objects for timestamp fields
-      fields.forEach(field => {
-        if (field.type === "date" && finalData[field.name] != null) {
-          const value = finalData[field.name];
-          if (typeof value === "string") {
-            finalData[field.name] = new Date(value);
-          }
-        }
-      });
+      // Convert date-field strings into `Date` objects so Drizzle can bind
+      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+      // failure mode this guards against.
+      coerceDateFieldsToDate(finalData, fields);
 
       // Prepare entry data
       const nowForTxCreate = new Date();
@@ -2591,16 +2560,10 @@ export class CollectionMutationService extends BaseService {
 
       this.serializeHasManyRelationships(finalData, fields);
 
-      // Convert date field strings to Date objects
-      // This is necessary because Drizzle ORM expects Date objects for timestamp fields
-      fields.forEach(field => {
-        if (field.type === "date" && finalData[field.name] != null) {
-          const value = finalData[field.name];
-          if (typeof value === "string") {
-            finalData[field.name] = new Date(value);
-          }
-        }
-      });
+      // Convert date-field strings into `Date` objects so Drizzle can bind
+      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
+      // failure mode this guards against.
+      coerceDateFieldsToDate(finalData, fields);
 
       // Update using transaction context
       // IMPORTANT: Use UTC ISO string for updatedAt to ensure consistent timezone handling

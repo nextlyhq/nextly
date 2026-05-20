@@ -14,6 +14,7 @@ import { NextlyError } from "../../../errors";
 import type { DynamicComponentRecord } from "../../../schemas/dynamic-components/types";
 import type { ComponentRegistryService } from "../../../services/components/component-registry-service";
 import { BaseService } from "../../../shared/base-service";
+import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import type { Logger } from "../../../shared/types";
 
 import {
@@ -928,6 +929,14 @@ export class ComponentMutationService extends BaseService {
     fields: FieldConfig[]
   ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
+
+    // Coerce date-field strings into `Date` objects before column mapping
+    // so Drizzle can bind them to `timestamp` columns. JSON request bodies
+    // always deliver dates as ISO strings; without this step the adapter
+    // throws `value.toISOString is not a function`. Covers every component
+    // write path because both `buildInsertRow` and the in-place update
+    // sites funnel through here.
+    coerceDateFieldsToDate(data, fields);
 
     const fieldMap = new Map<string, FieldConfig>();
     for (const field of fields) {
