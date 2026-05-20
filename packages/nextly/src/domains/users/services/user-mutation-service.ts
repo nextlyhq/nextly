@@ -422,6 +422,12 @@ export class UserMutationService extends BaseService {
         // Auto-verify email unless sendWelcomeEmail is checked (requires user to confirm)
         emailVerified: userData.sendWelcomeEmail ? null : now,
         image: userData.image ?? null,
+        // Default-false is load-bearing for self-registration: `/auth/register`
+        // funnels through this method without passing `isActive`, and email
+        // verification (`auth-service.verifyEmail`) is what flips the flag to
+        // true. Flipping the default here would let any self-registered user
+        // sign in without ever proving they own the email. Admin-side flows
+        // pass `isActive: true` explicitly.
         isActive: userData.isActive ?? false,
         createdAt: now,
         updatedAt: now,

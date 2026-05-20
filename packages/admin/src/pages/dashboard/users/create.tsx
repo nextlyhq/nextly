@@ -160,6 +160,13 @@ export default function CreateUserPage(): ReactElement {
         password: values.password, // Transmitted over HTTPS, hashed by backend
         roles,
         image: values.avatarUrl,
+        // `isActive` is load-bearing on the backend: self-registered users
+        // depend on the default-false to gate login on email verification,
+        // so an admin-created user has to opt in explicitly. The form
+        // defaults this checkbox to `true` ("Active Account — Default:
+        // Yes") to match the documented UX; an admin can uncheck it to
+        // provision a disabled account.
+        isActive: values.active ?? true,
         sendWelcomeEmail: values.sendWelcome,
         ...customFields,
       },

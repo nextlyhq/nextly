@@ -7,6 +7,8 @@ import type {
   UserPermissionsResponse,
 } from "../types/permissions";
 
+import { useRouter } from "./useRouter";
+
 /**
  * System resources that are NOT dynamic collections.
  * Permissions for these resources map to dedicated capability flags
@@ -162,12 +164,22 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
  * ```
  */
 export function useCurrentUserPermissions() {
+  // Gate the protected fetch on the current route being private. During a
+  // navigation transition from /admin to a public route (or before the
+  // router has hydrated), Suspense can keep this hook mounted briefly --
+  // without the gate, `refetchOnWindowFocus` could fire `/me/permissions`
+  // on a route where 401s are expected by design, surfacing benign errors
+  // to operators.
+  const { route } = useRouter();
+  const isPrivateRoute = route?.routeType === "private";
+
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
   // permissions payload.
   const { data, isLoading, error } = useQuery<UserPermissionsResponse>({
     queryKey: ["currentUserPermissions"],
     queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),
+    enabled: isPrivateRoute,
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,

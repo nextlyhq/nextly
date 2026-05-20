@@ -69,16 +69,18 @@ process.env.DATABASE_URL = TEST_DB_URL;
 // starts failing, update the CREATE TABLE here to match.
 const CREATE_USERS_TABLE = `
   CREATE TABLE IF NOT EXISTS users (
-    id                   TEXT PRIMARY KEY,
-    name                 TEXT,
-    email                TEXT NOT NULL,
-    email_verified       INTEGER,
-    password_updated_at  INTEGER,
-    image                TEXT,
-    password_hash        TEXT,
-    is_active            INTEGER NOT NULL DEFAULT 0,
-    created_at           INTEGER NOT NULL,
-    updated_at           INTEGER NOT NULL
+    id                     TEXT PRIMARY KEY,
+    name                   TEXT,
+    email                  TEXT NOT NULL,
+    email_verified         INTEGER,
+    password_updated_at    INTEGER,
+    image                  TEXT,
+    password_hash          TEXT,
+    is_active              INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts  INTEGER NOT NULL DEFAULT 0,
+    locked_until           INTEGER,
+    created_at             INTEGER NOT NULL,
+    updated_at             INTEGER NOT NULL
   )
 `;
 
@@ -191,6 +193,30 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0].email).toBe("regression@test.local");
+  });
+
+  // Lock the default-false `isActive` invariant. `/auth/register` funnels
+  // through `createLocalUser` without passing `isActive`, and the email-
+  // verification handler (`auth-service.verifyEmail`) is what flips the
+  // flag to true. Flipping this default would let any self-registered
+  // user sign in without ever proving they own the email -- a security
+  // regression. Admin-side callers that want an active user pass
+  // `isActive: true` explicitly.
+  it("defaults isActive to false when omitted (gates self-registration on email verification)", async () => {
+    const created = await service.createLocalUser({
+      email: "default-inactive@test.local",
+      name: "Default Inactive",
+      password: "TestPassword123!",
+    });
+    expect(created.isActive).toBe(false);
+
+    const rows = await adapter.executeQuery<{ is_active: number }>(
+      "SELECT is_active FROM users WHERE email = ?",
+      ["default-inactive@test.local"]
+    );
+    // SQLite stores booleans as 0/1; the column being 0 confirms the
+    // self-registration default is preserved.
+    expect(rows[0].is_active).toBe(0);
   });
 
   it("throws NextlyError(DUPLICATE) when inserting a duplicate email", async () => {
