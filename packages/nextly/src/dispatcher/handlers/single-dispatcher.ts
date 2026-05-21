@@ -192,7 +192,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     // the user actually sees).
     execute: async (svc, p) => {
       const limit = toNumber(p.limit);
-      const offset = toNumber(p.offset);
+      // Accept both `offset` (canonical) and `page` (1-based, what the
+      // admin UI's shared buildQuery helper emits). `offset` wins when
+      // both are supplied.
+      let offset = toNumber(p.offset);
+      if (!p.offset && p.page !== undefined && limit && limit > 0) {
+        const page1Based = toNumber(p.page);
+        if (page1Based !== undefined && page1Based > 0) {
+          offset = (page1Based - 1) * limit;
+        }
+      }
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
         search: p.search,
@@ -223,10 +232,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const items = filteredSingles.map(s =>
         injectSingleDefaultFields(s as unknown as SingleWithFields)
       );
+      // Use the registry's unfiltered total for the pagination meta so
+      // `hasNext` reflects the full dataset rather than the size of the
+      // current page. Without this, `total: filteredSingles.length`
+      // collapses to the page length and `hasNext` is always false once
+      // limit items are returned, breaking client-side pagination loops.
+      // For permission-filtered users this is an upper bound, which can
+      // make `hasNext` optimistic by one page; the loop terminates
+      // gracefully because the next page returns zero visible items.
       return respondList(
         items,
         offsetPaginationToMeta({
-          total: filteredSingles.length,
+          total: result.total,
           limit,
           offset,
         })
