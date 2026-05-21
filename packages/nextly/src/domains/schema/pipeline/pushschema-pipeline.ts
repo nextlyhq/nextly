@@ -805,6 +805,40 @@ export class PushSchemaPipeline {
             );
           }
           emittedStatements = pushResult.statementsToExecute;
+
+          // Safety net: drizzle-kit's pushSchema is interactive by
+          // contract — when it sees a change it considers data-losing
+          // (e.g. `text` → `jsonb` on Postgres) it omits the SQL from
+          // `statementsToExecute` and records the skipped change in
+          // `warnings`. Older Nextly versions ran the (possibly empty)
+          // statement list and logged the journal entry as `success`
+          // even though the drifting columns were never altered, so
+          // every subsequent preview re-detected the same drift
+          // forever (see rext-site-v2 / `dc_case_studies`, May 2026).
+          //
+          // The fast path now owns every op type that previously
+          // triggered the silent-skip class on Postgres, so this
+          // branch executes only on MySQL / SQLite (or when no ops
+          // are queued at all). We still guard here because (a)
+          // MySQL / SQLite drizzle-kit has its own silent-skip
+          // surfaces and (b) any future op type we forget to add to
+          // the fast path would otherwise reintroduce the same bug.
+          //
+          // `warnings.length > 0` is drizzle-kit's own signal that it
+          // omitted statements it would not auto-apply — that is the
+          // precise condition we need to fail on. Throwing surfaces
+          // the issue immediately and the journal records a failed
+          // apply (with the warning text) rather than a false success.
+          if (pushResult.warnings.length > 0) {
+            throw new PushSchemaError(
+              `drizzle-kit pushSchema declined to apply ` +
+                `${pushResult.warnings.length} change(s) it considered ` +
+                `data-losing or otherwise interactive. The schema was NOT ` +
+                `applied — the journal will record this as a failed apply ` +
+                `rather than a false success. drizzle-kit warnings: ` +
+                pushResult.warnings.join("; ")
+            );
+          }
         }
         const safe = this.filterUnsafeStatements(
           emittedStatements,
