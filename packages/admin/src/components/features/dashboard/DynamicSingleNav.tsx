@@ -49,6 +49,7 @@ export function DynamicSingleNav({
     isLoading,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     fetchNextPage,
   } = useInfiniteQuery({
     queryKey: [
@@ -67,11 +68,18 @@ export function DynamicSingleNav({
       lastPage.meta.hasNext ? allPages.length : undefined,
   });
 
+  // Guard against a persistent-error retry loop: when `fetchNextPage` fails,
+  // React Query exhausts its retry policy and flips `isFetchingNextPage` back
+  // to false, but `hasNextPage` stays true (it's computed from the last
+  // successful page). Without the `isFetchNextPageError` check the effect
+  // would immediately re-fire and hammer the endpoint forever. Surfacing the
+  // error to the user belongs to a higher-level boundary; here we just stop
+  // the storm so retries can be triggered intentionally (e.g. on refocus).
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) {
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
       void fetchNextPage();
     }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
   const allSingles: ApiSingle[] = useMemo(
     () => singlesPages?.pages.flatMap(p => p.items) ?? [],
