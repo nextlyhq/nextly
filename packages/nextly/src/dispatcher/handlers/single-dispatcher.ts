@@ -185,11 +185,11 @@ interface SinglesServices {
 
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   listSingles: {
-    // The registry returns the limit/offset BaseListResult shape;
-    // offsetPaginationToMeta synthesises the canonical PaginationMeta.
-    // Permission filtering runs after the raw fetch so the meta we ship
-    // reflects the FILTERED counts (admin pagination footer matches what
-    // the user actually sees).
+    // Permission filtering is pushed into the registry as a slug allowlist
+    // so the SQL count and the row results share the same scope. This keeps
+    // `meta.total` and `meta.hasNext` honest for non-super-admin callers and
+    // stops clients (e.g. the sidebar's auto-paginated walk) from chasing
+    // hasNext through pages that filter down to zero rows.
     execute: async (svc, p) => {
       const limit = toNumber(p.limit);
       // Accept both `offset` (canonical) and `page` (1-based, what the
@@ -202,44 +202,43 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           offset = (page1Based - 1) * limit;
         }
       }
+
+      const userId = p._authenticatedUserId
+        ? String(p._authenticatedUserId)
+        : undefined;
+
+      // Resolve the per-user readable-slug allowlist BEFORE the registry
+      // call. Super admins (and unauthenticated callers, who are gated at
+      // the route layer) pass through with `slugAllowlist: undefined`,
+      // which means "no filter". Authenticated non-super-admins get an
+      // explicit list (possibly empty); the registry short-circuits an
+      // empty list to a zero-row, zero-total response.
+      let slugAllowlist: string[] | undefined;
+      if (userId) {
+        const superAdmin = await isSuperAdmin(userId);
+        if (!superAdmin) {
+          const permissionPairs = await listEffectivePermissions(userId);
+          slugAllowlist = Array.from(
+            new Set(
+              permissionPairs
+                .filter(pair => pair.endsWith(":read"))
+                .map(pair => pair.split(":")[0])
+            )
+          );
+        }
+      }
+
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
         search: p.search,
         limit,
         offset,
+        slugAllowlist,
       });
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
 
-      let filteredSingles = result.data;
-      if (userId) {
-        const superAdmin = await isSuperAdmin(userId);
-        if (!superAdmin) {
-          const permissionPairs = await listEffectivePermissions(userId);
-          const readableResources = new Set(
-            permissionPairs
-              .filter(pair => pair.endsWith(":read"))
-              .map(pair => pair.split(":")[0])
-          );
-          filteredSingles = result.data.filter(single => {
-            const slug = single?.slug;
-            return slug ? readableResources.has(String(slug)) : false;
-          });
-        }
-      }
-
-      const items = filteredSingles.map(s =>
+      const items = result.data.map(s =>
         injectSingleDefaultFields(s as unknown as SingleWithFields)
       );
-      // Use the registry's unfiltered total for the pagination meta so
-      // `hasNext` reflects the full dataset rather than the size of the
-      // current page. Without this, `total: filteredSingles.length`
-      // collapses to the page length and `hasNext` is always false once
-      // limit items are returned, breaking client-side pagination loops.
-      // For permission-filtered users this is an upper bound, which can
-      // make `hasNext` optimistic by one page; the loop terminates
-      // gracefully because the next page returns zero visible items.
       return respondList(
         items,
         offsetPaginationToMeta({
