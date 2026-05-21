@@ -95,7 +95,13 @@ describe("generateSQL — postgres", () => {
     ).toBe('ALTER TABLE "dc_posts" RENAME COLUMN "title" TO "name"');
   });
 
-  it("change_column_type emits ALTER COLUMN ... TYPE", () => {
+  it("change_column_type emits ALTER COLUMN ... TYPE ... USING cast", () => {
+    // The USING clause covers cross-family transitions Postgres won't
+    // do implicitly. Even when source and target share an implicit
+    // cast (e.g. integer → bigint), USING is harmless — Postgres
+    // applies the same registered cast. We emit it unconditionally so
+    // the contract is identical for every direction and code-first
+    // `migrate:create` output never lands invalid SQL in the repo.
     expect(
       pg({
         type: "change_column_type",
@@ -104,7 +110,29 @@ describe("generateSQL — postgres", () => {
         fromType: "integer",
         toType: "bigint",
       })
-    ).toBe('ALTER TABLE "dc_posts" ALTER COLUMN "views" TYPE bigint');
+    ).toBe(
+      'ALTER TABLE "dc_posts" ALTER COLUMN "views" TYPE bigint ' +
+        'USING "views"::bigint'
+    );
+  });
+
+  // Regression: rext-site-v2 / dc_case_studies (May 2026) — the apply-
+  // time fast path was the first surface this hit, but `migrate:create`
+  // generates the same SQL and would have landed a broken `.sql` file
+  // in the repo without the USING clause.
+  it("change_column_type emits the USING clause for text → jsonb", () => {
+    expect(
+      pg({
+        type: "change_column_type",
+        tableName: "dc_case_studies",
+        columnName: "hero_section",
+        fromType: "text",
+        toType: "jsonb",
+      })
+    ).toBe(
+      'ALTER TABLE "dc_case_studies" ALTER COLUMN "hero_section" ' +
+        'TYPE jsonb USING "hero_section"::jsonb'
+    );
   });
 
   it("change_column_nullable emits SET NOT NULL when toNullable=false", () => {
