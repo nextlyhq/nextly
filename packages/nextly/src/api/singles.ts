@@ -38,6 +38,8 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
  * - search: Search query for slug and labels
  * - limit: Maximum results (default: 50, becomes `meta.limit` in response)
  * - offset: Number of results to skip (default: 0, derives `page` in meta)
+ * - page: 1-based page number. Alternative to `offset`; `offset` wins when
+ *   both are provided.
  *
  * Response:
  * - 200 OK: `{ "items": [...], "meta": { total, page, limit, totalPages, hasNext, hasPrev } }`
@@ -57,9 +59,19 @@ export const GET = withErrorHandler(
     const limit = searchParams.get("limit")
       ? parseInt(searchParams.get("limit")!, 10)
       : 50;
-    const offset = searchParams.get("offset")
-      ? parseInt(searchParams.get("offset")!, 10)
-      : 0;
+    // `offset` is the canonical skip count; `page` is the 1-based
+    // alternative. `offset` wins when both are present.
+    const offsetParam = searchParams.get("offset");
+    const pageParam = searchParams.get("page");
+    let offset = 0;
+    if (offsetParam !== null) {
+      offset = parseInt(offsetParam, 10);
+    } else if (pageParam !== null && limit > 0) {
+      const page1Based = parseInt(pageParam, 10);
+      if (Number.isFinite(page1Based) && page1Based > 0) {
+        offset = (page1Based - 1) * limit;
+      }
+    }
 
     const result = await registry.listSingles({
       source: source || undefined,
