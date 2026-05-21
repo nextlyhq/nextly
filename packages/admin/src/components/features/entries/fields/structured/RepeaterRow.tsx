@@ -197,7 +197,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CardHeader
-          className="p-2  border-b border-primary/5 dark:border-primary/5 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900 transition-colors"
+          className="p-0 pl-2 pr-1 border-b border-primary/5 dark:border-primary/5 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900/80 transition-colors"
           noBorder
         >
           <div className="flex items-center gap-2">
@@ -206,8 +206,8 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
               <button
                 type="button"
                 className={cn(
-                  "cursor-grab active:cursor-grabbing p-1 rounded-none",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1",
+                  "cursor-grab active:cursor-grabbing p-2 rounded-none",
+                  "focus:outline-none",
                   "touch-none" // Prevent touch scrolling interference
                 )}
                 aria-label={`Drag to reorder ${field.labels?.singular || "item"} ${index + 1}`}
@@ -226,9 +226,9 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
               <button
                 type="button"
                 className={cn(
-                  "flex items-center gap-2 flex-1 text-left min-w-0",
-                  "rounded-none px-1 py-0.5",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
+                  "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
+                  "rounded-none px-2 py-3",
+                  "focus:outline-none"
                 )}
                 aria-expanded={isOpen}
               >
@@ -248,7 +248,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
                 variant="ghost"
                 size="icon"
                 onClick={onRemove}
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
                 aria-label={`Remove ${field.labels?.singular || "item"} ${index + 1}`}
               >
                 <Trash2 className="h-4 w-4" />

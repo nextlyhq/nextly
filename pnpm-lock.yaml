@@ -155,6 +155,9 @@ importers:
       sharp:
         specifier: ^0.33.5
         version: 0.33.5
+      style.css:
+        specifier: link:@nextlyhq/admin/style.css
+        version: link:@nextlyhq/admin/style.css
     devDependencies:
       '@eslint/eslintrc':
         specifier: ^3
