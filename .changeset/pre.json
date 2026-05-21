@@ -36,6 +36,7 @@
     "neon-schema-apply-perf",
     "pnpm10-only-built-deps",
     "preserve-system-tables-in-scope-reduction",
+    "schema-apply-silent-skip-fix",
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation",
     "svg-upload-security-unification",
