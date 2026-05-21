@@ -157,3 +157,127 @@ describe("emitPostgresDdl — add_table", () => {
     expect(sql[0]).toContain(`CREATE TABLE "dc_minimal"`);
   });
 });
+
+describe("emitPostgresDdl — change_column_type", () => {
+  // Regression: rext-site-v2 / dc_case_studies (May 2026).
+  // Before this case was implemented, change_column_type ops routed to
+  // drizzle-kit's pushSchema which silently declined non-implicit casts
+  // like text → jsonb. The journal still recorded success. Owning the
+  // SQL here makes the change either run or fail loudly.
+  it("emits ALTER COLUMN SET DATA TYPE with an explicit USING cast", () => {
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "dc_case_studies",
+      columnName: "hero_section",
+      fromType: "text",
+      toType: "jsonb",
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_case_studies" ALTER COLUMN "hero_section" ` +
+        `SET DATA TYPE jsonb USING "hero_section"::jsonb`,
+    ]);
+  });
+
+  it("uses the toType in both SET DATA TYPE and the USING cast", () => {
+    // The USING expression dispatches the (sourceType → targetType) cast
+    // Postgres has registered. Routing through `::<targetType>` keeps
+    // the contract identical for every direction (text→jsonb, jsonb→text,
+    // varchar→int, …) — Postgres errors loudly on missing casts.
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: "dc_authors",
+      columnName: "age",
+      fromType: "text",
+      toType: "integer",
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_authors" ALTER COLUMN "age" ` +
+        `SET DATA TYPE integer USING "age"::integer`,
+    ]);
+  });
+
+  it("quotes identifiers containing a double quote in the USING expression too", () => {
+    const op: Operation = {
+      type: "change_column_type",
+      tableName: `weird"table`,
+      columnName: `weird"col`,
+      fromType: "text",
+      toType: "jsonb",
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "weird""table" ALTER COLUMN "weird""col" ` +
+        `SET DATA TYPE jsonb USING "weird""col"::jsonb`,
+    ]);
+  });
+});
+
+describe("emitPostgresDdl — change_column_nullable", () => {
+  it("emits SET NOT NULL when toggling to non-nullable", () => {
+    const op: Operation = {
+      type: "change_column_nullable",
+      tableName: "dc_authors",
+      columnName: "email",
+      fromNullable: true,
+      toNullable: false,
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_authors" ALTER COLUMN "email" SET NOT NULL`,
+    ]);
+  });
+
+  it("emits DROP NOT NULL when relaxing to nullable", () => {
+    const op: Operation = {
+      type: "change_column_nullable",
+      tableName: "dc_authors",
+      columnName: "email",
+      fromNullable: false,
+      toNullable: true,
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_authors" ALTER COLUMN "email" DROP NOT NULL`,
+    ]);
+  });
+});
+
+describe("emitPostgresDdl — change_column_default", () => {
+  it("emits SET DEFAULT with a raw expression when toDefault is provided", () => {
+    const op: Operation = {
+      type: "change_column_default",
+      tableName: "dc_authors",
+      columnName: "status",
+      fromDefault: "'draft'",
+      toDefault: "'published'",
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_authors" ALTER COLUMN "status" SET DEFAULT 'published'`,
+    ]);
+  });
+
+  it("emits DROP DEFAULT when toDefault is undefined", () => {
+    const op: Operation = {
+      type: "change_column_default",
+      tableName: "dc_authors",
+      columnName: "status",
+      fromDefault: "'draft'",
+      toDefault: undefined,
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_authors" ALTER COLUMN "status" DROP DEFAULT`,
+    ]);
+  });
+
+  it("passes function defaults through verbatim", () => {
+    // The default expression is owned by build-from-fields and matches
+    // what introspection returns; the emitter never quotes or rewrites.
+    const op: Operation = {
+      type: "change_column_default",
+      tableName: "dc_authors",
+      columnName: "created_at",
+      fromDefault: undefined,
+      toDefault: "now()",
+    };
+    expect(emitPostgresDdl(op)).toEqual([
+      `ALTER TABLE "dc_authors" ALTER COLUMN "created_at" SET DEFAULT now()`,
+    ]);
+  });
+});
