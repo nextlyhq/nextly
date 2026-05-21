@@ -60,6 +60,7 @@ import type {
 import type { ComponentDataService } from "../../../services/components/component-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
   buildPaginatedResponse,
   clampLimit,
@@ -76,7 +77,6 @@ import {
   getTableName,
   getSearchableFields,
   getMinSearchLength,
-  withTimestampAliases,
   isJsonFieldType,
 } from "./collection-utils";
 
@@ -589,11 +589,10 @@ export class CollectionQueryService extends BaseService {
 
       if (hasGeoFilters) {
         // Apply geo filters to the expanded entries
-        const geoResult = applyGeoFilters(
-          expandedEntries,
-          geoFilters,
-          { calculateDistances: true, idField: "id" }
-        );
+        const geoResult = applyGeoFilters(expandedEntries, geoFilters, {
+          calculateDistances: true,
+          idField: "id",
+        });
 
         geoFilteredEntries = geoResult.entries;
         geoDistances = geoResult.distances;
@@ -665,9 +664,9 @@ export class CollectionQueryService extends BaseService {
         );
       }
 
-      // Add camelCase aliases for timestamp fields (created_at -> createdAt, updated_at -> updatedAt)
+      // Convert snake_case timestamp columns to their camelCase API form.
       finalData = (finalData as Record<string, unknown>[]).map(entry =>
-        withTimestampAliases(entry)
+        convertTimestampsToCamelCase(entry)
       );
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for all entries
@@ -943,9 +942,7 @@ export class CollectionQueryService extends BaseService {
       }
 
       // Build the count query
-      let query = this.db
-        .select({ count: sql<number>`count(*)` })
-        .from(schema);
+      let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
 
       // Apply combined where conditions
       if (whereConditions.length > 0) {
@@ -1078,8 +1075,7 @@ export class CollectionQueryService extends BaseService {
         });
 
       // Use modified id if returned by beforeOperation
-      const entryId =
-        beforeOpArgs?.id ?? params.entryId;
+      const entryId = beforeOpArgs?.id ?? params.entryId;
 
       // Execute beforeRead hooks
       // Hooks can be used to modify query parameters or add filters
@@ -1221,14 +1217,11 @@ export class CollectionQueryService extends BaseService {
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields
       if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelection(
-          finalData,
-          params.select
-        );
+        finalData = this.applyFieldSelection(finalData, params.select);
       }
 
-      // Add camelCase aliases for timestamp fields (created_at -> createdAt, updated_at -> updatedAt)
-      finalData = withTimestampAliases(finalData);
+      // Convert snake_case timestamp columns to their camelCase API form.
+      finalData = convertTimestampsToCamelCase(finalData);
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {

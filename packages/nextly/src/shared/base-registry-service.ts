@@ -49,6 +49,24 @@ export interface BaseListOptions {
   /** Search query for filtering by slug or label */
   search?: string;
 
+  /**
+   * Restrict results to records whose `slug` is in this list.
+   *
+   * Used to scope queries to a per-user permission allowlist so that both
+   * the row results AND the `total` count reflect what the caller is
+   * actually allowed to see. Without this, callers that filter rows in
+   * application code after a paginated fetch end up with an inflated
+   * `total` (leaks counts of hidden records) and `hasNext` flags that drive
+   * clients into wasted pagination loops.
+   *
+   * Semantics:
+   *  - `undefined` (default) means "no allowlist filter applied".
+   *  - `[]` means "no records are visible" and short-circuits to an empty
+   *    result with `total: 0`. This is preferred over relying on
+   *    dialect-specific `IN ()` behaviour.
+   */
+  slugAllowlist?: string[];
+
   /** Maximum number of results */
   limit?: number;
 
@@ -202,6 +220,13 @@ export abstract class BaseRegistryService<
   protected async listRecords(
     options?: BaseListOptions
   ): Promise<BaseListResult<TRecord>> {
+    // Short-circuit when the caller passed an explicit empty allowlist
+    // (e.g. a user with no read permissions on any record). Returning early
+    // keeps `total` honest, avoids hitting the DB with a no-op query, and
+    // sidesteps the dialect-specific footgun of emitting `WHERE slug IN ()`.
+    if (options?.slugAllowlist && options.slugAllowlist.length === 0) {
+      return { data: [], total: 0 };
+    }
     try {
       const conditions = this.buildFilterConditions(options);
 
@@ -482,6 +507,18 @@ export abstract class BaseRegistryService<
         column: "locked",
         op: "=",
         value: options.locked as SqlParam,
+      });
+    }
+
+    // Apply slug allowlist as an IN filter. The empty-array case is handled
+    // by callers (see listRecords short-circuit) so we only emit an IN when
+    // there's at least one slug; otherwise we'd rely on dialect-specific
+    // behaviour of `IN ()` which is brittle.
+    if (options?.slugAllowlist && options.slugAllowlist.length > 0) {
+      conditions.push({
+        column: "slug",
+        op: "IN",
+        value: options.slugAllowlist as SqlParam[],
       });
     }
 
