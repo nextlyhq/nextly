@@ -201,7 +201,7 @@ export function GroupInput({
               className={cn(
                 "flex items-center gap-2 w-full text-left",
                 "rounded-none px-1 py-0.5",
-                "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
+                "hover-unified focus:outline-none"
               )}
               aria-expanded={isOpen}
             >
@@ -249,16 +249,16 @@ export function GroupInput({
         {/* Card Header - Collapsible trigger */}
         {field.label && (
           <CardHeader
-            className="pb-3 bg-primary/5/80 dark:bg-slate-900/80  border-b border-primary/5 dark:border-primary/5 p-4"
+            className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-primary/5 dark:border-primary/5 p-0"
             noBorder
           >
             <CollapsibleTrigger asChild>
               <button
                 type="button"
                 className={cn(
-                  "flex items-center gap-2 w-full text-left",
-                  "rounded-none px-1 py-0.5",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
+                  "flex items-center gap-2 w-full text-left cursor-pointer",
+                  "rounded-none p-4",
+                  "hover-unified focus:outline-none"
                 )}
                 aria-expanded={isOpen}
               >
@@ -273,7 +273,7 @@ export function GroupInput({
               </button>
             </CollapsibleTrigger>
             {field.admin?.description && isOpen && (
-              <p className="text-xs text-muted-foreground leading-relaxed mt-1 pl-7">
+              <p className="text-xs text-muted-foreground leading-relaxed pb-4 px-4 pl-10">
                 {field.admin.description}
               </p>
             )}
