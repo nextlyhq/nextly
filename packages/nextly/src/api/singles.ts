@@ -38,6 +38,8 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
  * - search: Search query for slug and labels
  * - limit: Maximum results (default: 50, becomes `meta.limit` in response)
  * - offset: Number of results to skip (default: 0, derives `page` in meta)
+ * - page: 1-based page number. Alternative to `offset`; `offset` wins when
+ *   both are provided.
  *
  * Response:
  * - 200 OK: `{ "items": [...], "meta": { total, page, limit, totalPages, hasNext, hasPrev } }`
@@ -54,12 +56,36 @@ export const GET = withErrorHandler(
       | "built-in"
       | null;
     const search = searchParams.get("search") || undefined;
-    const limit = searchParams.get("limit")
-      ? parseInt(searchParams.get("limit")!, 10)
-      : 50;
-    const offset = searchParams.get("offset")
-      ? parseInt(searchParams.get("offset")!, 10)
-      : 0;
+
+    // Parse query params through `Number.isFinite` so empty (`?offset=`),
+    // non-numeric (`?limit=abc`), and negative (`?offset=-5`) values all
+    // collapse to the safe default instead of forwarding `NaN` / negative
+    // numbers into the registry. The previous `parseInt(...)` direct-assign
+    // for `offset` regressed on empty-string values: `parseInt("", 10)`
+    // returns `NaN`, which then poisoned the pagination meta downstream.
+    const limitParam = searchParams.get("limit");
+    const parsedLimit =
+      limitParam !== null ? parseInt(limitParam, 10) : Number.NaN;
+    const limit =
+      Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
+
+    // `offset` is the canonical skip count; `page` is the 1-based
+    // alternative. A valid `offset` wins; otherwise we try `page`; otherwise
+    // we default to 0. Invalid values for either are treated as "absent" so
+    // a client serializing optional params as empty strings still gets sane
+    // behaviour instead of a NaN-poisoned response.
+    const offsetParam = searchParams.get("offset");
+    const pageParam = searchParams.get("page");
+    const parsedOffset =
+      offsetParam !== null ? parseInt(offsetParam, 10) : Number.NaN;
+    const parsedPage =
+      pageParam !== null ? parseInt(pageParam, 10) : Number.NaN;
+    let offset = 0;
+    if (Number.isFinite(parsedOffset) && parsedOffset >= 0) {
+      offset = parsedOffset;
+    } else if (Number.isFinite(parsedPage) && parsedPage > 0 && limit > 0) {
+      offset = (parsedPage - 1) * limit;
+    }
 
     const result = await registry.listSingles({
       source: source || undefined,

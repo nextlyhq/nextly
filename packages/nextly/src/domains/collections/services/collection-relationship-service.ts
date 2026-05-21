@@ -4,7 +4,10 @@ import { eq, inArray, sql } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { getDialectTables } from "../../../database";
-import { keysToCamelCase } from "../../../lib/case-conversion";
+import {
+  convertTimestampsToCamelCase,
+  keysToCamelCase,
+} from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
@@ -992,8 +995,9 @@ export class CollectionRelationshipService extends BaseService {
 
         // Build map for O(1) lookups
         for (const entry of entries) {
+          const normalized = convertTimestampsToCamelCase({ ...entry });
           resultMap.set(entry.id, {
-            ...entry,
+            ...normalized,
             label: entry[labelField] || entry.id,
           });
         }
@@ -1014,8 +1018,9 @@ export class CollectionRelationshipService extends BaseService {
 
         // Build map for O(1) lookups — include all fields from the related entry
         for (const entry of entries) {
+          const normalized = convertTimestampsToCamelCase({ ...entry });
           resultMap.set(entry.id, {
-            ...entry,
+            ...normalized,
             label: entry[labelField] || entry.id,
           });
         }
@@ -1142,7 +1147,8 @@ export class CollectionRelationshipService extends BaseService {
           console.log(
             `[ManyToMany Expand] Entry ${String(entry.id)}: labelField="${labelField}", value="${String(label)}"`
           );
-          return [entry.id, { ...entry, label }];
+          const normalized = convertTimestampsToCamelCase({ ...entry });
+          return [entry.id, { ...normalized, label }];
         })
       );
 
@@ -1563,7 +1569,7 @@ export class CollectionRelationshipService extends BaseService {
           .where(eq(targetSchema.id, entryId))
           .limit(1);
 
-        return entry || null;
+        return entry ? convertTimestampsToCamelCase({ ...entry }) : null;
       } else {
         // Handle dynamic collections
         const schema = await this.fileManager.loadDynamicSchema(collectionName);
@@ -1573,7 +1579,7 @@ export class CollectionRelationshipService extends BaseService {
           .where(eq(schema.id, entryId))
           .limit(1);
 
-        return entry || null;
+        return entry ? convertTimestampsToCamelCase({ ...entry }) : null;
       }
     } catch {
       return null;
@@ -1644,7 +1650,9 @@ export class CollectionRelationshipService extends BaseService {
         .from(targetSchema)
         .where(sql`${targetSchema.id} IN (${placeholders})`);
 
-      return entries || [];
+      return (entries || []).map((entry: Record<string, unknown>) =>
+        convertTimestampsToCamelCase({ ...entry })
+      );
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];

@@ -128,3 +128,38 @@ export function keysToSnakeCase(obj: unknown): unknown {
   }
   return obj;
 }
+
+/**
+ * Convert the DB timestamp columns (`created_at`, `updated_at`) on a row
+ * object into their camelCase API form (`createdAt`, `updatedAt`) and remove
+ * the snake_case keys. Pre-existing camelCase values are preserved.
+ *
+ * @param entry - The row object to mutate in place.
+ * @param options.normalize - Optional value transform applied to the
+ *   timestamp before it is written under the camelCase key.
+ * @returns The same `entry` reference.
+ */
+export function convertTimestampsToCamelCase<T extends Record<string, unknown>>(
+  entry: T,
+  options?: { normalize?: (value: unknown) => unknown }
+): T {
+  const record = entry as Record<string, unknown>;
+  const normalize = options?.normalize;
+  if (record.created_at !== undefined) {
+    if (record.createdAt === undefined) {
+      record.createdAt = normalize
+        ? normalize(record.created_at)
+        : record.created_at;
+    }
+    delete record.created_at;
+  }
+  if (record.updated_at !== undefined) {
+    if (record.updatedAt === undefined) {
+      record.updatedAt = normalize
+        ? normalize(record.updated_at)
+        : record.updated_at;
+    }
+    delete record.updated_at;
+  }
+  return entry;
+}

@@ -20,7 +20,6 @@ export { CollectionService } from "./services/collection-service";
 
 export {
   toCamelCase,
-  withTimestampAliases,
   isJsonFieldType,
   isRelationshipField,
   normalizeRelationshipValue,

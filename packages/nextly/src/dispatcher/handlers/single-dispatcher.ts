@@ -185,48 +185,64 @@ interface SinglesServices {
 
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   listSingles: {
-    // The registry returns the limit/offset BaseListResult shape;
-    // offsetPaginationToMeta synthesises the canonical PaginationMeta.
-    // Permission filtering runs after the raw fetch so the meta we ship
-    // reflects the FILTERED counts (admin pagination footer matches what
-    // the user actually sees).
+    // Permission filtering is pushed into the registry as a slug allowlist
+    // so the SQL count and the row results share the same scope. This keeps
+    // `meta.total` and `meta.hasNext` honest for non-super-admin callers and
+    // stops clients (e.g. the sidebar's auto-paginated walk) from chasing
+    // hasNext through pages that filter down to zero rows.
     execute: async (svc, p) => {
       const limit = toNumber(p.limit);
-      const offset = toNumber(p.offset);
+      // Accept both `offset` (canonical) and `page` (1-based, what the
+      // admin UI's shared buildQuery helper emits). `offset` wins when
+      // both are supplied.
+      let offset = toNumber(p.offset);
+      if (!p.offset && p.page !== undefined && limit && limit > 0) {
+        const page1Based = toNumber(p.page);
+        if (page1Based !== undefined && page1Based > 0) {
+          offset = (page1Based - 1) * limit;
+        }
+      }
+
+      const userId = p._authenticatedUserId
+        ? String(p._authenticatedUserId)
+        : undefined;
+
+      // Resolve the per-user readable-slug allowlist BEFORE the registry
+      // call. Super admins (and unauthenticated callers, who are gated at
+      // the route layer) pass through with `slugAllowlist: undefined`,
+      // which means "no filter". Authenticated non-super-admins get an
+      // explicit list (possibly empty); the registry short-circuits an
+      // empty list to a zero-row, zero-total response.
+      let slugAllowlist: string[] | undefined;
+      if (userId) {
+        const superAdmin = await isSuperAdmin(userId);
+        if (!superAdmin) {
+          const permissionPairs = await listEffectivePermissions(userId);
+          slugAllowlist = Array.from(
+            new Set(
+              permissionPairs
+                .filter(pair => pair.endsWith(":read"))
+                .map(pair => pair.split(":")[0])
+            )
+          );
+        }
+      }
+
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
         search: p.search,
         limit,
         offset,
+        slugAllowlist,
       });
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
 
-      let filteredSingles = result.data;
-      if (userId) {
-        const superAdmin = await isSuperAdmin(userId);
-        if (!superAdmin) {
-          const permissionPairs = await listEffectivePermissions(userId);
-          const readableResources = new Set(
-            permissionPairs
-              .filter(pair => pair.endsWith(":read"))
-              .map(pair => pair.split(":")[0])
-          );
-          filteredSingles = result.data.filter(single => {
-            const slug = single?.slug;
-            return slug ? readableResources.has(String(slug)) : false;
-          });
-        }
-      }
-
-      const items = filteredSingles.map(s =>
+      const items = result.data.map(s =>
         injectSingleDefaultFields(s as unknown as SingleWithFields)
       );
       return respondList(
         items,
         offsetPaginationToMeta({
-          total: filteredSingles.length,
+          total: result.total,
           limit,
           offset,
         })

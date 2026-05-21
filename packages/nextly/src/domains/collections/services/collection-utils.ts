@@ -40,24 +40,6 @@ export function toCamelCase(name: string): string {
 }
 
 /**
- * Add camelCase aliases for timestamp fields from database.
- * The database stores timestamps as `created_at` and `updated_at` (snake_case),
- * but the API response should provide them as `createdAt` and `updatedAt` (camelCase).
- */
-export function withTimestampAliases<T extends Record<string, unknown>>(
-  entry: T
-): T {
-  const record = entry as Record<string, unknown>;
-  if (record.createdAt === undefined && record.created_at !== undefined) {
-    record.createdAt = record.created_at;
-  }
-  if (record.updatedAt === undefined && record.updated_at !== undefined) {
-    record.updatedAt = record.updated_at;
-  }
-  return entry;
-}
-
-/**
  * Checks if a field requires JSON serialization/deserialization.
  * Also checks hasMany for select/text/number/upload/relationship
  * fields which are stored as jsonb when they hold arrays.
