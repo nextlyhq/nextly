@@ -70,7 +70,11 @@ export function DynamicCustomGroupNav({
     }
   );
 
-  const { data: singlesData } = useSingles();
+  const { data: singlesData } = useSingles({
+    pagination: { page: 0, pageSize: 100 },
+    sorting: [],
+    filters: {},
+  });
 
   // Build grouped items by deriving groups from collection/single data.
   // customGroups from admin-meta act as optional overrides for display name/icon.

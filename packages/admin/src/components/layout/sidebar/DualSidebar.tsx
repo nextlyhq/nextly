@@ -159,7 +159,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     data: singlesData,
     isLoading: isSinglesLoading,
     isError: isSinglesError,
-  } = useSingles();
+  } = useSingles({
+    pagination: { page: 0, pageSize: 100 },
+    sorting: [],
+    filters: {},
+  });
 
   const pluginMetadata = branding?.plugins;
 
