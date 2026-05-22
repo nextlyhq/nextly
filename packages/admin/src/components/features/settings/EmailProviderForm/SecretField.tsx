@@ -73,6 +73,7 @@ export function SecretField({
                   />
                   <button
                     type="button"
+                    tabIndex={-1}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => {
                       // Existing secrets are masked by backend and cannot be revealed.
