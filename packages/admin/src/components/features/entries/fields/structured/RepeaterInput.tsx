@@ -315,34 +315,32 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         {/* Collapsible Header */}
         <CardHeader
-          className="p-3 bg-primary/5/80 dark:bg-slate-900/80  border-b border-primary/5 dark:border-primary/5"
+          className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-primary/5 dark:border-primary/5 p-0"
           noBorder
         >
-          <div className="flex items-center justify-between">
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  "flex items-center gap-2 flex-1 text-left",
-                  "rounded-none px-1 py-0.5",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
-                )}
-                aria-expanded={isOpen}
-              >
-                {isOpen ? (
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
-                <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  {field.label || pluralLabel}
-                </span>
-                <span className="text-xs text-muted-foreground ml-1">
-                  ({items.length})
-                </span>
-              </button>
-            </CollapsibleTrigger>
-          </div>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                "flex items-center gap-2 w-full text-left cursor-pointer",
+                "rounded-none p-4",
+                "hover-unified focus:outline-none"
+              )}
+              aria-expanded={isOpen}
+            >
+              {isOpen ? (
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                {field.label || pluralLabel}
+              </span>
+              <span className="text-xs text-muted-foreground ml-1">
+                ({items.length})
+              </span>
+            </button>
+          </CollapsibleTrigger>
         </CardHeader>
 
         <CollapsibleContent>
