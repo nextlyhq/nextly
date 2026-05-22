@@ -19,7 +19,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
-import { toSnakeName } from "@admin/lib/builder";
+import { toKebabName } from "@admin/lib/builder";
 import { navigateTo } from "@admin/lib/navigation";
 
 import { SINGLE_BUILDER_CONFIG } from "./builder-config";
@@ -38,7 +38,10 @@ export default function SingleBuilderPage(): React.ReactElement | null {
 
   const handleSubmit = (values: BuilderSettingsValues) => {
     const singular = values.singularName.trim();
-    const slug = values.slug?.trim() || toSnakeName(singular);
+    // Why: registry slug is kebab-case (web URL convention + matches the
+    // entry-form slug validator). Table name is derived downstream by
+    // generateTableName, which converts hyphens to underscores.
+    const slug = values.slug?.trim() || toKebabName(singular);
 
     createSingle(
       {

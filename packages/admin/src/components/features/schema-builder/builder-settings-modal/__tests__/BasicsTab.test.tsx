@@ -9,11 +9,12 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 
 import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
-import type { BasicsField } from "../../builder-config";
+import type { BasicsField, BuilderKind } from "../../builder-config";
 import { BasicsTab } from "../BasicsTab";
 
 function Controlled(props: {
   fields: readonly BasicsField[];
+  kind?: BuilderKind;
   initial?: Partial<BuilderSettingsValues>;
   onChange?: (next: BuilderSettingsValues) => void;
 }) {
@@ -28,6 +29,7 @@ function Controlled(props: {
   return (
     <BasicsTab
       fields={props.fields}
+      kind={props.kind ?? "collection"}
       values={values}
       onChange={next => {
         setValues(next);
@@ -52,12 +54,13 @@ describe("BasicsTab", () => {
     expect(screen.getByLabelText(/plural name/i)).toBeInTheDocument();
   });
 
-  it("auto-derives slug from singular name on each keystroke until override", async () => {
+  it("auto-derives slug as snake_case for collections/components", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(
       <Controlled
         fields={["singularName", "slug"]}
+        kind="collection"
         initial={{ singularName: "" }}
         onChange={onChange}
       />
@@ -67,6 +70,24 @@ describe("BasicsTab", () => {
     const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
     expect(last.singularName).toBe("Blog Post");
     expect(last.slug).toBe("blog_post");
+  });
+
+  it("auto-derives slug as kebab-case for singles", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["singularName", "slug"]}
+        kind="single"
+        initial={{ singularName: "" }}
+        onChange={onChange}
+      />
+    );
+
+    await user.type(screen.getByLabelText(/singular name/i), "About Page");
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.singularName).toBe("About Page");
+    expect(last.slug).toBe("about-page");
   });
 
   it("stops auto-deriving slug after the user overrides it", async () => {
@@ -143,6 +164,7 @@ describe("BasicsTab -- 3-col layout for kinds without plural (PR G feedback 2)",
     render(
       <BasicsTab
         fields={["singularName", "slug", "icon"]}
+        kind="single"
         values={{
           singularName: "Hero",
           pluralName: "",
@@ -166,6 +188,7 @@ describe("BasicsTab -- 3-col layout for kinds without plural (PR G feedback 2)",
     render(
       <BasicsTab
         fields={["singularName", "pluralName", "slug", "icon"]}
+        kind="collection"
         values={{
           singularName: "Article",
           pluralName: "Articles",
