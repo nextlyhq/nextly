@@ -131,6 +131,7 @@ export function BuilderSettingsModal({
           <TabsContent value="basics">
             <BasicsTab
               fields={config.basicsFields}
+              kind={config.kind}
               values={values}
               onChange={setValues}
             />
