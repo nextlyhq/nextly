@@ -15,6 +15,9 @@ import { CSS } from "@dnd-kit/utilities";
 
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
+import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import type { WidthField } from "@admin/lib/builder/reflow";
+import { cn } from "@admin/lib/utils";
 
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField } from "../types";
@@ -39,6 +42,8 @@ function resolveFieldIcon(type: string): LucideIcon {
   return iconMap[name] ?? Icons.FileText;
 }
 
+type RowItem = WidthField & { _field: BuilderField };
+
 export function NestedFieldGroup({
   parentField,
   readOnly = false,
@@ -49,6 +54,17 @@ export function NestedFieldGroup({
 }: Props) {
   const children = parentField.fields ?? [];
   const parentLabel = parentField.label || parentField.name || "parent";
+
+  const rows = packIntoRows<RowItem>(
+    children.map(c => ({
+      id: c.id,
+      width:
+        c.type === "repeater" || c.type === "group"
+          ? 100
+          : parseWidth(c.admin?.width),
+      _field: c,
+    }))
+  );
 
   return (
     // Why: Q1 layout B -- bordered child container nested inside the
@@ -61,16 +77,20 @@ export function NestedFieldGroup({
           strategy={verticalListSortingStrategy}
         >
           <div className="space-y-1.5">
-            {children.map(child => (
-              <NestedFieldRow
-                key={child.id}
-                field={child}
-                readOnly={readOnly}
-                onEditField={onEditField}
-                onDeleteField={onDeleteField}
-                onDuplicateField={onDuplicateField}
-                onAddInsideParent={onAddInsideParent}
-              />
+            {rows.map((row, rIdx) => (
+              <div key={rIdx} className="flex gap-2 w-full">
+                {row.map(item => (
+                  <NestedFieldRow
+                    key={item.id}
+                    field={item._field}
+                    readOnly={readOnly}
+                    onEditField={onEditField}
+                    onDeleteField={onDeleteField}
+                    onDuplicateField={onDuplicateField}
+                    onAddInsideParent={onAddInsideParent}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         </SortableContext>
@@ -115,6 +135,9 @@ function NestedFieldRow({
   // referenced component, not inline).
   const isContainer = field.type === "repeater" || field.type === "group";
 
+  const widthPct = parseWidth(field.admin?.width);
+  const flexBasis = `calc(${widthPct}% - 0.5rem)`;
+
   return (
     <div
       ref={setNodeRef}
@@ -122,7 +145,9 @@ function NestedFieldRow({
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.4 : 1,
+        flex: isContainer ? "0 0 100%" : `0 0 ${flexBasis}`,
       }}
+      className={cn(isContainer ? "w-full" : "")}
     >
       <div
         role="button"
