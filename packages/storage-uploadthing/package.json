@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/storage-uploadthing",
-  "version": "0.0.2-alpha.18",
+  "version": "0.0.2-alpha.19",
   "description": "Uploadthing storage adapter for Nextly",
   "license": "MIT",
   "type": "module",
