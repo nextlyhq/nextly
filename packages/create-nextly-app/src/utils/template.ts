@@ -206,10 +206,12 @@ const RUNTIME_RESOLVED_PACKAGES = ["next", "eslint-config-next"] as const;
 const NEXTLY_PACKAGES = [
   "nextly",
   "@nextlyhq/admin",
+  "@nextlyhq/ui",
   "@nextlyhq/adapter-drizzle",
   "@nextlyhq/adapter-postgres",
   "@nextlyhq/adapter-mysql",
   "@nextlyhq/adapter-sqlite",
+  "@nextlyhq/plugin-form-builder",
 ];
 
 /** Cache so we only fetch once per CLI run. */
