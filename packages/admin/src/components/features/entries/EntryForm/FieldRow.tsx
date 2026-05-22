@@ -10,6 +10,8 @@ export interface FieldRowProps {
   disabled?: boolean;
   /** Whether all fields should be read-only */
   readOnly?: boolean;
+  /** Base path for nested fields (e.g. from group parent) */
+  basePath?: string;
 }
 
 /**
@@ -17,7 +19,7 @@ export interface FieldRowProps {
  * absent/malformed. Mirrors the parser in pack-fields-into-rows.ts but
  * without the dependency to keep this file self-contained.
  */
-function fieldWeight(field: FieldConfig): number {
+export function fieldWeight(field: FieldConfig): number {
   const w = (field as { admin?: { width?: string } }).admin?.width;
   if (!w) return 100;
   const m = /^(\d+(?:\.\d+)?)%$/.exec(w.trim());
@@ -43,17 +45,25 @@ export function FieldRow({
   fields,
   disabled,
   readOnly,
+  basePath,
 }: FieldRowProps): React.ReactElement {
-  const cols = fields.map(f => `${fieldWeight(f)}fr`).join(" ");
+  const weights = fields.map(fieldWeight);
+  const sum = weights.reduce((a, b) => a + b, 0);
+  const cols =
+    sum < 100
+      ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
+      : weights.map(w => `${w}fr`).join(" ");
+
   return (
     <div
-      className="grid gap-6 [&>*]:!w-full"
+      className="grid gap-6 items-start [&>*]:!w-full"
       style={{ gridTemplateColumns: cols }}
     >
       {fields.map((field, i) => (
         <FieldRenderer
           key={getFieldKey(field, i)}
           field={field}
+          basePath={basePath}
           disabled={disabled}
           readOnly={readOnly}
         />

@@ -26,12 +26,14 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
+import { fieldWeight } from "@admin/components/features/entries/EntryForm/FieldRow";
 import {
   GripVertical,
   ChevronDown,
   ChevronRight,
   Trash2,
 } from "@admin/components/icons";
+import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
 
 import { RepeaterRowLabel } from "./RepeaterRowLabel";
@@ -262,29 +264,43 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
             {/* Render sub-fields */}
             {field.fields && field.fields.length > 0 ? (
               renderField ? (
-                // Use provided renderField function
-                field.fields.map(subField => {
-                  // Only render fields with names (skip layout-only fields for now)
-                  if (!("name" in subField) || !subField.name) {
-                    return null;
-                  }
-                  return (
-                    <div key={(subField as { name: string }).name}>
-                      {renderField(
-                        // RepeaterFieldConfig.fields uses a structurally-loose
-                        // FieldConfig from array.ts; widen back to the canonical
-                        // FieldConfig union here.
-                        subField as unknown as FieldConfig,
-                        basePath,
-                        control,
-                        {
-                          disabled,
-                          readOnly,
-                        }
-                      )}
-                    </div>
+                (() => {
+                  const rows = packFieldsIntoRows(
+                    field.fields as unknown as FieldConfig[]
                   );
-                })
+                  return rows.map((row, rIdx) => {
+                    const weights = row.map(fieldWeight);
+                    const sum = weights.reduce((a, b) => a + b, 0);
+                    const cols =
+                      sum < 100
+                        ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
+                        : weights.map(w => `${w}fr`).join(" ");
+
+                    return (
+                      <div
+                        key={rIdx}
+                        className="grid gap-6 items-start [&>*]:!w-full"
+                        style={{ gridTemplateColumns: cols }}
+                      >
+                        {row.map((subField, idx) => {
+                          if (!("name" in subField) || !subField.name) {
+                            return null;
+                          }
+                          return (
+                            <div
+                              key={(subField as { name: string }).name || idx}
+                            >
+                              {renderField(subField, basePath, control, {
+                                disabled,
+                                readOnly,
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  });
+                })()
               ) : (
                 // Default placeholder when no renderField provided
                 <div className="text-sm text-muted-foreground bg-primary/5 rounded-none p-4  border border-primary/5 border-dashed">

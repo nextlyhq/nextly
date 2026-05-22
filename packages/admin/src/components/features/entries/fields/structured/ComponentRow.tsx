@@ -29,6 +29,7 @@ import type { FieldConfig } from "nextly/config";
 import { useState } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
+import { FieldRow } from "@admin/components/features/entries/EntryForm/FieldRow";
 import {
   GripVertical,
   ChevronDown,
@@ -36,9 +37,8 @@ import {
   Trash2,
   Puzzle,
 } from "@admin/components/icons";
+import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
-
-import { FieldRenderer } from "../FieldRenderer";
 
 // ============================================================
 // Types
@@ -325,21 +325,18 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
           <CardContent className="p-4 pt-0 space-y-4">
             {/* Render component fields */}
             {fields && fields.length > 0 ? (
-              fields.map((subField, idx) => {
-                // Only render fields with names
-                if (!("name" in subField) || !subField.name) {
-                  return null;
-                }
-                return (
-                  <FieldRenderer
-                    key={(subField as { name: string }).name || idx}
-                    field={subField}
+              (() => {
+                const rows = packFieldsIntoRows(fields);
+                return rows.map((row, i) => (
+                  <FieldRow
+                    key={i}
+                    fields={row}
                     basePath={basePath}
                     disabled={disabled}
                     readOnly={readOnly}
                   />
-                );
-              })
+                ));
+              })()
             ) : (
               <div className="text-sm text-muted-foreground text-center py-4">
                 No fields configured for this component.
