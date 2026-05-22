@@ -41,6 +41,7 @@
     "schema-apply-silent-skip-fix",
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation",
+    "single-slug-kebab-and-cli-version-pins",
     "svg-upload-security-unification",
     "sync-private-package-versions"
   ]
