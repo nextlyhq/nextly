@@ -11,6 +11,35 @@ import type { Operation, TableSpec } from "../diff/types";
 
 import { quoteIdent } from "./identifiers";
 
+/**
+ * Render the `USING` expression for an ALTER COLUMN TYPE migration.
+ *
+ * Why: Postgres only performs an implicit cast for a small set of
+ * type-family transitions (e.g. `varchar` → `text`). For most cross-
+ * family changes — including the common `text` → `jsonb` that occurs
+ * when a Builder field is reclassified from a text-like type to a
+ * `group` / `json` / `blocks` type — Postgres requires an explicit
+ * `USING` clause or it errors with `cannot be cast automatically`.
+ * Without that clause drizzle-kit's pushSchema historically skipped
+ * the statement entirely while the journal still recorded the apply
+ * as successful, leaving the live schema permanently drifted (see
+ * the rext-site-v2 / `dc_case_studies` incident: 10 `*_section`
+ * columns stuck on `text` despite repeated "successful" applies).
+ *
+ * Strategy: emit `USING "<col>"::<targetType>` for every change. The
+ * `::` cast operator dispatches to whichever cast Postgres has
+ * registered for the (source → target) pair. When no cast exists
+ * (e.g. arbitrary `bytea` → `int4`) the statement fails loudly at
+ * execution time, which is the desired behaviour — the operator
+ * sees the failure, the transaction rolls back, and they can
+ * provide a manual migration or backfill the column first. Silent
+ * success is the bug we are fixing here; explicit failure is the
+ * contract.
+ */
+function renderAlterTypeUsing(columnName: string, toType: string): string {
+  return `USING ${quoteIdent(columnName)}::${toType}`;
+}
+
 // Render the column tail shared by ADD COLUMN and CREATE TABLE column
 // lists: `<type> [NOT NULL] [DEFAULT <expr>]`. `type` and `default` are
 // dialect-ready tokens produced by diff/build-from-fields.ts (Postgres
@@ -94,12 +123,38 @@ export function emitPostgresDdl(op: Operation): string[] {
     }
 
     case "change_column_type":
-    case "change_column_nullable":
-    case "change_column_default":
-      throw new Error(
-        `emitPostgresDdl: op type "${op.type}" not yet implemented — ` +
-          `canEmitWithoutDrizzleKit should not have routed it here`
-      );
+      return [
+        `ALTER TABLE ${quoteIdent(op.tableName)} ` +
+          `ALTER COLUMN ${quoteIdent(op.columnName)} ` +
+          `SET DATA TYPE ${op.toType} ` +
+          renderAlterTypeUsing(op.columnName, op.toType),
+      ];
+
+    case "change_column_nullable": {
+      // Postgres requires the verb (SET / DROP) on its own statement;
+      // there is no combined "SET NULLABLE" form.
+      const verb = op.toNullable ? "DROP NOT NULL" : "SET NOT NULL";
+      return [
+        `ALTER TABLE ${quoteIdent(op.tableName)} ` +
+          `ALTER COLUMN ${quoteIdent(op.columnName)} ${verb}`,
+      ];
+    }
+
+    case "change_column_default": {
+      // `toDefault === undefined` means "remove default"; any other
+      // string is the raw default expression as written in DDL
+      // (matches build-from-fields output: `'draft'`, `now()`, `0`,
+      // `'{}'::jsonb`). We do not re-quote — callers own the literal
+      // form, same contract as `add_column` and `add_table` use.
+      const clause =
+        op.toDefault === undefined
+          ? "DROP DEFAULT"
+          : `SET DEFAULT ${op.toDefault}`;
+      return [
+        `ALTER TABLE ${quoteIdent(op.tableName)} ` +
+          `ALTER COLUMN ${quoteIdent(op.columnName)} ${clause}`,
+      ];
+    }
 
     default: {
       const exhaustive: never = op;

@@ -299,8 +299,12 @@ describe("PushSchemaPipeline (Option E flow) - empty desired", () => {
     expect(mocks.renameDetector.detect).toHaveBeenCalledTimes(1);
     // Phase C: pre-resolution called (with empty ops).
     expect(mocks.executePreRes).toHaveBeenCalledTimes(1);
-    // Phase D: pushSchema called once.
-    expect(mocks.pushSchema).toHaveBeenCalledTimes(1);
+    // Phase D: pushSchema is NOT called when our diff says there's
+    // nothing to apply on PostgreSQL. Letting drizzle-kit handle a
+    // no-ops apply means it runs its own rename heuristics and can
+    // emit destructive DDL we don't want (rext-site-v2 textarea→
+    // richText regression). We trust our own diff for "no work."
+    expect(mocks.pushSchema).not.toHaveBeenCalled();
 
     // Journal: start + end.
     expect(mocks.migrationJournal.recordStart).toHaveBeenCalledTimes(1);
@@ -469,7 +473,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     // false so this test's pushSchemaImpl mock actually runs.
     const { pipeline, mocks } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     const result = await pipeline.apply({
@@ -517,7 +535,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     // false so this test's pushSchemaImpl mock actually runs.
     const { pipeline, mocks } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     await pipeline.apply({
@@ -578,7 +610,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     // false so this test's pushSchemaImpl mock actually runs.
     const { pipeline, mocks } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     await pipeline.apply({
@@ -635,7 +681,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
       // Phase 4 (Task 8): force drizzle-kit fallback so pushSchemaImpl
       // is invoked. With add_table in FAST_PATH_OP_TYPES the natural
       // diff would route to the in-memory emitter and skip kit.
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     await pipeline.apply({
@@ -697,7 +757,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
       // Phase 4 (Task 8): force drizzle-kit fallback so the SQLite
       // rebuild sequence in pushSchemaImpl actually runs through
       // filterUnsafeStatements.
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     // Using PG dialect for the test — the filter logic is dialect-
@@ -760,7 +834,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     // false so this test's pushSchemaImpl mock actually runs.
     const { pipeline, mocks } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     // First run — populates the cache.
@@ -828,7 +916,21 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     // Phase 4 (Task 8): force drizzle-kit fallback (see notes above).
     const { pipeline } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     await pipeline.apply({
@@ -883,7 +985,21 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
     // Phase 4 (Task 8): force drizzle-kit fallback (see notes above).
     const { pipeline } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     const result = await pipeline.apply({
@@ -925,7 +1041,21 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
     const { pipeline } = makePipeline({
       executor,
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     const result = await pipeline.apply({
@@ -987,7 +1117,21 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
     // false so this test's pushSchemaImpl mock actually runs.
     const { pipeline, mocks } = makePipeline({
       pushSchemaImpl,
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     await pipeline.apply({
@@ -1106,13 +1250,17 @@ describe("scoped pushSchema (Task 6)", () => {
     // dc_articles (the affected table) should appear.
     //
     // Phase 4 (Task 8) override: bypass the real diff via
-    // resolvedOpsOverride containing a change_column_type op
-    // (deliberately not in FAST_PATH_OP_TYPES at this milestone) so
-    // the apply takes the drizzle-kit fallback path and the Task 6
-    // scope-reduction logic is what's actually exercised. Without
-    // this, the real diff would produce add_table for dc_articles,
-    // which routes to the in-memory emitter and skips pushSchemaImpl
-    // entirely.
+    // resolvedOpsOverride containing a rename_table op so the apply
+    // takes the drizzle-kit fallback path and the Task 6 scope-
+    // reduction logic is exercised. rename_table is in
+    // PRE_RESOLUTION_OP_TYPES (not FAST_PATH_OP_TYPES) so injecting
+    // it directly into resolvedOps forces the slow path on PG; the
+    // pre-resolution executor stub does nothing with it, leaving
+    // the slow-path branch as the one under test.
+    //
+    // We previously used change_column_type here, but that op type
+    // moved into the fast path during the rext-site-v2 silent-skip
+    // fix and no longer routes to drizzle-kit on PG.
     const { pipeline } = makePipeline({
       introspectImpl,
       pushSchemaImpl,
@@ -1123,11 +1271,9 @@ describe("scoped pushSchema (Task 6)", () => {
       }),
       resolvedOpsOverride: [
         {
-          type: "change_column_type",
-          tableName: "dc_articles",
-          columnName: "body",
-          fromType: "text",
-          toType: "varchar(255)",
+          type: "rename_table",
+          fromName: "dc_old_articles",
+          toName: "dc_articles",
         },
       ],
     });
@@ -1422,8 +1568,10 @@ describe("scoped pushSchema (Task 6)", () => {
       dc_posts: { _sentinel: "dc_posts" },
     });
 
-    // change_column_type forces the drizzle-kit fallback so pushSchemaImpl
-    // is actually invoked.
+    // MySQL always routes to the drizzle-kit fallback (the fast in-memory
+    // emitter is PG-only), so pushSchemaImpl is invoked here. The op type
+    // is incidental — we just need a non-empty resolvedOps so the diff
+    // engine has something to scope against.
     const { pipeline } = makePipeline({
       pushSchemaImpl,
       buildDrizzleSchemaImpl,
@@ -1467,6 +1615,80 @@ describe("scoped pushSchema (Task 6)", () => {
     expect(keys).toContain("accounts");
     expect(keys).toContain("sessions");
     expect(keys).toContain("dynamic_collections");
+  });
+
+  // Regression: rext-site-v2 / dc_case_studies (May 2026).
+  // drizzle-kit's pushSchema returns successfully even when it has
+  // declined to apply some changes — the skipped statements appear in
+  // `warnings`, NOT in `statementsToExecute`, and `success` is still
+  // true. Older Nextly versions wrote `status='success'` to the journal
+  // and the same drift re-appeared on every subsequent preview. The
+  // safety net now throws so the journal correctly records a failed
+  // apply with the warning text attached.
+  it("fails loudly when drizzle-kit pushSchema declined to apply some changes", async () => {
+    const pushSchemaImpl = vi
+      .fn<
+        (
+          schema: Record<string, unknown>,
+          db: unknown,
+          tablesFilter?: string[]
+        ) => Promise<{
+          statementsToExecute: string[];
+          warnings: string[];
+          hasDataLoss: boolean;
+        }>
+      >()
+      .mockResolvedValue({
+        statementsToExecute: [],
+        warnings: [
+          "· You're about to change body column type from text to jsonb data type. This statement may fail and you will have to manually migrate the data.",
+        ],
+        hasDataLoss: true,
+      });
+
+    const { pipeline } = makePipeline({
+      pushSchemaImpl,
+      buildDrizzleSchemaImpl: () => ({
+        dc_posts: { _sentinel: "dc_posts" },
+      }),
+      // MySQL forces the slow path so the safety net branch executes.
+      // (On PG the same op would route to the fast in-memory emitter.)
+      resolvedOpsOverride: [
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "body",
+          fromType: "text",
+          toType: "jsonb",
+        },
+      ],
+    });
+
+    const result = await pipeline.apply({
+      desired: {
+        collections: {
+          posts: {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "body", type: "json" }] as never,
+          },
+        },
+        singles: {},
+        components: {},
+      },
+      db: {},
+      dialect: "mysql",
+      source: "ui",
+      promptChannel: "browser",
+    });
+
+    expect(result.success).toBe(false);
+    // The journal records the failure with the drizzle-kit warning text
+    // attached, so operators see why nothing was applied.
+    expect(result.error?.message ?? "").toMatch(
+      /drizzle-kit pushSchema declined to apply/
+    );
+    expect(result.error?.message ?? "").toContain("body column type");
   });
 });
 
@@ -1602,7 +1824,21 @@ describe("filterUnsafeStatements orphan-DDL guards (Task 6.1)", () => {
       // filterUnsafeStatements logic under test gets exercised. Using
       // add_column here would route to the Phase 4 fast emitter and
       // never reach drizzle-kit's pushSchemaImpl.
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     const result = await pipeline.apply({
@@ -1729,7 +1965,21 @@ describe("filterUnsafeStatements orphan-DDL guards (Task 6.1)", () => {
       // filterUnsafeStatements logic under test gets exercised. Using
       // add_column here would route to the Phase 4 fast emitter and
       // never reach drizzle-kit's pushSchemaImpl.
-      resolvedOpsOverride: [],
+      // Force the drizzle-kit slow path on PG by injecting a non-fast-
+      // path op. rename_column is pre-resolution-only so the default
+      // executePreRes mock counts it without running SQL; the slow-path
+      // branch still gets exercised. Required after the empty-ops fast-
+      // path bypass (textarea→richText regression fix).
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
     });
 
     const result = await pipeline.apply({

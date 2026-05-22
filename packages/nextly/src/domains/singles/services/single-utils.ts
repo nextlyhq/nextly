@@ -17,6 +17,7 @@
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { Logger } from "../../../shared/types";
 import type { SingleDocument, SingleResult } from "../types";
 
@@ -444,15 +445,7 @@ export function deserializeJsonFields(
     }
   }
 
-  // Handle timestamp fields (snake_case from DB to camelCase)
-  if (result.created_at !== undefined) {
-    result.createdAt = normalizeTimestamp(result.created_at);
-    delete result.created_at;
-  }
-  if (result.updated_at !== undefined) {
-    result.updatedAt = normalizeTimestamp(result.updated_at);
-    delete result.updated_at;
-  }
+  convertTimestampsToCamelCase(result, { normalize: normalizeTimestamp });
 
   return result as SingleDocument;
 }

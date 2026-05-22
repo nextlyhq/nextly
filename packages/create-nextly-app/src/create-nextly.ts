@@ -189,8 +189,14 @@ export async function createNextly(
   let projectType: ProjectType;
 
   if (options.projectType) {
+    // Honour an explicit --template flag regardless of project kind.
     projectType = options.projectType;
-  } else if (defaults) {
+  } else if (defaults || existingProject) {
+    // Existing Next.js projects always get the blank template by default.
+    // Content templates (blog, etc.) ship their own pages and routes, and
+    // overlaying them on a user's existing app would clobber their frontend
+    // or surprise them with unrelated routes. Users who really want a
+    // content template into an existing app can still opt in via --template.
     projectType = "blank";
   } else {
     const template = await p.select({
