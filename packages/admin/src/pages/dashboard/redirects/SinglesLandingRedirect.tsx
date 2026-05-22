@@ -25,7 +25,11 @@ export default function SinglesLandingRedirect() {
   const { pinned: pinnedSingles } = useSidebarPins({
     storageKey: PINNED_SINGLES_STORAGE_KEY,
   });
-  const { data, isLoading } = useSingles();
+  const { data, isLoading } = useSingles({
+    pagination: { page: 0, pageSize: 100 },
+    sorting: [],
+    filters: {},
+  });
 
   const target = pickSinglesLandingTarget(data?.items ?? [], {
     capabilities,
