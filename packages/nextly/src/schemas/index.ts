@@ -88,6 +88,9 @@ export { media, mediaFolders, imageSizes } from "./media/postgres";
 
 // Plan A Task 9 — audit tables. PG re-exports for direct-query callers.
 export { auditLog, activityLog } from "./audit/postgres";
+
+// Plan A Task 10 — nextly_meta runtime key/value flags table.
+export { nextlyMeta } from "./nextly-meta/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
