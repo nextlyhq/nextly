@@ -42,6 +42,8 @@ import {
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { users } from "../users/mysql";
+
 import type {
   CollectionLabels,
   CollectionAdminConfig,
@@ -85,10 +87,15 @@ export const dynamicCollectionsMysql = mysqlTable(
     // Primary Key
     // --------------------------------------------------------
 
-    /** Unique identifier (UUID v4, auto-generated) */
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .$defaultFn(() => crypto.randomUUID()),
+    /**
+     * Unique identifier.
+     *
+     * `varchar(191)` matches `users.id` to satisfy MySQL's strict FK type
+     * matching (utf8mb4 index limit at 191 chars). Callers pass an explicit
+     * string id (e.g., `randomUUID()`); no auto-default is set because
+     * production code always supplies an id.
+     */
+    id: varchar("id", { length: 191 }).primaryKey(),
 
     // --------------------------------------------------------
     // Collection Identity
@@ -98,7 +105,7 @@ export const dynamicCollectionsMysql = mysqlTable(
      * Unique slug identifier for the collection.
      * Used in URLs and API endpoints (e.g., "posts", "products").
      */
-    slug: varchar("slug", { length: 255 }).unique().notNull(),
+    slug: varchar("slug", { length: 100 }).unique().notNull(),
 
     /**
      * Display labels for the Admin UI.
@@ -208,16 +215,42 @@ export const dynamicCollectionsMysql = mysqlTable(
 
     /**
      * Reference to the last applied migration ID.
-     * Null for collections that haven't been migrated yet.
+     *
+     * `varchar(100)` holds migration file slugs (e.g.,
+     * `0001_perpetual_captain_marvel`), not UUIDs. Null for collections
+     * that haven't been migrated yet.
      */
-    lastMigrationId: varchar("last_migration_id", { length: 36 }),
+    lastMigrationId: varchar("last_migration_id", { length: 100 }),
+
+    // --------------------------------------------------------
+    // Access Control
+    // --------------------------------------------------------
+
+    /**
+     * Optional per-operation access rules. Consumed by
+     * `CollectionAccessService`; opaque JSON because the rule shape evolves
+     * independently of the migration cycle.
+     */
+    accessRules: json("access_rules").$type<{
+      create?: { type: string; allowedRoles?: string[] };
+      read?: { type: string; allowedRoles?: string[] };
+      update?: { type: string; allowedRoles?: string[] };
+      delete?: { type: string; allowedRoles?: string[] };
+    }>(),
 
     // --------------------------------------------------------
     // Metadata
     // --------------------------------------------------------
 
-    /** User ID who created the collection (optional) */
-    createdBy: varchar("created_by", { length: 36 }),
+    /**
+     * User ID of the creator (optional).
+     *
+     * `varchar(191)` matches `users.id` for FK compatibility under the
+     * MySQL utf8mb4 191-char key prefix limit.
+     */
+    createdBy: varchar("created_by", { length: 191 }).references(
+      () => users.id
+    ),
 
     /** When the collection was created */
     createdAt: datetime("created_at")
