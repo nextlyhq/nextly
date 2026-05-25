@@ -82,6 +82,9 @@ export {
   roleInherits,
   userPermissionCache,
 } from "./rbac/postgres";
+
+// Plan A Task 8 — media tables. PG re-exports for direct-query callers.
+export { media, mediaFolders, imageSizes } from "./media/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
