@@ -329,3 +329,9 @@ export type DynamicCollectionPg = typeof dynamicCollectionsPg.$inferSelect;
  */
 export type DynamicCollectionInsertPg =
   typeof dynamicCollectionsPg.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Relations re-export — kept in `./postgres-relations.ts` to isolate the
+// `users` cross-feature import.
+// ---------------------------------------------------------------------------
+export { dynamicCollectionsRelations } from "./postgres-relations";

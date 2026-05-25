@@ -6,10 +6,9 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (refreshTokensRelations) remain in
- * database/schema/postgres.ts during Plan A — they reference tables that move
- * in later tasks. Relations consolidate in Task 17 once database/schema/ is
- * removed.
+ * Cross-table `relations()` blocks (refreshTokensRelations) live in
+ * `./postgres-relations.ts` to keep this file free of cross-feature imports
+ * (`users`). Re-exported at the bottom so namespace consumers see them.
  *
  * @module schemas/auth-tokens/postgres
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -115,3 +114,9 @@ export const refreshTokens = pgTable(
     index("refresh_tokens_expires_at_idx").on(t.expiresAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — kept in `./postgres-relations.ts` to isolate the
+// `users` cross-feature import.
+// ---------------------------------------------------------------------------
+export { refreshTokensRelations } from "./postgres-relations";

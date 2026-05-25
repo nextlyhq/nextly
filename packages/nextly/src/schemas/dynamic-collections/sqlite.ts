@@ -314,3 +314,9 @@ export type DynamicCollectionSqlite =
  */
 export type DynamicCollectionInsertSqlite =
   typeof dynamicCollectionsSqlite.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Relations re-export — kept in `./sqlite-relations.ts` to isolate the
+// `users` cross-feature import.
+// ---------------------------------------------------------------------------
+export { dynamicCollectionsRelations } from "./sqlite-relations";

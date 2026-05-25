@@ -5,10 +5,11 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (usersRelations, accountsRelations,
- * sessionsRelations) remain in database/schema/postgres.ts during Plan A —
- * they reference tables that move in later tasks. Relations consolidate in
- * Task 17 once database/schema/ is removed.
+ * Cross-table `relations()` blocks live in `./postgres-relations.ts` (split
+ * out in Task 17 to keep table definitions free of sibling-feature imports).
+ * Re-exported at the bottom of this file so consumers using
+ * `import * as schema from "./postgres"` still see the relations in the
+ * same namespace alongside the tables.
  *
  * @module schemas/users/postgres
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -94,3 +95,16 @@ export const sessions = pgTable(
   },
   t => [index("sessions_user_id_idx").on(t.userId)]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export
+// ---------------------------------------------------------------------------
+// Cross-table `relations()` blocks live in `./postgres-relations.ts` to keep
+// this file free of imports from sibling feature dirs (api-keys, audit,
+// auth-tokens, rbac). Re-exported here so namespace consumers
+// (`import * as pg from "./postgres"`) see the relations alongside the tables.
+export {
+  usersRelations,
+  accountsRelations,
+  sessionsRelations,
+} from "./postgres-relations";

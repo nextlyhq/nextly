@@ -6,11 +6,11 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (rolesRelations, permissionsRelations,
- * rolePermissionsRelations, userRolesRelations, roleInheritsRelations) remain
- * in database/schema/postgres.ts during Plan A — they reference tables that
- * move in later tasks. Relations consolidate in Task 17 once database/schema/
- * is removed.
+ * Cross-table `relations()` blocks (rolesRelations, permissionsRelations,
+ * rolePermissionsRelations, userRolesRelations, roleInheritsRelations) live
+ * in `./postgres-relations.ts` to keep this file free of cross-feature
+ * imports (`users`, `apiKeys`). Re-exported at the bottom so namespace
+ * consumers see them.
  *
  * The Zod RBAC validators (RoleSchema, PermissionSchema, etc.) live at
  * schemas/_zod/rbac.ts and are unrelated to this file.
@@ -199,3 +199,15 @@ export const userPermissionCache = pgTable(
     // Note: createdAt has no index - it's only for audit/display purposes
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — kept in `./postgres-relations.ts` to isolate the
+// `users` / `apiKeys` cross-feature imports.
+// ---------------------------------------------------------------------------
+export {
+  rolesRelations,
+  permissionsRelations,
+  rolePermissionsRelations,
+  userRolesRelations,
+  roleInheritsRelations,
+} from "./postgres-relations";
