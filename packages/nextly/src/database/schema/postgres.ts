@@ -26,21 +26,21 @@ export const systemMigrations = pgTable("system_migrations", {
 // until Task 16 sweeps imports to @nextly/schemas.
 export { users, accounts, sessions } from "../../schemas/users/postgres";
 
-export const verificationTokens = pgTable(
-  "verification_tokens",
-  {
-    identifier: text("identifier").notNull(),
-    token: text("token").notNull(),
-    expires: timestamp("expires", { withTimezone: false }).notNull(),
-  },
-  t => [
-    uniqueIndex("verification_tokens_identifier_token_pk").on(
-      t.identifier,
-      t.token
-    ),
-    index("verification_tokens_token_idx").on(t.token),
-  ]
-);
+// Auth-token tables — moved to schemas/auth-tokens/postgres.ts (Plan A Task 6).
+// Re-exported here so existing consumers and relations() blocks below keep working
+// until Task 16 sweeps imports to @nextly/schemas.
+export {
+  verificationTokens,
+  emailVerificationTokens,
+  passwordResetTokens,
+  refreshTokens,
+} from "../../schemas/auth-tokens/postgres";
+import {
+  verificationTokens,
+  emailVerificationTokens,
+  passwordResetTokens,
+  refreshTokens,
+} from "../../schemas/auth-tokens/postgres";
 
 // Audit table for dynamic DDL
 export const contentSchemaEvents = pgTable(
@@ -58,79 +58,6 @@ export const contentSchemaEvents = pgTable(
   t => [
     index("content_schema_events_created_at_idx").on(t.createdAt),
     index("content_schema_events_table_name_idx").on(t.tableName),
-  ]
-);
-
-// Password reset tokens (custom table)
-export const passwordResetTokens = pgTable(
-  "password_reset_tokens",
-  {
-    id: serial("id").primaryKey(),
-    identifier: text("identifier").notNull(),
-    tokenHash: text("token_hash").notNull(),
-    expires: timestamp("expires", { withTimezone: false }).notNull(),
-    usedAt: timestamp("used_at", { withTimezone: false }),
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [
-    uniqueIndex("prt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("prt_expires_idx").on(t.expires),
-    index("prt_used_at_idx").on(t.usedAt),
-  ]
-);
-
-// Email verification tokens (custom, hashed) to avoid storing raw tokens
-export const emailVerificationTokens = pgTable(
-  "email_verification_tokens",
-  {
-    id: serial("id").primaryKey(),
-    identifier: text("identifier").notNull(),
-    tokenHash: text("token_hash").notNull(),
-    expires: timestamp("expires", { withTimezone: false }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [
-    uniqueIndex("evt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("evt_expires_idx").on(t.expires),
-  ]
-);
-
-// Refresh tokens for custom auth session management
-// Stores SHA-256 hashed opaque tokens, enables session revocation and token rotation
-export const refreshTokens = pgTable(
-  "refresh_tokens",
-  {
-    id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    // SHA-256 hex digest of the opaque refresh token (never store raw tokens)
-    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
-    // Request metadata for session listing and security auditing
-    userAgent: text("user_agent"),
-    ipAddress: varchar("ip_address", { length: 45 }),
-    expiresAt: timestamp("expires_at", { withTimezone: false }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [
-    // Primary lookup: hash incoming token and query by tokenHash
-    index("refresh_tokens_token_hash_idx").on(t.tokenHash),
-    // Cleanup all tokens for a user on password change or logout-all
-    index("refresh_tokens_user_id_idx").on(t.userId),
-    // Cleanup expired tokens efficiently
-    index("refresh_tokens_expires_at_idx").on(t.expiresAt),
   ]
 );
 
