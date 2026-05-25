@@ -60,6 +60,13 @@ const serverEntries = [
   // route handlers (e.g. the template's seed POST route) can validate
   // sessions without reaching into private internals.
   "src/auth/index.ts",
+  // Schemas subpath: exposes getCoreSchema(dialect), CORE_TABLE_NAMES, and
+  // the canonical per-feature Drizzle tables that the pipeline / boot-apply
+  // path drives. Power users reach this directly when extending the
+  // framework (e.g. defining additional tables via the host app and
+  // merging via @nextly/scripts/merge-schemas). Consolidated under
+  // src/schemas/ by Plan A.
+  "src/schemas/index.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims
