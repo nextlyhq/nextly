@@ -49,3 +49,17 @@ export {
   type DynamicCollectionSqlite,
   type DynamicCollectionInsertSqlite,
 } from "./sqlite";
+
+// Plan A Task 12 — UI-builder field-definition types previously lived at the
+// top-level schemas/dynamic-collections.ts file. That top-level file also
+// declared a stale duplicate `dynamicCollections` Drizzle table whose columns
+// diverged from the runtime canonical (database/schema/<dialect>.ts). The
+// duplicate table was unused by any importer and was dropped; the types now
+// live alongside the rest of the dynamic-collections module.
+export type {
+  CollectionSchemaDefinition,
+  DynamicFieldType,
+  FieldDefinition,
+  DynamicCollection,
+  NewDynamicCollection,
+} from "./legacy-types";

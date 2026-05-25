@@ -251,7 +251,12 @@ export const mediaRelations = relations(media, ({ one }) => ({
 // userPermissionCache moved to schemas/rbac/sqlite.ts (Plan A Task 7) and
 // re-exported above with the rest of the RBAC tables.
 
-// Metadata table for tracking dynamic collections (SQLite)
+// Metadata table for tracking dynamic collections (SQLite).
+//
+// Plan A Task 12 note: see database/schema/postgres.ts for the rationale —
+// the runtime canonical remains this declaration. The diverging
+// `dynamicCollectionsSqlite` at schemas/dynamic-collections/sqlite.ts is
+// left in place for the new public-API surface but not aliased here.
 export const dynamicCollections = sqliteTable(
   "dynamic_collections",
   {
