@@ -9,13 +9,10 @@ import {
 
 import { users, accounts, sessions } from "../../schemas/users/sqlite";
 
-export const systemMigrations = sqliteTable("system_migrations", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  name: text("name").notNull(),
-  runAt: integer("run_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
-});
+// Legacy table — moved to schemas/_legacy/sqlite.ts (Plan A Task 13).
+// Re-exported here so existing consumers keep working until Plan B removes
+// the table entirely via `nextly upgrade`.
+export { systemMigrations } from "../../schemas/_legacy/sqlite";
 
 // Auth.js v5 compatible tables — moved to schemas/users/sqlite.ts (Plan A Task 5).
 // Re-exported here so existing consumers and relations() blocks below keep working
@@ -38,24 +35,10 @@ import {
   refreshTokens,
 } from "../../schemas/auth-tokens/sqlite";
 
-// Audit table for dynamic DDL
-export const contentSchemaEvents = sqliteTable(
-  "content_schema_events",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    op: text("op").notNull(),
-    tableName: text("table_name").notNull(),
-    sqlText: text("sql").notNull(),
-    meta: text("meta"), // JSON stored as text in SQLite
-    createdAt: integer("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [
-    index("content_schema_events_created_at_idx").on(t.createdAt),
-    index("content_schema_events_table_name_idx").on(t.tableName),
-  ]
-);
+// Legacy audit table — moved to schemas/_legacy/sqlite.ts (Plan A Task 13).
+// Re-exported here so existing consumers keep working until Plan B removes
+// the table entirely (superseded by nextly_schema_events).
+export { contentSchemaEvents } from "../../schemas/_legacy/sqlite";
 
 // Audit tables — moved to schemas/audit/sqlite.ts (Plan A Task 9).
 // Re-exported here so existing consumers and relations() blocks below keep working
