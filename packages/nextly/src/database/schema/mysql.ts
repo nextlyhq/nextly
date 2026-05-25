@@ -26,21 +26,21 @@ export const systemMigrations = mysqlTable("system_migrations", {
 // until Task 16 sweeps imports to @nextly/schemas.
 export { users, accounts, sessions } from "../../schemas/users/mysql";
 
-export const verificationTokens = mysqlTable(
-  "verification_tokens",
-  {
-    identifier: varchar("identifier", { length: 191 }).notNull(),
-    token: varchar("token", { length: 191 }).notNull(),
-    expires: datetime("expires").notNull(),
-  },
-  t => [
-    uniqueIndex("verification_tokens_identifier_token_pk").on(
-      t.identifier,
-      t.token
-    ),
-    index("verification_tokens_token_idx").on(t.token),
-  ]
-);
+// Auth-token tables — moved to schemas/auth-tokens/mysql.ts (Plan A Task 6).
+// Re-exported here so existing consumers and relations() blocks below keep working
+// until Task 16 sweeps imports to @nextly/schemas.
+export {
+  verificationTokens,
+  emailVerificationTokens,
+  passwordResetTokens,
+  refreshTokens,
+} from "../../schemas/auth-tokens/mysql";
+import {
+  verificationTokens,
+  emailVerificationTokens,
+  passwordResetTokens,
+  refreshTokens,
+} from "../../schemas/auth-tokens/mysql";
 
 // Audit table for dynamic DDL
 export const contentSchemaEvents = mysqlTable(
@@ -56,70 +56,6 @@ export const contentSchemaEvents = mysqlTable(
   t => [
     index("content_schema_events_created_at_idx").on(t.createdAt),
     index("content_schema_events_table_name_idx").on(t.tableName),
-  ]
-);
-
-// Password reset tokens (custom table)
-export const passwordResetTokens = mysqlTable(
-  "password_reset_tokens",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    identifier: varchar("identifier", { length: 255 }).notNull(),
-    tokenHash: varchar("token_hash", { length: 255 }).notNull(),
-    expires: datetime("expires").notNull(),
-    usedAt: datetime("used_at"),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-  },
-  t => [
-    uniqueIndex("prt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("prt_expires_idx").on(t.expires),
-    index("prt_used_at_idx").on(t.usedAt),
-  ]
-);
-
-// Email verification tokens (custom, hashed)
-export const emailVerificationTokens = mysqlTable(
-  "email_verification_tokens",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    identifier: varchar("identifier", { length: 255 }).notNull(),
-    tokenHash: varchar("token_hash", { length: 255 }).notNull(),
-    expires: datetime("expires").notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-  },
-  t => [
-    uniqueIndex("evt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("evt_expires_idx").on(t.expires),
-  ]
-);
-
-// Refresh tokens for custom auth session management
-// Stores SHA-256 hashed opaque tokens, enables session revocation and token rotation
-export const refreshTokens = mysqlTable(
-  "refresh_tokens",
-  {
-    id: varchar("id", { length: 191 }).primaryKey(),
-    userId: varchar("user_id", { length: 191 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    // SHA-256 hex digest of the opaque refresh token (never store raw tokens)
-    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
-    // Request metadata for session listing and security auditing
-    userAgent: text("user_agent"),
-    ipAddress: varchar("ip_address", { length: 45 }),
-    expiresAt: datetime("expires_at").notNull(),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-  },
-  t => [
-    index("refresh_tokens_token_hash_idx").on(t.tokenHash),
-    index("refresh_tokens_user_id_idx").on(t.userId),
-    index("refresh_tokens_expires_at_idx").on(t.expiresAt),
   ]
 );
 
