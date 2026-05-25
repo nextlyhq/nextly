@@ -71,6 +71,17 @@ export {
   passwordResetTokens,
   refreshTokens,
 } from "./auth-tokens/postgres";
+
+// Plan A Task 7 — RBAC tables (Drizzle). PG re-exports for direct-query callers.
+// Distinct from schemas/_zod/rbac.ts which holds the Zod validators.
+export {
+  roles,
+  permissions,
+  rolePermissions,
+  userRoles,
+  roleInherits,
+  userPermissionCache,
+} from "./rbac/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
