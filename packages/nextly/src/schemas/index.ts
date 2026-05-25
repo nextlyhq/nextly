@@ -59,6 +59,10 @@ export const CORE_TABLE_PREFIXES: readonly string[] = [
 // =============================================================================
 
 export * from "./_zod"; // Zod-only validators (user, rbac, validation)
+
+// Plan A Task 5 — user identity tables. PG re-exports here for direct-query
+// callers. Other dialects accessible via getCoreSchema(dialect).
+export { users, accounts, sessions } from "./users/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
