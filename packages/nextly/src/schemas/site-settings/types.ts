@@ -1,7 +1,7 @@
 /**
  * Shared type definitions for the General Settings schema.
  *
- * @module schemas/general-settings/types
+ * @module schemas/site-settings/types
  * @since 1.0.0
  */
 

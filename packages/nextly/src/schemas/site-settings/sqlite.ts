@@ -4,7 +4,7 @@
  * Defines the `site_settings` singleton table for SQLite.
  * Only one row ever exists (id = 'default').
  *
- * @module schemas/general-settings/sqlite
+ * @module schemas/site-settings/sqlite
  * @since 1.0.0
  */
 

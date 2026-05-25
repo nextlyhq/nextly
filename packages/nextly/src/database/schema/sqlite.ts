@@ -339,7 +339,7 @@ export const dynamicCollectionsRelations = relations(
 export { dynamicSinglesSqlite as dynamicSingles } from "../../schemas/dynamic-singles/sqlite";
 export { dynamicComponentsSqlite as dynamicComponents } from "../../schemas/dynamic-components/sqlite";
 // General Settings (site_settings singleton table) — needed for pushSchema + SchemaRegistry
-export { siteSettingsSqlite as siteSettings } from "../../schemas/general-settings/sqlite";
+export { siteSettingsSqlite as siteSettings } from "../../schemas/site-settings/sqlite";
 export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../../schemas/user-field-definitions/sqlite";
 export { emailProvidersSqlite as emailProviders } from "../../schemas/email-providers/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../../schemas/email-templates/sqlite";

@@ -372,8 +372,8 @@ export { dynamicComponentsMysql as dynamicComponents } from "../../schemas/dynam
 // Re-export from the separate module so that:
 // 1. pushSchema() includes it in table creation
 // 2. SchemaRegistry registers it for Drizzle query API access
-// 3. The general-settings service can query it via this.tables.siteSettings
-export { siteSettingsMysql as siteSettings } from "../../schemas/general-settings/mysql";
+// 3. The site-settings service can query it via this.tables.siteSettings
+export { siteSettingsMysql as siteSettings } from "../../schemas/site-settings/mysql";
 export { userFieldDefinitionsMysql as userFieldDefinitions } from "../../schemas/user-field-definitions/mysql";
 export { emailProvidersMysql as emailProviders } from "../../schemas/email-providers/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../../schemas/email-templates/mysql";
