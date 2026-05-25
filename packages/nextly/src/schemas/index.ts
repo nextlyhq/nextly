@@ -94,5 +94,9 @@ export { nextlyMeta } from "./nextly-meta/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
-export * from "./api-keys"; // consolidated in Task 11
+// Plan A Task 11 — apiKeys (Drizzle). PG re-exports for direct-query callers.
+// The Zod validators (CreateApiKeySchema, UpdateApiKeySchema, etc.) live at
+// schemas/_zod/api-keys.ts and are re-exported via `export * from "./_zod"`
+// at the top of this file.
+export { apiKeys } from "./api-keys/postgres";
 export * from "./security-config"; // Zod — review in Task 19
