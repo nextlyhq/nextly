@@ -20,6 +20,40 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { NextlySchemaSnapshot } from "../domains/schema/pipeline/diff/types";
 
+import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
+import { apiKeyTables } from "./api-keys";
+import { auditTables } from "./audit";
+import { authTokenTables } from "./auth-tokens";
+import {
+  dynamicCollectionsPg,
+  dynamicCollectionsMysql,
+  dynamicCollectionsSqlite,
+} from "./dynamic-collections";
+import {
+  dynamicComponentsPg,
+  dynamicComponentsMysql,
+  dynamicComponentsSqlite,
+} from "./dynamic-components";
+import { dynamicSinglesPg } from "./dynamic-singles/postgres";
+import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
+import { dynamicSinglesSqlite } from "./dynamic-singles/sqlite";
+import { emailProvidersPg } from "./email-providers/postgres";
+import { emailProvidersMysql } from "./email-providers/mysql";
+import { emailProvidersSqlite } from "./email-providers/sqlite";
+import { emailTemplatesPg } from "./email-templates/postgres";
+import { emailTemplatesMysql } from "./email-templates/mysql";
+import { emailTemplatesSqlite } from "./email-templates/sqlite";
+import { mediaTables } from "./media";
+import { nextlyMetaTables } from "./nextly-meta";
+import { rbacTables } from "./rbac";
+import { siteSettingsPg } from "./site-settings/postgres";
+import { siteSettingsMysql } from "./site-settings/mysql";
+import { siteSettingsSqlite } from "./site-settings/sqlite";
+import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
+import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
+import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
+import { userTables } from "./users";
+
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
 // =============================================================================
@@ -34,16 +68,94 @@ import type { NextlySchemaSnapshot } from "../domains/schema/pipeline/diff/types
  * @returns a frozen snapshot of all framework-managed tables for that dialect
  */
 export function getCoreSchema(
-  _dialect: SupportedDialect
+  dialect: SupportedDialect
 ): NextlySchemaSnapshot {
-  // STUB — fully implemented in Task 14 once all feature subdirs land.
-  return { tables: [] };
+  const tables = [
+    ...Object.values(userTables(dialect)),
+    ...Object.values(authTokenTables(dialect)),
+    ...Object.values(rbacTables(dialect)),
+    ...Object.values(mediaTables(dialect)),
+    ...Object.values(auditTables(dialect)),
+    ...Object.values(nextlyMetaTables(dialect)),
+    ...Object.values(apiKeyTables(dialect)),
+  ];
+
+  // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
+  switch (dialect) {
+    case "postgresql":
+      tables.push(
+        dynamicCollectionsPg,
+        dynamicSinglesPg,
+        dynamicComponentsPg,
+        siteSettingsPg,
+        userFieldDefinitionsPg,
+        emailProvidersPg,
+        emailTemplatesPg
+      );
+      break;
+    case "mysql":
+      tables.push(
+        dynamicCollectionsMysql,
+        dynamicSinglesMysql,
+        dynamicComponentsMysql,
+        siteSettingsMysql,
+        userFieldDefinitionsMysql,
+        emailProvidersMysql,
+        emailTemplatesMysql
+      );
+      break;
+    case "sqlite":
+      tables.push(
+        dynamicCollectionsSqlite,
+        dynamicSinglesSqlite,
+        dynamicComponentsSqlite,
+        siteSettingsSqlite,
+        userFieldDefinitionsSqlite,
+        emailProvidersSqlite,
+        emailTemplatesSqlite
+      );
+      break;
+    default: {
+      const _exhaustive: never = dialect;
+      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
+    }
+  }
+
+  return {
+    tables: tables.map(drizzleTableToTableSpec),
+  };
 }
 
 /** Snake-case names of every core table the framework manages. */
 export const CORE_TABLE_NAMES: readonly string[] = [
-  // Populated in Task 14.
-];
+  "users",
+  "accounts",
+  "sessions",
+  "verification_tokens",
+  "password_reset_tokens",
+  "email_verification_tokens",
+  "refresh_tokens",
+  "roles",
+  "permissions",
+  "role_permissions",
+  "user_roles",
+  "role_inherits",
+  "user_permission_cache",
+  "api_keys",
+  "audit_log",
+  "activity_log",
+  "media",
+  "media_folders",
+  "image_sizes",
+  "nextly_meta",
+  "dynamic_collections",
+  "dynamic_singles",
+  "dynamic_components",
+  "site_settings",
+  "user_field_definitions",
+  "email_providers",
+  "email_templates",
+] as const;
 
 /** Prefixes that identify managed user tables (dc_, single_, comp_). */
 export const CORE_TABLE_PREFIXES: readonly string[] = [
