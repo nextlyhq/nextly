@@ -59,12 +59,9 @@ export const UpdateUserSchema = z.object({
     // adapter returns paths of the form `/uploads/...`, which the previous
     // regex (which required `http(s)://`) would reject, blocking avatar
     // updates whenever the local media library was used.
-    .refine(
-      val => val === null || /^(https?:\/\/.+\..+|\/.+)$/.test(val),
-      {
-        message: "Image must be a valid URL or media path",
-      }
-    )
+    .refine(val => val === null || /^(https?:\/\/.+\..+|\/.+)$/.test(val), {
+      message: "Image must be a valid URL or media path",
+    })
     .optional(),
   emailVerified: z.union([z.date(), z.string(), z.null()]).optional(),
   roles: z.array(z.string().min(1)).optional(),

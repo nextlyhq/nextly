@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 
-import { PasswordSchema } from "@nextly/schemas/validation";
+import { PasswordSchema } from "@nextly/schemas/_zod/validation";
 
 /**
  * Password hashing/verification utilities for credentials authentication.

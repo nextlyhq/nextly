@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { UserFieldConfig } from "../users/config/types";
 
-import { CreateLocalUserSchema, UpdateUserSchema } from "./user";
+import { CreateLocalUserSchema, UpdateUserSchema } from "./_zod/user";
 
 /**
  * Maps a single UserFieldConfig to its corresponding Zod schema.
