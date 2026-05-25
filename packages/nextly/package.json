@@ -43,6 +43,10 @@
       "types": "./dist/database/seeders/index.d.ts",
       "import": "./dist/database/seeders/index.mjs"
     },
+    "./schemas": {
+      "types": "./dist/schemas/index.d.ts",
+      "import": "./dist/schemas/index.mjs"
+    },
     "./api": {
       "types": "./dist/api/index.d.ts",
       "import": "./dist/api/index.mjs"
