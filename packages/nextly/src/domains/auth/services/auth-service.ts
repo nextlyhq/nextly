@@ -8,7 +8,7 @@ import {
   hashPassword as hashPasswordBcrypt,
   validatePasswordStrength,
 } from "@nextly/auth/password";
-import { EmailSchema } from "@nextly/schemas/validation";
+import { EmailSchema } from "@nextly/schemas/_zod/validation";
 import type { MinimalUser } from "@nextly/types/auth";
 
 // PR 4 migration: switched from ServiceError + mapDbErrorToServiceError result

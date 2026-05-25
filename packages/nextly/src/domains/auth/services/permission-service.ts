@@ -15,7 +15,7 @@ import type {
 // return their data directly; failures throw a NextlyError.
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
-import { isSystemResource } from "../../../schemas/rbac";
+import { isSystemResource } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 

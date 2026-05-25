@@ -58,9 +58,7 @@ export const CORE_TABLE_PREFIXES: readonly string[] = [
 // list as its replacement lands in schemas/<feature>/.
 // =============================================================================
 
-export * from "./user"; // Zod — moved to _zod/ in Task 4
-export * from "./rbac"; // Zod — moved to _zod/ in Task 4
-export * from "./validation"; // Zod — moved to _zod/ in Task 4
+export * from "./_zod"; // Zod-only validators (user, rbac, validation)
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
