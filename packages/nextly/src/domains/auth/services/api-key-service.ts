@@ -38,27 +38,27 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
+import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
+import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
+import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
 import {
-  apiKeys as apiKeysMysql,
   permissions as permissionsMysql,
   rolePermissions as rolePermissionsMysql,
   roles as rolesMysql,
   userRoles as userRolesMysql,
-} from "../../../database/schema/mysql";
+} from "../../../schemas/rbac/mysql";
 import {
-  apiKeys as apiKeysPg,
   permissions as permissionsPg,
   rolePermissions as rolePermissionsPg,
   roles as rolesPg,
   userRoles as userRolesPg,
-} from "../../../database/schema/postgres";
+} from "../../../schemas/rbac/postgres";
 import {
-  apiKeys as apiKeysSqlite,
   permissions as permissionsSqlite,
   rolePermissions as rolePermissionsSqlite,
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
-} from "../../../database/schema/sqlite";
+} from "../../../schemas/rbac/sqlite";
 // PR 4 migration: switch from legacy ServiceError to NextlyError unified system.
 // ServiceError throw sites are replaced with NextlyError factory calls; identifying
 // info (key id, role id, exceeded permission) moves from public message to logContext
