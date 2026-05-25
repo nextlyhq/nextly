@@ -5,10 +5,10 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (mediaRelations, mediaFoldersRelations)
- * remain in database/schema/postgres.ts during Plan A — they reference tables
- * that move in later tasks. Relations consolidate in Task 17 once
- * database/schema/ is removed.
+ * Cross-table `relations()` blocks (mediaRelations, mediaFoldersRelations)
+ * live in `./postgres-relations.ts` to keep this file free of the `users`
+ * cross-feature import. Re-exported at the bottom so namespace consumers
+ * see them.
  *
  * @module schemas/media/postgres
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -217,3 +217,12 @@ export const imageSizes = pgTable(
   },
   t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — kept in `./postgres-relations.ts` to isolate the
+// `users` cross-feature import.
+// ---------------------------------------------------------------------------
+export {
+  mediaRelations,
+  mediaFoldersRelations,
+} from "./postgres-relations";

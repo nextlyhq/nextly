@@ -5,10 +5,9 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (mediaRelations, mediaFoldersRelations)
- * remain in database/schema/mysql.ts during Plan A — they reference tables
- * that move in later tasks. Relations consolidate in Task 17 once
- * database/schema/ is removed.
+ * Cross-table `relations()` blocks live in `./mysql-relations.ts` and are
+ * re-exported at the bottom of this file. See `./postgres.ts` for the
+ * rationale.
  *
  * @module schemas/media/mysql
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -163,3 +162,8 @@ export const imageSizes = mysqlTable(
   },
   t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — see `./postgres.ts` for the rationale.
+// ---------------------------------------------------------------------------
+export { mediaRelations, mediaFoldersRelations } from "./mysql-relations";

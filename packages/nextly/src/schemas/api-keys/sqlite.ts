@@ -5,10 +5,9 @@
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` block (apiKeysRelations) remains in
- * database/schema/sqlite.ts during Plan A — it references tables that move
- * in later tasks. Relations consolidate in Task 17 once database/schema/ is
- * removed.
+ * Cross-table `relations()` (apiKeysRelations) lives in `./sqlite-relations.ts`
+ * and is re-exported at the bottom of this file. See `./postgres.ts` for the
+ * rationale.
  *
  * @module schemas/api-keys/sqlite
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -70,3 +69,8 @@ export const apiKeys = sqliteTable(
     index("api_keys_is_active_expires_at_idx").on(t.isActive, t.expiresAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — see `./postgres.ts` for the rationale.
+// ---------------------------------------------------------------------------
+export { apiKeysRelations } from "./sqlite-relations";

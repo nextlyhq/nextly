@@ -5,6 +5,9 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
+ * Cross-table relations live in `./mysql-relations.ts` and are re-exported
+ * at the bottom of this file. See `./postgres.ts` for the rationale.
+ *
  * @module schemas/users/mysql
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
@@ -81,3 +84,12 @@ export const sessions = mysqlTable(
   },
   t => [index("sessions_user_id_idx").on(t.userId)]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — see `./postgres.ts` for the rationale.
+// ---------------------------------------------------------------------------
+export {
+  usersRelations,
+  accountsRelations,
+  sessionsRelations,
+} from "./mysql-relations";

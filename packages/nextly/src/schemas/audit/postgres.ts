@@ -5,10 +5,10 @@
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (activityLogRelations) remain in
- * database/schema/postgres.ts during Plan A — they reference tables that move
- * in later tasks. Relations consolidate in Task 17 once database/schema/ is
- * removed.
+ * Cross-table `relations()` (activityLogRelations) lives in
+ * `./postgres-relations.ts` to keep this file free of the `users`
+ * cross-feature import. Re-exported at the bottom so namespace consumers
+ * see it.
  *
  * @module schemas/audit/postgres
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -83,3 +83,9 @@ export const activityLog = pgTable(
     index("idx_activity_log_user_id").on(t.userId, t.createdAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — kept in `./postgres-relations.ts` to isolate the
+// `users` cross-feature import.
+// ---------------------------------------------------------------------------
+export { activityLogRelations } from "./postgres-relations";

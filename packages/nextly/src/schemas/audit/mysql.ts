@@ -5,10 +5,9 @@
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
- * Note: cross-table `relations()` blocks (activityLogRelations) remain in
- * database/schema/mysql.ts during Plan A — they reference tables that move in
- * later tasks. Relations consolidate in Task 17 once database/schema/ is
- * removed.
+ * Cross-table `relations()` (activityLogRelations) lives in
+ * `./mysql-relations.ts` and is re-exported at the bottom of this file. See
+ * `./postgres.ts` for the rationale.
  *
  * @module schemas/audit/mysql
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
@@ -79,3 +78,8 @@ export const activityLog = mysqlTable(
     index("idx_activity_log_user_id").on(t.userId, t.createdAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Relations re-export — see `./postgres.ts` for the rationale.
+// ---------------------------------------------------------------------------
+export { activityLogRelations } from "./mysql-relations";
