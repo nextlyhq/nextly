@@ -42,7 +42,7 @@ import { createHash, randomUUID } from "crypto";
 import type Database from "better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
-import * as schema from "@nextly/database/schema/sqlite";
+import * as schema from "../fixtures/sqlite-schema";
 
 // Re-export existing factories for convenience
 export { userFactory, bulkUsersFactory } from "../fixtures/users";
@@ -275,9 +275,15 @@ export async function seedTestCollection(
       singular: options.name.replace(/s$/i, ""),
       plural: options.name,
     },
-    fields: options.fields,
+    // Cast: SeedField is a loose test-shape; the canonical column types
+    // `FieldConfig[]`. The seed payload satisfies the JSON column at
+    // runtime; widening here keeps test ergonomics without bending
+    // production types.
+
+    fields: options.fields as any,
     schemaHash,
-    source: options.source ?? "ui",
+
+    source: (options.source ?? "ui") as any,
   });
 
   return { id, tableName, slug };

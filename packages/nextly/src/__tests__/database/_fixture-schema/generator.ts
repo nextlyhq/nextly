@@ -1,25 +1,29 @@
 /**
- * Schema Generator - Dialect-Specific SQL DDL Generation
+ * Schema Generator - Dialect-Specific SQL DDL Generation (TEST FIXTURE)
  *
- * This module provides utilities to generate SQL DDL statements from
- * database-agnostic `TableDefinition` objects. It handles type mapping
+ * Generates `CREATE TABLE` / `DROP TABLE` / `CREATE INDEX` SQL statements
+ * from database-agnostic `TableDefinition` objects. Handles type mapping
  * between abstract types (e.g., "jsonb", "serial", "text[]") and
  * dialect-specific SQL types for PostgreSQL, MySQL, and SQLite.
  *
  * @remarks
- * The generator follows a "closest equivalent with warning" strategy for
- * unsupported features. When a feature isn't natively supported by a dialect,
- * it maps to the closest equivalent and logs a warning.
+ * Test-only — moved here from `src/database/schema/generator.ts` in Plan A
+ * Task 17. The runtime schema source of truth is `getCoreSchema(dialect)`
+ * from `@nextly/schemas`; this file remains because `setup.ts` builds
+ * isolated test databases by feeding `nextlyTables` (a parallel abstract
+ * description of core tables) through these emitters. See
+ * `./index.ts` for the rationale behind keeping it under `__tests__/`.
+ *
+ * Strategy: "closest equivalent with warning" — when a feature isn't
+ * natively supported by a dialect, the generator maps to the closest
+ * equivalent and logs a `console.warn`.
  *
  * @example
  * ```typescript
  * import { generateCreateTableSql, generateSchemaForDialect } from "./generator";
  * import { nextlyTables } from "./unified";
  *
- * // Generate CREATE TABLE for a single table
  * const sql = generateCreateTableSql(nextlyTables[0], "postgresql");
- *
- * // Generate all DDL for a dialect
  * const schema = generateSchemaForDialect(nextlyTables, "mysql");
  * for (const tableSql of schema.tables) {
  *   await adapter.executeQuery(tableSql);
