@@ -1,14 +1,24 @@
 /**
- * Unified Database Schema Definitions
+ * Unified Database Schema Definitions (TEST FIXTURE)
  *
- * This file contains database-agnostic table definitions for all Nextly core tables.
- * These definitions use abstract type names (e.g., "jsonb", "uuid", "timestamp") that
- * are translated to dialect-specific types by each database adapter.
+ * Database-agnostic table definitions for the core Nextly tables, used to
+ * bootstrap isolated test databases via `./generator.ts`. Abstract type
+ * names (e.g., "jsonb", "uuid", "timestamp") are translated to
+ * dialect-specific SQL by the generator at emit time.
+ *
+ * @remarks
+ * Test-only — moved here from `src/database/schema/unified.ts` in Plan A
+ * Task 17. The runtime schema source of truth is now
+ * `getCoreSchema(dialect)` from `@nextly/schemas`, which returns the
+ * actual Drizzle table objects the pipeline introspects. This file
+ * remains as a separate abstract description because `setup.ts`'s
+ * `CREATE TABLE` shortcut path uses `TableDefinition` directly. See
+ * `./index.ts` for the rationale.
  *
  * Type Mapping Strategy:
- * - PostgreSQL: Uses native types (jsonb, uuid, timestamp, text, integer, boolean)
- * - MySQL: Translates jsonb→json, uuid→char(36), timestamp→timestamp
- * - SQLite: Translates jsonb→text(mode:'json'), uuid→text, timestamp→integer or text
+ * - PostgreSQL: native types (jsonb, uuid, timestamp, text, integer, boolean).
+ * - MySQL: jsonb→json, uuid→char(36), timestamp→timestamp.
+ * - SQLite: jsonb→text(mode:'json'), uuid→text, timestamp→integer or text.
  *
  * @packageDocumentation
  */

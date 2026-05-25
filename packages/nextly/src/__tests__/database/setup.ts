@@ -43,7 +43,7 @@ import {
   generateSchemaForDialect,
   generateDropSchemaForDialect,
   nextlyTables,
-} from "../../database/schema";
+} from "./_fixture-schema";
 
 // ============================================================
 // Types
