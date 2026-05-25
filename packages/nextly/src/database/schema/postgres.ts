@@ -331,7 +331,7 @@ export const dynamicCollectionsRelations = relations(
 export { dynamicSinglesPg as dynamicSingles } from "../../schemas/dynamic-singles/postgres";
 export { dynamicComponentsPg as dynamicComponents } from "../../schemas/dynamic-components/postgres";
 // General Settings (site_settings singleton table) — needed for pushSchema + SchemaRegistry
-export { siteSettingsPg as siteSettings } from "../../schemas/general-settings/postgres";
+export { siteSettingsPg as siteSettings } from "../../schemas/site-settings/postgres";
 export { userFieldDefinitionsPg as userFieldDefinitions } from "../../schemas/user-field-definitions/postgres";
 export { emailProvidersPg as emailProviders } from "../../schemas/email-providers/postgres";
 export { emailTemplatesPg as emailTemplates } from "../../schemas/email-templates/postgres";

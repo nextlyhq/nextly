@@ -12,13 +12,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
-import { siteSettingsMysql } from "../../schemas/general-settings/mysql";
-import { siteSettingsPg } from "../../schemas/general-settings/postgres";
-import { siteSettingsSqlite } from "../../schemas/general-settings/sqlite";
+import { siteSettingsMysql } from "../../schemas/site-settings/mysql";
+import { siteSettingsPg } from "../../schemas/site-settings/postgres";
+import { siteSettingsSqlite } from "../../schemas/site-settings/sqlite";
 import type {
   GeneralSettingsRecord,
   GeneralSettingsUpdate,
-} from "../../schemas/general-settings/types";
+} from "../../schemas/site-settings/types";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 

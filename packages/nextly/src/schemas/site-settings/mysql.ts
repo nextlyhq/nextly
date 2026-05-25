@@ -1,18 +1,18 @@
 /**
- * PostgreSQL Schema for General Settings
+ * MySQL Schema for General Settings
  *
- * Defines the `site_settings` singleton table for PostgreSQL.
+ * Defines the `site_settings` singleton table for MySQL.
  * Only one row ever exists (id = 'default').
  *
- * @module schemas/general-settings/postgres
+ * @module schemas/site-settings/mysql
  * @since 1.0.0
  */
 
-import { pgTable, text, varchar, timestamp } from "drizzle-orm/pg-core";
+import { mysqlTable, varchar, datetime } from "drizzle-orm/mysql-core";
 
-export const siteSettingsPg = pgTable("site_settings", {
+export const siteSettingsMysql = mysqlTable("site_settings", {
   /** Always 'default' — enforces singleton pattern. */
-  id: text("id").primaryKey(),
+  id: varchar("id", { length: 50 }).primaryKey(),
 
   /** Display name for the application. */
   applicationName: varchar("application_name", { length: 255 }),
@@ -39,16 +39,14 @@ export const siteSettingsPg = pgTable("site_settings", {
   logoUrlDark: varchar("logo_url_dark", { length: 2048 }),
 
   /** JSON array of custom sidebar groups, e.g. [{"slug":"analytics","name":"Analytics","icon":"BarChart"}] */
-  customSidebarGroups: text("custom_sidebar_groups"),
+  customSidebarGroups: varchar("custom_sidebar_groups", { length: 4096 }),
 
   /** JSON object mapping plugin slugs to sidebar group overrides, e.g. {"form-builder":"collections"} */
-  pluginPlacements: text("plugin_placements"),
+  pluginPlacements: varchar("plugin_placements", { length: 4096 }),
 
   /** When the settings were last updated. */
-  updatedAt: timestamp("updated_at", { withTimezone: false })
-    .defaultNow()
-    .notNull(),
+  updatedAt: datetime("updated_at").notNull(),
 });
 
-export type SiteSettingsPg = typeof siteSettingsPg.$inferSelect;
-export type SiteSettingsInsertPg = typeof siteSettingsPg.$inferInsert;
+export type SiteSettingsMysql = typeof siteSettingsMysql.$inferSelect;
+export type SiteSettingsInsertMysql = typeof siteSettingsMysql.$inferInsert;
