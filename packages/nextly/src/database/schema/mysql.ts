@@ -277,7 +277,12 @@ export const mediaFoldersRelations = relations(
 // imageSizes moved to schemas/media/mysql.ts (Plan A Task 8) and re-exported
 // with the rest of the media tables above.
 
-// Metadata table for tracking dynamic collections
+// Metadata table for tracking dynamic collections.
+//
+// Plan A Task 12 note: see database/schema/postgres.ts for the rationale —
+// the runtime canonical remains this declaration. The diverging
+// `dynamicCollectionsMysql` at schemas/dynamic-collections/mysql.ts is left
+// in place for the new public-API surface but not aliased here.
 export const dynamicCollections = mysqlTable(
   "dynamic_collections",
   {

@@ -236,7 +236,17 @@ export const activityLogRelations = relations(activityLog, ({ one }) => ({
   }),
 }));
 
-// Metadata table for tracking dynamic collections
+// Metadata table for tracking dynamic collections.
+//
+// Plan A Task 12 note: a `dynamicCollectionsPg` table also lives at
+// schemas/dynamic-collections/postgres.ts with a different shape (uuid id,
+// FieldConfig[] fields, CollectionLabels, etc.). The runtime canonical
+// remains this one because seed helpers and the live SchemaRegistry rely on
+// its column shape; aliasing the schemas/dynamic-collections/ version here
+// breaks the test surface (id is `.defaultRandom()` so explicit inserts
+// fail). The top-level schemas/dynamic-collections.ts (which carried yet a
+// third diverging table + the UI FieldDefinition types) was deleted; those
+// types now live at schemas/dynamic-collections/legacy-types.ts.
 export const dynamicCollections = pgTable(
   "dynamic_collections",
   {
