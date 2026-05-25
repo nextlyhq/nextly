@@ -15,11 +15,10 @@ import {
 
 import { users, accounts, sessions } from "../../schemas/users/postgres";
 
-export const systemMigrations = pgTable("system_migrations", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  runAt: timestamp("run_at", { withTimezone: false }).defaultNow().notNull(),
-});
+// Legacy table — moved to schemas/_legacy/postgres.ts (Plan A Task 13).
+// Re-exported here so existing consumers keep working until Plan B removes
+// the table entirely via `nextly upgrade`.
+export { systemMigrations } from "../../schemas/_legacy/postgres";
 
 // Auth.js v5 compatible tables — moved to schemas/users/postgres.ts (Plan A Task 5).
 // Re-exported here so existing consumers and relations() blocks below keep working
@@ -42,24 +41,10 @@ import {
   refreshTokens,
 } from "../../schemas/auth-tokens/postgres";
 
-// Audit table for dynamic DDL
-export const contentSchemaEvents = pgTable(
-  "content_schema_events",
-  {
-    id: serial("id").primaryKey(),
-    op: text("op").notNull(),
-    tableName: text("table_name").notNull(),
-    sqlText: text("sql").notNull(),
-    meta: jsonb("meta"),
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [
-    index("content_schema_events_created_at_idx").on(t.createdAt),
-    index("content_schema_events_table_name_idx").on(t.tableName),
-  ]
-);
+// Legacy audit table — moved to schemas/_legacy/postgres.ts (Plan A Task 13).
+// Re-exported here so existing consumers keep working until Plan B removes
+// the table entirely (superseded by nextly_schema_events).
+export { contentSchemaEvents } from "../../schemas/_legacy/postgres";
 
 // Audit tables — moved to schemas/audit/postgres.ts (Plan A Task 9).
 // Re-exported here so existing consumers and relations() blocks below keep working

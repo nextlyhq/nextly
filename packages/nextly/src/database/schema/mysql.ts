@@ -15,11 +15,10 @@ import {
 
 import { users, accounts, sessions } from "../../schemas/users/mysql";
 
-export const systemMigrations = mysqlTable("system_migrations", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  runAt: datetime("run_at").notNull().default(new Date()),
-});
+// Legacy table — moved to schemas/_legacy/mysql.ts (Plan A Task 13).
+// Re-exported here so existing consumers keep working until Plan B removes
+// the table entirely via `nextly upgrade`.
+export { systemMigrations } from "../../schemas/_legacy/mysql";
 
 // Auth.js v5 compatible tables — moved to schemas/users/mysql.ts (Plan A Task 5).
 // Re-exported here so existing consumers and relations() blocks below keep working
@@ -42,22 +41,10 @@ import {
   refreshTokens,
 } from "../../schemas/auth-tokens/mysql";
 
-// Audit table for dynamic DDL
-export const contentSchemaEvents = mysqlTable(
-  "content_schema_events",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    op: varchar("op", { length: 191 }).notNull(),
-    tableName: varchar("table_name", { length: 255 }).notNull(),
-    sqlText: varchar("sql", { length: 1024 }).notNull(),
-    meta: json("meta"),
-    createdAt: datetime("created_at").notNull().default(new Date()),
-  },
-  t => [
-    index("content_schema_events_created_at_idx").on(t.createdAt),
-    index("content_schema_events_table_name_idx").on(t.tableName),
-  ]
-);
+// Legacy audit table — moved to schemas/_legacy/mysql.ts (Plan A Task 13).
+// Re-exported here so existing consumers keep working until Plan B removes
+// the table entirely (superseded by nextly_schema_events).
+export { contentSchemaEvents } from "../../schemas/_legacy/mysql";
 
 // Audit tables — moved to schemas/audit/mysql.ts (Plan A Task 9).
 // Re-exported here so existing consumers and relations() blocks below keep working
