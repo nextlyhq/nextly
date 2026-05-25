@@ -459,18 +459,7 @@ export const mediaFoldersRelations = relations(
 // at first boot.
 export { nextlyMigrationJournalPg as nextlyMigrationJournal } from "../../schemas/migration-journal/postgres";
 
-// nextly_meta — runtime key/value flags table.
-// Used for state that doesn't belong in collection schemas. First consumer:
-// seed.completedAt / seed.skippedAt for the dashboard SeedDemoContentCard.
-// See migration 20260504_000000_nextly_meta.sql.
-export const nextlyMeta = pgTable(
-  "nextly_meta",
-  {
-    key: text("key").primaryKey(),
-    value: jsonb("value"),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  t => [index("nextly_meta_updated_at_idx").on(t.updatedAt)]
-);
+// nextlyMeta — moved to schemas/nextly-meta/postgres.ts (Plan A Task 10).
+// Re-exported here so existing consumers keep working until Task 16 sweeps
+// imports to @nextly/schemas.
+export { nextlyMeta } from "../../schemas/nextly-meta/postgres";
