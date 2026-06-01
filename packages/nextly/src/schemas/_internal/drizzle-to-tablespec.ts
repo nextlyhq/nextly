@@ -82,6 +82,23 @@ function normalizeDrizzleType(col: {
  * canonicalisation is Plan C scope.
  */
 function extractDefault(col: { default?: unknown }): string | undefined {
-  if (col.default === undefined || col.default === null) return undefined;
-  return String(col.default);
+  const value = col.default;
+  if (value === undefined || value === null) return undefined;
+  // Primitive defaults (`"now()"`, 0, false, …) stringify directly as before.
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  // SQL-expression defaults arrive as objects (or, rarely, functions/symbols);
+  // these have no meaningful primitive coercion (`String({})` →
+  // "[object Object]"), so serialize them deterministically instead.
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
 }

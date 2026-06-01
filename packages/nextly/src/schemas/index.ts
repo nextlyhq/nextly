@@ -34,23 +34,23 @@ import {
   dynamicComponentsMysql,
   dynamicComponentsSqlite,
 } from "./dynamic-components";
-import { dynamicSinglesPg } from "./dynamic-singles/postgres";
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
+import { dynamicSinglesPg } from "./dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "./dynamic-singles/sqlite";
-import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersMysql } from "./email-providers/mysql";
+import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
-import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesMysql } from "./email-templates/mysql";
+import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { mediaTables } from "./media";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
-import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsMysql } from "./site-settings/mysql";
+import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
-import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
+import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
 
@@ -67,9 +67,7 @@ import { userTables } from "./users";
  * @param _dialect - the runtime dialect to compile the snapshot for
  * @returns a frozen snapshot of all framework-managed tables for that dialect
  */
-export function getCoreSchema(
-  dialect: SupportedDialect
-): NextlySchemaSnapshot {
+export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
   const tables = [
     ...Object.values(userTables(dialect)),
     ...Object.values(authTokenTables(dialect)),
