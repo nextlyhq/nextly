@@ -48,3 +48,16 @@ describe("nextly_schema_events — postgres", () => {
     expect(cols.source.notNull).toBe(true);
   });
 });
+
+describe.each([
+  ["mysql", () => import("../mysql").then(m => m.nextlySchemaEventsMysql)],
+  ["sqlite", () => import("../sqlite").then(m => m.nextlySchemaEventsSqlite)],
+])("nextly_schema_events — %s", (_name, load) => {
+  it("matches the canonical column set", async () => {
+    const table = await load();
+    const names = Object.values(getTableColumns(table))
+      .map(c => c.name)
+      .sort();
+    expect(names).toEqual(EXPECTED_COLUMNS);
+  });
+});
