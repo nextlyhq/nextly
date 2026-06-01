@@ -48,6 +48,7 @@ export const nextlySchemaEventsSqlite = sqliteTable(
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
     durationMs: integer("duration_ms"),
     appliedBy: text("applied_by"),
+    note: text("note"),
 
     statementsPlanned: integer("statements_planned"),
     statementsExecuted: integer("statements_executed"),
@@ -68,7 +69,10 @@ export const nextlySchemaEventsSqlite = sqliteTable(
         sql`${table.eventType} = 'file_apply' AND ${table.status} = 'applied'`
       ),
     index("nextly_schema_events_started_at_idx").on(table.startedAt),
-    index("nextly_schema_events_scope_idx").on(table.scopeKind, table.scopeSlug),
+    index("nextly_schema_events_scope_idx").on(
+      table.scopeKind,
+      table.scopeSlug
+    ),
   ]
 );
 

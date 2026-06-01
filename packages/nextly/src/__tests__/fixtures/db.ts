@@ -216,6 +216,7 @@ function createTables(sqlite: Database.Database) {
       ended_at INTEGER,
       duration_ms INTEGER,
       applied_by TEXT,
+      note TEXT,
       statements_planned INTEGER,
       statements_executed INTEGER,
       renames_applied INTEGER,
