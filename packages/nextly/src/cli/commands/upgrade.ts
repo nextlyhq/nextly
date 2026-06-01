@@ -21,9 +21,13 @@ import {
   synthesizedCoreApplyEvent,
   type BackfillEvent,
 } from "../../domains/schema/events/backfill";
-import { detectLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import {
+  assertNoLegacyBookkeeping,
+  detectLegacyBookkeeping,
+} from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import { createContext } from "../program";
@@ -67,7 +71,11 @@ export interface RunUpgradeOptions {
 
 // --- raw exec/query helpers (dialect-branched; only the methods used) -------
 
-function execRaw(db: unknown, dialect: Dialect, statement: string): Promise<void> {
+function execRaw(
+  db: unknown,
+  dialect: Dialect,
+  statement: string
+): Promise<void> {
   if (dialect === "sqlite") {
     (db as { run: (q: unknown) => unknown }).run(sql.raw(statement));
     return Promise.resolve();
@@ -96,8 +104,7 @@ async function queryRaw(
       Record<string, unknown>
     >;
   }
-  return ((res as { rows?: Array<Record<string, unknown>> }).rows ??
-    []);
+  return (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
 }
 
 /** True iff the existing events table has the expected key columns. */
@@ -275,6 +282,46 @@ export async function runUpgrade(
   });
 }
 
+export interface RunReconcileCoreDeps {
+  adapter: UpgradeAdapter;
+  logger?: UpgradeLogger;
+  confirmDestructive: (reasons: string[]) => Promise<boolean>;
+}
+
+/** Injected for tests; defaults to the real reconcileCore. */
+interface ReconcileCoreInjection {
+  reconcileCore?: typeof reconcileCore;
+}
+
+/**
+ * `nextly upgrade --reconcile-core` (spec §4.10.3). Standalone Phase 1 in
+ * dev-loose with per-destructive-op confirmation. Gated by the legacy
+ * bookkeeping check and the shared migrate lock. Use only when `nextly
+ * migrate` reports core schema drift after upgrading.
+ */
+export async function runReconcileCore(
+  deps: RunReconcileCoreDeps,
+  injection: ReconcileCoreInjection = {}
+): Promise<void> {
+  const reconcile = injection.reconcileCore ?? reconcileCore;
+  const { adapter } = deps;
+  const dialect = adapter.getCapabilities().dialect;
+  const db = adapter.getDrizzle();
+
+  await assertNoLegacyBookkeeping(adapter);
+
+  await withMigrateLock(db, dialect, async () => {
+    await reconcile({
+      db,
+      dialect,
+      mode: "dev-loose",
+      confirmDestructive: deps.confirmDestructive,
+      logger: deps.logger,
+    });
+  });
+  deps.logger?.info?.("Core schema reconciliation complete.");
+}
+
 // ---------------------------------------------------------------------------
 // CLI command registration
 // ---------------------------------------------------------------------------
@@ -289,7 +336,10 @@ export interface UpgradeCommandOptions {
 /** Minimal interactive yes/no prompt for the TTY backup confirmation. */
 function promptYesNo(question: string): Promise<boolean> {
   return new Promise(resolve => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
     rl.question(question, answer => {
       rl.close();
       resolve(/^y(es)?$/i.test(answer.trim()));
@@ -315,19 +365,12 @@ export function registerUpgradeCommand(program: Command): void {
     )
     .option(
       "--reconcile-core",
-      "Reconcile drifted core schema (not available until the migrate-phases plan lands)",
+      "Reconcile drifted core schema (dev-loose, confirms each destructive op). Use only if `nextly migrate` reports core drift.",
       false
     )
     .action(async (cmdOptions: UpgradeCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
-
-      if (cmdOptions.reconcileCore) {
-        context.logger.error(
-          "`--reconcile-core` is not available yet. It ships with the migrate-phases plan (Plan C)."
-        );
-        process.exit(1);
-      }
 
       const dbValidation = validateDatabaseEnv();
       if (!dbValidation.valid || !dbValidation.dialect) {
@@ -350,23 +393,37 @@ export function registerUpgradeCommand(program: Command): void {
       }
 
       try {
-        await runUpgrade(
-          {
-            confirmBackedUp: cmdOptions.confirmBackedUp,
-            force: cmdOptions.force,
-            targetTableName: cmdOptions.targetTableName,
-          },
-          {
+        if (cmdOptions.reconcileCore) {
+          await runReconcileCore({
             adapter,
             logger: {
               info: msg => context.logger.info(msg),
               warn: msg => context.logger.warn(msg),
             },
-            isTTY: Boolean(process.stdin.isTTY),
-            promptConfirm: () =>
-              promptYesNo("Have you backed up your database? [y/N]: "),
-          }
-        );
+            confirmDestructive: reasons =>
+              promptYesNo(
+                `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `
+              ),
+          });
+        } else {
+          await runUpgrade(
+            {
+              confirmBackedUp: cmdOptions.confirmBackedUp,
+              force: cmdOptions.force,
+              targetTableName: cmdOptions.targetTableName,
+            },
+            {
+              adapter,
+              logger: {
+                info: msg => context.logger.info(msg),
+                warn: msg => context.logger.warn(msg),
+              },
+              isTTY: Boolean(process.stdin.isTTY),
+              promptConfirm: () =>
+                promptYesNo("Have you backed up your database? [y/N]: "),
+            }
+          );
+        }
       } catch (error) {
         context.logger.error(
           error instanceof Error ? error.message : String(error)
