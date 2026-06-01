@@ -13,12 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import {
-  sqliteTable,
-  integer,
-  text,
-  index,
-} from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
 import { users } from "../users/sqlite";
 
@@ -82,8 +77,3 @@ export const activityLog = sqliteTable(
     index("idx_activity_log_user_id").on(t.userId, t.createdAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export { activityLogRelations } from "./sqlite-relations";

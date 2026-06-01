@@ -97,9 +97,3 @@ export const apiKeys = pgTable(
     index("api_keys_is_active_expires_at_idx").on(t.isActive, t.expiresAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — kept in `./postgres-relations.ts` to isolate the
-// `users` / `roles` cross-feature imports.
-// ---------------------------------------------------------------------------
-export { apiKeysRelations } from "./postgres-relations";

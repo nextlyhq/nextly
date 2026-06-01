@@ -7,6 +7,12 @@
  * `schemas/<feature>/postgres.ts` modules, under the bare names callers
  * have always used (`apiKeys`, `users`, `dynamicCollections`, …).
  *
+ * Tables are sourced from `<feature>/postgres.ts`; relations from
+ * `<feature>/postgres-relations.ts`. The table modules deliberately do NOT
+ * re-export their relations — that back-edge created a table↔relations import
+ * cycle that left tables `undefined` at module-load. This bundle is the join
+ * point instead, so the dependency stays one-directional (relations → tables).
+ *
  * Consumers reach this module through `getDialectTables("postgresql")` /
  * `import { schema } from "@nextly/database"`. New consumers should prefer
  * `getCoreSchema(dialect)` from `@nextly/schemas`, which returns a
@@ -17,15 +23,13 @@
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/postgres.ts)
  */
 
-// Users + Auth.js identity (tables + relations co-exported from the file).
+// Users + Auth.js identity.
+export { users, accounts, sessions } from "../users/postgres";
 export {
-  users,
-  accounts,
-  sessions,
   usersRelations,
   accountsRelations,
   sessionsRelations,
-} from "../users/postgres";
+} from "../users/postgres-relations";
 
 // Auth tokens.
 export {
@@ -33,8 +37,8 @@ export {
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,
-  refreshTokensRelations,
 } from "../auth-tokens/postgres";
+export { refreshTokensRelations } from "../auth-tokens/postgres-relations";
 
 // RBAC.
 export {
@@ -44,27 +48,29 @@ export {
   userRoles,
   roleInherits,
   userPermissionCache,
+} from "../rbac/postgres";
+export {
   rolesRelations,
   permissionsRelations,
   rolePermissionsRelations,
   userRolesRelations,
   roleInheritsRelations,
-} from "../rbac/postgres";
+} from "../rbac/postgres-relations";
 
 // API keys.
-export { apiKeys, apiKeysRelations } from "../api-keys/postgres";
+export { apiKeys } from "../api-keys/postgres";
+export { apiKeysRelations } from "../api-keys/postgres-relations";
 
 // Audit.
-export { auditLog, activityLog, activityLogRelations } from "../audit/postgres";
+export { auditLog, activityLog } from "../audit/postgres";
+export { activityLogRelations } from "../audit/postgres-relations";
 
 // Media.
+export { media, mediaFolders, imageSizes } from "../media/postgres";
 export {
-  media,
-  mediaFolders,
-  imageSizes,
   mediaRelations,
   mediaFoldersRelations,
-} from "../media/postgres";
+} from "../media/postgres-relations";
 
 // Nextly meta + migration journal.
 export { nextlyMeta } from "../nextly-meta/postgres";
@@ -73,10 +79,8 @@ export { nextlyMigrationJournalPg as nextlyMigrationJournal } from "../migration
 // Dynamic collections / singles / components — aliased back to the bare
 // names production code uses (the legacy stub flattened
 // `dynamicCollectionsPg` → `dynamicCollections`, etc.).
-export {
-  dynamicCollectionsPg as dynamicCollections,
-  dynamicCollectionsRelations,
-} from "../dynamic-collections/postgres";
+export { dynamicCollectionsPg as dynamicCollections } from "../dynamic-collections/postgres";
+export { dynamicCollectionsRelations } from "../dynamic-collections/postgres-relations";
 export { dynamicSinglesPg as dynamicSingles } from "../dynamic-singles/postgres";
 export { dynamicComponentsPg as dynamicComponents } from "../dynamic-components/postgres";
 

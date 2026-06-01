@@ -177,14 +177,3 @@ export const userPermissionCache = sqliteTable(
     index("upc_user_action_resource_idx").on(t.userId, t.action, t.resource),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export {
-  rolesRelations,
-  permissionsRelations,
-  rolePermissionsRelations,
-  userRolesRelations,
-  roleInheritsRelations,
-} from "./sqlite-relations";

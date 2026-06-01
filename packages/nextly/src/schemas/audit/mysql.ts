@@ -78,8 +78,3 @@ export const activityLog = mysqlTable(
     index("idx_activity_log_user_id").on(t.userId, t.createdAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export { activityLogRelations } from "./mysql-relations";
