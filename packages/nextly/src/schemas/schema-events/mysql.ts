@@ -47,7 +47,9 @@ export const nextlySchemaEventsMysql = mysqlTable(
     filename: varchar("filename", { length: 255 }),
     sha256: varchar("sha256", { length: 64 }),
 
-    scopeKind: varchar("scope_kind", { length: 32 }).$type<SchemaEventScopeKind>(),
+    scopeKind: varchar("scope_kind", {
+      length: 32,
+    }).$type<SchemaEventScopeKind>(),
     scopeSlug: varchar("scope_slug", { length: 255 }),
 
     startedAt: datetime("started_at", { fsp: 3 })
@@ -56,6 +58,7 @@ export const nextlySchemaEventsMysql = mysqlTable(
     endedAt: datetime("ended_at", { fsp: 3 }),
     durationMs: int("duration_ms"),
     appliedBy: varchar("applied_by", { length: 255 }),
+    note: text("note"),
 
     statementsPlanned: int("statements_planned"),
     statementsExecuted: int("statements_executed"),
@@ -71,10 +74,14 @@ export const nextlySchemaEventsMysql = mysqlTable(
   },
   table => [
     index("nextly_schema_events_started_at_idx").on(table.startedAt),
-    index("nextly_schema_events_scope_idx").on(table.scopeKind, table.scopeSlug),
+    index("nextly_schema_events_scope_idx").on(
+      table.scopeKind,
+      table.scopeSlug
+    ),
   ]
 );
 
-export type NextlySchemaEventMysql = typeof nextlySchemaEventsMysql.$inferSelect;
+export type NextlySchemaEventMysql =
+  typeof nextlySchemaEventsMysql.$inferSelect;
 export type NextlySchemaEventInsertMysql =
   typeof nextlySchemaEventsMysql.$inferInsert;
