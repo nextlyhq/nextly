@@ -38,6 +38,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
+import { NextlyError } from "../../../errors/nextly-error";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
 import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
 import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
@@ -63,7 +64,6 @@ import {
 // ServiceError throw sites are replaced with NextlyError factory calls; identifying
 // info (key id, role id, exceeded permission) moves from public message to logContext
 // per spec §13.8 (no identifiers/values in publicMessage).
-import { NextlyError } from "../../../errors/nextly-error";
 import { BaseService } from "../../../services/base-service";
 import { listRoleSlugsForUser } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";

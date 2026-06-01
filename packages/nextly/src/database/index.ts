@@ -1,6 +1,6 @@
 import { env } from "../lib/env";
-import * as schemasPg from "../schemas/_dialect-bundles/postgres";
 import * as schemasMy from "../schemas/_dialect-bundles/mysql";
+import * as schemasPg from "../schemas/_dialect-bundles/postgres";
 import * as schemasSl from "../schemas/_dialect-bundles/sqlite";
 
 /**
