@@ -15,7 +15,6 @@ import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { sql } from "drizzle-orm";
 
-import { NextlyError } from "../../errors";
 import { withSchemaLock } from "../../domains/schema/events/advisory-lock";
 import {
   mapJournalRow,
@@ -26,6 +25,7 @@ import {
 import { detectLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { NextlyError } from "../../errors";
 import { createContext } from "../program";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
 
@@ -97,7 +97,7 @@ async function queryRaw(
     >;
   }
   return ((res as { rows?: Array<Record<string, unknown>> }).rows ??
-    []) as Array<Record<string, unknown>>;
+    []);
 }
 
 /** True iff the existing events table has the expected key columns. */
