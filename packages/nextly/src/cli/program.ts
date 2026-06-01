@@ -22,17 +22,14 @@ import { registerMigrateCommand } from "./commands/migrate";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
+import { registerMigrateResolveCommand } from "./commands/migrate-resolve";
 // F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
 // is "write a new corrective migration", not "run DOWN sections."
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
-import {
-  createLogger,
-  type Logger,
-  type LoggerOptions,
-} from "./utils/logger";
+import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
 
 // ============================================================================
 // Version
@@ -205,6 +202,7 @@ function registerCommands(program: Command): void {
   registerMigrateCreateCommand(program);
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
+  registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerMigrateFreshCommand(program);
 
   // Plan B — one-shot bookkeeping consolidation.
