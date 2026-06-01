@@ -54,7 +54,6 @@ export {
 } from "../media/mysql-relations";
 
 export { nextlyMeta } from "../nextly-meta/mysql";
-export { nextlyMigrationJournalMysql as nextlyMigrationJournal } from "../migration-journal/mysql";
 
 export { dynamicCollectionsMysql as dynamicCollections } from "../dynamic-collections/mysql";
 export { dynamicCollectionsRelations } from "../dynamic-collections/mysql-relations";

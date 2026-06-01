@@ -54,7 +54,6 @@ export {
 } from "../media/sqlite-relations";
 
 export { nextlyMeta } from "../nextly-meta/sqlite";
-export { nextlyMigrationJournalSqlite as nextlyMigrationJournal } from "../migration-journal/sqlite";
 
 export { dynamicCollectionsSqlite as dynamicCollections } from "../dynamic-collections/sqlite";
 export { dynamicCollectionsRelations } from "../dynamic-collections/sqlite-relations";
