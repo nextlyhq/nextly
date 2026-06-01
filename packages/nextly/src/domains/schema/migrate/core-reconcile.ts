@@ -59,7 +59,7 @@ export async function reconcileCore(
   const applyCore =
     deps.applyCore ??
     ((d: FreshPushDialect, database: unknown) =>
-      freshPushSchema(d, database, getDialectTables(d) as Record<string, unknown>));
+      freshPushSchema(d, database, getDialectTables(d)));
 
   const desired = getCoreSchema(dialect);
   const live = await introspect(db, dialect, [...CORE_TABLE_NAMES]);

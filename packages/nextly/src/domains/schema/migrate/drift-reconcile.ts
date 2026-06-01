@@ -18,6 +18,7 @@
 import { NextlyError } from "../../../errors";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
+
 import { migrationDriftError, type DriftItem } from "./drift-error";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";

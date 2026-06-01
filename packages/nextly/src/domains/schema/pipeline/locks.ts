@@ -15,10 +15,10 @@
  */
 import { createHash } from "node:crypto";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 const LOCK_NAMESPACE = "nextly:migrate";
 
@@ -49,7 +49,7 @@ function toRows(res: unknown): Array<Record<string, unknown>> {
     >;
   }
   return ((res as { rows?: Array<Record<string, unknown>> }).rows ??
-    []) as Array<Record<string, unknown>>;
+    []);
 }
 
 /** Truthy for PG `true` and MySQL `1`; falsy for `false`/`0`/`null`. */
