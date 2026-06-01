@@ -60,11 +60,10 @@ import {
 } from "../../domains/schema/migrate-create/generate";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { mergeUiEntities } from "../../domains/schema/ui-schema/merge";
 import { createContext, type CommandContext } from "../program";
-import {
-  getDialectDisplayName,
-  validateDatabaseEnv,
-} from "../utils/adapter";
+import { getDialectDisplayName, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
@@ -210,15 +209,43 @@ export async function runMigrateCreate(
   }
 
   // Convert config entries to the minimal shape the orchestrator needs.
-  const collections = toMinimalEntities(configResult.config.collections, "dc_");
-  const singles = toMinimalEntities(
+  const codeCollections = toMinimalEntities(
+    configResult.config.collections,
+    "dc_"
+  );
+  const codeSingles = toMinimalEntities(
     configResult.config.singles ?? [],
     "single_"
   );
-  const components = toMinimalEntities(
+  const codeComponents = toMinimalEntities(
     configResult.config.components ?? [],
     "comp_"
   );
+
+  // Load + merge UI-built entities (code-first wins on slug collision).
+  let manifest;
+  try {
+    manifest = await loadUiSchema({
+      projectRoot: cwd,
+      uiSchemaFile: configResult.config.db.uiSchemaFile,
+    });
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
+  const merged = mergeUiEntities({
+    codeCollections,
+    codeSingles,
+    codeComponents,
+    manifest,
+  });
+  for (const slug of merged.droppedUiSlugs) {
+    logger.warn(
+      `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
+    );
+  }
+  const { collections, singles, components } = merged;
 
   if (
     collections.length === 0 &&
