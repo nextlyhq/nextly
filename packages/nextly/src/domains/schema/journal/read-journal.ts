@@ -1,21 +1,20 @@
-// F10 PR 4 — read-side of the journal.
+// Plan C1 — read-side of the schema journal, now backed by
+// `nextly_schema_events` (was `nextly_migration_journal`).
 //
 // Pure async function: takes a Drizzle db + dialect + cursor pagination
 // args, returns { rows, hasMore }. Pagination uses a `started_at`
 // timestamp cursor (newer-first); fetching `limit + 1` rows lets us
 // compute `hasMore` cheaply without a second COUNT query.
 //
-// Powers F10 PR 4's `GET /api/schema/journal` endpoint, which in turn
-// drives the F10 PR 5 NotificationBell + Dropdown.
+// Only journal-equivalent events (dev_push / ui_save / db_sync) appear in
+// the admin feed — file_apply / core_apply are migrate/upgrade events, not
+// the dev-time apply journal the NotificationCenter shows.
+//
+// Powers `GET /api/schema/journal`, which drives the admin NotificationBell.
 
-import { desc, lt } from "drizzle-orm";
+import { and, desc, inArray, lt } from "drizzle-orm";
 
-import {
-  nextlyMigrationJournalMysql,
-  nextlyMigrationJournalPg,
-  nextlyMigrationJournalSqlite,
-} from "../../../schemas/migration-journal/index";
-import type { MigrationJournalScopeKind } from "../../../schemas/migration-journal/types";
+import { schemaEventsTables } from "../../../schemas/schema-events";
 
 export type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -63,6 +62,9 @@ export interface ReadJournalResult {
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 100;
 
+// Event types that make up the admin "schema journal" feed.
+const JOURNAL_EVENT_TYPES = ["dev_push", "ui_save", "db_sync"] as const;
+
 interface DrizzleSelectChain {
   from: (t: unknown) => DrizzleSelectChain;
   where: (clause: unknown) => DrizzleSelectChain;
@@ -77,22 +79,27 @@ interface DrizzleDbLike {
 export async function readJournal(
   args: ReadJournalArgs
 ): Promise<ReadJournalResult> {
-  const table = tableForDialect(args.dialect);
+  const table = schemaEventsTables(args.dialect).nextlySchemaEvents;
   const limit = clamp(args.limit, MIN_LIMIT, MAX_LIMIT);
   const beforeDate = args.before ? new Date(args.before) : undefined;
 
-  // Drizzle's typed db is dialect-specific; we accept a structural
-  // shape on the caller's `db` arg to avoid leaking dialect types up.
+  // Drizzle's typed db is dialect-specific; accept a structural shape on the
+  // caller's `db` arg to avoid leaking dialect types up.
   const db = args.db as DrizzleDbLike;
-  const startedAtCol = (table as { startedAt: unknown }).startedAt;
-
-  let chain = db.select().from(table);
-  if (beforeDate) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column type is dialect-specific; structural match
-    chain = chain.where(lt(startedAtCol as any, beforeDate));
-  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column type is dialect-specific; structural match
-  chain = chain.orderBy(desc(startedAtCol as any));
+  const eventTypeCol = (table as { eventType: any }).eventType;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column type is dialect-specific; structural match
+  const startedAtCol = (table as { startedAt: any }).startedAt;
+
+  const filter = beforeDate
+    ? and(inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]), lt(startedAtCol, beforeDate))
+    : inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]);
+
+  const chain = db
+    .select()
+    .from(table)
+    .where(filter)
+    .orderBy(desc(startedAtCol));
 
   // Fetch one extra row so we can compute hasMore without a COUNT.
   const raw = await chain.limit(limit + 1);
@@ -106,12 +113,12 @@ function clamp(n: number, lo: number, hi: number): number {
 }
 
 function mapRow(r: Record<string, unknown>): JournalRowApi {
-  const scopeKind = r.scopeKind as MigrationJournalScopeKind | null | undefined;
+  const scopeKind = r.scopeKind as string | null | undefined;
   const scopeSlug = r.scopeSlug as string | null | undefined;
   let scope: JournalScopeApi | null = null;
-  if (scopeKind === "fresh-push") {
-    scope = { kind: "fresh-push" };
-  } else if (scopeKind === "global") {
+  if (scopeKind === "global" || scopeKind === "core" || scopeKind === "component") {
+    // Events-only kinds (core/component) have no admin-facing equivalent;
+    // fold them into the generic "global" bucket.
     scope = scopeSlug ? { kind: "global", slug: scopeSlug } : { kind: "global" };
   } else if (
     (scopeKind === "collection" || scopeKind === "single") &&
@@ -120,21 +127,14 @@ function mapRow(r: Record<string, unknown>): JournalRowApi {
     scope = { kind: scopeKind, slug: scopeSlug };
   }
 
-  const sa = r.summaryAdded as number | null;
-  const sr = r.summaryRemoved as number | null;
-  const srn = r.summaryRenamed as number | null;
-  const sc = r.summaryChanged as number | null;
-  const summary =
-    sa !== null && sr !== null && srn !== null && sc !== null
-      ? { added: sa, removed: sr, renamed: srn, changed: sc }
-      : null;
-
   return {
     id: String(r.id),
-    source: r.source as "ui" | "code",
-    status: r.status as "in_progress" | "success" | "failed" | "aborted",
+    source: r.eventType === "ui_save" ? "ui" : "code",
+    status: mapStatus(r.status as string),
     scope,
-    summary,
+    // The events table does not persist per-kind counts (only renames_applied);
+    // the admin DTO summary is therefore always null. See Plan C1 scope notes.
+    summary: null,
     startedAt: toIso(r.startedAt),
     endedAt: r.endedAt != null ? toIso(r.endedAt) : null,
     durationMs: (r.durationMs as number | null) ?? null,
@@ -143,24 +143,23 @@ function mapRow(r: Record<string, unknown>): JournalRowApi {
   };
 }
 
+function mapStatus(status: string): JournalRowApi["status"] {
+  switch (status) {
+    case "applied":
+      return "success";
+    case "failed":
+      return "failed";
+    case "in_progress":
+      return "in_progress";
+    default:
+      // rolled_back / superseded → "aborted" for the admin feed.
+      return "aborted";
+  }
+}
+
 function toIso(v: unknown): string {
   if (v instanceof Date) return v.toISOString();
   if (typeof v === "number") return new Date(v).toISOString();
   if (typeof v === "string") return new Date(v).toISOString();
   return String(v);
-}
-
-function tableForDialect(dialect: Dialect): unknown {
-  switch (dialect) {
-    case "postgresql":
-      return nextlyMigrationJournalPg;
-    case "mysql":
-      return nextlyMigrationJournalMysql;
-    case "sqlite":
-      return nextlyMigrationJournalSqlite;
-    default: {
-      const exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(exhaustive)}`);
-    }
-  }
 }
