@@ -35,7 +35,9 @@ interface AnyDb {
   };
   select: () => { from: (t: unknown) => SelectChain };
   update: (t: unknown) => {
-    set: (v: Record<string, unknown>) => { where: (c: unknown) => Promise<unknown> };
+    set: (v: Record<string, unknown>) => {
+      where: (c: unknown) => Promise<unknown>;
+    };
   };
   delete: (t: unknown) => { where: (c: unknown) => Promise<unknown> };
 }
@@ -53,6 +55,7 @@ export interface SchemaEventRow {
   startedAt: Date;
   endedAt: Date | null;
   durationMs: number | null;
+  note: string | null;
   statementsExecuted: number | null;
   supersededEventIds: string[] | null;
   supersededBy: string | null;
@@ -200,7 +203,10 @@ export class SchemaEventsRepository {
    * Prune eligible rows (spec §4.3.3) honoring the superseded-row guard
    * (§4.3.2). Returns the ids actually deleted.
    */
-  async prune(options: { retentionDays: number; now: Date }): Promise<string[]> {
+  async prune(options: {
+    retentionDays: number;
+    now: Date;
+  }): Promise<string[]> {
     const rows = (await this.db
       .select()
       .from(this.table)) as unknown as SchemaEventRow[];
@@ -228,6 +234,32 @@ export class SchemaEventsRepository {
       .select()
       .from(this.table)
       .where(sql`event_type = 'file_apply'`)) as unknown as SchemaEventRow[];
+  }
+
+  /** All `file_apply` rows for a single filename (applied + failed + rolled_back). */
+  async findFileApplies(filename: string): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`filename = ${filename} AND event_type = 'file_apply'`
+      )) as unknown as SchemaEventRow[];
+  }
+
+  /** Transition a row to rolled_back (used by migrate:resolve --failed-cleanup). */
+  async markRolledBack(
+    id: string,
+    input: { note?: string | null } = {}
+  ): Promise<void> {
+    const set: Record<string, unknown> = {
+      status: "rolled_back",
+      endedAt: new Date(),
+    };
+    if (input.note !== undefined) set.note = input.note;
+    await this.db
+      .update(this.table)
+      .set(set)
+      .where(sql`id = ${id}`);
   }
 
   /** Every event for a given scope, oldest-first (spec §4.3.1). */
