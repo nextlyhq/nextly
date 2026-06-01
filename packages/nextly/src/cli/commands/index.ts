@@ -54,17 +54,19 @@ export {
   type MigrateFreshCommandOptions,
 } from "./migrate-fresh";
 
+// Plan C3 — migrate:resolve recovery command
+export {
+  registerMigrateResolveCommand,
+  runMigrateResolve,
+} from "./migrate-resolve";
+
 // F11 PR 2 (Q4=A): migrate:reset removed (forward-only model). Operators
 // who relied on rollback should write a new corrective migration instead.
 // BREAKING: external callers importing `runMigrateReset` or
 // `MigrateResetCommandOptions` from this barrel must remove that import.
 
 // Init command
-export {
-  registerInitCommand,
-  runInit,
-  type InitCommandOptions,
-} from "./init";
+export { registerInitCommand, runInit, type InitCommandOptions } from "./init";
 
 // Upgrade command (Plan B — bookkeeping consolidation)
 export {

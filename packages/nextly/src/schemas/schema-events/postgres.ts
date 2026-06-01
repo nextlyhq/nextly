@@ -50,6 +50,7 @@ export const nextlySchemaEventsPg = pgTable(
     endedAt: timestamp("ended_at", { withTimezone: true }),
     durationMs: integer("duration_ms"),
     appliedBy: text("applied_by"),
+    note: text("note"),
 
     statementsPlanned: integer("statements_planned"),
     statementsExecuted: integer("statements_executed"),
@@ -72,9 +73,13 @@ export const nextlySchemaEventsPg = pgTable(
         sql`${table.eventType} = 'file_apply' AND ${table.status} = 'applied'`
       ),
     index("nextly_schema_events_started_at_idx").on(table.startedAt),
-    index("nextly_schema_events_scope_idx").on(table.scopeKind, table.scopeSlug),
+    index("nextly_schema_events_scope_idx").on(
+      table.scopeKind,
+      table.scopeSlug
+    ),
   ]
 );
 
 export type NextlySchemaEventPg = typeof nextlySchemaEventsPg.$inferSelect;
-export type NextlySchemaEventInsertPg = typeof nextlySchemaEventsPg.$inferInsert;
+export type NextlySchemaEventInsertPg =
+  typeof nextlySchemaEventsPg.$inferInsert;

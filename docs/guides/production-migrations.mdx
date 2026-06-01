@@ -18,6 +18,7 @@ Nextly's schema-evolution model splits responsibilities cleanly between developm
 | `nextly migrate:check` | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database. |
 | `nextly migrate` | Applies pending `.sql` files to the target database. Run from CI or your laptop. |
 | `nextly migrate:status` | Shows applied / pending / failed migrations with their checksums and durations. |
+| `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
@@ -29,6 +30,7 @@ There is no `migrate:rollback` or `migrate:down`. Forward-only is by design: rol
 - `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations).
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
+- `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 
 ---
@@ -192,14 +194,26 @@ Run it in your PR CI to catch mistakes before they reach production.
 
 ## Recovering from a failed migration
 
+`nextly migrate` is forward-only. When a file partially applies or the live
+schema drifts, use `nextly migrate:resolve` to fix the bookkeeping in
+`nextly_schema_events` — it never runs migration SQL itself. All three modes
+are idempotent (re-running a no-op exits 0) and take the same lock as `migrate`.
+
 If `nextly migrate` fails partway through:
 
-1. The failure row is recorded with `status='failed'` and structured `error_json` containing the SQL state, message, and (on MySQL once F15 ships) the failing statement.
+1. The failure is recorded as a `file_apply` event with `status='failed'` and structured `error_json` containing the SQL state and message.
 2. Inspect with `nextly migrate:status --verbose`. The error JSON tells you what broke.
-3. Either fix the SQL (revert + regenerate via `migrate:create`) or fix the underlying database state.
-4. Re-run `nextly migrate`. The retry path deletes the prior `failed` row inside the same transaction, so the unique-filename constraint doesn't block re-application.
+3. Pick the recovery that matches what actually happened:
+   - **The file actually applied but wasn't recorded** (e.g. the process died after the DDL committed): `nextly migrate:resolve --applied <file>`. This verifies the live schema matches the file's target snapshot before recording it. Pass `--skip-verify` only if you have manually confirmed the state.
+   - **A failed attempt is blocking retries and the `.sql` needs editing first:** `nextly migrate:resolve --failed-cleanup <file>` flips the stuck failed row to `rolled_back`. Edit the file, then run `nextly migrate` again.
+   - **You need to re-run a file** that was recorded as applied: `nextly migrate:resolve --rolled-back <file>` — the next `nextly migrate` treats it as pending again.
+4. Otherwise, fix the SQL (revert + regenerate via `migrate:create`) or the underlying database state, then re-run `nextly migrate`.
 
 For MySQL specifically, partial state is possible because MySQL DDL auto-commits per statement. Manual cleanup may be needed; see [MySQL caveats](/docs/database/support) for the recovery playbook.
+
+### Core schema drift after `nextly upgrade`
+
+User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It reconciles core in dev-loose mode and prompts for confirmation on each destructive operation. Use it only when migrate reports core drift.
 
 ## Recovery via corrective migrations
 
@@ -209,4 +223,4 @@ The forward-only model means you don't roll back -- you write a new migration th
 - Renamed a column too aggressively and broke a downstream service -> write a new migration that adds the old column name back as a copy until consumers are updated.
 - Need to drop a table you added in a recent migration -> write a new migration with `DROP TABLE`.
 
-The audit trail in `nextly_migrations` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
+The audit trail in `nextly_schema_events` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
