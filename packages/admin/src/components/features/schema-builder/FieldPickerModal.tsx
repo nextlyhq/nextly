@@ -20,6 +20,10 @@ import { useMemo, useState } from "react";
 
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
+import {
+  isUiSchemaWriteMode,
+  UI_SCHEMA_FIELD_TYPES,
+} from "@admin/lib/builder/ui-schema-mode";
 import type { FieldPrimitiveType } from "@admin/types/collection";
 
 import {
@@ -65,8 +69,12 @@ export function FieldPickerModal({
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
+    // D4: file-write mode only supports ui-schema.json v1 field types.
+    const fileMode = isUiSchemaWriteMode();
+    const supported = new Set<string>(UI_SCHEMA_FIELD_TYPES);
     const matches = (e: FieldTypeEntry) =>
       !excludedTypes.includes(e.type) &&
+      (!fileMode || supported.has(e.type)) &&
       (q === "" ||
         e.label.toLowerCase().includes(q) ||
         e.hint.toLowerCase().includes(q) ||
