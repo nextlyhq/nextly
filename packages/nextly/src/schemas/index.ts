@@ -46,7 +46,6 @@ import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { mediaTables } from "./media";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
-import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
@@ -77,7 +76,14 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     ...Object.values(auditTables(dialect)),
     ...Object.values(nextlyMetaTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
-    ...Object.values(schemaEventsTables(dialect)),
+    // NOTE: `nextly_schema_events` (the migration ledger) is intentionally
+    // NOT part of the reconcile desired-state. It is bootstrapped out-of-band
+    // via `getSchemaEventsDdl` (by `nextly upgrade` and `nextly migrate`'s
+    // Phase-1 prelude) — you cannot reconcile the ledger via the same diff
+    // engine that records into it, and its raw-DDL shape differs from the
+    // drizzle-kit-introspected shape on some dialects (e.g. SQLite PK
+    // nullability). It is also excluded from `getDialectTables` for the same
+    // reason, so `applyCore` never touches it.
   ];
 
   // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
@@ -155,7 +161,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "user_field_definitions",
   "email_providers",
   "email_templates",
-  "nextly_schema_events",
+  // `nextly_schema_events` is deliberately omitted — the ledger is
+  // bootstrapped out-of-band (getSchemaEventsDdl), not reconciled. See
+  // getCoreSchema above.
 ] as const;
 
 /** Prefixes that identify managed user tables (dc_, single_, comp_). */

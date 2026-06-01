@@ -37,6 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
@@ -208,7 +209,12 @@ export async function runMigrate(
     );
 
     if (options.dryRun) {
-      const pending = await findPendingFiles(db, dialect, appMigrationsDir, logger);
+      const pending = await findPendingFiles(
+        db,
+        dialect,
+        appMigrationsDir,
+        logger
+      );
       logger.newline();
       logger.keyValue("Pending", formatCount(pending.length, "migration"));
       for (const m of pending) logger.info(`  • ${m.name}.sql`);
@@ -220,14 +226,30 @@ export async function runMigrate(
     // eslint-disable-next-line turbo/no-undeclared-env-vars
     const allowCoreDestructive = process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1"; // prettier-ignore
 
+    const dz = adapter as unknown as DrizzleAdapter & {
+      tableExists: (n: string) => Promise<boolean>;
+    };
+
     await withMigrateLock(db, dialect, async () => {
-      // Phase 1 — core schema reconciliation (production-strict).
+      // Phase 1 — core schema reconciliation (production-strict). The ledger
+      // table (`nextly_schema_events`) is bootstrapped out-of-band by
+      // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
+      // extraneous table) and BEFORE the event is recorded. Idempotent: the
+      // DDL runs only when the table is absent (MySQL's CREATE INDEX lacks
+      // IF NOT EXISTS, so it must not re-run).
       logger.info("Phase 1: reconciling core schema...");
       await reconcileCore({
         db,
         dialect,
         logger: { info: m => logger.debug(m), warn: m => logger.warn(m) },
         allowDestructive: allowCoreDestructive,
+        ensureLedger: async () => {
+          if (!(await dz.tableExists("nextly_schema_events"))) {
+            for (const stmt of getSchemaEventsDdl(dialect)) {
+              await dz.executeQuery(stmt);
+            }
+          }
+        },
       });
 
       // Phase 2 — user migration files (drift reconciliation, §4.7).
