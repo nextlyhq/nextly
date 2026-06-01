@@ -15,7 +15,7 @@ import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { sql } from "drizzle-orm";
 
-import { withSchemaLock } from "../../domains/schema/events/advisory-lock";
+import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
   mapJournalRow,
   mapMigrationsRow,
@@ -171,7 +171,7 @@ export async function runUpgrade(
   const log = (msg: string) => deps.logger?.info?.(msg);
   const eventsTable = options.targetTableName ?? EVENTS_TABLE;
 
-  await withSchemaLock(db, dialect, async () => {
+  await withMigrateLock(db, dialect, async () => {
     // 3. Introspect.
     const legacy = await detectLegacyBookkeeping(adapter);
     const eventsExists = await adapter.tableExists(eventsTable);
