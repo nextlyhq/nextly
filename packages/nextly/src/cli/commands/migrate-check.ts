@@ -63,6 +63,9 @@ import type {
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
+import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { mergeUiEntities } from "../../domains/schema/ui-schema/merge";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -132,10 +135,52 @@ export async function runMigrateCheck(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
+  // Layer 5: load + validate ui-schema.json (intra-file via loadUiSchema's Zod).
+  let manifest;
+  try {
+    manifest = await loadUiSchema({
+      projectRoot: cwd,
+      uiSchemaFile: configResult.config.db.uiSchemaFile,
+    });
+  } catch (error) {
+    logger.error(
+      `UI_SCHEMA_INVALID: ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  }
+
+  // Cross-file checks (slug collision, relation targets).
+  const crossIssues = validateCrossFile({
+    codeCollectionSlugs: configResult.config.collections.map(
+      (c: { slug: string }) => c.slug
+    ),
+    manifest,
+  });
+  if (crossIssues.length > 0) {
+    for (const issue of crossIssues) {
+      logger.error(`${issue.code}: ${issue.message}`);
+    }
+    process.exit(1);
+  }
+
+  // Merge code + UI entities (code-first wins) for the drift comparison.
+  const merged = mergeUiEntities({
+    codeCollections: toMinimalEntities(configResult.config.collections, "dc_"),
+    codeSingles: toMinimalEntities(
+      configResult.config.singles ?? [],
+      "single_"
+    ),
+    codeComponents: toMinimalEntities(
+      configResult.config.components ?? [],
+      "comp_"
+    ),
+    manifest,
+  });
+
   const desiredSnapshot = buildDesiredSnapshotFromConfig(
-    toMinimalEntities(configResult.config.collections, "dc_"),
-    toMinimalEntities(configResult.config.singles ?? [], "single_"),
-    toMinimalEntities(configResult.config.components ?? [], "comp_"),
+    merged.collections,
+    merged.singles,
+    merged.components,
     dialect
   );
 
