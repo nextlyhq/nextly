@@ -22,6 +22,7 @@ import { registerMigrateCommand } from "./commands/migrate";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
+import { registerUpgradeCommand } from "./commands/upgrade";
 // F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
 // is "write a new corrective migration", not "run DOWN sections."
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
@@ -205,6 +206,9 @@ function registerCommands(program: Command): void {
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateFreshCommand(program);
+
+  // Plan B — one-shot bookkeeping consolidation.
+  registerUpgradeCommand(program);
 
   // Permissions commands
   program.addCommand(createPermissionsCleanupCommand());

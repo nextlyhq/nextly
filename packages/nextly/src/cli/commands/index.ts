@@ -66,5 +66,13 @@ export {
   type InitCommandOptions,
 } from "./init";
 
+// Upgrade command (Plan B — bookkeeping consolidation)
+export {
+  registerUpgradeCommand,
+  runUpgrade,
+  type UpgradeCommandOptions,
+  type UpgradeAdapter,
+} from "./upgrade";
+
 // Permissions commands
 export { createPermissionsCleanupCommand } from "./permissions-cleanup";
