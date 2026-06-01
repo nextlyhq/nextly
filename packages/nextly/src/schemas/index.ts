@@ -46,6 +46,7 @@ import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { mediaTables } from "./media";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
+import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
@@ -76,6 +77,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     ...Object.values(auditTables(dialect)),
     ...Object.values(nextlyMetaTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
+    ...Object.values(schemaEventsTables(dialect)),
   ];
 
   // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
@@ -153,6 +155,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "user_field_definitions",
   "email_providers",
   "email_templates",
+  "nextly_schema_events",
 ] as const;
 
 /** Prefixes that identify managed user tables (dc_, single_, comp_). */
@@ -201,6 +204,8 @@ export { auditLog, activityLog } from "./audit/postgres";
 
 // Plan A Task 10 — nextly_meta runtime key/value flags table.
 export { nextlyMeta } from "./nextly-meta/postgres";
+// Plan B — schema-events bookkeeping table. PG re-export for direct-query callers.
+export { nextlySchemaEventsPg as nextlySchemaEvents } from "./schema-events/postgres";
 export * from "./dynamic-collections"; // dialect-aware barrel — kept; unchanged
 export * from "./dynamic-components"; // kept; unchanged
 export * from "./migrations"; // dropped in Plan B; kept here in Plan A
