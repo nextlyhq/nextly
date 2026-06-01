@@ -81,6 +81,15 @@ export interface DatabaseConfig {
    * @default './src/db/migrations'
    */
   migrationsDir?: string;
+
+  /**
+   * Path to the UI-schema manifest (`ui-schema.json`), relative to project
+   * root. Holds UI-built collections/singles/components (spec §4.12). When the
+   * file is absent it is treated as an empty manifest.
+   *
+   * @default './ui-schema.json'
+   */
+  uiSchemaFile?: string;
 }
 
 // ============================================================
@@ -665,6 +674,7 @@ export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
 export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   schemasDir: "./src/db/schemas/collections",
   migrationsDir: "./src/db/migrations",
+  uiSchemaFile: "./ui-schema.json",
 };
 
 /**
@@ -782,6 +792,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       schemasDir: config.db?.schemasDir ?? DEFAULT_DB_CONFIG.schemasDir,
       migrationsDir:
         config.db?.migrationsDir ?? DEFAULT_DB_CONFIG.migrationsDir,
+      uiSchemaFile: config.db?.uiSchemaFile ?? DEFAULT_DB_CONFIG.uiSchemaFile,
     },
     rateLimit,
     apiKeys,
