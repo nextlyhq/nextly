@@ -22,12 +22,12 @@ import { registerMigrateCommand } from "./commands/migrate";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
-import { registerUpgradeCommand } from "./commands/upgrade";
 // F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
 // is "write a new corrective migration", not "run DOWN sections."
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerTelemetryCommand } from "./commands/telemetry";
+import { registerUpgradeCommand } from "./commands/upgrade";
 import {
   createLogger,
   type Logger,
