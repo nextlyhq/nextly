@@ -88,6 +88,3 @@ export { siteSettingsPg as siteSettings } from "../site-settings/postgres";
 export { userFieldDefinitionsPg as userFieldDefinitions } from "../user-field-definitions/postgres";
 export { emailProvidersPg as emailProviders } from "../email-providers/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
-
-// Legacy tables — kept for Plan A; dropped by Plan B's first task.
-export { systemMigrations, contentSchemaEvents } from "../_legacy/postgres";

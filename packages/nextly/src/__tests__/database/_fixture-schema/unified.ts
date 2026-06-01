@@ -32,10 +32,10 @@ import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
  * Adapters translate these definitions into dialect-specific Drizzle schemas at runtime.
  *
  * Table Categories:
- * - System: systemMigrations, exampleUsers
+ * - System: exampleUsers
  * - Authentication: users, accounts, sessions, verificationTokens, passwordResetTokens, emailVerificationTokens, refreshTokens
  * - RBAC: roles, permissions, rolePermissions, userRoles, roleInherits, userPermissionCache
- * - CMS: dynamicCollections, media, mediaFolders, contentSchemaEvents
+ * - CMS: dynamicCollections, media, mediaFolders
  */
 export const nextlyTables: TableDefinition[] = [
   // ============================================================
