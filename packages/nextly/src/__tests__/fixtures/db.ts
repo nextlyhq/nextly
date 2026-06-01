@@ -202,6 +202,37 @@ function createTables(sqlite: Database.Database) {
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
     );
     CREATE INDEX IF NOT EXISTS nextly_meta_updated_at_idx ON nextly_meta(updated_at);
+
+    CREATE TABLE IF NOT EXISTS nextly_schema_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source TEXT NOT NULL,
+      filename TEXT,
+      sha256 TEXT,
+      scope_kind TEXT,
+      scope_slug TEXT,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      duration_ms INTEGER,
+      applied_by TEXT,
+      statements_planned INTEGER,
+      statements_executed INTEGER,
+      renames_applied INTEGER,
+      error_code TEXT,
+      error_message TEXT,
+      error_json TEXT,
+      superseded_event_ids TEXT,
+      superseded_at INTEGER,
+      superseded_by TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS nextly_schema_events_filename_applied_idx
+      ON nextly_schema_events (filename)
+      WHERE event_type = 'file_apply' AND status = 'applied';
+    CREATE INDEX IF NOT EXISTS nextly_schema_events_started_at_idx
+      ON nextly_schema_events (started_at);
+    CREATE INDEX IF NOT EXISTS nextly_schema_events_scope_idx
+      ON nextly_schema_events (scope_kind, scope_slug);
   `);
 }
 
