@@ -72,9 +72,8 @@ export {
   mediaFoldersRelations,
 } from "../media/postgres-relations";
 
-// Nextly meta + migration journal.
+// Nextly meta.
 export { nextlyMeta } from "../nextly-meta/postgres";
-export { nextlyMigrationJournalPg as nextlyMigrationJournal } from "../migration-journal/postgres";
 
 // Dynamic collections / singles / components — aliased back to the bare
 // names production code uses (the legacy stub flattened
