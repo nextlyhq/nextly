@@ -47,6 +47,7 @@ export interface SchemaEventRow {
   status: SchemaEventStatus;
   source: SchemaEventSource;
   filename: string | null;
+  sha256: string | null;
   scopeKind: SchemaEventScopeKind | null;
   scopeSlug: string | null;
   startedAt: Date;
