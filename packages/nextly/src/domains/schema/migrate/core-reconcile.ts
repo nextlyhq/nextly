@@ -19,7 +19,10 @@ import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../../schemas";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
-import { classifyForMode } from "../pipeline/classifier/modes";
+import {
+  classifyForMode,
+  type ClassifierMode,
+} from "../pipeline/classifier/modes";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
@@ -38,6 +41,13 @@ export interface ReconcileCoreDeps {
   logger?: LoggerLike;
   /** NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 lets a destructive core change proceed. */
   allowDestructive?: boolean;
+  /** Classifier mode for the core diff. Default: "production-strict". */
+  mode?: ClassifierMode;
+  /**
+   * Called (non-strict path only) when the diff contains destructive ops.
+   * Return true to proceed, false to abort with NEXTLY_CORE_DESTRUCTIVE_REFUSED.
+   */
+  confirmDestructive?: (reasons: string[]) => Promise<boolean>;
   /** Injectable for tests. Default: introspectLiveSnapshot. */
   introspect?: (
     db: unknown,
@@ -70,21 +80,45 @@ export async function reconcileCore(
     return { changed: false };
   }
 
-  const verdict = classifyForMode(ops, dialect, "production-strict");
-  if (verdict.verdict === "refuse") {
-    if (!deps.allowDestructive) {
-      throw new NextlyError({
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-        publicMessage:
-          "Core schema reconciliation requires destructive operations: " +
-          verdict.reasons.join("; ") +
-          ". This usually means a Nextly version mismatch. Set " +
-          "NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
-      });
+  const mode: ClassifierMode = deps.mode ?? "production-strict";
+  // Always compute the destructive reasons via production-strict so both the
+  // strict-refuse path and the non-strict confirmation path share one source.
+  const strict = classifyForMode(ops, dialect, "production-strict");
+  const destructiveReasons = strict.verdict === "refuse" ? strict.reasons : [];
+
+  if (destructiveReasons.length > 0) {
+    if (mode === "production-strict") {
+      if (!deps.allowDestructive) {
+        throw new NextlyError({
+          code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+          publicMessage:
+            "Core schema reconciliation requires destructive operations: " +
+            destructiveReasons.join("; ") +
+            ". This usually means a Nextly version mismatch. Set " +
+            "NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
+        });
+      }
+      logger?.warn?.(
+        "Applying destructive core change due to NEXTLY_ALLOW_CORE_DESTRUCTIVE=1."
+      );
+    } else {
+      // dev-loose (and any future non-strict mode): require explicit operator
+      // confirmation for the destructive set.
+      const confirmed =
+        (await deps.confirmDestructive?.(destructiveReasons)) ?? false;
+      if (!confirmed) {
+        throw new NextlyError({
+          code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+          publicMessage:
+            "Core schema reconciliation aborted: destructive operations were not confirmed: " +
+            destructiveReasons.join("; ") +
+            ".",
+        });
+      }
+      logger?.warn?.(
+        "Applying confirmed destructive core change (reconcile-core)."
+      );
     }
-    logger?.warn?.(
-      "Applying destructive core change due to NEXTLY_ALLOW_CORE_DESTRUCTIVE=1."
-    );
   }
 
   const repo = new SchemaEventsRepository(db, dialect);

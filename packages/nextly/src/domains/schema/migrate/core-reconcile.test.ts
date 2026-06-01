@@ -62,7 +62,10 @@ describe("reconcileCore (Phase 1)", () => {
     const live: NextlySchemaSnapshot = {
       tables: [
         ...desired.tables,
-        { name: "legacy_extra", columns: [{ name: "id", type: "text", nullable: false }] },
+        {
+          name: "legacy_extra",
+          columns: [{ name: "id", type: "text", nullable: false }],
+        },
       ],
     };
     const applyCore = vi.fn();
@@ -74,6 +77,59 @@ describe("reconcileCore (Phase 1)", () => {
         introspect: () => Promise.resolve(live),
         applyCore,
         allowDestructive: false,
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED" });
+    expect(applyCore).not.toHaveBeenCalled();
+  });
+
+  // A live snapshot with one EXTRA table the desired lacks → diff(live → desired)
+  // must DROP it (destructive). Reuses the proven extra-table pattern above.
+  function liveWithExtraTable(): NextlySchemaSnapshot {
+    return {
+      tables: [
+        ...desired.tables,
+        {
+          name: "legacy_extra",
+          columns: [{ name: "id", type: "text", nullable: false }],
+        },
+      ],
+    };
+  }
+
+  it("dev-loose applies a destructive diff when confirmDestructive returns true", async () => {
+    const live = liveWithExtraTable();
+    const applyCore = vi
+      .fn()
+      .mockResolvedValue({ statementsExecuted: ["DROP TABLE …"] });
+    const confirmDestructive = vi.fn().mockResolvedValue(true);
+
+    const result = await reconcileCore({
+      db: testDb.db,
+      dialect: "sqlite",
+      mode: "dev-loose",
+      confirmDestructive,
+      introspect: () => Promise.resolve(live),
+      applyCore,
+    });
+
+    expect(confirmDestructive).toHaveBeenCalledOnce();
+    expect(applyCore).toHaveBeenCalledOnce();
+    expect(result.changed).toBe(true);
+  });
+
+  it("dev-loose aborts when confirmDestructive returns false", async () => {
+    const live = liveWithExtraTable();
+    const applyCore = vi.fn();
+    const confirmDestructive = vi.fn().mockResolvedValue(false);
+
+    await expect(
+      reconcileCore({
+        db: testDb.db,
+        dialect: "sqlite",
+        mode: "dev-loose",
+        confirmDestructive,
+        introspect: () => Promise.resolve(live),
+        applyCore,
       })
     ).rejects.toMatchObject({ code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED" });
     expect(applyCore).not.toHaveBeenCalled();
