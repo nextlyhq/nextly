@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
-import { SYSTEM_RESOURCES } from "../../../schemas/rbac";
+import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
