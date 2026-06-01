@@ -37,11 +37,7 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateSQL } from "../pipeline/sql-templates/index";
 
-import {
-  formatMigrationFile,
-  formatTimestamp,
-  slugify,
-} from "./format-file";
+import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
   EMPTY_SNAPSHOT,
@@ -90,6 +86,11 @@ export interface GenerateArgs {
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
+  /**
+   * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
+   * Each is appended to the generated SQL when an operation touches its table.
+   */
+  metadataUpserts?: { tableName: string; sql: string }[];
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -108,6 +109,18 @@ export interface GenerateResult {
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
   renamesAccepted: number;
+}
+
+/** The table an operation acts on (for correlating metadata upserts). */
+function operationTableName(op: Operation): string {
+  switch (op.type) {
+    case "add_table":
+      return op.table.name;
+    case "rename_table":
+      return op.toName;
+    default:
+      return op.tableName;
+  }
 }
 
 /**
@@ -155,6 +168,14 @@ export async function generateMigration(
 
   // 7. Generate SQL per op.
   const sqlStatements = operations.map(op => generateSQL(op, args.dialect));
+
+  // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  if (args.metadataUpserts && args.metadataUpserts.length > 0) {
+    const touched = new Set(operations.map(operationTableName));
+    for (const m of args.metadataUpserts) {
+      if (touched.has(m.tableName)) sqlStatements.push(m.sql);
+    }
+  }
 
   // 8. Compose file content + write both files.
   const collectionSlugs = args.collections.map(c => c.slug).sort();

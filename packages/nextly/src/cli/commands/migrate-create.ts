@@ -62,6 +62,11 @@ import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { mergeUiEntities } from "../../domains/schema/ui-schema/merge";
+import {
+  buildCollectionMetadataUpsert,
+  buildComponentMetadataUpsert,
+  buildSingleMetadataUpsert,
+} from "../../domains/schema/ui-schema/metadata-sql";
 import { createContext, type CommandContext } from "../program";
 import { getDialectDisplayName, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -247,6 +252,34 @@ export async function runMigrateCreate(
   }
   const { collections, singles, components } = merged;
 
+  // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
+  // survived the merge (code-first wins → shadowed UI slugs are skipped).
+  const dropped = new Set(merged.droppedUiSlugs);
+  const tn = (slug: string, prefix: "dc_" | "single_" | "comp_") =>
+    `${prefix}${slug.replace(/-/g, "_")}`;
+  const metadataUpserts: { tableName: string; sql: string }[] = [];
+  for (const c of manifest.collections) {
+    if (dropped.has(c.slug)) continue;
+    metadataUpserts.push({
+      tableName: tn(c.slug, "dc_"),
+      sql: buildCollectionMetadataUpsert(c, dialect),
+    });
+  }
+  for (const s of manifest.singles) {
+    if (dropped.has(s.slug)) continue;
+    metadataUpserts.push({
+      tableName: tn(s.slug, "single_"),
+      sql: buildSingleMetadataUpsert(s, dialect),
+    });
+  }
+  for (const cp of manifest.components) {
+    if (dropped.has(cp.slug)) continue;
+    metadataUpserts.push({
+      tableName: tn(cp.slug, "comp_"),
+      sql: buildComponentMetadataUpsert(cp, dialect),
+    });
+  }
+
   if (
     collections.length === 0 &&
     singles.length === 0 &&
@@ -269,6 +302,7 @@ export async function runMigrateCreate(
       collections,
       singles,
       components,
+      metadataUpserts,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
     });
