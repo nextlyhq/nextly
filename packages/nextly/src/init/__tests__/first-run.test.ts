@@ -1,6 +1,6 @@
 // Unit tests for ensureFirstRunSetup — F8 PR 6.
 //
-// Probes for `nextly_migration_journal` (Nextly-namespaced — avoids
+// Probes for `nextly_schema_events` (Nextly-namespaced — avoids
 // false negatives on shared DBs that already have a `users` table from
 // another framework). When missing, calls freshPushSchema for the
 // dialect's static system tables. Failure-safe: never throws.
@@ -25,7 +25,7 @@ function makeAdapter(opts: {
     getDrizzle: () => ({}),
     tableExists: vi.fn(async (name: string) => {
       if (opts.probeThrows) throw new Error("connection lost");
-      if (name === "nextly_migration_journal") {
+      if (name === "nextly_schema_events") {
         return opts.journalExists ?? false;
       }
       return false;
@@ -143,7 +143,7 @@ describe("ensureFirstRunSetup", () => {
     expect(errorCalls.length).toBe(1);
   });
 
-  it("uses the nextly_migration_journal probe (not a generic users table)", async () => {
+  it("uses the nextly_schema_events probe (not a generic users table)", async () => {
     const adapter = makeAdapter({ journalExists: false });
 
     await ensureFirstRunSetup({
@@ -162,6 +162,6 @@ describe("ensureFirstRunSetup", () => {
       adapter.tableExists as unknown as { mock: { calls: string[][] } }
     ).mock.calls;
     expect(probeCalls.length).toBe(1);
-    expect(probeCalls[0][0]).toBe("nextly_migration_journal");
+    expect(probeCalls[0][0]).toBe("nextly_schema_events");
   });
 });
