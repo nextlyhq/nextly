@@ -64,5 +64,3 @@ export { siteSettingsSqlite as siteSettings } from "../site-settings/sqlite";
 export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-field-definitions/sqlite";
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
-
-export { systemMigrations, contentSchemaEvents } from "../_legacy/sqlite";
