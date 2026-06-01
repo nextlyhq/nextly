@@ -60,6 +60,8 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { collectionToManifestEntity } from "@admin/lib/builder/to-manifest-entity";
+import { isUiSchemaWriteMode } from "@admin/lib/builder/ui-schema-mode";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
   schemaApi,
@@ -67,6 +69,7 @@ import {
   type FieldResolution,
   type SchemaRenameResolution,
 } from "@admin/services/schemaApi";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 // Two import statements are intentional. With isolatedModules + esbuild,
 // merging these into a single `import { type FieldDefinition,
 // getCollectionFields }` block has historically been collapsed by
@@ -274,6 +277,34 @@ export default function CollectionBuilderEditPage({
       renameResolutions: SchemaRenameResolution[]
     ) => {
       if (!slug) return;
+
+      // D4: file-write mode (dev + opt-in flag). Persist to ui-schema.json via
+      // the dev API instead of mutating the DB. No DB change → no restart; the
+      // change applies later via `nextly migrate:create` + `migrate`.
+      if (isUiSchemaWriteMode()) {
+        try {
+          const entity = collectionToManifestEntity({
+            slug,
+            settings: {
+              singularName: settings?.singularName,
+              pluralName: settings?.pluralName,
+            },
+            fields: fieldDefinitions,
+          });
+          await schemaFileApi.writeCollection(entity);
+          const collectionLabel = settings?.singularName?.trim() || slug;
+          toast.success(`${collectionLabel} written to ui-schema.json`);
+          setShowSchemaDialog(false);
+          setPreviewData(null);
+          setOriginalFields(builder.fields.filter(f => !f.isSystem));
+          if (settings) setOriginalSettings(settings);
+        } catch (err) {
+          const errorObj = err as { message?: string };
+          toast.error(errorObj?.message || "Failed to write ui-schema.json");
+        }
+        return;
+      }
+
       setIsApplyingSchema(true);
       if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
       startRestart();
