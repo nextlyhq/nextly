@@ -20,6 +20,7 @@ const EXPECTED_COLUMNS = [
   "ended_at",
   "duration_ms",
   "applied_by",
+  "note",
   "statements_planned",
   "statements_executed",
   "renames_applied",
