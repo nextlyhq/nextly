@@ -11,12 +11,12 @@
 // break the schema apply. Errors are logged via the injected logger and the
 // surrounding pipeline call continues.
 
-import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
   SchemaEventScopeKind,
   SchemaEventSource,
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
+import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
   MigrationJournal,
   MigrationJournalScope,
