@@ -10,6 +10,9 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
+import { createInterface } from "node:readline";
+
+import type { Command } from "commander";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../errors";
@@ -23,6 +26,8 @@ import {
 import { detectLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { createContext } from "../program";
+import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -268,4 +273,107 @@ export async function runUpgrade(
 
     log("Done. You can now run `pnpm run dev` or `pnpm nextly migrate`.");
   });
+}
+
+// ---------------------------------------------------------------------------
+// CLI command registration
+// ---------------------------------------------------------------------------
+
+export interface UpgradeCommandOptions {
+  confirmBackedUp?: boolean;
+  force?: boolean;
+  targetTableName?: string;
+  reconcileCore?: boolean;
+}
+
+/** Minimal interactive yes/no prompt for the TTY backup confirmation. */
+function promptYesNo(question: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, answer => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
+
+export function registerUpgradeCommand(program: Command): void {
+  program
+    .command("upgrade")
+    .description(
+      "Consolidate legacy bookkeeping tables into nextly_schema_events"
+    )
+    .option(
+      "--confirm-backed-up",
+      "Confirm a backup exists (required in CI/non-TTY)",
+      false
+    )
+    .option("-f, --force", "Skip the interactive backup prompt", false)
+    .option(
+      "--target-table-name <name>",
+      "Override the events table name on a collision"
+    )
+    .option(
+      "--reconcile-core",
+      "Reconcile drifted core schema (not available until the migrate-phases plan lands)",
+      false
+    )
+    .action(async (cmdOptions: UpgradeCommandOptions, cmd: Command) => {
+      const globalOpts = cmd.optsWithGlobals();
+      const context = createContext(globalOpts);
+
+      if (cmdOptions.reconcileCore) {
+        context.logger.error(
+          "`--reconcile-core` is not available yet. It ships with the migrate-phases plan (Plan C)."
+        );
+        process.exit(1);
+      }
+
+      const dbValidation = validateDatabaseEnv();
+      if (!dbValidation.valid || !dbValidation.dialect) {
+        for (const err of dbValidation.errors ?? []) context.logger.error(err);
+        process.exit(1);
+      }
+
+      let adapter: { disconnect?: () => Promise<void> } & UpgradeAdapter;
+      try {
+        adapter = (await createAdapter({
+          dialect: dbValidation.dialect,
+          databaseUrl: dbValidation.databaseUrl,
+          logger: globalOpts.verbose ? context.logger : undefined,
+        })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
+      } catch (error) {
+        context.logger.error(
+          `Failed to connect to database: ${error instanceof Error ? error.message : String(error)}`
+        );
+        process.exit(1);
+      }
+
+      try {
+        await runUpgrade(
+          {
+            confirmBackedUp: cmdOptions.confirmBackedUp,
+            force: cmdOptions.force,
+            targetTableName: cmdOptions.targetTableName,
+          },
+          {
+            adapter,
+            logger: {
+              info: msg => context.logger.info(msg),
+              warn: msg => context.logger.warn(msg),
+            },
+            isTTY: Boolean(process.stdin.isTTY),
+            promptConfirm: () =>
+              promptYesNo("Have you backed up your database? [y/N]: "),
+          }
+        );
+      } catch (error) {
+        context.logger.error(
+          error instanceof Error ? error.message : String(error)
+        );
+        process.exitCode = 1;
+      } finally {
+        await adapter.disconnect?.();
+      }
+    });
 }
