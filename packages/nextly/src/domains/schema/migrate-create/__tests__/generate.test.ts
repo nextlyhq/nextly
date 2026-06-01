@@ -74,6 +74,39 @@ describe("generateMigration", () => {
     expect(sql).toContain("-- Generated at: 2026-04-29T15:45:00.123Z");
   });
 
+  it("appends a metadata upsert only when its table is touched (§4.12.7)", async () => {
+    const result = await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      metadataUpserts: [
+        {
+          tableName: "dc_posts",
+          sql: 'INSERT INTO "dynamic_collections" /*posts*/',
+        },
+        {
+          tableName: "dc_unrelated",
+          sql: 'INSERT INTO "dynamic_collections" /*nope*/',
+        },
+      ],
+    });
+    expect(result).not.toBeNull();
+    const sql = await readFile(result!.sqlPath, "utf-8");
+    // dc_posts is created → its upsert is appended.
+    expect(sql).toContain("/*posts*/");
+    // dc_unrelated has no operation → its upsert is omitted.
+    expect(sql).not.toContain("/*nope*/");
+    // The upsert follows the CREATE TABLE DDL.
+    expect(sql.indexOf("/*posts*/")).toBeGreaterThan(
+      sql.indexOf('CREATE TABLE "dc_posts"')
+    );
+  });
+
   it("returns null when config matches latest snapshot (no changes)", async () => {
     // Seed a snapshot matching POSTS_V1.
     const desired = buildDesiredSnapshotFromConfigForTest(
