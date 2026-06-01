@@ -298,9 +298,6 @@ export async function createTestDb(): Promise<{
   };
 }
 
-/** Resolved shape returned by {@link createTestDb}. */
-export type TestDb = Awaited<ReturnType<typeof createTestDb>>;
-
 /**
  * Type for test database instance
  */
