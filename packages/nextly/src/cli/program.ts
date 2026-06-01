@@ -27,6 +27,7 @@ import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerTelemetryCommand } from "./commands/telemetry";
+import { registerUpgradeCommand } from "./commands/upgrade";
 import {
   createLogger,
   type Logger,
@@ -205,6 +206,9 @@ function registerCommands(program: Command): void {
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateFreshCommand(program);
+
+  // Plan B — one-shot bookkeeping consolidation.
+  registerUpgradeCommand(program);
 
   // Permissions commands
   program.addCommand(createPermissionsCleanupCommand());

@@ -75,6 +75,7 @@ describe("schemas public API", () => {
         "email_providers",
         "email_templates",
         "nextly_meta",
+        "nextly_schema_events",
       ] as const;
       required.forEach(name => {
         expect(schemas.CORE_TABLE_NAMES).toContain(name);
