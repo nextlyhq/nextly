@@ -2,12 +2,13 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
-import * as schema from "@nextly/database/schema/sqlite";
+import * as schema from "./sqlite-schema";
 
 /**
  * Create database tables using raw SQL.
  * This is faster than using migrations for tests.
- * Schema matches packages/nextly/src/database/schema/sqlite.ts
+ * Schema mirrors the canonical per-feature schemas re-exported via
+ * `./sqlite-schema.ts`.
  */
 function createTables(sqlite: Database.Database) {
   // Create all necessary tables for RBAC testing

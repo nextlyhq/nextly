@@ -5,7 +5,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { CreatePermissionSchema } from "@nextly/schemas/rbac";
+import { CreatePermissionSchema } from "@nextly/schemas/_zod/rbac";
 import { ServiceContainer } from "@nextly/services/index";
 
 /**

@@ -26,8 +26,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SQL, Table, Column } from "drizzle-orm";
 import { and, eq, ne, or, asc, desc, count, sql, inArray } from "drizzle-orm";
 
-import { GetUserByIdSchema } from "@nextly/schemas/user";
-import { EmailSchema } from "@nextly/schemas/validation";
+import { GetUserByIdSchema } from "@nextly/schemas/_zod/user";
+import { EmailSchema } from "@nextly/schemas/_zod/validation";
 import type { MinimalUser } from "@nextly/types/auth";
 
 import { toDbError } from "../../../database/errors";

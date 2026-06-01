@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import { createTestDb, type TestDb } from "../__tests__/fixtures/db";
-import { dynamicCollections } from "../database/schema/postgres";
+// The test database is SQLite, so use the SQLite-flavoured dynamic-collections
+// table (the previous PG import worked only through structural typing —
+// switching to the matching dialect avoids subtle JSON/column-mode mismatches).
+import { dynamicCollectionsSqlite as dynamicCollections } from "../schemas/dynamic-collections/sqlite";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 
 import { DynamicCollectionService } from "./dynamic-collections";
