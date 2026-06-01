@@ -7,8 +7,11 @@
 // so that loadDynamicTables + the auto-sync block both see a populated
 // schema instead of swallowing "table not exist" errors.
 //
-// Probe choice: `nextly_migration_journal` (added in F8 PR 5).
+// Probe choice: `nextly_schema_events` (Plan B; replaced the legacy
+// `nextly_migration_journal` probe in Plan C1).
 //   - Namespaced with the `nextly_` prefix — only Nextly creates it.
+//   - Part of the core schema (getCoreSchema), so it exists after any
+//     successful boot-apply / migrate / upgrade.
 //   - Avoids false negatives on shared databases where a non-Nextly
 //     `users` table happens to exist (review #1).
 //
@@ -48,7 +51,7 @@ export type EnsureFirstRunSetupResult =
   | { ranSetup: true; statementsExecuted: number; durationMs: number }
   | { ranSetup: false; reason: "already_initialized" | "probe_failed" };
 
-const PROBE_TABLE = "nextly_migration_journal";
+const PROBE_TABLE = "nextly_schema_events";
 
 export async function ensureFirstRunSetup(
   args: EnsureFirstRunSetupArgs
