@@ -15,7 +15,6 @@ import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { sql } from "drizzle-orm";
 
-import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
   mapJournalRow,
   mapMigrationsRow,
@@ -25,6 +24,7 @@ import {
 import { detectLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import { createContext } from "../program";
 import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
