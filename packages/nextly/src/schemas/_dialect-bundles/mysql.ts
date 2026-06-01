@@ -54,7 +54,6 @@ export {
 } from "../media/mysql-relations";
 
 export { nextlyMeta } from "../nextly-meta/mysql";
-export { nextlyMigrationJournalMysql as nextlyMigrationJournal } from "../migration-journal/mysql";
 
 export { dynamicCollectionsMysql as dynamicCollections } from "../dynamic-collections/mysql";
 export { dynamicCollectionsRelations } from "../dynamic-collections/mysql-relations";
@@ -65,5 +64,3 @@ export { siteSettingsMysql as siteSettings } from "../site-settings/mysql";
 export { userFieldDefinitionsMysql as userFieldDefinitions } from "../user-field-definitions/mysql";
 export { emailProvidersMysql as emailProviders } from "../email-providers/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
-
-export { systemMigrations, contentSchemaEvents } from "../_legacy/mysql";

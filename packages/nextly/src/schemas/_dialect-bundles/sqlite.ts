@@ -54,7 +54,6 @@ export {
 } from "../media/sqlite-relations";
 
 export { nextlyMeta } from "../nextly-meta/sqlite";
-export { nextlyMigrationJournalSqlite as nextlyMigrationJournal } from "../migration-journal/sqlite";
 
 export { dynamicCollectionsSqlite as dynamicCollections } from "../dynamic-collections/sqlite";
 export { dynamicCollectionsRelations } from "../dynamic-collections/sqlite-relations";
@@ -65,5 +64,3 @@ export { siteSettingsSqlite as siteSettings } from "../site-settings/sqlite";
 export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-field-definitions/sqlite";
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
-
-export { systemMigrations, contentSchemaEvents } from "../_legacy/sqlite";
