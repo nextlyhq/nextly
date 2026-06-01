@@ -69,8 +69,3 @@ export const apiKeys = sqliteTable(
     index("api_keys_is_active_expires_at_idx").on(t.isActive, t.expiresAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export { apiKeysRelations } from "./sqlite-relations";

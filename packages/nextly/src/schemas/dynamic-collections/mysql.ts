@@ -330,9 +330,3 @@ export type DynamicCollectionMysql =
  */
 export type DynamicCollectionInsertMysql =
   typeof dynamicCollectionsMysql.$inferInsert;
-
-// ---------------------------------------------------------------------------
-// Relations re-export — kept in `./mysql-relations.ts` to isolate the
-// `users` cross-feature import.
-// ---------------------------------------------------------------------------
-export { dynamicCollectionsRelations } from "./mysql-relations";

@@ -109,8 +109,3 @@ export const refreshTokens = sqliteTable(
     index("refresh_tokens_expires_at_idx").on(t.expiresAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export { refreshTokensRelations } from "./sqlite-relations";

@@ -83,9 +83,3 @@ export const activityLog = pgTable(
     index("idx_activity_log_user_id").on(t.userId, t.createdAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — kept in `./postgres-relations.ts` to isolate the
-// `users` cross-feature import.
-// ---------------------------------------------------------------------------
-export { activityLogRelations } from "./postgres-relations";

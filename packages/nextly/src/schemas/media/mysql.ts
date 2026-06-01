@@ -162,8 +162,3 @@ export const imageSizes = mysqlTable(
   },
   t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export { mediaRelations, mediaFoldersRelations } from "./mysql-relations";

@@ -95,16 +95,3 @@ export const sessions = pgTable(
   },
   t => [index("sessions_user_id_idx").on(t.userId)]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export
-// ---------------------------------------------------------------------------
-// Cross-table `relations()` blocks live in `./postgres-relations.ts` to keep
-// this file free of imports from sibling feature dirs (api-keys, audit,
-// auth-tokens, rbac). Re-exported here so namespace consumers
-// (`import * as pg from "./postgres"`) see the relations alongside the tables.
-export {
-  usersRelations,
-  accountsRelations,
-  sessionsRelations,
-} from "./postgres-relations";

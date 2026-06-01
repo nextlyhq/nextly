@@ -160,14 +160,3 @@ export const userPermissionCache = mysqlTable(
     // Note: createdAt has no index - it's only for audit/display purposes
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export {
-  rolesRelations,
-  permissionsRelations,
-  rolePermissionsRelations,
-  userRolesRelations,
-  roleInheritsRelations,
-} from "./mysql-relations";

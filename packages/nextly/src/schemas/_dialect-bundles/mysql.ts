@@ -2,28 +2,28 @@
  * Flat MySQL dialect bundle.
  *
  * Replaces the legacy `database/schema/mysql.ts` runtime surface deleted in
- * Plan A Task 17. See `./postgres.ts` for the rationale.
+ * Plan A Task 17. See `./postgres.ts` for the rationale — including why
+ * relations are sourced from `<feature>/mysql-relations.ts` rather than
+ * re-exported by the table modules (avoids a table↔relations import cycle).
  *
  * @module schemas/_dialect-bundles/mysql
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/mysql.ts)
  */
 
+export { users, accounts, sessions } from "../users/mysql";
 export {
-  users,
-  accounts,
-  sessions,
   usersRelations,
   accountsRelations,
   sessionsRelations,
-} from "../users/mysql";
+} from "../users/mysql-relations";
 
 export {
   verificationTokens,
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,
-  refreshTokensRelations,
 } from "../auth-tokens/mysql";
+export { refreshTokensRelations } from "../auth-tokens/mysql-relations";
 
 export {
   roles,
@@ -32,32 +32,32 @@ export {
   userRoles,
   roleInherits,
   userPermissionCache,
+} from "../rbac/mysql";
+export {
   rolesRelations,
   permissionsRelations,
   rolePermissionsRelations,
   userRolesRelations,
   roleInheritsRelations,
-} from "../rbac/mysql";
+} from "../rbac/mysql-relations";
 
-export { apiKeys, apiKeysRelations } from "../api-keys/mysql";
+export { apiKeys } from "../api-keys/mysql";
+export { apiKeysRelations } from "../api-keys/mysql-relations";
 
-export { auditLog, activityLog, activityLogRelations } from "../audit/mysql";
+export { auditLog, activityLog } from "../audit/mysql";
+export { activityLogRelations } from "../audit/mysql-relations";
 
+export { media, mediaFolders, imageSizes } from "../media/mysql";
 export {
-  media,
-  mediaFolders,
-  imageSizes,
   mediaRelations,
   mediaFoldersRelations,
-} from "../media/mysql";
+} from "../media/mysql-relations";
 
 export { nextlyMeta } from "../nextly-meta/mysql";
 export { nextlyMigrationJournalMysql as nextlyMigrationJournal } from "../migration-journal/mysql";
 
-export {
-  dynamicCollectionsMysql as dynamicCollections,
-  dynamicCollectionsRelations,
-} from "../dynamic-collections/mysql";
+export { dynamicCollectionsMysql as dynamicCollections } from "../dynamic-collections/mysql";
+export { dynamicCollectionsRelations } from "../dynamic-collections/mysql-relations";
 export { dynamicSinglesMysql as dynamicSingles } from "../dynamic-singles/mysql";
 export { dynamicComponentsMysql as dynamicComponents } from "../dynamic-components/mysql";
 

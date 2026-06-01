@@ -114,9 +114,3 @@ export const refreshTokens = pgTable(
     index("refresh_tokens_expires_at_idx").on(t.expiresAt),
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — kept in `./postgres-relations.ts` to isolate the
-// `users` cross-feature import.
-// ---------------------------------------------------------------------------
-export { refreshTokensRelations } from "./postgres-relations";

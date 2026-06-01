@@ -217,12 +217,3 @@ export const imageSizes = pgTable(
   },
   t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — kept in `./postgres-relations.ts` to isolate the
-// `users` cross-feature import.
-// ---------------------------------------------------------------------------
-export {
-  mediaRelations,
-  mediaFoldersRelations,
-} from "./postgres-relations";

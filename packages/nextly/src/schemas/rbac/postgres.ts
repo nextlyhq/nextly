@@ -199,15 +199,3 @@ export const userPermissionCache = pgTable(
     // Note: createdAt has no index - it's only for audit/display purposes
   ]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — kept in `./postgres-relations.ts` to isolate the
-// `users` / `apiKeys` cross-feature imports.
-// ---------------------------------------------------------------------------
-export {
-  rolesRelations,
-  permissionsRelations,
-  rolePermissionsRelations,
-  userRolesRelations,
-  roleInheritsRelations,
-} from "./postgres-relations";

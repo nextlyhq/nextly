@@ -84,12 +84,3 @@ export const sessions = mysqlTable(
   },
   t => [index("sessions_user_id_idx").on(t.userId)]
 );
-
-// ---------------------------------------------------------------------------
-// Relations re-export — see `./postgres.ts` for the rationale.
-// ---------------------------------------------------------------------------
-export {
-  usersRelations,
-  accountsRelations,
-  sessionsRelations,
-} from "./mysql-relations";
