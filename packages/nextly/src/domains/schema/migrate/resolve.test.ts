@@ -156,6 +156,9 @@ describe("resolveMigration", () => {
       expect(r.kind).toBe("rolled-back");
       const rows = await repo.findFileApplies("001_add_posts.sql");
       expect(rows.some(x => x.status === "rolled_back")).toBe(true);
+      // The prior applied row must be retired (superseded), else the partial
+      // unique index blocks re-apply on the next `migrate`.
+      expect(rows.some(x => x.status === "applied")).toBe(false);
     });
 
     it("throws PRECONDITION when no applied row exists", async () => {
