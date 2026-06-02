@@ -23,6 +23,8 @@ import type {
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
 
+import { newestEvent } from "./newest-event";
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 /** Structural shape of the Drizzle DB methods this repository uses. */
@@ -152,15 +154,15 @@ export class SchemaEventsRepository {
       .where(sql`id = ${id}`);
   }
 
-  /** True iff an applied `file_apply` row exists for the filename. */
+  /**
+   * True iff the file's MOST RECENT `file_apply` event is `applied`. Latest
+   * wins: a later `rolled_back` (or `failed`) event un-applies the file so the
+   * next `migrate` re-runs it. Mirrors the event-sourced model the resolve
+   * command uses (see newest-event.ts).
+   */
   async isFileApplied(filename: string): Promise<boolean> {
-    const rows = await this.db
-      .select()
-      .from(this.table)
-      .where(
-        sql`filename = ${filename} AND event_type = 'file_apply' AND status = 'applied'`
-      );
-    return rows.length > 0;
+    const rows = await this.findFileApplies(filename);
+    return newestEvent(rows)?.status === "applied";
   }
 
   /** Find a row by id. */
