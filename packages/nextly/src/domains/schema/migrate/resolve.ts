@@ -19,6 +19,7 @@
  * @since v0.0.3-alpha (Plan C3)
  */
 import { NextlyError } from "../../../errors";
+import { newestEvent } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
@@ -64,12 +65,6 @@ function withSqlExt(name: string): string {
 
 function equiv(a: NextlySchemaSnapshot, b: NextlySchemaSnapshot): boolean {
   return diffSnapshots(a, b).length === 0;
-}
-
-function newest(rows: SchemaEventRow[]): SchemaEventRow | undefined {
-  return [...rows].sort(
-    (a, b) => +new Date(b.startedAt) - +new Date(a.startedAt)
-  )[0];
 }
 
 export async function resolveMigration(
@@ -158,11 +153,12 @@ async function resolveRolledBack(
   }
 
   const rows = await args.repo.findFileApplies(filename);
-  const latest = newest(rows);
+  const latest = newestEvent(rows);
   if (latest?.status === "rolled_back") {
     return { kind: "noop", reason: `${filename} is already rolled back.` };
   }
-  if (!rows.some(r => r.status === "applied")) {
+  const appliedRows = rows.filter(r => r.status === "applied");
+  if (appliedRows.length === 0) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
       publicMessage: `Cannot roll back ${filename}: no prior applied event exists.`,
@@ -177,6 +173,14 @@ async function resolveRolledBack(
     startedAt: new Date(),
     endedAt: new Date(),
     note: NOTE,
+  });
+  // Retire the prior applied row(s) by superseding them with this rolled_back
+  // event. Without this, the partial unique index
+  // (filename WHERE status='applied') still sees a live applied row and the
+  // next `migrate` re-apply fails with a UNIQUE constraint violation.
+  await args.repo.supersede({
+    supersededEventIds: appliedRows.map(r => r.id),
+    byEventId: eventId,
   });
   return { kind: "rolled-back", eventId };
 }
