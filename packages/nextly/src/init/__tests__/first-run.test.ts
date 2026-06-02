@@ -13,6 +13,7 @@ interface FakeAdapter {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
   tableExists: (name: string) => Promise<boolean>;
+  executeQuery: (sql: string) => Promise<unknown>;
 }
 
 function makeAdapter(opts: {
@@ -23,6 +24,7 @@ function makeAdapter(opts: {
   return {
     dialect: opts.dialect ?? "sqlite",
     getDrizzle: () => ({}),
+    executeQuery: vi.fn(async () => undefined),
     tableExists: vi.fn(async (name: string) => {
       if (opts.probeThrows) throw new Error("connection lost");
       if (name === "nextly_schema_events") {
@@ -32,6 +34,8 @@ function makeAdapter(opts: {
     }),
   };
 }
+
+const fakeLedgerDdl = ["CREATE TABLE nextly_schema_events (...)"];
 
 const fakeLogger = {
   debug: vi.fn(),
@@ -163,5 +167,26 @@ describe("ensureFirstRunSetup", () => {
     ).mock.calls;
     expect(probeCalls.length).toBe(1);
     expect(probeCalls[0][0]).toBe("nextly_schema_events");
+  });
+
+  it("bootstraps the nextly_schema_events ledger via executeQuery when missing", async () => {
+    const adapter = makeAdapter({ journalExists: false });
+
+    const result = await ensureFirstRunSetup({
+      adapter,
+      logger: fakeLogger,
+      deps: {
+        freshPushSchema: vi
+          .fn()
+          .mockResolvedValue({ statementsExecuted: [], applied: true }),
+        getDialectTables: () => fakeStaticTables,
+        getSchemaEventsDdl: () => fakeLedgerDdl,
+      },
+    });
+
+    expect(result.ranSetup).toBe(true);
+    // The ledger DDL must be executed out-of-band so the journal/builder
+    // endpoints don't fail with "relation nextly_schema_events does not exist".
+    expect(adapter.executeQuery).toHaveBeenCalledWith(fakeLedgerDdl[0]);
   });
 });
