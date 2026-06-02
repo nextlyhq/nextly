@@ -50,6 +50,27 @@ describe("SchemaEventsRepository (sqlite)", () => {
     expect(await repo.isFileApplied("0001_init.sql")).toBe(true);
   });
 
+  it("isFileApplied is latest-status-wins: a later rolled_back un-applies it", async () => {
+    const id = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+    });
+    await repo.markApplied(id, {});
+    expect(await repo.isFileApplied("0001_init.sql")).toBe(true);
+
+    // What `migrate:resolve --rolled-back` does: append a later rolled_back event.
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "rolled_back",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+      startedAt: new Date(Date.now() + 1000),
+      endedAt: new Date(Date.now() + 1000),
+    });
+    expect(await repo.isFileApplied("0001_init.sql")).toBe(false);
+  });
+
   it("supersede links consumed rows and prune never deletes them", async () => {
     const consumedId = await repo.recordStart({
       eventType: "dev_push",
