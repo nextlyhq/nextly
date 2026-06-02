@@ -337,7 +337,7 @@ async function loadTargetSnapshot(
  * Walks files in lex order, carrying each file's target snapshot forward as the
  * next file's baseline. Returns the count actually applied.
  */
-async function runFileMigrations(args: {
+export async function runFileMigrations(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
   dialect: SupportedDialect;
@@ -354,12 +354,6 @@ async function runFileMigrations(args: {
 
   const repo = new SchemaEventsRepository(db, dialect);
   const metaDir = resolve(migrationsDir, "meta");
-
-  // Phase 2 scope = managed USER tables (dc_/single_/comp_). Core is Phase 1.
-  const liveTables = await safeListTables(adapter);
-  const managed = liveTables.filter(t =>
-    CORE_TABLE_PREFIXES.some(p => t.startsWith(p))
-  );
 
   const dz = adapter as unknown as DrizzleAdapter;
   const executeSql = async (sqlText: string): Promise<number> => {
@@ -413,6 +407,14 @@ async function runFileMigrations(args: {
       continue;
     }
 
+    // Recompute the managed-table scope per file: tables created by earlier
+    // migrations in THIS run must be visible to this file's drift check.
+    // Capturing it once before the loop left it empty on a fresh DB, so the
+    // 2nd+ migration saw its tables as "absent" and aborted with false drift.
+    const liveTables = await safeListTables(adapter);
+    const managed = liveTables.filter(t =>
+      CORE_TABLE_PREFIXES.some(p => t.startsWith(p))
+    );
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
       file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
