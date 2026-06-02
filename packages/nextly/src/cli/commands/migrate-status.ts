@@ -441,15 +441,16 @@ async function getCollectionsWithPendingChanges(
 //   `nextly migrate` will treat the latter as MIGRATION_MISSING (exit 3),
 //   but `migrate:status` keeps surfacing it as a row so operators can
 //   investigate and either restore the file or contact whoever deleted it.
-function buildMigrationStatuses(
+export function buildMigrationStatuses(
   files: ParsedMigration[],
   applied: MigrationRecord[]
 ): MigrationStatus[] {
-  const appliedMap = new Map(applied.map(m => [m.filename, m]));
+  const stripSql = (f: string): string => f.replace(/\.sql$/i, "");
+  const appliedMap = new Map(applied.map(m => [stripSql(m.filename), m]));
   const statuses: MigrationStatus[] = [];
 
   for (const file of files) {
-    const record = appliedMap.get(file.name);
+    const record = appliedMap.get(stripSql(file.name));
 
     if (record) {
       const checksumMismatch = record.sha256 !== file.checksum;
@@ -471,7 +472,7 @@ function buildMigrationStatuses(
         checksumMismatch,
       });
 
-      appliedMap.delete(file.name);
+      appliedMap.delete(stripSql(file.name));
     } else {
       statuses.push({
         filename: file.name,
