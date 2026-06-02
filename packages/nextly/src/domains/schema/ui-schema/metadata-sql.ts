@@ -62,6 +62,27 @@ function boolLiteral(value: boolean, dialect: Dialect): string {
   return value ? "true" : "false";
 }
 
+/**
+ * "Now" SQL expression per dialect. created_at/updated_at use Drizzle
+ * `$defaultFn` (app-level, NO DB default), so a raw INSERT must set them or
+ * NOT NULL fails. SQLite stores epoch-ms integers; PG/MySQL use timestamps.
+ */
+function nowExpr(dialect: Dialect): string {
+  if (dialect === "sqlite")
+    return "CAST(strftime('%s','now') AS INTEGER) * 1000";
+  if (dialect === "mysql") return "NOW(3)";
+  return "now()";
+}
+
+/** created_at + updated_at columns (set explicitly — no usable DB default). */
+function timestampColumns(dialect: Dialect): Column[] {
+  const now = nowExpr(dialect);
+  return [
+    { name: "created_at", value: now },
+    { name: "updated_at", value: now, update: true },
+  ];
+}
+
 interface Column {
   name: string;
   value: string;
@@ -150,6 +171,7 @@ export function buildCollectionMetadataUpsert(
       update: true,
     });
   }
+  columns.push(...timestampColumns(dialect));
   return buildUpsert("dynamic_collections", columns, dialect);
 }
 
@@ -179,6 +201,7 @@ export function buildSingleMetadataUpsert(
     },
     { name: "migration_status", value: sqlStr("applied") },
   ];
+  columns.push(...timestampColumns(dialect));
   return buildUpsert("dynamic_singles", columns, dialect);
 }
 
@@ -200,5 +223,6 @@ export function buildComponentMetadataUpsert(
     { name: "schema_hash", value: sqlStr(hashOf(entity)), update: true },
     { name: "migration_status", value: sqlStr("applied") },
   ];
+  columns.push(...timestampColumns(dialect));
   return buildUpsert("dynamic_components", columns, dialect);
 }

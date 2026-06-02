@@ -32,6 +32,11 @@ import {
   getSQLiteDrizzleKit,
 } from "../../../database/drizzle-kit-lazy";
 
+import {
+  drizzleTableNames,
+  filterUnsafeStatements,
+} from "./filter-unsafe-statements";
+
 export type FreshPushDialect = "postgresql" | "mysql" | "sqlite";
 
 // Result shape returned to callers. `applied` is always true when no
@@ -85,14 +90,38 @@ export async function freshPushSchema(
     return applyViaPushSchemaSQLite(db, schema);
   }
 
-  // PostgreSQL: pushSchema works correctly — use it directly.
+  // PostgreSQL: pushSchema computes the diff, but we execute the statements
+  // ourselves so the shared drop-guard can strip drops of tables outside the
+  // provided schema. drizzle-kit's own result.apply() would run them opaquely
+  // — including DROP TABLE for user (dc_/single_/comp_) tables that are absent
+  // from a core-only push, which is the data-loss bug this guards against. The
+  // safe set runs inside one transaction for an atomic reconcile.
   const kit = await getPgDrizzleKit();
   const result = await kit.pushSchema(schema, db, ["public"]);
-  await result.apply();
+  const desiredTableNames = drizzleTableNames(schema);
+  const safe = filterUnsafeStatements(
+    result.statementsToExecute,
+    desiredTableNames
+  );
+  const { sql: sqlTag } = await import("drizzle-orm");
+  const executed: string[] = [];
+  type PgTxDb = {
+    transaction: (
+      fn: (tx: { execute: (q: unknown) => Promise<unknown> }) => Promise<void>
+    ) => Promise<void>;
+  };
+  await (db as PgTxDb).transaction(async tx => {
+    for (const raw of safe) {
+      const stmt = raw.replace(/--> statement-breakpoint/g, "").trim();
+      if (!stmt) continue;
+      await tx.execute(sqlTag.raw(stmt));
+      executed.push(raw);
+    }
+  });
   return {
     hasDataLoss: result.hasDataLoss,
     warnings: result.warnings,
-    statementsExecuted: result.statementsToExecute,
+    statementsExecuted: executed,
     applied: true,
   };
 }
@@ -122,6 +151,11 @@ async function applyViaPushSchemaSQLite(
     };
   }
 
+  // Allow-list of tables this push is responsible for, by SQL name. The guard
+  // strips any DROP for a table outside this set (e.g. user dc_/single_/comp_
+  // tables absent from a core-only push) so they are never destroyed.
+  const desiredTableNames = drizzleTableNames(schema);
+
   const { sql: sqlTag } = await import("drizzle-orm");
   const executed: string[] = [];
   for (const rawStmt of result.statementsToExecute) {
@@ -137,7 +171,8 @@ async function applyViaPushSchemaSQLite(
           !s.startsWith("--") &&
           /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
       );
-    for (const raw of pieces) {
+    const safePieces = filterUnsafeStatements(pieces, desiredTableNames);
+    for (const raw of safePieces) {
       // Drizzle-kit 0.31.10's SQLite recreate-table strategy emits
       //   INSERT INTO `__new_<t>`(cols) SELECT cols FROM `<t>`
       // where `cols` includes columns that do not yet exist in `<t>`.
@@ -265,7 +300,15 @@ async function applyViaGenerate(
           /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/i.test(s)
       );
 
-    for (let stmt of individualStatements) {
+    // Uniform with the other paths: strip drops of tables outside the schema.
+    // A no-op in practice (the empty-snapshot diff emits only CREATE), but it
+    // keeps the safety contract identical across dialects.
+    const safeStatements = filterUnsafeStatements(
+      individualStatements,
+      drizzleTableNames(schema)
+    );
+
+    for (let stmt of safeStatements) {
       try {
         stmt = stmt.replace(
           /\bCREATE TABLE\b(?!\s+IF\s+NOT\s+EXISTS)/gi,

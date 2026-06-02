@@ -59,6 +59,15 @@ export interface ReconcileCoreDeps {
     dialect: FreshPushDialect,
     db: unknown
   ) => Promise<{ statementsExecuted: string[] }>;
+  /**
+   * Bootstrap the `nextly_schema_events` ledger (out-of-band, idempotent).
+   * Called AFTER applyCore (so drizzle-kit pushSchema doesn't see the ledger
+   * as an extraneous table) and BEFORE recording the core_apply event (so the
+   * insert has a table to write to). The caller wires it to `getSchemaEventsDdl`
+   * guarded by a table-exists check. Omitted in unit tests (the fixture
+   * pre-creates the ledger).
+   */
+  ensureLedger?: () => Promise<void>;
 }
 
 export async function reconcileCore(
@@ -122,13 +131,22 @@ export async function reconcileCore(
   }
 
   const repo = new SchemaEventsRepository(db, dialect);
-  const id = await repo.recordStart({
-    eventType: "core_apply",
-    source: "cli-migrate",
-    scopeKind: "core",
-  });
   try {
+    // 1. Apply the core schema first (drizzle-kit pushSchema over
+    //    getDialectTables). The ledger is NOT in that set, so pushSchema sees
+    //    a clean diff (no extraneous-table prompt on a fresh DB).
     const result = await applyCore(dialect, db);
+
+    // 2. Bootstrap the ledger out-of-band, after applyCore and before
+    //    recording, so recordStart has a table to write to.
+    await deps.ensureLedger?.();
+
+    // 3. Record the core_apply event.
+    const id = await repo.recordStart({
+      eventType: "core_apply",
+      source: "cli-migrate",
+      scopeKind: "core",
+    });
     await repo.markApplied(id, {
       statementsExecuted: result.statementsExecuted.length,
     });
@@ -137,12 +155,9 @@ export async function reconcileCore(
     );
     return { changed: true };
   } catch (err) {
+    // applyCore/bootstrap may have failed before the ledger exists, so we
+    // can't reliably record a failed event — surface the error instead.
     const message = err instanceof Error ? err.message : String(err);
-    await repo.markFailed(id, {
-      errorMessage: message,
-      errorJson:
-        err instanceof Error ? { name: err.name, message: err.message } : err,
-    });
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_APPLY_FAILED",
       publicMessage: `Core schema apply failed: ${message}`,
