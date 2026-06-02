@@ -157,7 +157,8 @@ async function resolveRolledBack(
   if (latest?.status === "rolled_back") {
     return { kind: "noop", reason: `${filename} is already rolled back.` };
   }
-  if (!rows.some(r => r.status === "applied")) {
+  const appliedRows = rows.filter(r => r.status === "applied");
+  if (appliedRows.length === 0) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
       publicMessage: `Cannot roll back ${filename}: no prior applied event exists.`,
@@ -172,6 +173,14 @@ async function resolveRolledBack(
     startedAt: new Date(),
     endedAt: new Date(),
     note: NOTE,
+  });
+  // Retire the prior applied row(s) by superseding them with this rolled_back
+  // event. Without this, the partial unique index
+  // (filename WHERE status='applied') still sees a live applied row and the
+  // next `migrate` re-apply fails with a UNIQUE constraint violation.
+  await args.repo.supersede({
+    supersededEventIds: appliedRows.map(r => r.id),
+    byEventId: eventId,
   });
   return { kind: "rolled-back", eventId };
 }
