@@ -210,6 +210,7 @@ export async function runMigrate(
 
     if (options.dryRun) {
       const pending = await findPendingFiles(
+        adapter,
         db,
         dialect,
         appMigrationsDir,
@@ -279,14 +280,25 @@ export async function runMigrate(
   }
 }
 
-/** Discover migration files with no applied `file_apply` event yet. */
-async function findPendingFiles(
+/**
+ * Discover migration files with no applied `file_apply` event yet. On a fresh
+ * DB the ledger table does not exist yet (only the real `migrate` bootstraps
+ * it in Phase 1); dry-run must stay read-only, so if the ledger is absent we
+ * report every discovered file as pending rather than querying (and throwing).
+ */
+export async function findPendingFiles(
+  adapter: CLIDatabaseAdapter,
   db: unknown,
   dialect: SupportedDialect,
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<ParsedMigration[]> {
   const all = await discoverMigrations(migrationsDir, logger, "app");
+  const hasLedger = await (
+    adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  if (!hasLedger) return all;
+
   const repo = new SchemaEventsRepository(db, dialect);
   const pending: ParsedMigration[] = [];
   for (const m of all) {
