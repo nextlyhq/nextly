@@ -19,6 +19,7 @@
  * @since v0.0.3-alpha (Plan C3)
  */
 import { NextlyError } from "../../../errors";
+import { newestEvent } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
@@ -64,12 +65,6 @@ function withSqlExt(name: string): string {
 
 function equiv(a: NextlySchemaSnapshot, b: NextlySchemaSnapshot): boolean {
   return diffSnapshots(a, b).length === 0;
-}
-
-function newest(rows: SchemaEventRow[]): SchemaEventRow | undefined {
-  return [...rows].sort(
-    (a, b) => +new Date(b.startedAt) - +new Date(a.startedAt)
-  )[0];
 }
 
 export async function resolveMigration(
@@ -158,7 +153,7 @@ async function resolveRolledBack(
   }
 
   const rows = await args.repo.findFileApplies(filename);
-  const latest = newest(rows);
+  const latest = newestEvent(rows);
   if (latest?.status === "rolled_back") {
     return { kind: "noop", reason: `${filename} is already rolled back.` };
   }
