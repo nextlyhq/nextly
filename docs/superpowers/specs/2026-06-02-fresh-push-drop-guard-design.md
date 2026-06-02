@@ -72,39 +72,60 @@ Move, verbatim, from `pushschema-pipeline.ts`:
 - `inferOwnerTableFromObjectName(objectName, desiredSet)` (lines 1089-1101) —
   module-private helper.
 - `ORPHAN_DROP_PATTERNS` (lines 222-234) — module-private const.
+- `isDrizzleTable(value)` and `getDrizzleTableName(value, fallback)` (currently
+  private methods at lines 1199-1209) — exported helpers. **`freshPushSchema`
+  needs these to derive SQL table names from a Drizzle schema bundle (see Unit 2
+  — this is the correctness fix).** Plus a small convenience wrapper:
+  `drizzleTableNames(schema): string[]` = the SQL names of every Drizzle table
+  in `schema` (filters out non-table exports like relations).
 
 It imports `isManagedTable` from the existing `./managed-tables` module (no
 change there). The `console.warn` blocking logs stay inside the function so
 every caller emits the identical operator-visible protection log. Behavior is
 byte-identical to today.
 
-`PushSchemaPipeline` is updated to import and delegate to the shared function
-(its private method is removed, or becomes a one-line passthrough). This must
+`PushSchemaPipeline` is updated to import and delegate to the shared functions
+(its private methods are removed, or become one-line passthroughs). This must
 not change dev-server behavior — covered by existing pipeline tests.
 
 ### Unit 2 — Wire the guard into `freshPushSchema`
 
 In `packages/nextly/src/domains/schema/pipeline/fresh-push.ts`, the desired
-table set is exactly `Object.keys(schema)` — the tables the caller handed in.
+table set must be the **SQL table names** of the Drizzle tables in `schema` —
+**NOT `Object.keys(schema)`.** `freshPushSchema` receives the raw dialect
+bundle (`getDialectTables(d)`), which is keyed by JS export names (`users`,
+`dynamicCollections`, `emailTemplates`, …) and also contains non-table exports
+(`dynamicCollectionsRelations`, etc.). The SQL names that `filterUnsafeStatements`
+compares against differ (`dynamic_collections`, `email_templates`, …). Using
+`Object.keys` would still block user tables (correct) but would also wrongly
+block legitimate **core-table rebuild drops** on SQLite (e.g. `DROP
+dynamic_collections` during a type-change rebuild), breaking core reconcile on
+a version upgrade. So derive names the same way the pipeline does
+(`pushschema-pipeline.ts:1135-1141`):
+
+```ts
+const desiredTableNames = drizzleTableNames(schema); // SQL names via drizzle:Name
+```
 
 - **SQLite** (`applyViaPushSchemaSQLite`): run `result.statementsToExecute`
-  through `filterUnsafeStatements(stmts, Object.keys(schema))` before the
+  through `filterUnsafeStatements(stmts, desiredTableNames)` before the
   existing execution loop (line 127).
 - **PostgreSQL**: replace `result.apply()` (which executes opaquely, leaving
   no seam for the filter) with the dev-server shape — read
   `result.statementsToExecute`, run them through
-  `filterUnsafeStatements(stmts, Object.keys(schema))`, and execute the safe
+  `filterUnsafeStatements(stmts, desiredTableNames)`, and execute the safe
   set ourselves via the async `.execute()` path, wrapped in a single
   transaction (`BEGIN` … `COMMIT` / `ROLLBACK`) for atomic core reconcile.
+  The existing `["public"]` schema-filter arg to `kit.pushSchema` is kept.
   This mirrors `pushschema-pipeline.ts:795-843`.
 - **MySQL** (`applyViaGenerate`): diffs against an empty snapshot → emits only
   `CREATE` → the filter is a harmless no-op. Apply it anyway for uniformity.
 
 Effect: a core-only `freshPushSchema` call can no longer drop a
-`dc_*`/`single_*`/`comp_*` table — they are not in `Object.keys(schema)`, so
-they hit the BLOCK branch. The SQLite rebuild pattern
-(`CREATE __new / DROP / RENAME` for a table that IS in the desired set) still
-passes, because that table is in the keys → ALLOW branch.
+`dc_*`/`single_*`/`comp_*` table — they are not in `desiredTableNames`, so they
+hit the BLOCK branch. The SQLite rebuild pattern (`CREATE __new / DROP / RENAME`
+for a core table that IS in the desired set) still passes, because that table's
+**SQL name** is in `desiredTableNames` → ALLOW branch.
 
 This fixes the root cause for **all three** `freshPushSchema` callers at once:
 Phase 1 core reconcile, `ensureCoreTables`, and the MySQL seed safety-net.
@@ -133,12 +154,23 @@ dropped without weakening protection.
 1. **Unit (shared guard):** move/extend existing `filterUnsafeStatements`
    coverage to target the new module — DROP TABLE in/out of desired set,
    DROP SEQUENCE/INDEX owner inference, custom-named object → blocked.
-2. **DB-backed regression (the core proof), isolated SQLite only:**
+2. **Unit (name derivation):** `drizzleTableNames(getDialectTables("sqlite"))`
+   returns **SQL** names (`dynamic_collections`, `email_templates`, …), not
+   export keys, and excludes relations exports. This is the regression test for
+   the bug found in spec review.
+3. **DB-backed: user table survives, core rebuild still works (isolated SQLite
+   only)** — this single test must prove BOTH halves:
    - Create core schema + a `dc_articles` table; insert a row.
-   - Force a core-reconcile that triggers `applyCore` (core drift present).
-   - Assert: `dc_articles` still exists, the row still exists, and a
+   - Force a core-reconcile that triggers `applyCore` with a core-table
+     change that makes drizzle-kit emit a rebuild (`CREATE __new_<core> / DROP
+     <core> / RENAME`) AND would emit `DROP TABLE dc_articles`.
+   - Assert (user safety): `dc_articles` still exists, the row still exists, a
      `[Nextly schema] Blocked DROP TABLE "dc_articles"` warning was emitted.
-3. **Regression guard:** existing `PushSchemaPipeline` + `reload-config` tests
+   - Assert (core not broken): the core rebuild completed — the changed core
+     table exists with its new shape, no "table already exists" error. This
+     guards against the `Object.keys` bug, where the core `DROP` would have been
+     wrongly blocked and the `RENAME` would have failed.
+4. **Regression guard:** existing `PushSchemaPipeline` + `reload-config` tests
    must stay green (proves the dev-server path is unchanged by the extraction).
 
 Testing runs against isolated SQLite (`file:/tmp/...`), never the real Neon
@@ -147,8 +179,12 @@ Postgres DB.
 ## Files
 
 - Create: `packages/nextly/src/domains/schema/pipeline/filter-unsafe-statements.ts`
+  (exports `filterUnsafeStatements`, `isDrizzleTable`, `getDrizzleTableName`,
+  `drizzleTableNames`; module-private `inferOwnerTableFromObjectName` +
+  `ORPHAN_DROP_PATTERNS`)
 - Modify: `packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts`
-  (delegate to shared function; remove moved code)
+  (delegate to shared functions; remove the moved private methods/const)
 - Modify: `packages/nextly/src/domains/schema/pipeline/fresh-push.ts`
-  (wire guard into SQLite + PG + MySQL paths; PG → statement-level + tx)
+  (derive SQL names via `drizzleTableNames`; wire guard into SQLite + PG +
+  MySQL paths; PG → statement-level filter + execute + tx)
 - Create/extend tests as above.
