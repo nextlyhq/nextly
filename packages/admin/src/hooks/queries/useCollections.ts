@@ -35,6 +35,7 @@ import {
 } from "@tanstack/react-query";
 
 import { collectionApi } from "@admin/services/collectionApi";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type {
   Collection,
   CreateCollectionPayload,
@@ -449,7 +450,14 @@ export function useDeleteCollection() {
 
   return useMutation<void, Error, string>({
     mutationFn: async (collectionName: string) => {
-      return await collectionApi.deleteCollection(collectionName);
+      const result = await collectionApi.deleteCollection(collectionName);
+      // D-series: keep ui-schema.json in sync (best-effort, dev-only API).
+      try {
+        await schemaFileApi.deleteCollection(collectionName);
+      } catch {
+        // Non-fatal: DB delete succeeded; manifest cleanup can be re-run.
+      }
+      return result;
     },
     onSuccess: () => {
       // Invalidate all collections queries using query key factory

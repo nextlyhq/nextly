@@ -333,6 +333,26 @@ export default function CollectionBuilderEditPage({
           // Re-pin the settings snapshot too so a settings + fields save
           // doesn't leave the badge lit afterward.
           if (settings) setOriginalSettings(settings);
+
+          // D-series: database mode also writes the committable ui-schema.json
+          // so the entity has a migration record (matches code-first). A
+          // failure here must NOT undo the already-successful DB apply.
+          try {
+            const entity = collectionToManifestEntity({
+              slug,
+              settings: {
+                singularName: settings?.singularName,
+                pluralName: settings?.pluralName,
+              },
+              fields: fieldDefinitions,
+            });
+            await schemaFileApi.writeCollection(entity);
+          } catch (err) {
+            const m = (err as { message?: string })?.message;
+            toast.warning(
+              `Schema applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+            );
+          }
         } else {
           stopRestart(
             false,

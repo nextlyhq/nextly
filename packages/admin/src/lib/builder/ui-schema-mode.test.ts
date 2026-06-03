@@ -33,9 +33,10 @@ describe("isUiSchemaWriteMode", () => {
 });
 
 describe("UI_SCHEMA_FIELD_TYPES", () => {
-  it("is the 9 supported v1 types", () => {
+  it("is the full canonical field-type set (mirrors the package UI_FIELD_TYPES)", () => {
     expect([...UI_SCHEMA_FIELD_TYPES].sort()).toEqual(
       [
+        // original v1 subset
         "checkbox",
         "date",
         "number",
@@ -45,6 +46,16 @@ describe("UI_SCHEMA_FIELD_TYPES", () => {
         "text",
         "textarea",
         "upload",
+        // widened canonical set
+        "chips",
+        "code",
+        "component",
+        "email",
+        "group",
+        "json",
+        "password",
+        "radio",
+        "repeater",
       ].sort()
     );
   });

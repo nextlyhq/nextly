@@ -24,4 +24,28 @@ export const schemaFileApi = {
       "/_dev/schema/collection",
       entity
     ),
+
+  /** Upsert a single in ui-schema.json. */
+  writeSingle: (entity: ManifestEntity) =>
+    protectedApi.post<DevSchemaWriteResponse>("/_dev/schema/single", entity),
+
+  /** Upsert a component in ui-schema.json. */
+  writeComponent: (entity: ManifestEntity) =>
+    protectedApi.post<DevSchemaWriteResponse>("/_dev/schema/component", entity),
+
+  /** Remove a collection from ui-schema.json. */
+  deleteCollection: (slug: string) =>
+    protectedApi.delete<DevSchemaWriteResponse>(
+      `/_dev/schema/collection/${slug}`
+    ),
+
+  /** Remove a single from ui-schema.json. */
+  deleteSingle: (slug: string) =>
+    protectedApi.delete<DevSchemaWriteResponse>(`/_dev/schema/single/${slug}`),
+
+  /** Remove a component from ui-schema.json. */
+  deleteComponent: (slug: string) =>
+    protectedApi.delete<DevSchemaWriteResponse>(
+      `/_dev/schema/component/${slug}`
+    ),
 };

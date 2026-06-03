@@ -83,7 +83,8 @@ describe("collectionToManifestEntity", () => {
       collectionToManifestEntity({
         slug: "x",
         settings: {},
-        fields: [{ name: "blocks", type: "repeater" }],
+        // `geopoint` is not in the canonical UI_SCHEMA_FIELD_TYPES set.
+        fields: [{ name: "where", type: "geopoint" }],
       })
     ).toThrowError(/unsupported field type/i);
   });

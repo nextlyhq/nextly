@@ -10,8 +10,14 @@
  * @since v0.0.3-alpha (Plan D4)
  */
 
-/** Field types supported by `ui-schema.json` v1 (mirrors the package UI_FIELD_TYPES). */
+/**
+ * Field types supported by `ui-schema.json`. Mirrors the package
+ * `UI_FIELD_TYPES` in packages/nextly/src/schemas/_zod/ui-schema.ts — keep the
+ * two lists in lockstep (the package zod is the source of truth; a UI field of
+ * any of these round-trips through `getColumnDescriptor` with no translation).
+ */
 export const UI_SCHEMA_FIELD_TYPES = [
+  // original v1 subset
   "text",
   "textarea",
   "richText",
@@ -21,6 +27,16 @@ export const UI_SCHEMA_FIELD_TYPES = [
   "select",
   "relationship",
   "upload",
+  // widened to the full canonical set
+  "email",
+  "password",
+  "code",
+  "radio",
+  "repeater",
+  "group",
+  "component",
+  "json",
+  "chips",
 ] as const;
 
 export type UiSchemaFieldType = (typeof UI_SCHEMA_FIELD_TYPES)[number];

@@ -14,8 +14,13 @@
  */
 import { z } from "zod";
 
-/** Builder-supported subset of the codebase `FieldType` tokens. */
+/**
+ * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
+ * `field-column-descriptor.ts:classifyFieldKind` maps to a column, so the
+ * manifest round-trips through `getColumnDescriptor` with no translation.
+ */
 export const UI_FIELD_TYPES = [
+  // original v1 subset
   "text",
   "textarea",
   "richText",
@@ -25,6 +30,16 @@ export const UI_FIELD_TYPES = [
   "select",
   "relationship",
   "upload",
+  // widened to the full canonical set
+  "email",
+  "password",
+  "code",
+  "radio",
+  "repeater",
+  "group",
+  "component",
+  "json",
+  "chips",
 ] as const;
 
 /** Field names the framework reserves (system columns). */
@@ -66,60 +81,104 @@ const validation = z
     { message: "validation.pattern must be a valid regular expression" }
   );
 
-const field = z
-  .object({
-    name: z
-      .string()
-      .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
-    type: z.enum(UI_FIELD_TYPES),
-    required: z.boolean().optional(),
-    hasMany: z.boolean().optional(),
-    relationTo: z.string().optional(),
-    options: z.array(selectOption).optional(),
-    defaultValue: z.unknown().optional(),
-    validation: validation.optional(),
-  })
-  .superRefine((f, ctx) => {
-    if (f.type === "select" && (!f.options || f.options.length === 0)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "select fields require a non-empty options[] array",
-        path: ["options"],
-      });
-    }
-    if (
-      (f.type === "relationship" || f.type === "upload") &&
-      (f.relationTo === undefined || f.relationTo.length === 0)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${f.type} fields require relationTo`,
-        path: ["relationTo"],
-      });
-    }
-    if (RESERVED_FIELD_NAMES.has(f.name)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `field name '${f.name}' is reserved`,
-        path: ["name"],
-      });
-    }
-    if (f.defaultValue !== undefined) {
-      const dv = f.defaultValue;
-      const okType =
-        (f.type === "number" && typeof dv === "number") ||
-        (f.type === "checkbox" && typeof dv === "boolean") ||
-        (["text", "textarea", "richText", "date", "select"].includes(f.type) &&
-          typeof dv === "string");
-      if (!okType) {
+// Recursive field shape: container types (repeater/group/component) carry
+// nested `fields`, so `field` references itself via z.lazy. The explicit
+// FieldNode type breaks the circular inference.
+export type FieldNode = {
+  name: string;
+  type: (typeof UI_FIELD_TYPES)[number];
+  required?: boolean;
+  hasMany?: boolean;
+  relationTo?: string;
+  options?: { label: string; value: string }[];
+  defaultValue?: unknown;
+  validation?: { min?: number; max?: number; pattern?: string };
+  fields?: FieldNode[];
+};
+
+const field: z.ZodType<FieldNode> = z.lazy(() =>
+  z
+    .object({
+      name: z
+        .string()
+        .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
+      type: z.enum(UI_FIELD_TYPES),
+      required: z.boolean().optional(),
+      hasMany: z.boolean().optional(),
+      relationTo: z.string().optional(),
+      options: z.array(selectOption).optional(),
+      defaultValue: z.unknown().optional(),
+      validation: validation.optional(),
+      // Nested fields for container types (repeater/group/component).
+      fields: z.array(field).optional(),
+    })
+    .superRefine((f, ctx) => {
+      if (
+        (f.type === "select" || f.type === "radio") &&
+        (!f.options || f.options.length === 0)
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `defaultValue type does not match field type '${f.type}'`,
-          path: ["defaultValue"],
+          message: `${f.type} fields require a non-empty options[] array`,
+          path: ["options"],
         });
       }
-    }
-  });
+      if (
+        (f.type === "relationship" || f.type === "upload") &&
+        (f.relationTo === undefined || f.relationTo.length === 0)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${f.type} fields require relationTo`,
+          path: ["relationTo"],
+        });
+      }
+      if (
+        (f.type === "repeater" ||
+          f.type === "group" ||
+          f.type === "component") &&
+        (!f.fields || f.fields.length === 0)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${f.type} fields require a non-empty fields[] array`,
+          path: ["fields"],
+        });
+      }
+      if (RESERVED_FIELD_NAMES.has(f.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `field name '${f.name}' is reserved`,
+          path: ["name"],
+        });
+      }
+      if (f.defaultValue !== undefined) {
+        const dv = f.defaultValue;
+        const okType =
+          (f.type === "number" && typeof dv === "number") ||
+          (f.type === "checkbox" && typeof dv === "boolean") ||
+          ([
+            "text",
+            "textarea",
+            "richText",
+            "email",
+            "password",
+            "code",
+            "date",
+            "select",
+            "radio",
+          ].includes(f.type) &&
+            typeof dv === "string");
+        if (!okType) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `defaultValue type does not match field type '${f.type}'`,
+            path: ["defaultValue"],
+          });
+        }
+      }
+    })
+);
 
 const admin = z.object({
   useAsTitle: z.string().optional(),
