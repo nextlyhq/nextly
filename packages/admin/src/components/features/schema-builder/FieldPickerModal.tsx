@@ -20,10 +20,7 @@ import { useMemo, useState } from "react";
 
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
-import {
-  isUiSchemaWriteMode,
-  UI_SCHEMA_FIELD_TYPES,
-} from "@admin/lib/builder/ui-schema-mode";
+import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
 import type { FieldPrimitiveType } from "@admin/types/collection";
 
 import {
@@ -69,12 +66,13 @@ export function FieldPickerModal({
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
-    // D4: file-write mode only supports ui-schema.json v1 field types.
-    const fileMode = isUiSchemaWriteMode();
+    // The manifest is always written now (both database and file mode), so the
+    // picker offers only the canonical ui-schema-representable types in every
+    // mode — non-canonical catalog entries (e.g. toggle) are hidden.
     const supported = new Set<string>(UI_SCHEMA_FIELD_TYPES);
     const matches = (e: FieldTypeEntry) =>
       !excludedTypes.includes(e.type) &&
-      (!fileMode || supported.has(e.type)) &&
+      supported.has(e.type) &&
       (q === "" ||
         e.label.toLowerCase().includes(q) ||
         e.hint.toLowerCase().includes(q) ||
