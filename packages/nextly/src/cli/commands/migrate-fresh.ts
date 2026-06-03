@@ -377,63 +377,88 @@ async function discoverTables(
 }
 
 /**
- * Disable foreign key checks to allow dropping tables with dependencies
+ * True when an error is Postgres's "permission denied to set parameter"
+ * rejection for `session_replication_role`. Managed Postgres (Neon, RDS,
+ * Supabase) forbids that superuser-only GUC.
  */
-async function disableForeignKeyChecks(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect
-): Promise<void> {
-  let query: string;
-
-  switch (dialect) {
-    case "postgresql":
-      // PostgreSQL: Use session_replication_role to disable triggers
-      // This disables all triggers including FK checks
-      query = "SET session_replication_role = 'replica'";
-      break;
-
-    case "mysql":
-      query = "SET FOREIGN_KEY_CHECKS = 0";
-      break;
-
-    case "sqlite":
-      query = "PRAGMA foreign_keys = OFF";
-      break;
-
-    default:
-      throw new Error(`Unsupported dialect: ${String(dialect)}`);
-  }
-
-  await adapter.executeQuery(query);
+function isReplicationRolePermissionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /permission denied to set parameter/i.test(msg);
 }
 
 /**
- * Re-enable foreign key checks after dropping tables
+ * Best-effort `SET session_replication_role`. On self-hosted Postgres where
+ * the role is a superuser this disables triggers during the drop; on managed
+ * Postgres it's rejected with "permission denied to set parameter" — which we
+ * swallow, because the drop path uses `DROP TABLE ... CASCADE` that resolves
+ * FK dependencies without it. Any OTHER error (e.g. a dropped connection) is
+ * propagated so real failures still surface.
  */
-async function enableForeignKeyChecks(
+async function bestEffortReplicationRole(
+  adapter: DrizzleAdapter,
+  value: "replica" | "origin"
+): Promise<void> {
+  try {
+    await adapter.executeQuery(`SET session_replication_role = '${value}'`);
+  } catch (err) {
+    if (isReplicationRolePermissionError(err)) return;
+    throw err;
+  }
+}
+
+/**
+ * Disable foreign key checks to allow dropping tables with dependencies.
+ * Exported for unit testing the managed-Postgres best-effort path.
+ */
+export async function disableForeignKeyChecks(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
 ): Promise<void> {
-  let query: string;
-
   switch (dialect) {
     case "postgresql":
-      query = "SET session_replication_role = 'origin'";
-      break;
+      // Best-effort — see bestEffortReplicationRole. Not required for the drop
+      // itself (DROP TABLE ... CASCADE handles FK deps); attempting it only
+      // helps on self-hosted superuser setups.
+      await bestEffortReplicationRole(adapter, "replica");
+      return;
 
     case "mysql":
-      query = "SET FOREIGN_KEY_CHECKS = 1";
-      break;
+      await adapter.executeQuery("SET FOREIGN_KEY_CHECKS = 0");
+      return;
 
     case "sqlite":
-      query = "PRAGMA foreign_keys = ON";
-      break;
+      await adapter.executeQuery("PRAGMA foreign_keys = OFF");
+      return;
 
     default:
       throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
+}
 
-  await adapter.executeQuery(query);
+/**
+ * Re-enable foreign key checks after dropping tables.
+ * Exported for unit testing the managed-Postgres best-effort path.
+ */
+export async function enableForeignKeyChecks(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<void> {
+  switch (dialect) {
+    case "postgresql":
+      await bestEffortReplicationRole(adapter, "origin");
+      return;
+
+    case "mysql":
+      await adapter.executeQuery("SET FOREIGN_KEY_CHECKS = 1");
+      return;
+
+    case "sqlite":
+      await adapter.executeQuery("PRAGMA foreign_keys = ON");
+      return;
+
+    default:
+      throw new Error(`Unsupported dialect: ${String(dialect)}`);
+  }
 }
 
 /**
