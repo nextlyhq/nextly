@@ -34,6 +34,7 @@ import {
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle } from "@admin/types/entities";
 
@@ -326,7 +327,14 @@ export function useDeleteSingle() {
 
   return useMutation<void, Error, string>({
     mutationFn: async (slug: string) => {
-      return await singleApi.deleteSingle(slug);
+      const result = await singleApi.deleteSingle(slug);
+      // D-series: keep ui-schema.json in sync (best-effort, dev-only API).
+      try {
+        await schemaFileApi.deleteSingle(slug);
+      } catch {
+        // Non-fatal: DB delete succeeded; manifest cleanup can be re-run.
+      }
+      return result;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: singleKeys.all() });

@@ -47,6 +47,8 @@ import {
   reorderNestedFields,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
+import { singleToManifestEntity } from "@admin/lib/builder/to-manifest-entity-single";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
@@ -232,6 +234,22 @@ export default function SingleBuilderEditPage({
           setPreviewData(null);
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
           if (settings) setOriginalSettings(settings);
+
+          // D-series: database mode also writes the committable ui-schema.json
+          // so the single has a migration record. Non-fatal if it fails.
+          try {
+            const entity = singleToManifestEntity({
+              slug,
+              settings: { singularName: settings?.singularName },
+              fields: fieldDefinitions,
+            });
+            await schemaFileApi.writeSingle(entity);
+          } catch (err) {
+            const m = (err as { message?: string })?.message;
+            toast.warning(
+              `Single applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+            );
+          }
         } else {
           stopRestart(
             false,

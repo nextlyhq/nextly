@@ -27,6 +27,7 @@
 //      e. change_column_default (alphabetical)
 
 import { normalizeDefault } from "./normalize-default";
+import { normalizeType } from "./normalize-type";
 import type {
   AddColumnOp,
   AddTableOp,
@@ -125,7 +126,13 @@ function diffColumns(
     }
     if (prevC && curC) {
       // Column present in both - check for changes.
-      if (prevC.type !== curC.type) {
+      // Compare normalised type tokens — the live side reads PG's `udt_name`
+      // (`int4`, `bool`, `varchar` without length) while the desired side
+      // authors SQL names (`integer`, `boolean`, `varchar(255)`). A raw
+      // string compare flags every core column as a "type change" and makes
+      // `nextly migrate` refuse every existing Postgres DB. See
+      // ./normalize-type.ts. The op carries the original, un-normalised names.
+      if (normalizeType(prevC.type) !== normalizeType(curC.type)) {
         typeChanges.push({
           type: "change_column_type",
           tableName,
