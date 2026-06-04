@@ -1,7 +1,8 @@
 /**
  * Dev-only client for writing `ui-schema.json` via the package's
  * `/admin/api/_dev/schema/*` endpoints (spec §4.12.3). Used by the schema
- * builder when `isUiSchemaWriteMode()` is active.
+ * builder on every create/edit/delete (dual-write), keeping `ui-schema.json`
+ * in sync with the dev DB.
  *
  * @module services/schemaFileApi
  * @since v0.0.3-alpha (Plan D4)

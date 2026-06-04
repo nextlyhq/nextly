@@ -20,7 +20,9 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
 import { toSnakeName } from "@admin/lib/builder";
+import { singleToManifestEntity } from "@admin/lib/builder/to-manifest-entity-single";
 import { navigateTo } from "@admin/lib/navigation";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 
 import { SINGLE_BUILDER_CONFIG } from "./builder-config";
 
@@ -60,8 +62,30 @@ export default function SingleBuilderPage(): React.ReactElement | null {
       },
       {
         onSuccess: () => {
-          toast.success("Single created");
-          navigateTo(buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug }));
+          // Mirror the new (field-less) single to ui-schema.json (best-effort;
+          // a file-write failure warns but never blocks navigation). Wrapped in
+          // a void IIFE so the mutation callback stays synchronous.
+          void (async () => {
+            try {
+              await schemaFileApi.writeSingle(
+                singleToManifestEntity({
+                  slug,
+                  settings: {
+                    singularName: singular,
+                    status: values.status === true,
+                  },
+                  fields: [],
+                })
+              );
+            } catch (err) {
+              const m = (err as { message?: string })?.message;
+              toast.warning(
+                `Single created, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+              );
+            }
+            toast.success("Single created");
+            navigateTo(buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug }));
+          })();
         },
         onError: err => {
           const error = err as { message?: string };
