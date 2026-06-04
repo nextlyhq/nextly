@@ -42,12 +42,24 @@ describe("doctor.checkEnvFile", () => {
     await fs.rm(tmp, { recursive: true });
   });
 
-  it("returns failure with copy command when .env is missing", async () => {
-    // Use a path that ends in .env so the doctor's path-derivation regex
-    // (replace(/\.env$/, ".env.example")) produces a real "cp .env.example .env" hint.
-    const result = await checkEnvFile("/tmp/doctor-missing-env-test/.env");
+  it("auto-creates .env by copying .env.example when present", async () => {
+    const tmp = `/tmp/doctor-env-copy-${Date.now()}`;
+    await fs.mkdir(tmp, { recursive: true });
+    await fs.writeFile(`${tmp}/.env.example`, "DB_DIALECT=sqlite\n");
+    const result = await checkEnvFile(`${tmp}/.env`);
+    expect(result.ok).toBe(true);
+    // The .env was created from the example.
+    await expect(fs.access(`${tmp}/.env`)).resolves.toBeUndefined();
+    await fs.rm(tmp, { recursive: true });
+  });
+
+  it("fails with a manual-create hint when both .env and .env.example are missing", async () => {
+    const tmp = `/tmp/doctor-env-none-${Date.now()}`;
+    await fs.mkdir(tmp, { recursive: true });
+    const result = await checkEnvFile(`${tmp}/.env`);
     expect(result.ok).toBe(false);
-    expect(result.fix).toMatch(/cp .*\.env\.example .*\.env/);
+    expect(result.fix).toMatch(/create .*manually/i);
+    await fs.rm(tmp, { recursive: true });
   });
 });
 
