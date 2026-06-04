@@ -47,6 +47,7 @@ export type DynamicFieldType =
   | "code"
   | "number"
   | "checkbox"
+  | "toggle"
   | "date"
   | "select"
   | "radio"

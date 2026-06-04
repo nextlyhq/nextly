@@ -157,6 +157,7 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     }
 
     case "checkbox":
+    case "toggle":
       return "boolean";
 
     case "date":

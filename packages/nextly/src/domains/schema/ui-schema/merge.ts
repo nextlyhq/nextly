@@ -41,6 +41,8 @@ function uiToMinimal(
       name: f.name,
       type: f.type,
       required: f.required,
+      hasMany: f.hasMany,
+      relationTo: f.relationTo,
     })),
     status: entity.status === true,
   };
