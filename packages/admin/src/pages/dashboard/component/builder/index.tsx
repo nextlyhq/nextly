@@ -23,7 +23,9 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateComponent } from "@admin/hooks/queries/useComponents";
 import { toSnakeName } from "@admin/lib/builder";
+import { componentToManifestEntity } from "@admin/lib/builder/to-manifest-entity-component";
 import { navigateTo } from "@admin/lib/navigation";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 
 import { COMPONENT_BUILDER_CONFIG } from "./builder-config";
 
@@ -55,8 +57,27 @@ export default function ComponentBuilderPage(): React.ReactElement | null {
       },
       {
         onSuccess: () => {
-          toast.success("Component created");
-          navigateTo(buildRoute(ROUTES.BUILDER_COMPONENTS_EDIT, { slug }));
+          // Mirror the new (field-less) component to ui-schema.json (best-effort;
+          // a file-write failure warns but never blocks navigation). Wrapped in
+          // a void IIFE so the mutation callback stays synchronous.
+          void (async () => {
+            try {
+              await schemaFileApi.writeComponent(
+                componentToManifestEntity({
+                  slug,
+                  settings: { singularName: singular },
+                  fields: [],
+                })
+              );
+            } catch (err) {
+              const m = (err as { message?: string })?.message;
+              toast.warning(
+                `Component created, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+              );
+            }
+            toast.success("Component created");
+            navigateTo(buildRoute(ROUTES.BUILDER_COMPONENTS_EDIT, { slug }));
+          })();
         },
         onError: err => {
           const error = err as { message?: string };

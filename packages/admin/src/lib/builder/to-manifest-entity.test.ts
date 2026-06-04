@@ -88,4 +88,18 @@ describe("collectionToManifestEntity", () => {
       })
     ).toThrowError(/unsupported field type/i);
   });
+
+  it("maps an empty field list to a field-less entity with labels + status (create case)", () => {
+    const entity = collectionToManifestEntity({
+      slug: "widgets",
+      settings: { singularName: "Widget", pluralName: "Widgets", status: true },
+      fields: [],
+    });
+    expect(entity).toEqual({
+      slug: "widgets",
+      fields: [],
+      labels: { singular: "Widget", plural: "Widgets" },
+      status: true,
+    });
+  });
 });

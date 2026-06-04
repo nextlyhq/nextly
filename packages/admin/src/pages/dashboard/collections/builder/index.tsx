@@ -24,7 +24,9 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
 import { toSnakeName } from "@admin/lib/builder";
+import { collectionToManifestEntity } from "@admin/lib/builder/to-manifest-entity";
 import { navigateTo } from "@admin/lib/navigation";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 
 import { COLLECTION_BUILDER_CONFIG } from "./builder-config";
 
@@ -64,11 +66,36 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
       },
       {
         onSuccess: () => {
-          toast.success("Collection created");
-          // Navigate to the edit page where the user can add fields.
-          // We use the slug we computed because the API doesn't return
-          // the created entity in this response shape.
-          navigateTo(buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug }));
+          // Mirror the new (field-less) collection to ui-schema.json so the
+          // committable manifest stays in sync with the dev DB. Best-effort:
+          // a file-write failure warns but never blocks navigation (the DB
+          // create already succeeded). Wrapped in a void IIFE so the mutation
+          // callback stays synchronous (void return).
+          void (async () => {
+            try {
+              await schemaFileApi.writeCollection(
+                collectionToManifestEntity({
+                  slug,
+                  settings: {
+                    singularName: singular,
+                    pluralName: plural,
+                    status: values.status === true,
+                  },
+                  fields: [],
+                })
+              );
+            } catch (err) {
+              const m = (err as { message?: string })?.message;
+              toast.warning(
+                `Collection created, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+              );
+            }
+            toast.success("Collection created");
+            // Navigate to the edit page where the user can add fields.
+            // We use the slug we computed because the API doesn't return
+            // the created entity in this response shape.
+            navigateTo(buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug }));
+          })();
         },
         onError: err => {
           const error = err as { message?: string };
