@@ -137,7 +137,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "users",
   "accounts",
   "sessions",
-  "verification_tokens",
   "password_reset_tokens",
   "email_verification_tokens",
   "refresh_tokens",
@@ -187,7 +186,6 @@ export { users, accounts, sessions } from "./users/postgres";
 
 // Plan A Task 6 — auth-token tables. PG re-exports for direct-query callers.
 export {
-  verificationTokens,
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,

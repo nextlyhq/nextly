@@ -18,7 +18,6 @@ export {
 } from "../users/sqlite-relations";
 
 export {
-  verificationTokens,
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,
