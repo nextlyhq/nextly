@@ -74,6 +74,27 @@ describe("generateMigration", () => {
     expect(sql).toContain("-- Generated at: 2026-04-29T15:45:00.123Z");
   });
 
+  it("writes a -- DOWN section that drops the table the UP creates", async () => {
+    const result = await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+    expect(result).not.toBeNull();
+    const sql = await readFile(result!.sqlPath, "utf-8");
+    expect(sql).toContain("-- UP");
+    expect(sql).toContain("-- DOWN");
+    expect(sql.indexOf("-- UP")).toBeLessThan(sql.indexOf("-- DOWN"));
+    // DOWN inverts the CREATE TABLE.
+    expect(sql.toUpperCase()).toContain("DROP TABLE");
+    expect(sql).toContain("dc_posts");
+  });
+
   it("appends a metadata upsert only when its table is touched (§4.12.7)", async () => {
     const result = await generateMigration({
       name: "create_posts",
