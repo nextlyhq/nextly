@@ -85,4 +85,42 @@ describe("mutateManifest", () => {
     });
     expect(withComponent.components.map(c => c.slug)).toEqual(["seo"]);
   });
+
+  it("rejects a structurally-partial upsert (missing fields) — Zod guards full-replace", () => {
+    expect(() =>
+      mutateManifest(base, {
+        type: "upsert",
+        kind: "collections",
+        entity: { slug: "events" }, // no `fields` — would clobber on replace
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "NEXTLY_UI_SCHEMA_INVALID" })
+    );
+    // The original entity is untouched (mutateManifest is pure; caller writes nothing).
+    expect(base.collections[0].fields.map(f => f.name)).toEqual(["title"]);
+  });
+
+  it("allows turning status off via a complete upsert (full-replace preserves unset)", () => {
+    const withStatus = mutateManifest(base, {
+      type: "upsert",
+      kind: "collections",
+      entity: {
+        slug: "events",
+        status: true,
+        fields: [{ name: "title", type: "text" }],
+      },
+    });
+    expect(withStatus.collections[0].status).toBe(true);
+
+    const off = mutateManifest(withStatus, {
+      type: "upsert",
+      kind: "collections",
+      entity: {
+        slug: "events",
+        status: false,
+        fields: [{ name: "title", type: "text" }],
+      },
+    });
+    expect(off.collections[0].status).toBe(false);
+  });
 });
