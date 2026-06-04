@@ -21,10 +21,12 @@ import { registerInitCommand } from "./commands/init";
 import { registerMigrateCommand } from "./commands/migrate";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
+import { registerMigrateDownCommand } from "./commands/migrate-down";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
 import { registerMigrateResolveCommand } from "./commands/migrate-resolve";
-// F11 PR 2 (Q4=A): forward-only model. migrate:reset deleted; rollback
-// is "write a new corrective migration", not "run DOWN sections."
+// F11 PR 2 (Q4=A): migrate:reset deleted. SP-2 adds single-step rollback via
+// migrate:down (runs the file's -- DOWN section); multi-step recovery still
+// prefers a new corrective migration or migrate:fresh.
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerTelemetryCommand } from "./commands/telemetry";
@@ -197,13 +199,14 @@ function registerCommands(program: Command): void {
   registerGenerateTypesCommand(program);
   registerGenerateSchemaCommand(program);
 
-  // Migration commands (F11: forward-only; no rollback commands).
+  // Migration commands. F11 was forward-only; SP-2 adds single-step rollback.
   registerMigrateCommand(program); // Imported from ./commands/migrate.js
   registerMigrateCreateCommand(program);
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerMigrateFreshCommand(program);
+  registerMigrateDownCommand(program); // SP-2 — rollback
 
   // Plan B — one-shot bookkeeping consolidation.
   registerUpgradeCommand(program);

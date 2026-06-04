@@ -37,6 +37,7 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateSQL } from "../pipeline/sql-templates/index";
 
+import { buildInverseOperations } from "./down-generator";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
@@ -166,8 +167,15 @@ export async function generateMigration(
     return null;
   }
 
-  // 7. Generate SQL per op.
+  // 7. Generate UP SQL per op.
   const sqlStatements = operations.map(op => generateSQL(op, args.dialect));
+
+  // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
+  // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
+  // reverse rename rather than a data-losing drop+add. Object-removing ops
+  // recover their original spec from previousSnapshot.
+  const inverseOps = buildInverseOperations(operations, previousSnapshot);
+  const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
 
   // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
   if (args.metadataUpserts && args.metadataUpserts.length > 0) {
@@ -185,6 +193,7 @@ export async function generateMigration(
     name: args.name,
     dialect: args.dialect,
     sqlStatements,
+    downSqlStatements,
     collections: collectionSlugs,
     singles: singleSlugs,
     components: componentSlugs,
