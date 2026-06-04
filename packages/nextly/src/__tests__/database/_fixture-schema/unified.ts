@@ -268,39 +268,6 @@ export const nextlyTables: TableDefinition[] = [
   },
 
   {
-    name: "verification_tokens",
-    comment: "Email verification tokens - Auth.js v5 compatible",
-    columns: [
-      {
-        name: "identifier",
-        type: "text",
-        nullable: false,
-      },
-      {
-        name: "token",
-        type: "text",
-        nullable: false,
-      },
-      {
-        name: "expires",
-        type: "timestamp",
-        nullable: false,
-      },
-    ],
-    indexes: [
-      {
-        name: "verification_tokens_identifier_token_pk",
-        columns: ["identifier", "token"],
-        unique: true,
-      },
-      {
-        name: "verification_tokens_token_idx",
-        columns: ["token"],
-      },
-    ],
-  },
-
-  {
     name: "password_reset_tokens",
     comment: "Password reset tokens with hashing for security",
     columns: [

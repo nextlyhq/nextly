@@ -1,8 +1,7 @@
 /**
  * Auth-token tables — PostgreSQL.
  *
- * Tables: verificationTokens, emailVerificationTokens, passwordResetTokens,
- * refreshTokens.
+ * Tables: emailVerificationTokens, passwordResetTokens, refreshTokens.
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
@@ -25,22 +24,6 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { users } from "../users/postgres";
-
-export const verificationTokens = pgTable(
-  "verification_tokens",
-  {
-    identifier: text("identifier").notNull(),
-    token: text("token").notNull(),
-    expires: timestamp("expires", { withTimezone: false }).notNull(),
-  },
-  t => [
-    uniqueIndex("verification_tokens_identifier_token_pk").on(
-      t.identifier,
-      t.token
-    ),
-    index("verification_tokens_token_idx").on(t.token),
-  ]
-);
 
 // Password reset tokens (custom table)
 export const passwordResetTokens = pgTable(

@@ -30,21 +30,18 @@ export function authTokenTables(dialect: SupportedDialect) {
   switch (dialect) {
     case "postgresql":
       return {
-        verificationTokens: pg.verificationTokens,
         emailVerificationTokens: pg.emailVerificationTokens,
         passwordResetTokens: pg.passwordResetTokens,
         refreshTokens: pg.refreshTokens,
       };
     case "mysql":
       return {
-        verificationTokens: my.verificationTokens,
         emailVerificationTokens: my.emailVerificationTokens,
         passwordResetTokens: my.passwordResetTokens,
         refreshTokens: my.refreshTokens,
       };
     case "sqlite":
       return {
-        verificationTokens: sl.verificationTokens,
         emailVerificationTokens: sl.emailVerificationTokens,
         passwordResetTokens: sl.passwordResetTokens,
         refreshTokens: sl.refreshTokens,

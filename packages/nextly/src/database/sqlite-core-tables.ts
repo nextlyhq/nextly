@@ -62,12 +62,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
       "expires" INTEGER NOT NULL
     )`,
-    `CREATE TABLE IF NOT EXISTS "verification_tokens" (
-      "identifier" TEXT NOT NULL,
-      "token" TEXT NOT NULL,
-      "expires" INTEGER NOT NULL,
-      UNIQUE("identifier", "token")
-    )`,
     `CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,

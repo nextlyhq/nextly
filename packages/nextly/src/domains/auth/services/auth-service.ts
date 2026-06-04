@@ -686,11 +686,6 @@ export class AuthService extends BaseService {
       await this.db
         .delete(this.tables.emailVerificationTokens)
         .where(lt(this.tables.emailVerificationTokens.expires, now));
-
-      // Auth.js verification tokens
-      await this.db
-        .delete(this.tables.verificationTokens)
-        .where(lt(this.tables.verificationTokens.expires, now));
     } catch (error) {
       console.error("Failed to cleanup expired tokens:", error);
     }

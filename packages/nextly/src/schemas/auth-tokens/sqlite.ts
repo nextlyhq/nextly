@@ -1,8 +1,7 @@
 /**
  * Auth-token tables — SQLite.
  *
- * Tables: verificationTokens, emailVerificationTokens, passwordResetTokens,
- * refreshTokens.
+ * Tables: emailVerificationTokens, passwordResetTokens, refreshTokens.
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -23,22 +22,6 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 import { users } from "../users/sqlite";
-
-export const verificationTokens = sqliteTable(
-  "verification_tokens",
-  {
-    identifier: text("identifier").notNull(),
-    token: text("token").notNull(),
-    expires: integer("expires", { mode: "timestamp" }).notNull(),
-  },
-  t => [
-    uniqueIndex("verification_tokens_identifier_token_pk").on(
-      t.identifier,
-      t.token
-    ),
-    index("verification_tokens_token_idx").on(t.token),
-  ]
-);
 
 // Password reset tokens (custom table)
 export const passwordResetTokens = sqliteTable(

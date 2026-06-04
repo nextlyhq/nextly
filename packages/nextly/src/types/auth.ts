@@ -67,7 +67,6 @@ export interface AuthTables {
   users: unknown;
   accounts: unknown;
   sessions: unknown;
-  verificationTokens: unknown;
   passwordResetTokens: unknown;
   emailVerificationTokens?: unknown;
 }
