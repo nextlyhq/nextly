@@ -7,6 +7,8 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
+    "nextly": "nextly",
+    "ci": "nextly migrate && next build",
     "check-types": "tsc --noEmit",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
