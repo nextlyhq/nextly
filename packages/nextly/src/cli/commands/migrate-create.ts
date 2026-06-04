@@ -412,7 +412,13 @@ function toMinimalEntities(
   return entities.map(raw => {
     const e = raw as {
       slug: string;
-      fields?: { name: string; type: string; required?: boolean }[];
+      fields?: {
+        name: string;
+        type: string;
+        required?: boolean;
+        hasMany?: boolean;
+        relationTo?: string | string[];
+      }[];
       dbName?: string;
       status?: boolean;
     };
@@ -421,6 +427,8 @@ function toMinimalEntities(
       name: f.name,
       type: f.type,
       required: f.required,
+      hasMany: f.hasMany,
+      relationTo: f.relationTo,
     }));
     return {
       slug,

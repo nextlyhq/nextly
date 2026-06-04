@@ -67,6 +67,84 @@ describe("ui-schema field types (widened set)", () => {
     ).toBe(false);
   });
 
+  it("accepts a toggle field with a boolean default", () => {
+    expect(
+      uiSchemaManifest.safeParse(
+        manifestWith({ name: "is_active", type: "toggle", defaultValue: true })
+      ).success
+    ).toBe(true);
+  });
+
+  it("losslessly round-trips a fully-configured field", () => {
+    const field = {
+      name: "cover",
+      type: "relationship",
+      label: "Cover",
+      required: true,
+      unique: true,
+      index: true,
+      hasMany: true,
+      relationTo: ["media", "documents"],
+      maxDepth: 2,
+      allowCreate: true,
+      allowEdit: false,
+      isSortable: true,
+      relationshipFilter: { field: "status", equals: "published" },
+      validation: {
+        minLength: 1,
+        maxLength: 50,
+        min: 0,
+        max: 10,
+        minRows: 1,
+        maxRows: 5,
+        pattern: "^[a-z]+$",
+        message: "letters only",
+      },
+      admin: {
+        width: "50%",
+        position: "sidebar",
+        readOnly: false,
+        hidden: false,
+        description: "help",
+        placeholder: "pick",
+        hideGutter: true,
+        allowCreate: true,
+        condition: { field: "other", operator: "equals", value: "x" },
+      },
+    };
+    const r = uiSchemaManifest.safeParse(manifestWith(field));
+    expect(r.success).toBe(true);
+    const out = r.success ? r.data.collections[0].fields[0] : undefined;
+    expect(out).toMatchObject({
+      label: "Cover",
+      unique: true,
+      index: true,
+      relationTo: ["media", "documents"],
+      validation: { minLength: 1, maxLength: 50, message: "letters only" },
+      admin: { width: "50%", hideGutter: true },
+    });
+  });
+
+  it("rejects an empty relationTo array for a relationship", () => {
+    expect(
+      uiSchemaManifest.safeParse(
+        manifestWith({ name: "r", type: "relationship", relationTo: [] })
+      ).success
+    ).toBe(false);
+  });
+
+  it("rejects minLength greater than maxLength", () => {
+    expect(
+      uiSchemaManifest.safeParse(
+        manifestWith({
+          name: "t",
+          type: "text",
+          validation: { minLength: 5, maxLength: 2 },
+        })
+      ).success
+    ).toBe(false);
+  });
+
   it("accepts a repeater field with nested fields", () => {
     expect(
       uiSchemaManifest.safeParse(

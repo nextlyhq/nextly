@@ -4,7 +4,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { collectionToManifestEntity } from "./to-manifest-entity";
+import {
+  collectionToManifestEntity,
+  mapBuilderFieldToManifest,
+} from "./to-manifest-entity";
 
 describe("collectionToManifestEntity", () => {
   it("maps slug, labels, admin, status, and supported fields", () => {
@@ -67,7 +70,7 @@ describe("collectionToManifestEntity", () => {
     expect(entity.labels).toBeUndefined();
   });
 
-  it("collapses a relationTo array to its first target", () => {
+  it("preserves a polymorphic relationTo array (no truncation)", () => {
     const entity = collectionToManifestEntity({
       slug: "x",
       settings: {},
@@ -75,7 +78,37 @@ describe("collectionToManifestEntity", () => {
         { name: "rel", type: "relationship", relationTo: ["users", "media"] },
       ],
     });
-    expect(entity.fields[0].relationTo).toBe("users");
+    expect(entity.fields[0].relationTo).toEqual(["users", "media"]);
+  });
+});
+
+describe("mapBuilderFieldToManifest", () => {
+  it("preserves a polymorphic relationTo array", () => {
+    const out = mapBuilderFieldToManifest({
+      name: "cover",
+      type: "relationship",
+      relationTo: ["media", "documents"],
+    });
+    expect(out.relationTo).toEqual(["media", "documents"]);
+  });
+
+  it("forwards admin, unique, index, label, and full validation", () => {
+    const out = mapBuilderFieldToManifest({
+      name: "title",
+      type: "text",
+      label: "Title",
+      unique: true,
+      index: true,
+      validation: { minLength: 2, maxLength: 80, pattern: "^.+$" },
+      admin: { width: "50%", description: "the title", placeholder: "..." },
+    });
+    expect(out).toMatchObject({
+      label: "Title",
+      unique: true,
+      index: true,
+      validation: { minLength: 2, maxLength: 80, pattern: "^.+$" },
+      admin: { width: "50%", description: "the title", placeholder: "..." },
+    });
   });
 
   it("throws on an unsupported field type (defensive — picker prevents it)", () => {
