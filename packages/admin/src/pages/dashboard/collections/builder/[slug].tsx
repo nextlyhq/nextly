@@ -60,7 +60,7 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
-import { collectionToManifestEntity } from "@admin/lib/builder/to-manifest-entity";
+import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import {
   schemaApi,
@@ -310,15 +310,11 @@ export default function CollectionBuilderEditPage({
           // so the entity has a migration record (matches code-first). A
           // failure here must NOT undo the already-successful DB apply.
           try {
-            const entity = collectionToManifestEntity({
-              slug,
-              settings: {
-                singularName: settings?.singularName,
-                pluralName: settings?.pluralName,
-              },
-              fields: fieldDefinitions,
-            });
-            await schemaFileApi.writeCollection(entity);
+            if (settings) {
+              await schemaFileApi.writeCollection(
+                collectionEntityFromSettings(slug, settings, fieldDefinitions)
+              );
+            }
           } catch (err) {
             const m = (err as { message?: string })?.message;
             toast.warning(
@@ -380,6 +376,22 @@ export default function CollectionBuilderEditPage({
             // disables again immediately after a successful save.
             setOriginalSettings(settings);
             setOriginalFields(builder.fields.filter(f => !f.isSystem));
+            // Mirror the settings change (notably Draft/Published) into the
+            // committable ui-schema.json. Best-effort: the DB write already
+            // succeeded, so a file-write failure only warns. Void IIFE keeps
+            // the mutation callback synchronous.
+            void (async () => {
+              try {
+                await schemaFileApi.writeCollection(
+                  collectionEntityFromSettings(slug, settings, fieldDefinitions)
+                );
+              } catch (err) {
+                const m = (err as { message?: string })?.message;
+                toast.warning(
+                  `Collection updated, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+                );
+              }
+            })();
           },
           onError: err => {
             const errorObj = err as { message?: string };

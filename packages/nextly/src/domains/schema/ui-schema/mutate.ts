@@ -49,6 +49,13 @@ export function mutateManifest(
     const slug = slugOf(mutation.entity);
     const idx =
       slug === undefined ? -1 : list.findIndex(e => slugOf(e) === slug);
+    // Full-replace by slug is intentional: callers (the admin builder via
+    // settings-to-manifest.ts) send a COMPLETE entity, so replacing lets a
+    // user unset an optional flag (e.g. turn Draft/Published off). We do not
+    // merge with the stored entity — a shallow merge would make unsetting
+    // impossible (an omitted key would silently retain the old value).
+    // Structurally-partial entities (missing slug/fields) are already
+    // rejected by the Zod re-validation below (NEXTLY_UI_SCHEMA_INVALID).
     if (idx >= 0) list[idx] = mutation.entity;
     else list.push(mutation.entity);
   } else {
