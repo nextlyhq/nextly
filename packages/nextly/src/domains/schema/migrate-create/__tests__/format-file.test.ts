@@ -17,6 +17,7 @@ describe("formatMigrationFile", () => {
       name: "add_excerpt",
       dialect: "postgresql",
       sqlStatements: ['ALTER TABLE "dc_posts" ADD COLUMN "excerpt" text'],
+      downSqlStatements: [],
       collections: ["posts"],
       singles: [],
       components: [],
@@ -31,18 +32,38 @@ describe("formatMigrationFile", () => {
     expect(out).toContain('ALTER TABLE "dc_posts" ADD COLUMN "excerpt" text;');
   });
 
-  it("DOES NOT emit a -- DOWN section (Q4=A: forward-only)", () => {
+  it("emits a -- DOWN section with the down statements, after -- UP", () => {
     const out = formatMigrationFile({
-      name: "add_excerpt",
+      name: "add_slug",
       dialect: "postgresql",
-      sqlStatements: ['ALTER TABLE "dc_posts" ADD COLUMN "excerpt" text'],
+      sqlStatements: ['ALTER TABLE "dc_posts" ADD COLUMN "slug" text'],
+      downSqlStatements: ['ALTER TABLE "dc_posts" DROP COLUMN "slug"'],
       collections: ["posts"],
       singles: [],
       components: [],
       hasUserExt: false,
       now: NOW,
     });
-    expect(out).not.toContain("-- DOWN");
+    expect(out).toContain("-- UP");
+    expect(out).toContain("-- DOWN");
+    expect(out.indexOf("-- UP")).toBeLessThan(out.indexOf("-- DOWN"));
+    expect(out).toContain('ALTER TABLE "dc_posts" DROP COLUMN "slug";');
+  });
+
+  it("emits a placeholder -- DOWN when there are no down statements", () => {
+    const out = formatMigrationFile({
+      name: "data_only",
+      dialect: "postgresql",
+      sqlStatements: ["INSERT INTO dc_posts (id) VALUES ('x')"],
+      downSqlStatements: [],
+      collections: ["posts"],
+      singles: [],
+      components: [],
+      hasUserExt: false,
+      now: NOW,
+    });
+    expect(out).toContain("-- DOWN");
+    expect(out).toContain("no automatic down");
   });
 
   it("appends `;` to each SQL statement", () => {
@@ -53,12 +74,15 @@ describe("formatMigrationFile", () => {
         'ALTER TABLE "dc_posts" ADD COLUMN "a" text',
         'ALTER TABLE "dc_posts" ADD COLUMN "b" text',
       ],
+      downSqlStatements: [],
       collections: ["posts"],
       singles: [],
       components: [],
       hasUserExt: false,
       now: NOW,
     });
+    // Two UP statements → two semicolons; the empty-down placeholder is a
+    // comment and contributes none.
     const matches = out.match(/;/g);
     expect(matches?.length).toBe(2);
   });
@@ -68,6 +92,7 @@ describe("formatMigrationFile", () => {
       name: "no_metadata",
       dialect: "mysql",
       sqlStatements: ["SELECT 1"],
+      downSqlStatements: [],
       collections: [],
       singles: [],
       components: [],
@@ -85,6 +110,7 @@ describe("formatMigrationFile", () => {
       name: "user_ext_change",
       dialect: "postgresql",
       sqlStatements: ['ALTER TABLE "user_ext" ADD COLUMN "bio" text'],
+      downSqlStatements: [],
       collections: [],
       singles: [],
       components: [],
@@ -99,6 +125,7 @@ describe("formatMigrationFile", () => {
       name: "multi",
       dialect: "postgresql",
       sqlStatements: ["SELECT 1"],
+      downSqlStatements: [],
       collections: ["posts", "comments"],
       singles: [],
       components: [],
@@ -110,14 +137,14 @@ describe("formatMigrationFile", () => {
 });
 
 describe("formatBlankFile", () => {
-  it("emits a -- UP section but no body and no DOWN", () => {
+  it("emits a -- UP section and a -- DOWN placeholder, no body", () => {
     const out = formatBlankFile(
       "custom_seed",
       "postgresql",
       new Date("2026-04-29T00:00:00Z")
     );
     expect(out).toContain("-- UP");
-    expect(out).not.toContain("-- DOWN");
+    expect(out).toContain("-- DOWN");
     expect(out).toContain("-- Migration: custom_seed");
     expect(out).toContain("-- Dialect: PostgreSQL");
   });

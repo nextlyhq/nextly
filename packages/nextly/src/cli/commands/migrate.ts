@@ -47,7 +47,10 @@ import {
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
-import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import {
+  forceUnlock,
+  withMigrateLock,
+} from "../../domains/schema/pipeline/locks";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
@@ -74,6 +77,12 @@ export interface MigrateCommandOptions {
    * Run only N migrations.
    */
   step?: number;
+
+  /**
+   * Clear a stale migrate lock before running (e.g. left by a crashed run).
+   * @default false
+   */
+  forceUnlock?: boolean;
 }
 
 /**
@@ -231,18 +240,24 @@ export async function runMigrate(
       tableExists: (n: string) => Promise<boolean>;
     };
 
-    await withMigrateLock(db, dialect, async () => {
-      // Phase 1 — core schema reconciliation (production-strict). The ledger
-      // table (`nextly_schema_events`) is bootstrapped out-of-band by
-      // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
-      // extraneous table) and BEFORE the event is recorded. Idempotent: the
-      // DDL runs only when the table is absent (MySQL's CREATE INDEX lacks
-      // IF NOT EXISTS, so it must not re-run).
-      logger.info("Phase 1: reconciling core schema...");
-      await reconcileCore({
-        db,
+    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
+    // crashed prior run), then proceed with the normal migrate.
+    await maybeForceUnlock(options, db, dialect);
+
+    // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The
+    // ledger (`nextly_schema_events`) is bootstrapped out-of-band by
+    // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
+    // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
+    // error here maps to a non-zero CLI exit (the core itself never exits).
+    try {
+      const { applied } = await migrateCore({
         dialect,
-        logger: { info: m => logger.debug(m), warn: m => logger.warn(m) },
+        db,
+        adapter,
+        migrationsDir: appMigrationsDir,
+        logger,
+        lockMode: "fail-fast",
+        ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         allowDestructive: allowCoreDestructive,
         ensureLedger: async () => {
           if (!(await dz.tableExists("nextly_schema_events"))) {
@@ -251,17 +266,7 @@ export async function runMigrate(
             }
           }
         },
-      });
-
-      // Phase 2 — user migration files (drift reconciliation, §4.7).
-      logger.info("Phase 2: applying user migrations...");
-      const applied = await runFileMigrations({
-        adapter,
-        db,
-        dialect,
-        migrationsDir: appMigrationsDir,
         step: options.step,
-        logger,
       });
 
       logger.newline();
@@ -270,7 +275,10 @@ export async function runMigrate(
           ? "Nothing to migrate. Database is up to date."
           : `${formatCount(applied, "migration")} applied.`
       );
-    });
+    } catch (err) {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
 
     const duration = Date.now() - startTime;
     logger.divider();
@@ -278,6 +286,96 @@ export async function runMigrate(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * Non-exiting migrate core: runs Phase 1 (core reconcile) + Phase 2 (file
+ * migrations) under the lock, and **throws** on failure (never `process.exit`).
+ * Shared by the CLI `runMigrate` (which maps a throw → process.exit) and the
+ * production run-on-boot hook (which catches → logs, never exits). The lock
+ * `mode` is threaded so boot can run in "wait" mode. Seams are injectable for
+ * tests.
+ */
+export interface MigrateCoreDeps {
+  dialect: SupportedDialect;
+  db: unknown;
+  adapter: CLIDatabaseAdapter;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  lockMode?: "fail-fast" | "wait";
+  ttlSeconds?: number;
+  isSettled?: () => Promise<boolean>;
+  allowDestructive?: boolean;
+  ensureLedger?: () => Promise<void>;
+  step?: number;
+  reconcileCoreFn?: typeof reconcileCore;
+  runFileMigrationsFn?: typeof runFileMigrations;
+  withLock?: typeof withMigrateLock;
+}
+
+export interface MigrateCoreResult {
+  applied: number;
+  coreChanged: boolean;
+}
+
+/** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
+export async function maybeForceUnlock(
+  options: { forceUnlock?: boolean },
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<void> {
+  if (!options.forceUnlock) return;
+  await forceUnlock(db, dialect);
+}
+
+export async function migrateCore(
+  deps: MigrateCoreDeps
+): Promise<MigrateCoreResult> {
+  const reconcile = deps.reconcileCoreFn ?? reconcileCore;
+  const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
+  const lock = deps.withLock ?? withMigrateLock;
+  let applied = 0;
+  let coreChanged = false;
+
+  await lock(
+    deps.db,
+    deps.dialect,
+    async () => {
+      deps.logger.info("Phase 1: reconciling core schema...");
+      const r = await reconcile({
+        db: deps.db,
+        dialect: deps.dialect,
+        logger: {
+          info: m => deps.logger.debug(m),
+          warn: m => deps.logger.warn(m),
+        },
+        allowDestructive: deps.allowDestructive,
+        ensureLedger: deps.ensureLedger,
+      });
+      coreChanged = r.changed;
+
+      deps.logger.info("Phase 2: applying user migrations...");
+      applied = await runFiles({
+        adapter: deps.adapter,
+        db: deps.db,
+        dialect: deps.dialect,
+        migrationsDir: deps.migrationsDir,
+        step: deps.step,
+        logger: deps.logger,
+      });
+    },
+    {
+      mode: deps.lockMode ?? "fail-fast",
+      ttlSeconds: deps.ttlSeconds,
+      isSettled: deps.isSettled,
+      logger: {
+        warn: m => deps.logger.warn(m),
+        info: m => deps.logger.info(m),
+      },
+    }
+  );
+
+  return { applied, coreChanged };
 }
 
 /**
@@ -525,7 +623,10 @@ function parseMigrationFile(
   };
 }
 
-function parseSqlSections(content: string): { upSql: string; downSql: string } {
+export function parseSqlSections(content: string): {
+  upSql: string;
+  downSql: string;
+} {
   const lines = content.split("\n");
 
   let upLines: string[] = [];
@@ -569,7 +670,7 @@ function parseSqlSections(content: string): { upSql: string; downSql: string } {
   };
 }
 
-async function executeTransaction(
+export async function executeTransaction(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   fn: () => Promise<void>
@@ -593,7 +694,7 @@ async function executeTransaction(
   }
 }
 
-function splitSqlStatements(sql: string): string[] {
+export function splitSqlStatements(sql: string): string[] {
   // Remove Drizzle's statement breakpoint markers and SQL comments.
   // drizzle-kit uses two marker patterns in generated migration SQL:
   //   1. Standalone: `--> statement-breakpoint` on its own line (between CREATE TABLE blocks)
@@ -683,6 +784,11 @@ export function registerMigrateCommand(program: Command): void {
     .description("Run all pending database migrations")
     .option("--dry-run", "Show what would be migrated without executing", false)
     .option("--step <n>", "Run only N migrations", parseInt)
+    .option(
+      "--force-unlock",
+      "Clear a stale migrate lock before running",
+      false
+    )
     .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);

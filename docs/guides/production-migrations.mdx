@@ -8,7 +8,12 @@ Nextly's schema-evolution model splits responsibilities cleanly between developm
 - **Local development:** `next dev` + Nextly's HMR pipeline auto-applies schema changes as you edit `nextly.config.ts`.
 - **Production:** schema changes are committed as `.sql` files in your repo. A CI/CD step (or your laptop) runs `nextly migrate` against the production database **before** the new app code is deployed.
 
-**The deployed Next.js app never touches the schema.** No boot-time auto-apply, no advisory locks, no race conditions across serverless cold-starts. This page covers the three common deploy patterns. Pick whichever fits your stack.
+**By default the deployed Next.js app does not touch the schema** — you apply migrations in CI/build, before deploy (Patterns 1–3). Two production-grade options make this safe and flexible:
+
+- **A migrate lock** guards every `nextly migrate`, so two runs never apply schema at once. It's a pooler-safe lock row (works through Neon/Supabase PgBouncer) with a TTL, plus a `--force-unlock` escape hatch.
+- **Optional run-on-boot** (`db.runMigrationsOnBoot`, opt-in) applies pending migrations during app startup in production — safe across multiple instances thanks to the lock. See [Pattern 4](#pattern-4-run-migrations-on-boot-opt-in).
+
+This page covers the common deploy patterns. Pick whichever fits your stack.
 
 ## The CLI commands you'll use
 
@@ -20,18 +25,20 @@ Nextly's schema-evolution model splits responsibilities cleanly between developm
 | `nextly migrate:status` | Shows applied / pending / failed migrations with their checksums and durations. |
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
+| `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
 
-There is no `migrate:rollback` or `migrate:down`. Forward-only is by design: rollback for live production data is intrinsically lossy. To undo an applied change, write a NEW corrective migration that reverses it.
+`nextly migrate:down` reverts a single migration at a time (or the last N via `--step`). It is a manual, CLI-only tool — it never runs on boot. **In production, prefer rolling forward** with a new corrective migration, or restore from a backup; rollback restores schema *shape*, not row *data*. See [Rolling back a migration](#rolling-back-a-migration).
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations).
+- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
+- `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--force-unlock`.
 
 ---
 
@@ -119,6 +126,45 @@ vercel --prod
 
 For non-Vercel hosts, replace `vercel --prod` with whatever your deploy command is.
 
+## Pattern 4: Run migrations on boot (opt-in)
+
+For long-running servers/containers you can have the app apply pending migrations
+during startup instead of (or in addition to) a CI step. Opt in via config:
+
+```ts
+// nextly.config.ts
+export default defineConfig({
+  db: {
+    runMigrationsOnBoot: true, // default: false
+  },
+});
+```
+
+- **Production only** (`NODE_ENV === "production"`) — a no-op in development.
+- Pending migrations apply during initialization, **under the migrate lock**, so
+  multiple instances starting together are safe: one applies while the others
+  wait, then all serve with the schema ready.
+- **Failure-safe:** a failed boot migration is logged and the app continues (it
+  does not crash the process); resolve with `nextly migrate`.
+- Tune lock takeover with `db.migrateLockTtlSeconds` (default **900s**).
+
+> **Serverless caveat.** Running migrations on boot adds work to cold starts. On
+> platforms with many short-lived instances (e.g. Vercel), prefer the CI patterns
+> above. Boot-time migrations suit long-running servers/containers.
+
+## Environment-specific configurations
+
+If your `nextly.config.ts` differs by environment (e.g. a plugin enabled only in
+production), a migration generated in one environment can miss the other's
+schema. Three ways to handle it:
+
+1. **Edit the generated migration** after `migrate:create` to include the
+   environment-specific changes.
+2. **Temporarily enable the production env vars locally** when generating, so the
+   migration captures the production shape.
+3. **Use separate migration files per environment**, applied in the matching
+   environment.
+
 ## Other platforms
 
 Nextly's CLI is platform-agnostic. The pattern is the same on Railway, Render, Fly.io, or AWS:
@@ -190,7 +236,7 @@ Run it in your PR CI to catch mistakes before they reach production.
 
 - **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with an ESLint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
 - **Don't edit applied migration files.** The hash check catches this and aborts with `MIGRATION_TAMPERED`. To change something already applied, write a new corrective migration.
-- **Don't run `nextly migrate` concurrently** (e.g. two CI jobs racing). Nextly does not take an advisory lock; the `filename` UNIQUE constraint on `nextly_migrations` will catch double-insert, but the second instance will exit non-zero. Single-instance operator responsibility.
+- **Concurrent `nextly migrate` runs are guarded by the migrate lock.** A second concurrent run won't apply schema at the same time — it either errors with `NEXTLY_MIGRATE_LOCK_BUSY` (CLI) or waits (boot run). If a crashed run leaves a stale lock, clear it with `nextly migrate --force-unlock`. (The lock is a pooler-safe row with a TTL; the `filename` UNIQUE constraint remains a second line of defense.)
 
 ## Recovering from a failed migration
 
@@ -215,9 +261,45 @@ For MySQL specifically, partial state is possible because MySQL DDL auto-commits
 
 User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It reconciles core in dev-loose mode and prompts for confirmation on each destructive operation. Use it only when migrate reports core drift.
 
+## Rolling back a migration
+
+`nextly migrate:create` writes a `-- DOWN` section into each generated migration
+(the inverse of its `-- UP`). `nextly migrate:down` reverts the most-recently
+applied migration using that section:
+
+```bash
+# Roll back the last migration
+nextly migrate:down
+
+# Roll back the last 3
+nextly migrate:down --step 3
+
+# Preview without executing
+nextly migrate:down --dry-run
+```
+
+**Rollback restores schema *shape*, not *data*.** Reverting an added column drops
+it (and its data); reverting a dropped column re-adds an empty column — the old
+rows are gone. For this reason:
+
+- A migration whose DOWN drops a table or column requires `--allow-data-loss`.
+- In production (`NODE_ENV=production`), `migrate:down` requires `--yes`.
+- A migration with an empty `-- DOWN` (data-only or blank) is **irreversible** —
+  `migrate:down` refuses it. Roll forward with a corrective migration instead.
+
+After a successful rollback, the migration is recorded as `rolled_back` in
+`nextly_schema_events` and becomes pending again, so the next `nextly migrate`
+re-applies it.
+
+**In production, prefer rolling forward** (a new corrective migration) or
+restoring from a backup. `migrate:down` is a manual, CLI-only break-glass tool;
+it never runs on boot.
+
 ## Recovery via corrective migrations
 
-The forward-only model means you don't roll back -- you write a new migration that fixes the previous one. Examples:
+`migrate:down` handles single-step rollback, but for production incidents the
+safer path is usually to **roll forward** -- write a new migration that fixes the
+previous one. Examples:
 
 - Accidentally added a `NOT NULL` column without a default and the deploy failed -> write a new migration that backfills the column then re-applies the constraint.
 - Renamed a column too aggressively and broke a downstream service -> write a new migration that adds the old column name back as a copy until consumers are updated.
