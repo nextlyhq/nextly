@@ -60,8 +60,12 @@ export {
   runMigrateResolve,
 } from "./migrate-resolve";
 
-// F11 PR 2 (Q4=A): migrate:reset removed (forward-only model). Operators
-// who relied on rollback should write a new corrective migration instead.
+// SP-2 — migrate:down rollback command
+export { registerMigrateDownCommand, runMigrateDown } from "./migrate-down";
+
+// F11 PR 2 (Q4=A): migrate:reset removed (forward-only model). Single-step
+// rollback is available via `migrate:down` (SP-2); for multi-step recovery
+// prefer a new corrective migration or `migrate:fresh`.
 // BREAKING: external callers importing `runMigrateReset` or
 // `MigrateResetCommandOptions` from this barrel must remove that import.
 

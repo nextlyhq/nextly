@@ -52,7 +52,8 @@ export function getDrizzleTableName(value: unknown, fallback: string): string {
 export function drizzleTableNames(schema: Record<string, unknown>): string[] {
   const names: string[] = [];
   for (const [exportKey, value] of Object.entries(schema)) {
-    if (isDrizzleTable(value)) names.push(getDrizzleTableName(value, exportKey));
+    if (isDrizzleTable(value))
+      names.push(getDrizzleTableName(value, exportKey));
   }
   return names;
 }
@@ -134,6 +135,15 @@ export function filterUnsafeStatements(
       if (isInDesired) {
         // Intentional drop — rebuild pattern, system-table refresh, etc.
         return true;
+      }
+
+      // Internal framework tables (nextly_ prefix: ledger, migrate lock, meta)
+      // are bootstrapped out-of-band and never part of the desired schema. Block
+      // their drop SILENTLY — they must never be dropped, and warning on every
+      // reconcile is just noise. (User/collection slugs can't start with
+      // `nextly_` — the slug validator reserves that prefix.)
+      if (tableName.toLowerCase().startsWith("nextly_")) {
+        return false;
       }
 
       // Accidental drop — table not in desired schema. Block and log so

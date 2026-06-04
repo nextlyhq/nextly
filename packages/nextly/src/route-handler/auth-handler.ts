@@ -203,6 +203,25 @@ async function ensureServicesInitialized(): Promise<void> {
     const { runBootTimeApplyIfDev } = await import("../init/boot-apply");
     await runBootTimeApplyIfDev({ caller: "auth-handler" });
 
+    // Production sibling: apply committed migrations on boot when opted in
+    // (db.runMigrationsOnBoot). No-op in dev. Failure-safe.
+    const handlerConfig = getHandlerConfig();
+    if (handlerConfig) {
+      const { runProdMigrationsIfEnabled } = await import(
+        "../init/prod-migrations"
+      );
+      await runProdMigrationsIfEnabled({
+        config: handlerConfig,
+        adapter: getService("adapter"),
+        logger: {
+          info: m => console.log(m),
+          warn: m => console.warn(m),
+          error: m => console.error(m),
+          debug: m => console.debug(m),
+        },
+      });
+    }
+
     // Open the HMR listener so live edits to nextly.config.ts during a
     // running dev session reach reloadNextlyConfig(). Without this, only
     // the boot-time apply above runs and in-session config edits silently
