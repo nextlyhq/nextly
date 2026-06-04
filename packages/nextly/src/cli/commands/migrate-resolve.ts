@@ -140,7 +140,9 @@ export async function runMigrateResolve(
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
 
-    const result = await withMigrateLock(db, dialect, () =>
+    // fail-fast mode (the default) never returns undefined — it runs fn or
+    // throws — so the non-null assertion below is safe.
+    const result = (await withMigrateLock(db, dialect, () =>
       resolveMigration({
         mode,
         filename,
@@ -156,7 +158,7 @@ export async function runMigrateResolve(
           return introspectLiveSnapshot(db, dialect, managed);
         },
       })
-    );
+    ))!;
 
     switch (result.kind) {
       case "applied":

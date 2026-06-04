@@ -45,3 +45,22 @@ describe("filterUnsafeStatements", () => {
     expect(out).toEqual(["DROP TABLE `dynamic_collections`"]);
   });
 });
+
+describe("filterUnsafeStatements — internal nextly_ table allowlist", () => {
+  it("blocks DROP of internal nextly_ tables WITHOUT a warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const out = filterUnsafeStatements(
+      ['DROP TABLE "nextly_migrate_lock"', 'DROP TABLE "nextly_schema_events"'],
+      []
+    );
+    expect(out).toEqual([]); // both blocked
+    expect(warn).not.toHaveBeenCalled(); // silently
+  });
+
+  it("still warns when blocking a non-internal orphan table", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const out = filterUnsafeStatements(['DROP TABLE "dc_orphan"'], []);
+    expect(out).toEqual([]);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+});
