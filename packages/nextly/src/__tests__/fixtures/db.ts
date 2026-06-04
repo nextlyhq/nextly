@@ -91,14 +91,6 @@ function createTables(sqlite: Database.Database) {
     CREATE UNIQUE INDEX IF NOT EXISTS evt_identifier_token_hash_unique ON email_verification_tokens(identifier, token_hash);
     CREATE INDEX IF NOT EXISTS evt_expires_idx ON email_verification_tokens(expires);
 
-    CREATE TABLE IF NOT EXISTS verification_tokens (
-      identifier TEXT NOT NULL,
-      token TEXT NOT NULL,
-      expires INTEGER NOT NULL
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS verification_tokens_identifier_token_pk ON verification_tokens(identifier, token);
-    CREATE INDEX IF NOT EXISTS verification_tokens_token_idx ON verification_tokens(token);
-
     CREATE TABLE IF NOT EXISTS user_roles (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

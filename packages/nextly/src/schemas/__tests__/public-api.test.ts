@@ -51,7 +51,6 @@ describe("schemas public API", () => {
         "users",
         "accounts",
         "sessions",
-        "verification_tokens",
         "password_reset_tokens",
         "email_verification_tokens",
         "refresh_tokens",

@@ -188,10 +188,6 @@ export interface AuthSchemaTables {
     tokenHash: unknown;
     expires: unknown;
   };
-  verificationTokens: {
-    id?: unknown;
-    expires: unknown;
-  };
   accounts: {
     id: unknown;
     userId: unknown;
