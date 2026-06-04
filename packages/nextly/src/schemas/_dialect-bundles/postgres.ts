@@ -33,7 +33,6 @@ export {
 
 // Auth tokens.
 export {
-  verificationTokens,
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,

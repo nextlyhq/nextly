@@ -1,8 +1,7 @@
 /**
  * Auth-token tables — MySQL.
  *
- * Tables: verificationTokens, emailVerificationTokens, passwordResetTokens,
- * refreshTokens.
+ * Tables: emailVerificationTokens, passwordResetTokens, refreshTokens.
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -25,22 +24,6 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import { users } from "../users/mysql";
-
-export const verificationTokens = mysqlTable(
-  "verification_tokens",
-  {
-    identifier: varchar("identifier", { length: 191 }).notNull(),
-    token: varchar("token", { length: 191 }).notNull(),
-    expires: datetime("expires").notNull(),
-  },
-  t => [
-    uniqueIndex("verification_tokens_identifier_token_pk").on(
-      t.identifier,
-      t.token
-    ),
-    index("verification_tokens_token_idx").on(t.token),
-  ]
-);
 
 // Password reset tokens (custom table)
 export const passwordResetTokens = mysqlTable(

@@ -18,7 +18,6 @@ export {
 } from "../users/mysql-relations";
 
 export {
-  verificationTokens,
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,
