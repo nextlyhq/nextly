@@ -2,9 +2,10 @@
  * Playground reset.
  *
  * Wipes the local DB, uploaded media, Next.js / Turbo caches, generated
- * types and Drizzle migrations, then re-runs the seed. Branches on
- * DB_DIALECT: SQLite deletes the file, Postgres drops/recreates the
- * `public` schema, MySQL drops/recreates the database.
+ * types and Drizzle migrations, then re-runs the seed. The dialect is taken
+ * from `DB_DIALECT` when set, otherwise auto-detected from `DATABASE_URL`
+ * (see `resolveDialect`): SQLite deletes the file, Postgres drops/recreates
+ * the `public` schema, MySQL drops/recreates the database.
  *
  * Does NOT spawn `next dev`. Contributor runs `pnpm dev:app` after.
  *
@@ -12,8 +13,8 @@
  * to other tools and survive a reset.
  *
  * Usage:
- *   pnpm dev:reset                # SQLite by default
- *   DB_DIALECT=postgresql pnpm dev:reset
+ *   pnpm dev:reset                       # dialect auto-detected from DATABASE_URL
+ *   DB_DIALECT=postgresql pnpm dev:reset # explicit override
  *   DB_DIALECT=mysql pnpm dev:reset
  */
 import * as fs from "node:fs/promises";
@@ -101,9 +102,32 @@ function resolveSqlitePath(databaseUrl: string | undefined): string {
   return path.isAbsolute(raw) ? raw : path.resolve(PLAYGROUND_DIR, raw);
 }
 
+/**
+ * Resolve the DB dialect to reset. An explicit `DB_DIALECT` wins; otherwise
+ * detect from the `DATABASE_URL` scheme (matching how the `nextly` migrate CLI
+ * auto-detects). Falling back to "sqlite" only when there's no Postgres/MySQL
+ * URL avoids the footgun where a bare `pnpm dev:reset` against a Postgres
+ * `DATABASE_URL` silently wiped a nonexistent SQLite file and left the real DB
+ * untouched.
+ */
+export function resolveDialect(
+  dbDialect: string | undefined,
+  databaseUrl: string | undefined
+): "sqlite" | "postgresql" | "mysql" {
+  if (dbDialect === "postgresql" || dbDialect === "postgres")
+    return "postgresql";
+  if (dbDialect === "mysql") return "mysql";
+  if (dbDialect === "sqlite") return "sqlite";
+
+  const url = databaseUrl ?? "";
+  if (/^postgres(ql)?:\/\//i.test(url)) return "postgresql";
+  if (/^mysql:\/\//i.test(url)) return "mysql";
+  return "sqlite"; // file: URL or unset
+}
+
 export async function runReset(): Promise<void> {
-  const dialect = process.env.DB_DIALECT ?? "sqlite";
   const databaseUrl = process.env.DATABASE_URL;
+  const dialect = resolveDialect(process.env.DB_DIALECT, databaseUrl);
 
   console.log("[nextly] Wiping file state...");
   await wipeFileState(PLAYGROUND_DIR);
@@ -111,7 +135,7 @@ export async function runReset(): Promise<void> {
   console.log(`[nextly] Wiping ${dialect} database...`);
   if (dialect === "sqlite") {
     await wipeDbSqlite(resolveSqlitePath(databaseUrl));
-  } else if (dialect === "postgresql" || dialect === "postgres") {
+  } else if (dialect === "postgresql") {
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required for postgres reset");
     }

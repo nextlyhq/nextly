@@ -7,7 +7,7 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { wipeDbSqlite, wipeFileState } from "../reset";
+import { resolveDialect, wipeDbSqlite, wipeFileState } from "../reset";
 
 const TMP = path.join("/tmp", "playground-reset-test");
 
@@ -44,6 +44,31 @@ describe("wipeFileState", () => {
     await fs.rm(path.join(TMP, ".next"), { recursive: true });
     await fs.rm(path.join(TMP, ".turbo"), { recursive: true });
     await expect(wipeFileState(TMP)).resolves.toBeUndefined();
+  });
+});
+
+describe("resolveDialect", () => {
+  it("detects postgresql from a postgres:// URL when DB_DIALECT is unset", () => {
+    expect(resolveDialect(undefined, "postgresql://u:p@host/db")).toBe(
+      "postgresql"
+    );
+    expect(resolveDialect(undefined, "postgres://u:p@host/db")).toBe(
+      "postgresql"
+    );
+  });
+
+  it("detects mysql from a mysql:// URL", () => {
+    expect(resolveDialect(undefined, "mysql://u:p@host/db")).toBe("mysql");
+  });
+
+  it("falls back to sqlite for a file: URL or no URL", () => {
+    expect(resolveDialect(undefined, "file:./data/x.db")).toBe("sqlite");
+    expect(resolveDialect(undefined, undefined)).toBe("sqlite");
+  });
+
+  it("honors an explicit DB_DIALECT over the URL (and normalizes 'postgres')", () => {
+    expect(resolveDialect("postgres", "file:./x.db")).toBe("postgresql");
+    expect(resolveDialect("sqlite", "postgresql://u:p@host/db")).toBe("sqlite");
   });
 });
 
