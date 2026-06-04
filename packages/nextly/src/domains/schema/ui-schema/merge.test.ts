@@ -67,4 +67,25 @@ describe("mergeUiEntities", () => {
     expect(r.singles[0].tableName).toBe("single_home");
     expect(r.components[0].tableName).toBe("comp_seo");
   });
+
+  it("forwards a UI collection's status: true into the merged MinimalConfigEntity", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "stories",
+          status: true,
+          fields: [{ name: "body", type: "text" }],
+        },
+      ],
+    });
+    const merged = mergeUiEntities({
+      codeCollections: [],
+      codeSingles: [],
+      codeComponents: [],
+      manifest,
+    });
+    const stories = merged.collections.find(c => c.slug === "stories");
+    expect(stories?.status).toBe(true);
+    expect(stories?.tableName).toBe("dc_stories");
+  });
 });

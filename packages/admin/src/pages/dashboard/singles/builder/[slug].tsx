@@ -47,16 +47,16 @@ import {
   reorderNestedFields,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
-import { singleToManifestEntity } from "@admin/lib/builder/to-manifest-entity-single";
-import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
   SchemaRenameResolution,
 } from "@admin/services/schemaApi";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiSingle } from "@admin/types/entities";
@@ -238,12 +238,11 @@ export default function SingleBuilderEditPage({
           // D-series: database mode also writes the committable ui-schema.json
           // so the single has a migration record. Non-fatal if it fails.
           try {
-            const entity = singleToManifestEntity({
-              slug,
-              settings: { singularName: settings?.singularName },
-              fields: fieldDefinitions,
-            });
-            await schemaFileApi.writeSingle(entity);
+            if (settings) {
+              await schemaFileApi.writeSingle(
+                singleEntityFromSettings(slug, settings, fieldDefinitions)
+              );
+            }
           } catch (err) {
             const m = (err as { message?: string })?.message;
             toast.warning(
@@ -301,6 +300,20 @@ export default function SingleBuilderEditPage({
             setOriginalFields(builder.fields.filter(f => !f.isSystem));
             // Re-pin settings baseline so the Save button disables again.
             setOriginalSettings(settings);
+            // Mirror the settings change (notably Draft/Published) into the
+            // committable ui-schema.json. Best-effort; DB write already done.
+            void (async () => {
+              try {
+                await schemaFileApi.writeSingle(
+                  singleEntityFromSettings(slug, settings, fieldDefinitions)
+                );
+              } catch (err) {
+                const m = (err as { message?: string })?.message;
+                toast.warning(
+                  `Single updated, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+                );
+              }
+            })();
           },
           onError: err => {
             const errorObj = err as { message?: string };
