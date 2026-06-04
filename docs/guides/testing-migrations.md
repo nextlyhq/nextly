@@ -9,6 +9,11 @@ the migration CLI, and authoring schema two ways — **code-first** and via the
 > Make sure `DATABASE_URL` in `apps/playground/.env` points at a **throwaway**
 > Postgres DB — several commands drop tables.
 
+> **Looking for the full playbook?** This page is the quick reference. For an
+> exhaustive manual-testing guide — every command + flag, the migrate lock,
+> rollback, production run-on-boot, CI/build integration, and troubleshooting —
+> see [manual-testing-migrations.md](./manual-testing-migrations.md).
+
 ---
 
 ## 1. The migration commands
@@ -61,11 +66,8 @@ export const Books = defineCollection({
 
 ### B. Admin UI (the builder)
 
-1. In `apps/playground/.env`, set the builder mode:
-   - `NEXT_PUBLIC_NEXTLY_UI_SCHEMA_WRITE=0` → **database mode** (applies to the DB
-     **and** writes `ui-schema.json` — the new dual-write).
-   - `NEXT_PUBLIC_NEXTLY_UI_SCHEMA_WRITE=1` → **file mode** (writes
-     `ui-schema.json` only, no DB change).
+1. The builder always **dual-writes**: every create/edit/delete applies to the
+   dev DB **and** writes the committable `ui-schema.json`. (No mode flag.)
 2. Start the dev server: `pnpm dev:app` (from the repo root).
 3. Go to `/admin` → builder → create a **collection** or **single**, add fields
    (the picker now offers the full canonical set, incl. `relationship` +
