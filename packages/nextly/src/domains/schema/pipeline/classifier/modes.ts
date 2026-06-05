@@ -37,6 +37,10 @@ function isDestructive(op: Operation): boolean {
     case "add_column":
       // A NOT NULL column with no default fails at apply time.
       return op.column.nullable === false && op.column.default == null;
+    case "drop_index":
+      // Dropping an index/constraint is destructive (loses uniqueness
+      // enforcement / index). add_index is additive → falls through to false.
+      return true;
     default:
       return false;
   }
@@ -54,6 +58,8 @@ function reasonFor(op: Operation): string {
       return `adds NOT NULL to column '${op.tableName}.${op.columnName}' (would fail on existing rows)`;
     case "add_column":
       return `adds NOT NULL column '${op.tableName}.${op.column.name}' with no default (would fail on existing rows)`;
+    case "drop_index":
+      return `drops index '${op.index.name}' on '${op.tableName}'`;
     default:
       return `operation '${op.type}'`;
   }

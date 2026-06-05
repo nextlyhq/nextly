@@ -7,9 +7,18 @@
 // so they must emit nothing here (empty array) — emitting DDL for them
 // would double-apply.
 
-import type { Operation, TableSpec } from "../diff/types";
+import type { IndexSpec, Operation, TableSpec } from "../diff/types";
 
 import { quoteIdent } from "./identifiers";
+
+/** Render a single CREATE [UNIQUE] INDEX statement for the apply fast-path. */
+function createIndexStatement(tableName: string, index: IndexSpec): string {
+  const cols = index.columns.map(c => quoteIdent(c)).join(", ");
+  return (
+    `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ` +
+    `${quoteIdent(index.name)} ON ${quoteIdent(tableName)} (${cols})`
+  );
+}
 
 /**
  * Render the `USING` expression for an ALTER COLUMN TYPE migration.
@@ -119,8 +128,21 @@ export function emitPostgresDdl(op: Operation): string[] {
     case "add_table": {
       const cols = op.table.columns.map(createTableColumn);
       const createTable = `CREATE TABLE ${quoteIdent(op.table.name)} (\n  ${cols.join(",\n  ")}\n)`;
-      return [createTable, ...createTableCanonicalIndexes(op.table)];
+      // C1: render the table's tracked indexes (slug/created_at + user/
+      // relationship). When `indexes` is undefined (pre-C1 sentinel), fall
+      // back to the legacy hardcoded canonical slug/created_at indexes.
+      const indexStmts =
+        op.table.indexes !== undefined
+          ? op.table.indexes.map(i => createIndexStatement(op.table.name, i))
+          : createTableCanonicalIndexes(op.table);
+      return [createTable, ...indexStmts];
     }
+
+    case "add_index":
+      return [createIndexStatement(op.tableName, op.index)];
+
+    case "drop_index":
+      return [`DROP INDEX IF EXISTS ${quoteIdent(op.index.name)}`];
 
     case "change_column_type":
       return [

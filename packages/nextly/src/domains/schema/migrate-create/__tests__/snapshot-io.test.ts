@@ -101,6 +101,34 @@ describe("snapshot-io", () => {
       expect(parsed.snapshot.tables[0].name).toBe("dc_posts");
     });
 
+    it("persists indexes when present and leaves them undefined when absent", async () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "dc_x",
+            columns: [{ name: "id", type: "text", nullable: false }],
+            indexes: [
+              { name: "idx_dc_x_slug", columns: ["slug"], unique: true },
+            ],
+          },
+          {
+            name: "dc_y",
+            columns: [{ name: "id", type: "text", nullable: false }],
+            // no indexes key -> stays undefined (pre-C1 sentinel)
+          },
+        ],
+      };
+      await writeSnapshot(metaDir, "20260601_120000_001_idx", snapshot, "-- sql");
+      const loaded = await loadLatestSnapshot(metaDir);
+      const tables = loaded!.data.snapshot.tables;
+      const x = tables.find(t => t.name === "dc_x")!;
+      const y = tables.find(t => t.name === "dc_y")!;
+      expect(x.indexes).toEqual([
+        { name: "idx_dc_x_slug", columns: ["slug"], unique: true },
+      ]);
+      expect(y.indexes).toBeUndefined();
+    });
+
     it("sorts tables and columns alphabetically for reproducibility", async () => {
       const snapshot = {
         tables: [

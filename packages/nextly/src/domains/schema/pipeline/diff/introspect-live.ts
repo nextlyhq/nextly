@@ -17,7 +17,61 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import type { ColumnSpec, NextlySchemaSnapshot, TableSpec } from "./types";
+import type {
+  ColumnSpec,
+  IndexSpec,
+  NextlySchemaSnapshot,
+  TableSpec,
+} from "./types";
+
+/** A single (table, index, column) row from a per-dialect index query. */
+interface IndexRow {
+  table: string;
+  index: string;
+  unique: boolean;
+  column: string;
+}
+
+/**
+ * Group index rows (one per index column, ordered) by table + index name, and
+ * attach an `indexes` array to every table in the snapshot. Every table gets a
+ * DEFINED array (possibly empty) — introspection never leaves it undefined, so
+ * the diff sentinel only ever comes from pre-C1 on-disk snapshots.
+ */
+function attachIndexes(
+  snapshot: NextlySchemaSnapshot,
+  rows: IndexRow[]
+): void {
+  const byTable = new Map<
+    string,
+    Map<string, { unique: boolean; columns: string[] }>
+  >();
+  for (const r of rows) {
+    let indexes = byTable.get(r.table);
+    if (!indexes) {
+      indexes = new Map();
+      byTable.set(r.table, indexes);
+    }
+    let idx = indexes.get(r.index);
+    if (!idx) {
+      idx = { unique: r.unique, columns: [] };
+      indexes.set(r.index, idx);
+    }
+    idx.columns.push(r.column);
+  }
+  for (const t of snapshot.tables) {
+    const indexes = byTable.get(t.name);
+    t.indexes = indexes
+      ? [...indexes.entries()].map(
+          ([name, v]): IndexSpec => ({
+            name,
+            columns: v.columns,
+            unique: v.unique,
+          })
+        )
+      : [];
+  }
+}
 
 interface PgRow {
   table_name: string;
@@ -33,6 +87,24 @@ interface MysqlRow {
   COLUMN_TYPE: string;
   IS_NULLABLE: "YES" | "NO";
   COLUMN_DEFAULT: string | null;
+}
+
+interface MysqlIndexRow {
+  TABLE_NAME: string;
+  INDEX_NAME: string;
+  NON_UNIQUE: number | string;
+  COLUMN_NAME: string;
+  SEQ_IN_INDEX: number;
+}
+
+interface SqliteIndexListRow {
+  name: string;
+  unique: number;
+  origin: string;
+}
+
+interface SqliteIndexInfoRow {
+  name: string;
 }
 
 interface SqliteRow {
@@ -80,7 +152,35 @@ export async function introspectLiveSnapshot(
             AND table_name IN (${tableNamesIn})
           ORDER BY table_name, ordinal_position`
     )) as { rows: PgRow[] };
-    return buildSnapshotFromPgRows(result.rows);
+    const snapshot = buildSnapshotFromPgRows(result.rows);
+    // Index query: join pg_index/pg_class/pg_attribute. Exclude primary keys
+    // (indisprimary) and partial indexes (indpred). Expression indexes yield no
+    // pg_attribute row and are naturally excluded.
+    const idxResult = (await dbTyped.execute(
+      sql`SELECT t.relname AS table, i.relname AS index, ix.indisunique AS unique,
+                 a.attname AS column, array_position(ix.indkey, a.attnum) AS ord
+          FROM pg_class t
+          JOIN pg_index ix ON ix.indrelid = t.oid
+          JOIN pg_class i ON i.oid = ix.indexrelid
+          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+          WHERE t.relname IN (${tableNamesIn})
+            AND ix.indisprimary = false
+            AND ix.indpred IS NULL
+            AND a.attnum > 0
+          ORDER BY t.relname, i.relname, ord`
+    )) as {
+      rows: { table: string; index: string; unique: boolean; column: string }[];
+    };
+    attachIndexes(
+      snapshot,
+      idxResult.rows.map(r => ({
+        table: r.table,
+        index: r.index,
+        unique: r.unique,
+        column: r.column,
+      }))
+    );
+    return snapshot;
   }
 
   if (dialect === "mysql") {
@@ -100,19 +200,66 @@ export async function introspectLiveSnapshot(
       Array.isArray((result as unknown[])[0])
         ? (result as [MysqlRow[], unknown])[0]
         : (result as MysqlRow[]);
-    return buildSnapshotFromMysqlRows(rows);
+    const snapshot = buildSnapshotFromMysqlRows(rows);
+    // Index query: information_schema.STATISTICS. Exclude PRIMARY.
+    const idxRaw = (await dbTyped.execute(
+      sql`SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX
+          FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME IN (${tableNamesIn})
+            AND INDEX_NAME <> 'PRIMARY'
+          ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
+    )) as MysqlIndexRow[] | [MysqlIndexRow[], unknown];
+    const idxRows: MysqlIndexRow[] =
+      Array.isArray(idxRaw) &&
+      idxRaw.length > 0 &&
+      Array.isArray((idxRaw as unknown[])[0])
+        ? (idxRaw as [MysqlIndexRow[], unknown])[0]
+        : (idxRaw as MysqlIndexRow[]);
+    attachIndexes(
+      snapshot,
+      idxRows.map(r => ({
+        table: r.TABLE_NAME,
+        index: r.INDEX_NAME,
+        unique: Number(r.NON_UNIQUE) === 0,
+        column: r.COLUMN_NAME,
+      }))
+    );
+    return snapshot;
   }
 
   // SQLite - PRAGMA per table; no information_schema.
   const dbTyped = db as SqliteAll;
+  const dbAny = db as {
+    all(query: unknown): SqliteIndexListRow[] | Promise<SqliteIndexListRow[]>;
+  };
   const tables: TableSpec[] = [];
   for (const table of tableNames) {
     const rows = await dbTyped.all(
       sql`PRAGMA table_info(${sql.identifier(table)})`
     );
     if (rows.length === 0) continue;
+    // Indexes: PRAGMA index_list + index_info. Filter pk-origin indexes and
+    // SQLite's auto-created sqlite_autoindex_* (unique-constraint backed).
+    const idxList = (await dbAny.all(
+      sql`PRAGMA index_list(${sql.identifier(table)})`
+    ));
+    const indexes: IndexSpec[] = [];
+    for (const ix of idxList) {
+      if (ix.origin === "pk") continue;
+      if (ix.name.startsWith("sqlite_autoindex_")) continue;
+      const infoRows = (await dbAny.all(
+        sql`PRAGMA index_info(${sql.identifier(ix.name)})`
+      )) as unknown as SqliteIndexInfoRow[];
+      indexes.push({
+        name: ix.name,
+        columns: infoRows.map(r => r.name),
+        unique: ix.unique === 1,
+      });
+    }
     tables.push({
       name: table,
+      indexes,
       columns: rows.map(
         (r): ColumnSpec => ({
           name: r.name,
