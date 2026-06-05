@@ -54,16 +54,16 @@ import {
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
-import { componentToManifestEntity } from "@admin/lib/builder/to-manifest-entity-component";
-import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { componentToManifestEntity } from "@admin/lib/builder/to-manifest-entity-component";
 import { componentApi } from "@admin/services/componentApi";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
   SchemaRenameResolution,
 } from "@admin/services/schemaApi";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
