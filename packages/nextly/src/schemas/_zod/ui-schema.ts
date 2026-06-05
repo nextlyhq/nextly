@@ -26,6 +26,7 @@ export const UI_FIELD_TYPES = [
   "richText",
   "number",
   "checkbox",
+  "toggle",
   "date",
   "select",
   "relationship",
@@ -55,19 +56,32 @@ const slug = z
   });
 
 const selectOption = z.object({
+  id: z.string().optional(),
   label: z.string().min(1),
   value: z.string().min(1),
 });
 
 const validation = z
   .object({
+    minLength: z.number().optional(),
+    maxLength: z.number().optional(),
     min: z.number().optional(),
     max: z.number().optional(),
+    minRows: z.number().optional(),
+    maxRows: z.number().optional(),
     pattern: z.string().optional(),
+    message: z.string().optional(),
   })
   .refine(v => v.min === undefined || v.max === undefined || v.min <= v.max, {
     message: "validation.min must be <= validation.max",
   })
+  .refine(
+    v =>
+      v.minLength === undefined ||
+      v.maxLength === undefined ||
+      v.minLength <= v.maxLength,
+    { message: "validation.minLength must be <= validation.maxLength" }
+  )
   .refine(
     v => {
       if (v.pattern === undefined) return true;
@@ -81,18 +95,70 @@ const validation = z
     { message: "validation.pattern must be a valid regular expression" }
   );
 
+const fieldAdmin = z
+  .object({
+    width: z.enum(["25%", "33%", "50%", "66%", "75%", "100%"]).optional(),
+    position: z.literal("sidebar").optional(),
+    readOnly: z.boolean().optional(),
+    hidden: z.boolean().optional(),
+    description: z.string().optional(),
+    placeholder: z.string().optional(),
+    hideGutter: z.boolean().optional(),
+    allowCreate: z.boolean().optional(),
+    // condition's operator union is broad and the runtime evaluator is
+    // fail-open; store it permissively so nothing is lost.
+    condition: z.record(z.string(), z.unknown()).optional(),
+  })
+  .partial();
+
 // Recursive field shape: container types (repeater/group/component) carry
 // nested `fields`, so `field` references itself via z.lazy. The explicit
 // FieldNode type breaks the circular inference.
 export type FieldNode = {
   name: string;
   type: (typeof UI_FIELD_TYPES)[number];
+  label?: string;
   required?: boolean;
+  unique?: boolean;
+  index?: boolean;
   hasMany?: boolean;
-  relationTo?: string;
-  options?: { label: string; value: string }[];
+  relationTo?: string | string[];
+  options?: { id?: string; label: string; value: string }[];
   defaultValue?: unknown;
-  validation?: { min?: number; max?: number; pattern?: string };
+  validation?: {
+    minLength?: number;
+    maxLength?: number;
+    min?: number;
+    max?: number;
+    minRows?: number;
+    maxRows?: number;
+    pattern?: string;
+    message?: string;
+  };
+  admin?: {
+    width?: string;
+    position?: "sidebar";
+    readOnly?: boolean;
+    hidden?: boolean;
+    description?: string;
+    placeholder?: string;
+    hideGutter?: boolean;
+    allowCreate?: boolean;
+    condition?: Record<string, unknown>;
+  };
+  maxDepth?: number;
+  allowCreate?: boolean;
+  allowEdit?: boolean;
+  isSortable?: boolean;
+  relationshipFilter?: { field: string; equals: string };
+  mimeTypes?: string;
+  maxFileSize?: number;
+  labels?: { singular?: string; plural?: string };
+  initCollapsed?: boolean;
+  rowLabelField?: string;
+  component?: string;
+  components?: string[];
+  repeatable?: boolean;
   fields?: FieldNode[];
 };
 
@@ -103,12 +169,36 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
         .string()
         .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
       type: z.enum(UI_FIELD_TYPES),
+      label: z.string().optional(),
       required: z.boolean().optional(),
+      unique: z.boolean().optional(),
+      index: z.boolean().optional(),
       hasMany: z.boolean().optional(),
-      relationTo: z.string().optional(),
+      relationTo: z.union([z.string(), z.array(z.string())]).optional(),
       options: z.array(selectOption).optional(),
       defaultValue: z.unknown().optional(),
       validation: validation.optional(),
+      admin: fieldAdmin.optional(),
+      maxDepth: z.number().optional(),
+      allowCreate: z.boolean().optional(),
+      allowEdit: z.boolean().optional(),
+      isSortable: z.boolean().optional(),
+      relationshipFilter: z
+        .object({ field: z.string(), equals: z.string() })
+        .optional(),
+      mimeTypes: z.string().optional(),
+      maxFileSize: z.number().optional(),
+      labels: z
+        .object({
+          singular: z.string().optional(),
+          plural: z.string().optional(),
+        })
+        .optional(),
+      initCollapsed: z.boolean().optional(),
+      rowLabelField: z.string().optional(),
+      component: z.string().optional(),
+      components: z.array(z.string()).optional(),
+      repeatable: z.boolean().optional(),
       // Nested fields for container types (repeater/group/component).
       fields: z.array(field).optional(),
     })
@@ -125,7 +215,9 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
       }
       if (
         (f.type === "relationship" || f.type === "upload") &&
-        (f.relationTo === undefined || f.relationTo.length === 0)
+        (f.relationTo === undefined ||
+          (typeof f.relationTo === "string" && f.relationTo.length === 0) ||
+          (Array.isArray(f.relationTo) && f.relationTo.length === 0))
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -156,7 +248,8 @@ const field: z.ZodType<FieldNode> = z.lazy(() =>
         const dv = f.defaultValue;
         const okType =
           (f.type === "number" && typeof dv === "number") ||
-          (f.type === "checkbox" && typeof dv === "boolean") ||
+          ((f.type === "checkbox" || f.type === "toggle") &&
+            typeof dv === "boolean") ||
           ([
             "text",
             "textarea",

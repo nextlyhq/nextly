@@ -325,7 +325,11 @@ export function computeJournalSummaryFromOperations(
         break;
       case "drop_table":
       case "drop_column":
+      case "drop_index":
         removed++;
+        break;
+      case "add_index":
+        added++;
         break;
       case "rename_table":
       case "rename_column":
@@ -646,6 +650,8 @@ export class PushSchemaPipeline {
           case "change_column_type":
           case "change_column_nullable":
           case "change_column_default":
+          case "add_index":
+          case "drop_index":
             affectedTableNames.add(op.tableName);
             break;
           default: {

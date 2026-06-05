@@ -92,6 +92,10 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
         fromDefault: op.toDefault,
         toDefault: op.fromDefault,
       };
+    case "add_index":
+      return { type: "drop_index", tableName: op.tableName, index: op.index };
+    case "drop_index":
+      return { type: "add_index", tableName: op.tableName, index: op.index };
     default: {
       const _exhaustive: never = op;
       throw new Error(`down-generator: unhandled op ${String(_exhaustive)}`);

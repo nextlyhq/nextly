@@ -30,9 +30,27 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "../../services/field-column-descriptor";
 
-import type { ColumnSpec, TableSpec } from "./types";
+import { indexKey } from "./index-util";
+import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
+
+/**
+ * Drop indexes that duplicate an earlier one by logical key (same column set +
+ * uniqueness). The system slug index and a user/injected `unique` slug field
+ * both target `unique(slug)`; keep the first (system) and drop the redundant
+ * one so migrations don't emit two indexes for the same constraint.
+ */
+function dedupeIndexes(indexes: IndexSpec[]): IndexSpec[] {
+  const seen = new Set<string>();
+  return indexes.filter(i => {
+    const key = indexKey(i);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 // Minimal field shape we read. The real FieldDefinition type has many more
 // attributes; we only need name + type + required + hasMany + relationTo for
@@ -44,6 +62,8 @@ interface MinimalFieldDef {
   required?: boolean;
   hasMany?: boolean;
   relationTo?: unknown;
+  unique?: boolean;
+  index?: boolean;
 }
 
 /** Optional toggles that affect which system columns are injected. */
@@ -107,7 +127,46 @@ export function buildDesiredTableFromFields(
       default: undefined,
     });
   }
-  return { name: tableName, columns };
+
+  // Indexes: system slug(unique)+created_at, plus per-field unique/index and a
+  // single-relationship auto-index (matches the runtime live-DDL). hasMany /
+  // polymorphic relationships are JSON columns and get NO index.
+  const indexes: IndexSpec[] = [];
+  if (columns.some(c => c.name === "slug")) {
+    indexes.push({
+      name: `idx_${tableName}_slug`,
+      columns: ["slug"],
+      unique: true,
+    });
+  }
+  if (columns.some(c => c.name === "created_at")) {
+    indexes.push({
+      name: `idx_${tableName}_created_at`,
+      columns: ["created_at"],
+      unique: false,
+    });
+  }
+  for (const field of fields) {
+    const col = toSnakeCase(field.name);
+    const isSingleRelation =
+      (field.type === "relationship" || field.type === "upload") &&
+      field.hasMany !== true &&
+      !Array.isArray(field.relationTo);
+    if (field.unique === true) {
+      indexes.push({
+        name: `uq_${tableName}_${col}`,
+        columns: [col],
+        unique: true,
+      });
+    } else if (field.index === true || isSingleRelation) {
+      indexes.push({
+        name: `idx_${tableName}_${col}`,
+        columns: [col],
+        unique: false,
+      });
+    }
+  }
+  return { name: tableName, columns, indexes: dedupeIndexes(indexes) };
 }
 
 /**
@@ -297,5 +356,14 @@ export function buildDesiredTableFromComponentFields(
     });
   }
 
-  return { name: tableName, columns };
+  // Component tables have no slug; they get the system created_at index only.
+  const indexes: IndexSpec[] = [];
+  if (columns.some(c => c.name === "created_at")) {
+    indexes.push({
+      name: `idx_${tableName}_created_at`,
+      columns: ["created_at"],
+      unique: false,
+    });
+  }
+  return { name: tableName, columns, indexes: dedupeIndexes(indexes) };
 }

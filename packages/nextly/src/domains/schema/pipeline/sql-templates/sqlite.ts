@@ -19,10 +19,13 @@
 
 import type {
   AddColumnOp,
+  AddIndexOp,
   AddTableOp,
   ColumnSpec,
   DropColumnOp,
+  DropIndexOp,
   DropTableOp,
+  IndexSpec,
   Operation,
   RenameColumnOp,
   RenameTableOp,
@@ -77,6 +80,10 @@ export function generateSqliteSQL(op: Operation): string {
         "change_column_default",
         "Same recreate-table workaround as change_column_type."
       );
+    case "add_index":
+      return generateAddIndex(op);
+    case "drop_index":
+      return generateDropIndex(op);
     default: {
       const exhaustive: never = op;
       void exhaustive;
@@ -87,9 +94,26 @@ export function generateSqliteSQL(op: Operation): string {
   }
 }
 
+function createIndexStatement(tableName: string, index: IndexSpec): string {
+  const cols = index.columns.map(q).join(", ");
+  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})`;
+}
+
+function generateAddIndex(op: AddIndexOp): string {
+  return createIndexStatement(op.tableName, op.index);
+}
+
+function generateDropIndex(op: DropIndexOp): string {
+  return `DROP INDEX IF EXISTS ${q(op.index.name)}`;
+}
+
 function generateAddTable(op: AddTableOp): string {
   const cols = op.table.columns.map(c => `  ${columnDef(c)}`).join(",\n");
-  return `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
+  const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
+  const indexStmts = (op.table.indexes ?? []).map(i =>
+    createIndexStatement(op.table.name, i)
+  );
+  return [createTable, ...indexStmts].join(";\n");
 }
 
 function generateDropTable(op: DropTableOp): string {
