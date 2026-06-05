@@ -64,6 +64,8 @@
   --animate-slide-in-from-bottom-2: slide-in-from-bottom-2 0.2s ease-out;
   --animate-slide-in-from-left-2: slide-in-from-left-2 0.2s ease-out;
   --animate-slide-in-from-right-2: slide-in-from-right-2 0.2s ease-out;
+  --animate-brand-orbit: brand-orbit 2.4s linear infinite;
+  --animate-brand-pulse: brand-pulse 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
 
   /* ============================================
    * COLOR PALETTE (Tailwind v4.1)
@@ -478,6 +480,27 @@
 }
 
 /* Keyframes for custom animations */
+@keyframes brand-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes brand-pulse {
+  0%,
+  100% {
+    transform: scale(0.97);
+    filter: drop-shadow(0 0 10px hsl(var(--primary) / 0.08));
+  }
+  50% {
+    transform: scale(1.03);
+    filter: drop-shadow(0 0 20px hsl(var(--primary) / 0.22));
+  }
+}
+
 @keyframes accordion-down {
   from {
     height: 0;

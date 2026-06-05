@@ -263,8 +263,7 @@ export function getDefaultVisibleColumns(
   // Build the ordered data columns
   let orderedDataColumns: string[] = [];
 
-  // 1. ID
-  orderedDataColumns.push("id");
+  // 1. ID (Note: keep 'id' in availableColumns for the toggler, but skip pushing it to default visible columns)
 
   // 2. Title (either useAsTitle or 'title')
   if (useAsTitle && useAsTitle !== "id") {
@@ -287,9 +286,9 @@ export function getDefaultVisibleColumns(
   // 6. Remaining data columns
   orderedDataColumns = [...orderedDataColumns, ...otherColumns];
 
-  // Remove any duplicates and structural columns that might have slipped in
+  // Remove any duplicates, structural columns, and the ID column from default visibility
   const uniqueDataColumns = Array.from(new Set(orderedDataColumns)).filter(
-    col => !structural.includes(col)
+    col => !structural.includes(col) && col !== "id"
   );
 
   return [

@@ -1,7 +1,8 @@
 "use client";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
-import React from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import React, { useEffect, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Bookmark, Globe, type LucideIcon } from "@admin/components/icons";
@@ -13,11 +14,12 @@ import {
 } from "@admin/components/layout/sidebar";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useSidebarPins } from "@admin/hooks/useSidebarPins";
 import { getSidebarSinglesForLanding } from "@admin/lib/sidebar-landing";
 import { cn } from "@admin/lib/utils";
+import { singleApi } from "@admin/services/singleApi";
+import type { ApiSingle } from "@admin/types/entities";
 
 interface DynamicSingleNavProps {
   isActive: (href?: string) => boolean;
@@ -34,11 +36,56 @@ const PINNED_SINGLES_STORAGE_KEY = "nextly:sidebar:pinned-singles";
  * Renders each Single entity directly in the sidebar for easy access.
  * Each item links directly to its content editing page.
  */
+const SIDEBAR_PAGE_SIZE = 100;
+
 export function DynamicSingleNav({
   isActive,
   search = "",
 }: DynamicSingleNavProps) {
-  const { data: singlesData, isLoading } = useSingles();
+  // Walk the paginated singles endpoint until `meta.hasNext` is false so the
+  // sidebar can render every single regardless of count.
+  const {
+    data: singlesPages,
+    isLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  } = useInfiniteQuery({
+    queryKey: [
+      "singles",
+      "sidebar-all",
+      { pageSize: SIDEBAR_PAGE_SIZE },
+    ] as const,
+    queryFn: ({ pageParam }) =>
+      singleApi.fetchSingles({
+        pagination: { page: pageParam, pageSize: SIDEBAR_PAGE_SIZE },
+        sorting: [],
+        filters: {},
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.meta.hasNext ? allPages.length : undefined,
+  });
+
+  // Guard against a persistent-error retry loop: when `fetchNextPage` fails,
+  // React Query exhausts its retry policy and flips `isFetchingNextPage` back
+  // to false, but `hasNextPage` stays true (it's computed from the last
+  // successful page). Without the `isFetchNextPageError` check the effect
+  // would immediately re-fire and hammer the endpoint forever. Surfacing the
+  // error to the user belongs to a higher-level boundary; here we just stop
+  // the storm so retries can be triggered intentionally (e.g. on refocus).
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      void fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+
+  const allSingles: ApiSingle[] = useMemo(
+    () => singlesPages?.pages.flatMap(p => p.items) ?? [],
+    [singlesPages?.pages]
+  );
+
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
   const { capabilities } = useCurrentUserPermissions();
@@ -65,7 +112,7 @@ export function DynamicSingleNav({
   // (see `lib/sidebar-landing.ts`). Centralising the order keeps the
   // sidebar's first item and the redirect's landing target in lock-step.
   // Search filtering still happens here because it's sidebar-only state.
-  const baseSingles = getSidebarSinglesForLanding(singlesData?.items ?? [], {
+  const baseSingles = getSidebarSinglesForLanding(allSingles, {
     capabilities,
     pinnedSingles,
   });

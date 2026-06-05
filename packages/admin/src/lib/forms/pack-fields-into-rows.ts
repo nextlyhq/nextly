@@ -11,7 +11,6 @@ const BLOCK_FIELD_TYPES = new Set([
   "tabs",
   "row",
   "collapsible",
-  "group",
   "array",
   "blocks",
   "component",
@@ -46,6 +45,7 @@ function isBlockField(field: FieldConfig): boolean {
  * EntryFormContent which renders each row inside a flex container.
  */
 export function packFieldsIntoRows(fields: FieldConfig[]): FieldConfig[][] {
+  if (!fields || !Array.isArray(fields)) return [];
   const rows: FieldConfig[][] = [];
   let current: FieldConfig[] = [];
   let runningSum = 0;

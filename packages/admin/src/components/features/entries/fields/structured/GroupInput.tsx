@@ -25,10 +25,10 @@ import {
 import type { GroupFieldConfig, FieldConfig } from "nextly/config";
 import { useState } from "react";
 
+import { FieldRow } from "@admin/components/features/entries/EntryForm/FieldRow";
 import { ChevronDown, ChevronRight } from "@admin/components/icons";
+import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
-
-import { FieldRenderer } from "../FieldRenderer";
 
 // ============================================================================
 // Types
@@ -161,12 +161,13 @@ export function GroupInput({
   // =========================================
   // Used for visual grouping without nesting field paths
   if (!field.name) {
+    const rows = packFieldsIntoRows(field.fields as unknown as FieldConfig[]);
     return (
       <div className={cn("space-y-4", field.admin?.className)}>
-        {field.fields?.map((subField, idx) => (
-          <FieldRenderer
-            key={(subField as { name?: string }).name || idx}
-            field={subField as unknown as FieldConfig}
+        {rows.map((row, i) => (
+          <FieldRow
+            key={i}
+            fields={row}
             basePath={basePath}
             disabled={disabled}
             readOnly={readOnly}
@@ -201,7 +202,7 @@ export function GroupInput({
               className={cn(
                 "flex items-center gap-2 w-full text-left",
                 "rounded-none px-1 py-0.5",
-                "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
+                "hover-unified focus:outline-none"
               )}
               aria-expanded={isOpen}
             >
@@ -223,15 +224,20 @@ export function GroupInput({
         )}
         <CollapsibleContent>
           <div className="space-y-6 mt-3">
-            {field.fields?.map((subField, idx) => (
-              <FieldRenderer
-                key={(subField as { name?: string }).name || idx}
-                field={subField as unknown as FieldConfig}
-                basePath={groupPath}
-                disabled={disabled}
-                readOnly={readOnly}
-              />
-            ))}
+            {(() => {
+              const rows = packFieldsIntoRows(
+                field.fields as unknown as FieldConfig[]
+              );
+              return rows.map((row, i) => (
+                <FieldRow
+                  key={i}
+                  fields={row}
+                  basePath={groupPath}
+                  disabled={disabled}
+                  readOnly={readOnly}
+                />
+              ));
+            })()}
           </div>
         </CollapsibleContent>
       </Collapsible>
@@ -249,16 +255,16 @@ export function GroupInput({
         {/* Card Header - Collapsible trigger */}
         {field.label && (
           <CardHeader
-            className="pb-3 bg-primary/5/80 dark:bg-slate-900/80  border-b border-primary/5 dark:border-primary/5 p-4"
+            className="bg-primary/5/80 dark:bg-slate-900/80 border-b border-primary/5 dark:border-primary/5 p-0"
             noBorder
           >
             <CollapsibleTrigger asChild>
               <button
                 type="button"
                 className={cn(
-                  "flex items-center gap-2 w-full text-left",
-                  "rounded-none px-1 py-0.5",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
+                  "flex items-center gap-2 w-full text-left cursor-pointer",
+                  "rounded-none p-4",
+                  "hover-unified focus:outline-none"
                 )}
                 aria-expanded={isOpen}
               >
@@ -273,7 +279,7 @@ export function GroupInput({
               </button>
             </CollapsibleTrigger>
             {field.admin?.description && isOpen && (
-              <p className="text-xs text-muted-foreground leading-relaxed mt-1 pl-7">
+              <p className="text-xs text-muted-foreground leading-relaxed pb-4 px-4 pl-10">
                 {field.admin.description}
               </p>
             )}
@@ -283,15 +289,20 @@ export function GroupInput({
         {/* Card Content - Nested fields */}
         <CollapsibleContent>
           <CardContent className={cn("space-y-6 p-5", !field.label && "pt-5")}>
-            {field.fields?.map((subField, idx) => (
-              <FieldRenderer
-                key={(subField as { name?: string }).name || idx}
-                field={subField as unknown as FieldConfig}
-                basePath={groupPath}
-                disabled={disabled}
-                readOnly={readOnly}
-              />
-            ))}
+            {(() => {
+              const rows = packFieldsIntoRows(
+                field.fields as unknown as FieldConfig[]
+              );
+              return rows.map((row, i) => (
+                <FieldRow
+                  key={i}
+                  fields={row}
+                  basePath={groupPath}
+                  disabled={disabled}
+                  readOnly={readOnly}
+                />
+              ));
+            })()}
           </CardContent>
         </CollapsibleContent>
       </Collapsible>

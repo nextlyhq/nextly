@@ -1,15 +1,18 @@
 // Why: Basics-tab fields for the BuilderSettingsModal. Renders only the
-// fields listed in the per-kind config (config-driven, no kind branching
-// inside this component). Auto-derives the slug from the singular name on
-// each keystroke until the user explicitly overrides it via SlugInput's
-// Edit affordance — once `values.slug` differs from the snake-cased
-// singular, we treat that as an override and stop tracking.
+// fields listed in the per-kind config (config-driven). Auto-derives the
+// slug from the singular name on each keystroke until the user explicitly
+// overrides it via SlugInput's Edit affordance — once `values.slug` differs
+// from the auto-derived form, we treat that as an override and stop tracking.
+// Slug case is per-kind: singles use kebab (the entry-form slug validator is
+// kebab-only); collections and components keep snake to match their backend
+// validators. This is the one place the shared modal needs a per-kind branch
+// because the slug-case decision is genuinely kind-specific.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
 
-import { toSnakeName } from "@admin/lib/builder";
+import { toKebabName, toSnakeName } from "@admin/lib/builder";
 import { pluralizeName } from "@admin/lib/builder/pluralize-helper";
 
-import type { BasicsField } from "../builder-config";
+import type { BasicsField, BuilderKind } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 
 import { IconPicker } from "./IconPicker";
@@ -17,11 +20,16 @@ import { SlugInput } from "./SlugInput";
 
 type Props = {
   fields: readonly BasicsField[];
+  kind: BuilderKind;
   values: BuilderSettingsValues;
   onChange: (next: BuilderSettingsValues) => void;
 };
 
-export function BasicsTab({ fields, values, onChange }: Props) {
+export function BasicsTab({ fields, kind, values, onChange }: Props) {
+  // Singles' entry-form slug field validates as kebab-case only, so the
+  // auto-derived default in the create popup must also be kebab. Collections
+  // and components keep snake_case to match their respective backend rules.
+  const toSlug = kind === "single" ? toKebabName : toSnakeName;
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
     value: BuilderSettingsValues[K]
@@ -32,7 +40,7 @@ export function BasicsTab({ fields, values, onChange }: Props) {
   // auto-derive of the OLD singular would have produced. As soon as the
   // user stamps their own value, the auto-derive stops for that field.
   const setSingular = (singular: string) => {
-    const previousAutoSlug = toSnakeName(values.singularName);
+    const previousAutoSlug = toSlug(values.singularName);
     const isStillAutoSlug = !values.slug || values.slug === previousAutoSlug;
     const previousAutoPlural = pluralizeName(values.singularName);
     const isStillAutoPlural =
@@ -40,7 +48,7 @@ export function BasicsTab({ fields, values, onChange }: Props) {
     onChange({
       ...values,
       singularName: singular,
-      slug: isStillAutoSlug ? toSnakeName(singular) : values.slug,
+      slug: isStillAutoSlug ? toSlug(singular) : values.slug,
       pluralName: isStillAutoPlural
         ? pluralizeName(singular)
         : values.pluralName,

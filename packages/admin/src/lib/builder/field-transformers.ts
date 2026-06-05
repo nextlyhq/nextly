@@ -22,6 +22,14 @@ export function toSnakeName(s: string): string {
     .replace(/[^a-z0-9_]/g, "_");
 }
 
+export function toKebabName(s: string): string {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 /**
  * Recursively find a field by ID, searching through nested fields and block types.
  */

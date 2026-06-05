@@ -24,12 +24,14 @@
     "absolute-media-urls",
     "absolutize-media-variants",
     "admin-create-user-default-active",
+    "admin-entries-builder-ui-fixes",
     "api-default-all-statuses",
     "auth-setup-status-fail-closed",
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
     "date-field-coercion-singles-components",
     "fix-cli-prompt-for-folder-when-missing",
+    "fix-singles-sidebar-and-timestamps",
     "fix-status-column-strip",
     "flat-bugs-float",
     "initial-alpha-release",
@@ -39,6 +41,7 @@
     "schema-apply-silent-skip-fix",
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation",
+    "single-slug-kebab-and-cli-version-pins",
     "svg-upload-security-unification",
     "sync-private-package-versions"
   ]
