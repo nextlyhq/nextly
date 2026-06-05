@@ -78,6 +78,16 @@ function toDriftItem(op: Operation): DriftItem {
         kind: "-",
         detail: `${op.tableName}.${op.columnName} absent from DB`,
       };
+    case "add_index":
+      return {
+        kind: "+",
+        detail: `index '${op.index.name}' on '${op.tableName}' present in DB`,
+      };
+    case "drop_index":
+      return {
+        kind: "-",
+        detail: `index '${op.index.name}' on '${op.tableName}' absent from DB`,
+      };
     default:
       return { kind: "?", detail: `${op.type} differs` };
   }

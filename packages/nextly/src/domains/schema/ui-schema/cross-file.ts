@@ -60,15 +60,20 @@ export function validateCrossFile(
   ]);
   for (const e of manifestEntities) {
     for (const f of e.fields) {
-      if (
-        (f.type === "relationship" || f.type === "upload") &&
-        f.relationTo !== undefined &&
-        !validTargets.has(f.relationTo)
-      ) {
-        issues.push({
-          code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
-          message: `${e.slug}.${f.name} relates to unknown target '${f.relationTo}'`,
-        });
+      if (f.type !== "relationship" && f.type !== "upload") continue;
+      if (f.relationTo === undefined) continue;
+      // relationTo may be a single target or an array (polymorphic) — check
+      // every target so a polymorphic relation can't smuggle in an unknown one.
+      const targets = Array.isArray(f.relationTo)
+        ? f.relationTo
+        : [f.relationTo];
+      for (const target of targets) {
+        if (!validTargets.has(target)) {
+          issues.push({
+            code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+            message: `${e.slug}.${f.name} relates to unknown target '${target}'`,
+          });
+        }
       }
     }
   }

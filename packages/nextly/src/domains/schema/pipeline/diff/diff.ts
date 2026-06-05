@@ -26,6 +26,7 @@
 //      d. change_column_nullable (alphabetical)
 //      e. change_column_default (alphabetical)
 
+import { indexKey, isManagedIndexName } from "./index-util";
 import { normalizeDefault } from "./normalize-default";
 import { normalizeType } from "./normalize-type";
 import type {
@@ -37,6 +38,7 @@ import type {
   ColumnSpec,
   DropColumnOp,
   DropTableOp,
+  IndexSpec,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
@@ -54,6 +56,7 @@ export function diffSnapshots(
 
   const tableOps: Operation[] = [];
   const columnOps: Operation[] = [];
+  const indexOps: Operation[] = [];
 
   // Pass 1: table-level ops (add_table, drop_table). rename_table is NOT
   // detected here; same as columns, the rename detector reads (drop, add)
@@ -80,10 +83,41 @@ export function diffSnapshots(
     if (prevT && curT) {
       // Pass 2: column-level ops for tables present in both snapshots.
       columnOps.push(...diffColumns(name, prevT.columns, curT.columns));
+      // Pass 3: index-level ops (sentinel: skip when either side untracked).
+      indexOps.push(...diffIndexes(name, prevT.indexes, curT.indexes));
     }
   }
 
-  return [...tableOps, ...columnOps];
+  return [...tableOps, ...columnOps, ...indexOps];
+}
+
+/**
+ * Emit add_index / drop_index for a table present in both snapshots. Matches by
+ * logical key (sorted columns + uniqueness), so a constraint-backed unique and
+ * a CREATE UNIQUE INDEX on the same column compare equal. Skips entirely when
+ * either side's `indexes` is undefined (pre-C1 sentinel). Only drops indexes we
+ * manage (idx_/uq_, never *_pkey) — external indexes are left alone.
+ */
+function diffIndexes(
+  tableName: string,
+  prev: IndexSpec[] | undefined,
+  cur: IndexSpec[] | undefined
+): Operation[] {
+  if (prev === undefined || cur === undefined) return [];
+  const ops: Operation[] = [];
+  const prevByKey = new Map(prev.map(i => [indexKey(i), i]));
+  const curByKey = new Map(cur.map(i => [indexKey(i), i]));
+  for (const [key, idx] of curByKey) {
+    if (!prevByKey.has(key)) {
+      ops.push({ type: "add_index", tableName, index: idx });
+    }
+  }
+  for (const [key, idx] of prevByKey) {
+    if (!curByKey.has(key) && isManagedIndexName(idx.name)) {
+      ops.push({ type: "drop_index", tableName, index: idx });
+    }
+  }
+  return ops;
 }
 
 function diffColumns(

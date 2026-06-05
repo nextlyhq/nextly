@@ -54,6 +54,15 @@ export interface MinimalConfigField {
   name: string;
   type: string;
   required?: boolean;
+  // Forwarded so the column-type classifier (field-column-descriptor.ts)
+  // emits `json` for hasMany / polymorphic relationships instead of a single
+  // `text` id column. Stripping these previously mis-typed those columns.
+  hasMany?: boolean;
+  relationTo?: string | string[];
+  // Forwarded so the desired-index builder (build-from-fields.ts) emits the
+  // unique/plain index for this field (Stage C1).
+  unique?: boolean;
+  index?: boolean;
 }
 
 /**

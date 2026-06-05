@@ -20,6 +20,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
+describe("DynamicCollectionSchemaService — index naming (snake_case)", () => {
+  it("names a relationship FK index by the snake_case column, not camelCase", () => {
+    const service = new DynamicCollectionSchemaService(undefined, "postgresql");
+    const sql = service.generateMigrationSQL("dc_books", [
+      { name: "authorProfile", type: "relationship" } as FieldDefinition,
+    ]);
+    expect(sql).toContain("idx_dc_books_author_profile");
+    expect(sql).toContain('("author_profile")');
+    expect(sql).not.toContain("authorProfile");
+  });
+
+  it("names a user index by the snake_case column", () => {
+    const service = new DynamicCollectionSchemaService(undefined, "postgresql");
+    const sql = service.generateMigrationSQL("dc_books", [
+      { name: "pageCount", type: "number", index: true } as FieldDefinition,
+    ]);
+    expect(sql).toContain("idx_dc_books_page_count");
+    expect(sql).not.toContain("pageCount");
+  });
+});
+
 describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D rename detection", () => {
   let service: DynamicCollectionSchemaService;
   let warnSpy: ReturnType<typeof vi.spyOn>;
