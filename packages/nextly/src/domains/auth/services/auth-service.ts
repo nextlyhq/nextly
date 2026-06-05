@@ -8,7 +8,7 @@ import {
   hashPassword as hashPasswordBcrypt,
   validatePasswordStrength,
 } from "@nextly/auth/password";
-import { EmailSchema } from "@nextly/schemas/validation";
+import { EmailSchema } from "@nextly/schemas/_zod/validation";
 import type { MinimalUser } from "@nextly/types/auth";
 
 // PR 4 migration: switched from ServiceError + mapDbErrorToServiceError result
@@ -686,11 +686,6 @@ export class AuthService extends BaseService {
       await this.db
         .delete(this.tables.emailVerificationTokens)
         .where(lt(this.tables.emailVerificationTokens.expires, now));
-
-      // Auth.js verification tokens
-      await this.db
-        .delete(this.tables.verificationTokens)
-        .where(lt(this.tables.verificationTokens.expires, now));
     } catch (error) {
       console.error("Failed to cleanup expired tokens:", error);
     }

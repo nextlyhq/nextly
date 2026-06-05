@@ -337,6 +337,23 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
 };
 
+// D4 (§4.12.4): the visual schema builder is development-only. Drop its
+// editor routes in production so they never mount (data editing is
+// unaffected; only the schema-builder pages are removed).
+if (process.env.NODE_ENV === "production") {
+  const devOnlyBuilderRoutes = [
+    ROUTES.BUILDER_COLLECTIONS_NEW,
+    ROUTES.BUILDER_COLLECTIONS_EDIT,
+    ROUTES.BUILDER_SINGLES_NEW,
+    ROUTES.BUILDER_SINGLES_EDIT,
+    ROUTES.BUILDER_COMPONENTS_NEW,
+    ROUTES.BUILDER_COMPONENTS_EDIT,
+  ];
+  for (const key of devOnlyBuilderRoutes) {
+    delete routeConfig[key];
+  }
+}
+
 // Legacy export for backward compatibility
 const registry: Record<string, React.ComponentType<PageProps>> = Object.entries(
   routeConfig

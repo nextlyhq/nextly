@@ -38,6 +38,7 @@ import {
   type CreateComponentPayload,
   type UpdateComponentPayload,
 } from "@admin/services/componentApi";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { ApiComponent } from "@admin/types/entities";
 
 import { useBulkMutation } from "../useBulkMutation";
@@ -353,7 +354,14 @@ export function useDeleteComponent() {
 
   return useMutation<void, Error, string>({
     mutationFn: async (componentSlug: string) => {
-      return await componentApi.deleteComponent(componentSlug);
+      const result = await componentApi.deleteComponent(componentSlug);
+      // D-series: keep ui-schema.json in sync (best-effort, dev-only API).
+      try {
+        await schemaFileApi.deleteComponent(componentSlug);
+      } catch {
+        // Non-fatal: DB delete succeeded; manifest cleanup can be re-run.
+      }
+      return result;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: componentKeys.all() });

@@ -19,7 +19,7 @@ import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
-import { EmailSchema, PasswordSchema } from "../../schemas/validation";
+import { EmailSchema, PasswordSchema } from "../../schemas/_zod/validation";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 

@@ -1,9 +1,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
-import { nextlyMeta as nextlyMetaMysql } from "../../../database/schema/mysql";
-import { nextlyMeta as nextlyMetaPg } from "../../../database/schema/postgres";
-import { nextlyMeta as nextlyMetaSqlite } from "../../../database/schema/sqlite";
+import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
+import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
+import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 

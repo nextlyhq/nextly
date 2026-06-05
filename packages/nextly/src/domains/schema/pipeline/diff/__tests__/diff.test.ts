@@ -125,6 +125,33 @@ describe("diffSnapshots - column-level diff within existing table", () => {
     ]);
   });
 
+  it("does NOT emit change_column_type for PG alias pairs (int4/integer, bool/boolean, _text/text[], varchar/varchar(n))", () => {
+    // Live side = introspected udt_name (no length); desired = SQL names.
+    // These are the same types and must NOT diff (else `nextly migrate`
+    // refuses every existing Postgres DB).
+    const prev = snap({
+      name: "dc_posts",
+      columns: [
+        { name: "n", type: "int4", nullable: false },
+        { name: "flag", type: "bool", nullable: false },
+        { name: "tags", type: "_text", nullable: true },
+        { name: "name", type: "varchar", nullable: false },
+        { name: "at", type: "timestamptz", nullable: true },
+      ],
+    });
+    const cur = snap({
+      name: "dc_posts",
+      columns: [
+        { name: "n", type: "integer", nullable: false },
+        { name: "flag", type: "boolean", nullable: false },
+        { name: "tags", type: "text[]", nullable: true },
+        { name: "name", type: "varchar(255)", nullable: false },
+        { name: "at", type: "timestamp with time zone", nullable: true },
+      ],
+    });
+    expect(diffSnapshots(prev, cur)).toEqual([]);
+  });
+
   it("changing column nullable yields change_column_nullable", () => {
     const prev = snap({
       name: "dc_posts",

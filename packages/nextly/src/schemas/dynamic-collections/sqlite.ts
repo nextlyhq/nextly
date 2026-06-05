@@ -33,6 +33,8 @@ import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { users } from "../users/sqlite";
+
 import type {
   CollectionLabels,
   CollectionAdminConfig,
@@ -200,16 +202,39 @@ export const dynamicCollectionsSqlite = sqliteTable(
 
     /**
      * Reference to the last applied migration ID.
-     * Null for collections that haven't been migrated yet.
+     *
+     * Holds the migration file slug (e.g.,
+     * `0001_perpetual_captain_marvel`), not a UUID. Null for collections
+     * that haven't been migrated yet.
      */
     lastMigrationId: text("last_migration_id"),
+
+    // --------------------------------------------------------
+    // Access Control
+    // --------------------------------------------------------
+
+    /**
+     * Optional per-operation access rules. Consumed by
+     * `CollectionAccessService`; stored as JSON because the rule shape
+     * evolves independently of the migration cycle.
+     */
+    accessRules: text("access_rules", { mode: "json" }).$type<{
+      create?: { type: string; allowedRoles?: string[] };
+      read?: { type: string; allowedRoles?: string[] };
+      update?: { type: string; allowedRoles?: string[] };
+      delete?: { type: string; allowedRoles?: string[] };
+    }>(),
 
     // --------------------------------------------------------
     // Metadata
     // --------------------------------------------------------
 
-    /** User ID who created the collection (optional) */
-    createdBy: text("created_by"),
+    /**
+     * User ID of the creator (optional).
+     *
+     * FK to `users.id`; `text` to match the user identifier column.
+     */
+    createdBy: text("created_by").references(() => users.id),
 
     /** When the collection was created */
     createdAt: integer("created_at", { mode: "timestamp" })

@@ -36,7 +36,7 @@ import type { DatabaseCapabilities } from "@nextlyhq/adapter-drizzle/types";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { vi } from "vitest";
 
-import * as schema from "@nextly/database/schema/sqlite";
+import * as schema from "../fixtures/sqlite-schema";
 
 import type { Logger } from "../../services/shared";
 import { createTestDb, type TestDb } from "../fixtures/db";

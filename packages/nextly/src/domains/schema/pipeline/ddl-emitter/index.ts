@@ -27,6 +27,8 @@ const FAST_PATH_OP_TYPES = new Set<Operation["type"]>([
   "change_column_type",
   "change_column_nullable",
   "change_column_default",
+  "add_index",
+  "drop_index",
 ]);
 
 /**

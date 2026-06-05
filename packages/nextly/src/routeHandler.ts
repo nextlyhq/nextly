@@ -76,6 +76,7 @@ import {
   setHandlerConfig,
   getHandlerConfig,
 } from "./route-handler";
+import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
 import {
@@ -823,11 +824,7 @@ async function handleServiceRequest(
     // beyond `PATCH ... 500`, making 5xx triage essentially impossible.
     // Skip logging for benign expected errors (NOT_FOUND, RATE_LIMITED,
     // AUTH_REQUIRED) so the log doesn't get flooded by unauth probes.
-    const benignCodes = new Set([
-      "NOT_FOUND",
-      "RATE_LIMITED",
-      "AUTH_REQUIRED",
-    ]);
+    const benignCodes = new Set(["NOT_FOUND", "RATE_LIMITED", "AUTH_REQUIRED"]);
     if (!benignCodes.has(String(nextlyErr.code))) {
       try {
         // Lazy-import the logger to avoid pulling it onto the cold path
@@ -1120,6 +1117,9 @@ async function handleGet(req: Request, params: string[]) {
 }
 
 async function handlePost(req: Request, params: string[]) {
+  if (params[0] === "_dev" && process.env.NODE_ENV === "development") {
+    return handleDevSchemaRequest(req, params, "POST");
+  }
   return handleServiceRequest(req, params, "POST");
 }
 
@@ -1135,6 +1135,9 @@ async function handlePatch(req: Request, params: string[]) {
 }
 
 async function handleDelete(req: Request, params: string[]) {
+  if (params[0] === "_dev" && process.env.NODE_ENV === "development") {
+    return handleDevSchemaRequest(req, params, "DELETE");
+  }
   return handleServiceRequest(req, params, "DELETE");
 }
 
@@ -1204,8 +1207,7 @@ export function createDynamicHandlers(options?: {
     ...(rateLimitConfig ?? {}),
     trustProxy:
       rateLimitConfig?.trustProxy ?? securityConfig?.trustProxy ?? false,
-    trustedProxyIps:
-      rateLimitConfig?.trustedProxyIps ?? trustedProxyIpsFromEnv,
+    trustedProxyIps: rateLimitConfig?.trustedProxyIps ?? trustedProxyIpsFromEnv,
   });
 
   /**
@@ -1376,7 +1378,6 @@ export function getCollectionsHandler(): CollectionsHandler | undefined {
   // The caller should check for this and handle accordingly
   return undefined;
 }
-
 
 export const _handleAdminMetaRequestForTest = handleAdminMetaRequest;
 export const _handleAdminMetaSidebarGroupsForTest =

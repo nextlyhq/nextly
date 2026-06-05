@@ -7,8 +7,11 @@
 // so that loadDynamicTables + the auto-sync block both see a populated
 // schema instead of swallowing "table not exist" errors.
 //
-// Probe choice: `nextly_migration_journal` (added in F8 PR 5).
+// Probe choice: `nextly_schema_events` (Plan B; replaced the legacy
+// `nextly_migration_journal` probe in Plan C1).
 //   - Namespaced with the `nextly_` prefix — only Nextly creates it.
+//   - Part of the core schema (getCoreSchema), so it exists after any
+//     successful boot-apply / migrate / upgrade.
 //   - Avoids false negatives on shared databases where a non-Nextly
 //     `users` table happens to exist (review #1).
 //
@@ -20,6 +23,7 @@ interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
   tableExists: (name: string) => Promise<boolean>;
+  executeQuery: (sql: string) => Promise<unknown>;
 }
 
 interface LoggerLike {
@@ -36,6 +40,17 @@ export interface EnsureFirstRunSetupDeps {
     schema: Record<string, unknown>
   ) => Promise<{ statementsExecuted: string[]; applied: true }>;
   getDialectTables: (dialect: string) => Record<string, unknown>;
+  /**
+   * Raw CREATE-TABLE/-INDEX DDL for the `nextly_schema_events` ledger. The
+   * ledger is deliberately excluded from `getDialectTables` (drizzle-kit's
+   * pushSchema would treat it as drift and prompt), so it is bootstrapped
+   * out-of-band here — mirroring `nextly migrate`'s `ensureLedger`. Without
+   * this, an app-boot-initialized DB never gets the ledger and every
+   * `nextly_schema_events` query (e.g. the schema journal) fails.
+   */
+  getSchemaEventsDdl: (
+    dialect: "postgresql" | "mysql" | "sqlite"
+  ) => string[];
 }
 
 export interface EnsureFirstRunSetupArgs {
@@ -48,7 +63,7 @@ export type EnsureFirstRunSetupResult =
   | { ranSetup: true; statementsExecuted: number; durationMs: number }
   | { ranSetup: false; reason: "already_initialized" | "probe_failed" };
 
-const PROBE_TABLE = "nextly_migration_journal";
+const PROBE_TABLE = "nextly_schema_events";
 
 export async function ensureFirstRunSetup(
   args: EnsureFirstRunSetupArgs
@@ -85,6 +100,16 @@ export async function ensureFirstRunSetup(
       adapter.getDrizzle(),
       staticTables
     );
+
+    // Bootstrap the `nextly_schema_events` ledger out-of-band (it is not in
+    // `getDialectTables`). Idempotent — the DDL uses CREATE TABLE/INDEX IF NOT
+    // EXISTS. Without this, app-boot leaves the ledger missing and the probe
+    // above stays false on every boot (re-running setup each time), while the
+    // schema journal + builder endpoints fail with "relation does not exist".
+    for (const stmt of deps.getSchemaEventsDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+
     const durationMs = Date.now() - start;
     logger.info(
       `[nextly] Setup done in ${durationMs}ms (${result.statementsExecuted.length} statement(s)).`
@@ -106,15 +131,22 @@ export async function ensureFirstRunSetup(
 async function resolveDeps(
   injected: Partial<EnsureFirstRunSetupDeps> | undefined
 ): Promise<EnsureFirstRunSetupDeps> {
-  if (injected?.freshPushSchema && injected?.getDialectTables) {
+  if (
+    injected?.freshPushSchema &&
+    injected?.getDialectTables &&
+    injected?.getSchemaEventsDdl
+  ) {
     return injected as EnsureFirstRunSetupDeps;
   }
-  const [{ freshPushSchema }, { getDialectTables }] = await Promise.all([
-    import("../domains/schema/pipeline/fresh-push"),
-    import("../database/index"),
-  ]);
+  const [{ freshPushSchema }, { getDialectTables }, { getSchemaEventsDdl }] =
+    await Promise.all([
+      import("../domains/schema/pipeline/fresh-push"),
+      import("../database/index"),
+      import("../domains/schema/events/schema-events-ddl"),
+    ]);
   return {
     freshPushSchema: injected?.freshPushSchema ?? freshPushSchema,
     getDialectTables: injected?.getDialectTables ?? getDialectTables,
+    getSchemaEventsDdl: injected?.getSchemaEventsDdl ?? getSchemaEventsDdl,
   };
 }
