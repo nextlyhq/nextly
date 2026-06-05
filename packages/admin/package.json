@@ -82,7 +82,7 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

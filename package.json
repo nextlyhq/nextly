@@ -87,7 +87,7 @@
     "tsx": "^4.20.5",
     "turbo": "^2.9.7",
     "typescript": "5.9.3",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.0"
   },
   "prettier": "@nextlyhq/prettier-config",
   "packageManager": "pnpm@9.0.0",
