@@ -82,7 +82,7 @@ export type ColumnKind =
 // previously-duplicated set in both consumers.
 const LAYOUT_FIELD_TYPES = new Set(["tabs", "collapsible", "row"]);
 
-function toSnakeCase(name: string): string {
+export function toSnakeCase(name: string): string {
   return name
     .replace(/([A-Z])/g, "_$1")
     .toLowerCase()

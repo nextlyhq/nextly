@@ -418,6 +418,8 @@ function toMinimalEntities(
         required?: boolean;
         hasMany?: boolean;
         relationTo?: string | string[];
+        unique?: boolean;
+        index?: boolean;
       }[];
       dbName?: string;
       status?: boolean;
@@ -429,6 +431,8 @@ function toMinimalEntities(
       required: f.required,
       hasMany: f.hasMany,
       relationTo: f.relationTo,
+      unique: f.unique,
+      index: f.index,
     }));
     return {
       slug,

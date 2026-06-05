@@ -30,9 +30,18 @@ export interface ColumnSpec {
   default?: string;
 }
 
+export interface IndexSpec {
+  name: string;
+  columns: string[];
+  unique: boolean;
+}
+
 export interface TableSpec {
   name: string;
   columns: ColumnSpec[];
+  // undefined = "no index data tracked" (pre-C1 snapshots) — the diff/drift
+  // index dimension is SKIPPED for such tables. [] = tracked, none.
+  indexes?: IndexSpec[];
 }
 
 // A snapshot of either the live DB state or the desired state. Only includes
@@ -54,7 +63,9 @@ export type Operation =
   | RenameColumnOp
   | ChangeColumnTypeOp
   | ChangeColumnNullableOp
-  | ChangeColumnDefaultOp;
+  | ChangeColumnDefaultOp
+  | AddIndexOp
+  | DropIndexOp;
 
 export interface AddTableOp {
   type: "add_table";
@@ -119,6 +130,18 @@ export interface ChangeColumnDefaultOp {
   columnName: string;
   fromDefault: string | undefined;
   toDefault: string | undefined;
+}
+
+export interface AddIndexOp {
+  type: "add_index";
+  tableName: string;
+  index: IndexSpec;
+}
+
+export interface DropIndexOp {
+  type: "drop_index";
+  tableName: string;
+  index: IndexSpec;
 }
 
 // =============================================================================
