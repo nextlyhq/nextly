@@ -43,6 +43,10 @@
       "types": "./dist/database/seeders/index.d.ts",
       "import": "./dist/database/seeders/index.mjs"
     },
+    "./schemas": {
+      "types": "./dist/schemas/index.d.ts",
+      "import": "./dist/schemas/index.mjs"
+    },
     "./api": {
       "types": "./dist/api/index.d.ts",
       "import": "./dist/api/index.mjs"
@@ -183,14 +187,8 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
-    "db:push": "drizzle-kit push --config=drizzle.config.ts",
-    "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
     "db:seed": "tsx scripts/seed-permissions.ts",
-    "db:seed:all": "tsx scripts/seed-all.ts",
-    "drizzle:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
-    "drizzle:check": "drizzle-kit check --config=drizzle.config.ts",
-    "drizzle:pull": "drizzle-kit pull --config=drizzle.config.ts"
+    "db:seed:all": "tsx scripts/seed-all.ts"
   },
   "engines": {
     "node": ">=20.0.0"

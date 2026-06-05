@@ -242,6 +242,18 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // the direct API or the route-handler dispatcher path.
         await runBootTimeApplyIfDev({ caller: "init" });
 
+        // Production sibling of boot-apply: when `db.runMigrationsOnBoot` is on,
+        // apply committed migration files (prod only; no-op in dev). Wired at
+        // both init entry points. Failure-safe — it logs but never throws.
+        const { runProdMigrationsIfEnabled } = await import(
+          "./init/prod-migrations"
+        );
+        await runProdMigrationsIfEnabled({
+          config: options.config,
+          adapter: adapter,
+          logger: driftLogger,
+        });
+
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
         // returns as soon as the DB connection is ready.  All tasks are
@@ -294,7 +306,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         userFields: directAPI.userFields,
         email: directAPI.email,
 
-        // RBAC namespaces 
+        // RBAC namespaces
         roles: directAPI.roles,
         permissions: directAPI.permissions,
         access: directAPI.access,

@@ -324,14 +324,18 @@ ${allColumnDefs.join(",\n")}
         f.type === "relationship" &&
         f.options?.relationType !== "manyToMany"
       ) {
-        const indexName = `idx_${tableName}_${f.name}`;
+        // Use the snake_case column name for both the index name and the
+        // indexed column so this matches the actual physical column (created
+        // snake_cased) and the migrate:create desired-state index naming.
+        const col = this.toSnakeCase(f.name);
+        const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
-            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(f.name)});`
+            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
           );
         } else {
           indexStatements.push(
-            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(f.name)});`
+            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
           );
         }
       }
@@ -340,14 +344,15 @@ ${allColumnDefs.join(",\n")}
     // Add manual indexes requested by the user
     fields.forEach(f => {
       if (f.index && f.type !== "relationship") {
-        const indexName = `idx_${tableName}_${f.name}`;
+        const col = this.toSnakeCase(f.name);
+        const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
-            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(f.name)});`
+            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
           );
         } else {
           indexStatements.push(
-            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(f.name)});`
+            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
           );
         }
       }

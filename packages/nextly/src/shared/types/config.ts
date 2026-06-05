@@ -81,6 +81,34 @@ export interface DatabaseConfig {
    * @default './src/db/migrations'
    */
   migrationsDir?: string;
+
+  /**
+   * Path to the UI-schema manifest (`ui-schema.json`), relative to project
+   * root. Holds UI-built collections/singles/components (spec §4.12). When the
+   * file is absent it is treated as an empty manifest.
+   *
+   * @default './ui-schema.json'
+   */
+  uiSchemaFile?: string;
+
+  /**
+   * When true, pending migrations run on app boot — **production only** (no-op
+   * in development). Off by default; prefer running migrations in CI
+   * (`nextly migrate && build`). Safe across multiple instances via the migrate
+   * lock. May slow serverless cold starts — best for long-running
+   * servers/containers.
+   *
+   * @default false
+   */
+  runMigrationsOnBoot?: boolean;
+
+  /**
+   * Seconds a held migrate lock stays valid before another process may take it
+   * over (TTL). Tune up for unusually long migrations.
+   *
+   * @default 900
+   */
+  migrateLockTtlSeconds?: number;
 }
 
 // ============================================================
@@ -665,6 +693,9 @@ export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
 export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   schemasDir: "./src/db/schemas/collections",
   migrationsDir: "./src/db/migrations",
+  uiSchemaFile: "./ui-schema.json",
+  runMigrationsOnBoot: false,
+  migrateLockTtlSeconds: 900,
 };
 
 /**
@@ -782,6 +813,12 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       schemasDir: config.db?.schemasDir ?? DEFAULT_DB_CONFIG.schemasDir,
       migrationsDir:
         config.db?.migrationsDir ?? DEFAULT_DB_CONFIG.migrationsDir,
+      uiSchemaFile: config.db?.uiSchemaFile ?? DEFAULT_DB_CONFIG.uiSchemaFile,
+      runMigrationsOnBoot:
+        config.db?.runMigrationsOnBoot ?? DEFAULT_DB_CONFIG.runMigrationsOnBoot,
+      migrateLockTtlSeconds:
+        config.db?.migrateLockTtlSeconds ??
+        DEFAULT_DB_CONFIG.migrateLockTtlSeconds,
     },
     rateLimit,
     apiKeys,

@@ -37,11 +37,8 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateSQL } from "../pipeline/sql-templates/index";
 
-import {
-  formatMigrationFile,
-  formatTimestamp,
-  slugify,
-} from "./format-file";
+import { buildInverseOperations } from "./down-generator";
+import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
   EMPTY_SNAPSHOT,
@@ -57,6 +54,15 @@ export interface MinimalConfigField {
   name: string;
   type: string;
   required?: boolean;
+  // Forwarded so the column-type classifier (field-column-descriptor.ts)
+  // emits `json` for hasMany / polymorphic relationships instead of a single
+  // `text` id column. Stripping these previously mis-typed those columns.
+  hasMany?: boolean;
+  relationTo?: string | string[];
+  // Forwarded so the desired-index builder (build-from-fields.ts) emits the
+  // unique/plain index for this field (Stage C1).
+  unique?: boolean;
+  index?: boolean;
 }
 
 /**
@@ -90,6 +96,11 @@ export interface GenerateArgs {
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
+  /**
+   * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
+   * Each is appended to the generated SQL when an operation touches its table.
+   */
+  metadataUpserts?: { tableName: string; sql: string }[];
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -108,6 +119,18 @@ export interface GenerateResult {
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
   renamesAccepted: number;
+}
+
+/** The table an operation acts on (for correlating metadata upserts). */
+function operationTableName(op: Operation): string {
+  switch (op.type) {
+    case "add_table":
+      return op.table.name;
+    case "rename_table":
+      return op.toName;
+    default:
+      return op.tableName;
+  }
 }
 
 /**
@@ -153,8 +176,23 @@ export async function generateMigration(
     return null;
   }
 
-  // 7. Generate SQL per op.
+  // 7. Generate UP SQL per op.
   const sqlStatements = operations.map(op => generateSQL(op, args.dialect));
+
+  // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
+  // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
+  // reverse rename rather than a data-losing drop+add. Object-removing ops
+  // recover their original spec from previousSnapshot.
+  const inverseOps = buildInverseOperations(operations, previousSnapshot);
+  const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
+
+  // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  if (args.metadataUpserts && args.metadataUpserts.length > 0) {
+    const touched = new Set(operations.map(operationTableName));
+    for (const m of args.metadataUpserts) {
+      if (touched.has(m.tableName)) sqlStatements.push(m.sql);
+    }
+  }
 
   // 8. Compose file content + write both files.
   const collectionSlugs = args.collections.map(c => c.slug).sort();
@@ -164,6 +202,7 @@ export async function generateMigration(
     name: args.name,
     dialect: args.dialect,
     sqlStatements,
+    downSqlStatements,
     collections: collectionSlugs,
     singles: singleSlugs,
     components: componentSlugs,

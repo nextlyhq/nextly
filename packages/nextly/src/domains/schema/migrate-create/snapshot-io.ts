@@ -154,6 +154,18 @@ export async function writeSnapshot(
         .map(t => ({
           name: t.name,
           columns: [...t.columns].sort((a, b) => a.name.localeCompare(b.name)),
+          // Persist indexes only when tracked. A table built without index
+          // data keeps `indexes` undefined (the pre-C1 sentinel), so the diff
+          // skips the index dimension for it.
+          ...(t.indexes !== undefined
+            ? {
+                indexes: [...t.indexes].sort(
+                  (a, b) =>
+                    a.name.localeCompare(b.name) ||
+                    a.columns.join().localeCompare(b.columns.join())
+                ),
+              }
+            : {}),
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     },

@@ -6,13 +6,16 @@
 
 import type {
   AddColumnOp,
+  AddIndexOp,
   AddTableOp,
   ChangeColumnDefaultOp,
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
   ColumnSpec,
   DropColumnOp,
+  DropIndexOp,
   DropTableOp,
+  IndexSpec,
   Operation,
   RenameColumnOp,
   RenameTableOp,
@@ -48,6 +51,10 @@ export function generatePgSQL(op: Operation): string {
       return generateChangeColumnNullable(op);
     case "change_column_default":
       return generateChangeColumnDefault(op);
+    case "add_index":
+      return generateAddIndex(op);
+    case "drop_index":
+      return generateDropIndex(op);
     default: {
       const exhaustive: never = op;
       void exhaustive;
@@ -58,9 +65,28 @@ export function generatePgSQL(op: Operation): string {
   }
 }
 
+function createIndexStatement(tableName: string, index: IndexSpec): string {
+  const cols = index.columns.map(q).join(", ");
+  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})`;
+}
+
+function generateAddIndex(op: AddIndexOp): string {
+  return createIndexStatement(op.tableName, op.index);
+}
+
+function generateDropIndex(op: DropIndexOp): string {
+  return `DROP INDEX IF EXISTS ${q(op.index.name)}`;
+}
+
 function generateAddTable(op: AddTableOp): string {
   const cols = op.table.columns.map(c => `  ${columnDef(c)}`).join(",\n");
-  return `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
+  const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
+  // Render the table's tracked indexes as separate statements after CREATE
+  // TABLE. When `indexes` is undefined (pre-C1 sentinel) none are emitted.
+  const indexStmts = (op.table.indexes ?? []).map(i =>
+    createIndexStatement(op.table.name, i)
+  );
+  return [createTable, ...indexStmts].join(";\n");
 }
 
 // PG CASCADE drops FK references atomically. Mirrors pre-resolution

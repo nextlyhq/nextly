@@ -56,12 +56,14 @@ import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+import { componentToManifestEntity } from "@admin/lib/builder/to-manifest-entity-component";
 import { componentApi } from "@admin/services/componentApi";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
   SchemaRenameResolution,
 } from "@admin/services/schemaApi";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
 import type { SchemaField } from "@admin/types/entities";
 
@@ -205,6 +207,22 @@ export default function ComponentBuilderEditPage({
           setShowSafeDialog(false);
           setPreviewData(null);
           setOriginalFields(builder.fields.filter(f => !f.isSystem));
+
+          // D-series: database mode also writes the committable ui-schema.json
+          // so the component has a migration record. Non-fatal if it fails.
+          try {
+            const entity = componentToManifestEntity({
+              slug,
+              settings: { singularName: settings?.singularName },
+              fields: fieldDefinitions,
+            });
+            await schemaFileApi.writeComponent(entity);
+          } catch (err) {
+            const m = (err as { message?: string })?.message;
+            toast.warning(
+              `Component applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+            );
+          }
         } else {
           stopRestart(
             false,

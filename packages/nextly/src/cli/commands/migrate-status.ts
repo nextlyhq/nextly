@@ -31,6 +31,7 @@ import { resolve, basename } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import type {
   MigrationErrorJson,
@@ -230,9 +231,6 @@ export async function runMigrateStatus(
   }
 
   try {
-    logger.debug("Checking migrations table...");
-    await ensureMigrationsTable(adapter as unknown as DrizzleAdapter, dialect);
-
     const cwd = options.cwd ?? process.cwd();
     const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
@@ -344,115 +342,27 @@ function parseMigrationFile(
   };
 }
 
-// F11: kept in sync with `cli/commands/migrate.ts:ensureMigrationsTable`.
-// This is a duplicated helper today; both call sites need the new schema
-// in lockstep. A shared helper extraction is a follow-up cleanup (out of
-// PR 1 scope to keep diff focused).
-//
-// MIRROR: keep this in sync with `migrate.ts:ensureMigrationsTable`
-// AND with `database/migrations/<dialect>/20260429_000000_000_initial_journal.sql`
-// AND with `migrate-fresh.ts:generateSqliteCreateStatements`.
-async function ensureMigrationsTable(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect
-): Promise<void> {
-  let createTableSql: string;
-
-  switch (dialect) {
-    case "postgresql":
-      createTableSql = `
-        CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-          "id"           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          "filename"     TEXT NOT NULL UNIQUE,
-          "sha256"       CHAR(64) NOT NULL,
-          "applied_at"   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          "applied_by"   TEXT,
-          "duration_ms"  INTEGER,
-          "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
-          "error_json"   JSONB,
-          "rollback_sql" TEXT
-        );
-        CREATE INDEX IF NOT EXISTS "nextly_migrations_applied_at_idx"
-          ON "nextly_migrations" ("applied_at");
-      `;
-      break;
-    case "mysql":
-      createTableSql = `
-        CREATE TABLE IF NOT EXISTS \`nextly_migrations\` (
-          \`id\`           VARCHAR(36) PRIMARY KEY,
-          \`filename\`     VARCHAR(512) NOT NULL UNIQUE,
-          \`sha256\`       CHAR(64) NOT NULL,
-          \`applied_at\`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          \`applied_by\`   VARCHAR(255),
-          \`duration_ms\`  INTEGER,
-          \`status\`       VARCHAR(20) NOT NULL CHECK (\`status\` IN ('applied', 'failed')),
-          \`error_json\`   JSON,
-          \`rollback_sql\` TEXT,
-          INDEX \`nextly_migrations_applied_at_idx\` (\`applied_at\`)
-        )
-      `;
-      break;
-    case "sqlite":
-      createTableSql = `
-        CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-          "id"           TEXT PRIMARY KEY,
-          "filename"     TEXT NOT NULL UNIQUE,
-          "sha256"       TEXT NOT NULL,
-          "applied_at"   INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
-          "applied_by"   TEXT,
-          "duration_ms"  INTEGER,
-          "status"       TEXT NOT NULL CHECK ("status" IN ('applied', 'failed')),
-          "error_json"   TEXT,
-          "rollback_sql" TEXT
-        );
-        CREATE INDEX IF NOT EXISTS "nextly_migrations_applied_at_idx"
-          ON "nextly_migrations" ("applied_at");
-      `;
-      break;
-    default:
-      throw new Error(`Unsupported dialect: ${dialect as string}`);
-  }
-
-  await adapter.executeQuery(createTableSql);
-}
-
-// F11: parses the structured error_json column. SQLite stores TEXT;
-// PG/MySQL return parsed objects (or string-encoded depending on driver).
-function parseErrorJson(value: unknown): MigrationErrorJson | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "object") return value as MigrationErrorJson;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as MigrationErrorJson;
-    } catch {
-      return { message: value };
-    }
-  }
-  return null;
-}
-
+// Plan C2: applied/failed state now lives in `nextly_schema_events`
+// (`file_apply` rows), not the legacy `nextly_migrations` ledger.
 async function getAppliedMigrations(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
 ): Promise<MigrationRecord[]> {
-  const query =
-    dialect === "mysql"
-      ? "SELECT * FROM `nextly_migrations` ORDER BY `applied_at` ASC"
-      : 'SELECT * FROM "nextly_migrations" ORDER BY "applied_at" ASC';
-
   try {
-    const results = await adapter.executeQuery<Record<string, unknown>>(query);
-
-    return results.map(row => ({
-      id: coerceString(row.id),
-      filename: coerceString(row.filename),
-      sha256: coerceString(row.sha256),
-      status: coerceString(row.status) as MigrationRecordStatus,
-      appliedBy: coerceStringOrNull(row.applied_by),
-      durationMs: coerceNumberOrNull(row.duration_ms),
-      errorJson: parseErrorJson(row.error_json),
-      appliedAt: coerceDate(row.applied_at),
-    }));
+    const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+    const rows = await repo.listFileApplies();
+    return rows
+      .filter(r => r.status === "applied" || r.status === "failed")
+      .map(r => ({
+        id: r.id,
+        filename: r.filename ?? "",
+        sha256: r.sha256 ?? "",
+        status: r.status === "failed" ? "failed" : "applied",
+        appliedBy: null,
+        durationMs: r.durationMs ?? null,
+        errorJson: null,
+        appliedAt: r.startedAt,
+      }));
   } catch {
     return [];
   }
@@ -473,22 +383,6 @@ function coerceStringOrNull(value: unknown): string | null {
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
   return null;
-}
-
-function coerceNumberOrNull(value: unknown): number | null {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-function coerceDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  if (typeof value === "string" || typeof value === "number")
-    return new Date(value);
-  return new Date(0);
 }
 
 async function getCollectionsWithPendingChanges(
@@ -547,15 +441,16 @@ async function getCollectionsWithPendingChanges(
 //   `nextly migrate` will treat the latter as MIGRATION_MISSING (exit 3),
 //   but `migrate:status` keeps surfacing it as a row so operators can
 //   investigate and either restore the file or contact whoever deleted it.
-function buildMigrationStatuses(
+export function buildMigrationStatuses(
   files: ParsedMigration[],
   applied: MigrationRecord[]
 ): MigrationStatus[] {
-  const appliedMap = new Map(applied.map(m => [m.filename, m]));
+  const stripSql = (f: string): string => f.replace(/\.sql$/i, "");
+  const appliedMap = new Map(applied.map(m => [stripSql(m.filename), m]));
   const statuses: MigrationStatus[] = [];
 
   for (const file of files) {
-    const record = appliedMap.get(file.name);
+    const record = appliedMap.get(stripSql(file.name));
 
     if (record) {
       const checksumMismatch = record.sha256 !== file.checksum;
@@ -577,7 +472,7 @@ function buildMigrationStatuses(
         checksumMismatch,
       });
 
-      appliedMap.delete(file.name);
+      appliedMap.delete(stripSql(file.name));
     } else {
       statuses.push({
         filename: file.name,

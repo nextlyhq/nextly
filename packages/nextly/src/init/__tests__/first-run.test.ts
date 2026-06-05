@@ -1,6 +1,6 @@
 // Unit tests for ensureFirstRunSetup — F8 PR 6.
 //
-// Probes for `nextly_migration_journal` (Nextly-namespaced — avoids
+// Probes for `nextly_schema_events` (Nextly-namespaced — avoids
 // false negatives on shared DBs that already have a `users` table from
 // another framework). When missing, calls freshPushSchema for the
 // dialect's static system tables. Failure-safe: never throws.
@@ -13,6 +13,7 @@ interface FakeAdapter {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
   tableExists: (name: string) => Promise<boolean>;
+  executeQuery: (sql: string) => Promise<unknown>;
 }
 
 function makeAdapter(opts: {
@@ -23,15 +24,18 @@ function makeAdapter(opts: {
   return {
     dialect: opts.dialect ?? "sqlite",
     getDrizzle: () => ({}),
+    executeQuery: vi.fn(async () => undefined),
     tableExists: vi.fn(async (name: string) => {
       if (opts.probeThrows) throw new Error("connection lost");
-      if (name === "nextly_migration_journal") {
+      if (name === "nextly_schema_events") {
         return opts.journalExists ?? false;
       }
       return false;
     }),
   };
 }
+
+const fakeLedgerDdl = ["CREATE TABLE nextly_schema_events (...)"];
 
 const fakeLogger = {
   debug: vi.fn(),
@@ -143,7 +147,7 @@ describe("ensureFirstRunSetup", () => {
     expect(errorCalls.length).toBe(1);
   });
 
-  it("uses the nextly_migration_journal probe (not a generic users table)", async () => {
+  it("uses the nextly_schema_events probe (not a generic users table)", async () => {
     const adapter = makeAdapter({ journalExists: false });
 
     await ensureFirstRunSetup({
@@ -162,6 +166,27 @@ describe("ensureFirstRunSetup", () => {
       adapter.tableExists as unknown as { mock: { calls: string[][] } }
     ).mock.calls;
     expect(probeCalls.length).toBe(1);
-    expect(probeCalls[0][0]).toBe("nextly_migration_journal");
+    expect(probeCalls[0][0]).toBe("nextly_schema_events");
+  });
+
+  it("bootstraps the nextly_schema_events ledger via executeQuery when missing", async () => {
+    const adapter = makeAdapter({ journalExists: false });
+
+    const result = await ensureFirstRunSetup({
+      adapter,
+      logger: fakeLogger,
+      deps: {
+        freshPushSchema: vi
+          .fn()
+          .mockResolvedValue({ statementsExecuted: [], applied: true }),
+        getDialectTables: () => fakeStaticTables,
+        getSchemaEventsDdl: () => fakeLedgerDdl,
+      },
+    });
+
+    expect(result.ranSetup).toBe(true);
+    // The ledger DDL must be executed out-of-band so the journal/builder
+    // endpoints don't fail with "relation nextly_schema_events does not exist".
+    expect(adapter.executeQuery).toHaveBeenCalledWith(fakeLedgerDdl[0]);
   });
 });

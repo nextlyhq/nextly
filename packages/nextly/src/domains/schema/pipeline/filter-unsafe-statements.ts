@@ -1,0 +1,185 @@
+// Shared drop-guard for drizzle-kit pushSchema output.
+//
+// drizzle-kit's pushSchema can emit DROP TABLE / DROP SEQUENCE / DROP INDEX
+// for any object that exists in the live DB but is absent from the desired
+// schema it was handed. Both PushSchemaPipeline (dev server / HMR) and
+// freshPushSchema (`nextly migrate` Phase 1, ensureCoreTables) run pushSchema
+// against a desired schema that is narrower than the live DB, so both MUST
+// strip drops of objects the caller never asked about — otherwise user
+// content tables (dc_/single_/comp_) get destroyed as collateral.
+//
+// The desired set is compared by SQL table name. Callers that hold a Drizzle
+// schema bundle MUST derive names via `drizzleTableNames` (Symbol-based),
+// NOT Object.keys() — bundle keys are JS export names (e.g. dynamicCollections),
+// not SQL names (dynamic_collections), and include non-table exports.
+
+import { isManagedTable } from "./managed-tables";
+
+const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
+  kind: "SEQUENCE" | "INDEX";
+  re: RegExp;
+}> = [
+  {
+    kind: "SEQUENCE",
+    re: /^DROP\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
+  },
+  {
+    kind: "INDEX",
+    re: /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
+  },
+];
+
+/** Cheap structural check for Drizzle tables (carry Symbol.for("drizzle:Name")). */
+export function isDrizzleTable(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  // Drizzle tables carry Symbol.for("drizzle:Name") — the simplest
+  // stable cross-dialect check.
+  return Symbol.for("drizzle:Name") in value;
+}
+
+/** Extract a Drizzle table's SQL name, falling back to the export key. */
+export function getDrizzleTableName(value: unknown, fallback: string): string {
+  const named = (value as Record<symbol, unknown>)[Symbol.for("drizzle:Name")];
+  return typeof named === "string" ? named : fallback;
+}
+
+/**
+ * SQL table names of every Drizzle table in a schema bundle. Skips non-table
+ * exports (relations). This is the correct allow-list for
+ * `filterUnsafeStatements` — NEVER use `Object.keys(schema)`, which yields JS
+ * export keys (camelCase) rather than the SQL names the filter compares against.
+ */
+export function drizzleTableNames(schema: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  for (const [exportKey, value] of Object.entries(schema)) {
+    if (isDrizzleTable(value))
+      names.push(getDrizzleTableName(value, exportKey));
+  }
+  return names;
+}
+
+/**
+ * Infers the owner table of a sequence or index from its name using
+ * Postgres's default naming conventions:
+ *   - SERIAL / IDENTITY sequences: `<table>_<col>_seq`
+ *   - Indexes:                      `<table>_<col(s)>_idx | _key | _pkey | _unique`
+ *
+ * Strategy: walk underscore-delimited prefixes from longest to shortest
+ * and return the first candidate found in `desiredSet`. Longest-first
+ * ensures multi-word table names like `email_templates` are preferred
+ * over the shorter prefix `email`.
+ *
+ * Returns the matched table name (lowercased) or `null` if no prefix in
+ * `desiredSet` was found. A `null` result means we can't identify the
+ * owner, and the caller should treat the statement as unsafe.
+ */
+function inferOwnerTableFromObjectName(
+  objectName: string,
+  desiredSet: ReadonlySet<string>
+): string | null {
+  const lower = objectName.toLowerCase();
+  const parts = lower.split("_");
+  // Walk from the longest prefix down to a single part.
+  for (let i = parts.length - 1; i > 0; i--) {
+    const candidate = parts.slice(0, i).join("_");
+    if (desiredSet.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Strip data-losing drops drizzle-kit emits for objects outside the desired
+ * schema.
+ *
+ * SQLite can't ALTER COLUMN type, so drizzle-kit emits a CREATE/COPY/DROP/RENAME
+ * sequence for type changes (renames included):
+ *   1. CREATE TABLE __new_dc_job (...)
+ *   2. INSERT INTO __new_dc_job SELECT ... FROM dc_job
+ *   3. DROP TABLE dc_job          ← intentional, NOT accidental
+ *   4. ALTER TABLE __new_dc_job RENAME TO dc_job
+ * A strict block-all-DROPs rule breaks step 3 → step 4 then fails with
+ * "table dc_job already exists".
+ *
+ * Refined rule:
+ *   - DROP TABLE for a table IN the desired schema → ALLOW (part of an
+ *     intentional rebuild — the table is recreated by a subsequent
+ *     CREATE/RENAME).
+ *   - DROP TABLE for a table NOT in the desired schema → BLOCK (drizzle-kit
+ *     thinks it's orphaned; this is the scenario where a narrow desired
+ *     schema would otherwise destroy admin-UI / user content tables).
+ *
+ * The same policy extends to DROP SEQUENCE / DROP INDEX: `tablesFilter`
+ * restricts which TABLES drizzle-kit inspects but does NOT suppress its
+ * emission of DROP SEQUENCE / DROP INDEX for "orphan" objects whose owner
+ * table isn't in the scoped schema (e.g. desired = {posts} but the live DB
+ * has `accounts_id_seq` → drizzle-kit emits `DROP SEQUENCE accounts_id_seq`,
+ * which fails with PG 2BP01 because `accounts.id` still depends on it). We
+ * infer the owner table from the object name; custom-named objects that don't
+ * share a prefix with any managed table are blocked + warned (fail-safe).
+ */
+export function filterUnsafeStatements(
+  statements: string[],
+  desiredTableNames: string[]
+): string[] {
+  const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
+
+  return statements.filter(stmt => {
+    // ── DROP TABLE ──────────────────────────────────────────────────
+    const dropMatch = stmt.match(
+      /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
+    );
+    if (dropMatch) {
+      const tableName = dropMatch[1] ?? "<unknown>";
+      const isInDesired = desiredSet.has(tableName.toLowerCase());
+
+      if (isInDesired) {
+        // Intentional drop — rebuild pattern, system-table refresh, etc.
+        return true;
+      }
+
+      // Internal framework tables (nextly_ prefix: ledger, migrate lock, meta)
+      // are bootstrapped out-of-band and never part of the desired schema. Block
+      // their drop SILENTLY — they must never be dropped, and warning on every
+      // reconcile is just noise. (User/collection slugs can't start with
+      // `nextly_` — the slug validator reserves that prefix.)
+      if (tableName.toLowerCase().startsWith("nextly_")) {
+        return false;
+      }
+
+      // Accidental drop — table not in desired schema. Block and log so
+      // operators see the protection.
+      console.warn(
+        `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
+          `drizzle-kit pushSchema (table not in current desired schema). ` +
+          `If this drop was intentional, route it through the ` +
+          `pre-resolution executor with explicit user confirmation. ` +
+          `(managed=${isManagedTable(tableName)})`
+      );
+      return false;
+    }
+
+    // ── DROP SEQUENCE / DROP INDEX ───────────────────────────────────
+    // Block when the inferred owner table is not in desiredSet
+    // (longest-prefix match — see inferOwnerTableFromObjectName).
+    for (const { kind, re } of ORPHAN_DROP_PATTERNS) {
+      const m = stmt.match(re);
+      if (!m) continue;
+      const objectName = m[1] ?? "";
+      if (inferOwnerTableFromObjectName(objectName, desiredSet) !== null) {
+        return true;
+      }
+      console.warn(
+        `[Nextly schema] Blocked DROP ${kind} "${objectName}" emitted by ` +
+          `drizzle-kit pushSchema (owner table not in current desired ` +
+          `schema or name is non-conventional). If this drop was ` +
+          `intentional, route it through the pre-resolution executor ` +
+          `with explicit user confirmation, or drop it manually before ` +
+          `re-running if the ${kind.toLowerCase()} name is custom.`
+      );
+      return false;
+    }
+
+    // ── Everything else passes through ──────────────────────────────
+    return true;
+  });
+}

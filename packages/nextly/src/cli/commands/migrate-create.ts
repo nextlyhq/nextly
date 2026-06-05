@@ -60,11 +60,15 @@ import {
 } from "../../domains/schema/migrate-create/generate";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
-import { createContext, type CommandContext } from "../program";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { mergeUiEntities } from "../../domains/schema/ui-schema/merge";
 import {
-  getDialectDisplayName,
-  validateDatabaseEnv,
-} from "../utils/adapter";
+  buildCollectionMetadataUpsert,
+  buildComponentMetadataUpsert,
+  buildSingleMetadataUpsert,
+} from "../../domains/schema/ui-schema/metadata-sql";
+import { createContext, type CommandContext } from "../program";
+import { getDialectDisplayName, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
@@ -210,15 +214,71 @@ export async function runMigrateCreate(
   }
 
   // Convert config entries to the minimal shape the orchestrator needs.
-  const collections = toMinimalEntities(configResult.config.collections, "dc_");
-  const singles = toMinimalEntities(
+  const codeCollections = toMinimalEntities(
+    configResult.config.collections,
+    "dc_"
+  );
+  const codeSingles = toMinimalEntities(
     configResult.config.singles ?? [],
     "single_"
   );
-  const components = toMinimalEntities(
+  const codeComponents = toMinimalEntities(
     configResult.config.components ?? [],
     "comp_"
   );
+
+  // Load + merge UI-built entities (code-first wins on slug collision).
+  let manifest;
+  try {
+    manifest = await loadUiSchema({
+      projectRoot: cwd,
+      uiSchemaFile: configResult.config.db.uiSchemaFile,
+    });
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
+  const merged = mergeUiEntities({
+    codeCollections,
+    codeSingles,
+    codeComponents,
+    manifest,
+  });
+  for (const slug of merged.droppedUiSlugs) {
+    logger.warn(
+      `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
+    );
+  }
+  const { collections, singles, components } = merged;
+
+  // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
+  // survived the merge (code-first wins → shadowed UI slugs are skipped).
+  const dropped = new Set(merged.droppedUiSlugs);
+  const tn = (slug: string, prefix: "dc_" | "single_" | "comp_") =>
+    `${prefix}${slug.replace(/-/g, "_")}`;
+  const metadataUpserts: { tableName: string; sql: string }[] = [];
+  for (const c of manifest.collections) {
+    if (dropped.has(c.slug)) continue;
+    metadataUpserts.push({
+      tableName: tn(c.slug, "dc_"),
+      sql: buildCollectionMetadataUpsert(c, dialect),
+    });
+  }
+  for (const s of manifest.singles) {
+    if (dropped.has(s.slug)) continue;
+    metadataUpserts.push({
+      tableName: tn(s.slug, "single_"),
+      sql: buildSingleMetadataUpsert(s, dialect),
+    });
+  }
+  for (const cp of manifest.components) {
+    if (dropped.has(cp.slug)) continue;
+    metadataUpserts.push({
+      tableName: tn(cp.slug, "comp_"),
+      sql: buildComponentMetadataUpsert(cp, dialect),
+    });
+  }
 
   if (
     collections.length === 0 &&
@@ -242,6 +302,7 @@ export async function runMigrateCreate(
       collections,
       singles,
       components,
+      metadataUpserts,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
     });
@@ -351,7 +412,15 @@ function toMinimalEntities(
   return entities.map(raw => {
     const e = raw as {
       slug: string;
-      fields?: { name: string; type: string; required?: boolean }[];
+      fields?: {
+        name: string;
+        type: string;
+        required?: boolean;
+        hasMany?: boolean;
+        relationTo?: string | string[];
+        unique?: boolean;
+        index?: boolean;
+      }[];
       dbName?: string;
       status?: boolean;
     };
@@ -360,6 +429,10 @@ function toMinimalEntities(
       name: f.name,
       type: f.type,
       required: f.required,
+      hasMany: f.hasMany,
+      relationTo: f.relationTo,
+      unique: f.unique,
+      index: f.index,
     }));
     return {
       slug,

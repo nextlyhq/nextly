@@ -1,7 +1,37 @@
 import { describe, expect, it } from "vitest";
 
+import { getColumnDescriptor } from "../../../services/field-column-descriptor";
 import { buildDesiredTableFromFields } from "../build-from-fields";
 import type { ColumnSpec } from "../types";
+
+// Characterization test guarding the ui-schema widening: every field type now
+// allowed in ui-schema.json must already map to a column via the descriptor
+// (so the manifest round-trips with no translation). If any of these FAIL, that
+// type isn't actually storable and must be removed from UI_FIELD_TYPES.
+describe("canonical field types map to columns (widened ui-schema set)", () => {
+  const cases: Array<[string, string]> = [
+    ["email", "text"],
+    ["password", "text"],
+    ["code", "text"],
+    ["radio", "text"],
+    ["repeater", "jsonb"],
+    ["group", "jsonb"],
+    ["component", "jsonb"],
+    ["json", "jsonb"],
+    ["chips", "jsonb"],
+  ];
+  for (const [type, dialectType] of cases) {
+    it(`maps ${type} -> ${dialectType} (postgres)`, () => {
+      const d = getColumnDescriptor(
+        { name: "f", type, required: false } as unknown as Parameters<
+          typeof getColumnDescriptor
+        >[0],
+        "postgresql"
+      );
+      expect(d?.dialectType).toBe(dialectType);
+    });
+  }
+});
 
 // Minimal FieldConfig shape used by the helper. The real type lives in
 // schemas/dynamic-collections/types.ts; we only need name + type + required.

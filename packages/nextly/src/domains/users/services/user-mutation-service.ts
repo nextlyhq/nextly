@@ -25,7 +25,10 @@ import type { Table, Column } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 
 import { hashPassword } from "@nextly/auth/password";
-import { CreateLocalUserSchema, UpdateUserSchema } from "@nextly/schemas/user";
+import {
+  CreateLocalUserSchema,
+  UpdateUserSchema,
+} from "@nextly/schemas/_zod/user";
 import {
   buildCreateUserSchema,
   buildUpdateUserSchema,

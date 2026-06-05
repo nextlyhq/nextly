@@ -1,15 +1,12 @@
-// F10 PR 4 — real-PG integration test for `readJournal` pagination.
+// Plan C1 — real-PG integration test for `readJournal` pagination, now
+// against `nextly_schema_events`.
 //
-// Seeds N rows with deterministic `started_at` timestamps and verifies
-// the cursor-based pagination contract end-to-end against real PG:
-//   1. First page returns the latest `limit` rows newest-first +
-//      hasMore=true when more exist.
-//   2. Second page using `before=<oldest of page 1>` returns the next
-//      page + hasMore correctly reflects remaining rows.
-//   3. NULL scope_kind / summary columns surface as null in the API
-//      shape (forward-compat for legacy rows).
+// Seeds N rows with deterministic `started_at` timestamps and verifies the
+// cursor-based pagination contract end-to-end against real PG, plus the
+// events→API mapping (event_type ui_save → source ui; status applied →
+// success; summary always null).
 //
-// Auto-skips when TEST_POSTGRES_URL isn't set (matches F18 convention).
+// Auto-skips when TEST_POSTGRES_URL isn't set.
 
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -20,7 +17,7 @@ import { readJournal } from "../read-journal";
 
 const ctx = makeTestContext("postgresql");
 
-describe("readJournal — real-PG integration", () => {
+describe("readJournal — real-PG integration (nextly_schema_events)", () => {
   if (!ctx.available || !ctx.url) {
     it.skip("Skipping — TEST_POSTGRES_URL not set", () => {});
     return;
@@ -33,29 +30,30 @@ describe("readJournal — real-PG integration", () => {
     pool = new Pool({ connectionString: ctx.url ?? undefined });
     db = drizzle(pool);
 
-    // Stand up the journal table directly (raw SQL mirroring the
-    // Drizzle schema). Avoids pulling in pushSchema for a focused
-    // pagination test.
-    await pool.query('DROP TABLE IF EXISTS "nextly_migration_journal"');
+    await pool.query('DROP TABLE IF EXISTS "nextly_schema_events"');
     await pool.query(`
-      CREATE TABLE "nextly_migration_journal" (
+      CREATE TABLE "nextly_schema_events" (
         "id" text PRIMARY KEY,
-        "source" varchar(20) NOT NULL,
-        "status" varchar(20) NOT NULL DEFAULT 'in_progress',
+        "event_type" text NOT NULL,
+        "status" text NOT NULL,
+        "source" text NOT NULL,
+        "filename" text,
+        "sha256" text,
+        "scope_kind" text,
+        "scope_slug" text,
         "started_at" timestamptz NOT NULL,
         "ended_at" timestamptz,
         "duration_ms" integer,
-        "statements_planned" integer NOT NULL DEFAULT 0,
+        "applied_by" text,
+        "statements_planned" integer,
         "statements_executed" integer,
         "renames_applied" integer,
-        "error_code" varchar(64),
+        "error_code" text,
         "error_message" text,
-        "scope_kind" varchar(20),
-        "scope_slug" text,
-        "summary_added" integer,
-        "summary_removed" integer,
-        "summary_renamed" integer,
-        "summary_changed" integer
+        "error_json" jsonb,
+        "superseded_event_ids" jsonb,
+        "superseded_at" timestamptz,
+        "superseded_by" text
       )
     `);
   });
@@ -63,20 +61,18 @@ describe("readJournal — real-PG integration", () => {
   afterAll(async () => {
     if (pool) {
       await pool
-        .query('DROP TABLE IF EXISTS "nextly_migration_journal"')
+        .query('DROP TABLE IF EXISTS "nextly_schema_events"')
         .catch(() => {});
       await pool.end();
     }
   });
 
   beforeEach(async () => {
-    await pool.query('TRUNCATE TABLE "nextly_migration_journal"');
+    await pool.query('TRUNCATE TABLE "nextly_schema_events"');
   });
 
-  // Seeds `count` rows with deterministically-decreasing started_at
-  // values starting from `baseTime`. Returns the inserted IDs in
-  // newest-to-oldest order so callers can match against `readJournal`
-  // results without sorting.
+  // Seeds `count` applied ui_save events with decreasing started_at.
+  // Returns ids newest-to-oldest.
   async function seedRows(args: {
     count: number;
     baseTime: Date;
@@ -89,24 +85,18 @@ describe("readJournal — real-PG integration", () => {
       const startedAt = new Date(args.baseTime.getTime() - i * 1000);
       const endedAt = new Date(startedAt.getTime() + 100);
       await pool.query(
-        `INSERT INTO "nextly_migration_journal"
-         (id, source, status, started_at, ended_at, duration_ms,
+        `INSERT INTO "nextly_schema_events"
+         (id, event_type, status, source, started_at, ended_at, duration_ms,
           statements_planned, statements_executed, renames_applied,
-          scope_kind, scope_slug,
-          summary_added, summary_removed, summary_renamed, summary_changed)
-         VALUES ($1, 'ui', 'success', $2, $3, 100,
-                 1, 1, 0,
-                 $4, $5, $6, $7, $8, $9)`,
+          scope_kind, scope_slug)
+         VALUES ($1, 'ui_save', 'applied', 'admin-ui', $2, $3, 100,
+                 1, 1, 0, $4, $5)`,
         [
           id,
           startedAt,
           endedAt,
           args.legacyMissingScope ? null : "collection",
           args.legacyMissingScope ? null : `posts-${i}`,
-          args.legacyMissingScope ? null : 1,
-          args.legacyMissingScope ? null : 0,
-          args.legacyMissingScope ? null : 0,
-          args.legacyMissingScope ? null : 0,
         ]
       );
     }
@@ -118,16 +108,9 @@ describe("readJournal — real-PG integration", () => {
       count: 25,
       baseTime: new Date("2026-04-29T18:00:00.000Z"),
     });
-
-    const result = await readJournal({
-      db,
-      dialect: "postgresql",
-      limit: 20,
-    });
-
+    const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
     expect(result.rows).toHaveLength(20);
     expect(result.hasMore).toBe(true);
-    // Newest-first ordering.
     expect(result.rows[0].id).toBe(ids[0]);
     expect(result.rows[19].id).toBe(ids[19]);
   });
@@ -137,12 +120,7 @@ describe("readJournal — real-PG integration", () => {
       count: 25,
       baseTime: new Date("2026-04-29T18:00:00.000Z"),
     });
-
-    const page1 = await readJournal({
-      db,
-      dialect: "postgresql",
-      limit: 20,
-    });
+    const page1 = await readJournal({ db, dialect: "postgresql", limit: 20 });
     expect(page1.hasMore).toBe(true);
 
     const oldestOnPage1 = page1.rows[19].startedAt;
@@ -152,55 +130,34 @@ describe("readJournal — real-PG integration", () => {
       limit: 20,
       before: oldestOnPage1,
     });
-
     expect(page2.rows).toHaveLength(5);
     expect(page2.hasMore).toBe(false);
     expect(page2.rows.map(r => r.id)).toEqual(ids.slice(20));
   });
 
   it("hasMore=false when total rows fit in one page", async () => {
-    await seedRows({
-      count: 5,
-      baseTime: new Date("2026-04-29T18:00:00.000Z"),
-    });
-
-    const result = await readJournal({
-      db,
-      dialect: "postgresql",
-      limit: 20,
-    });
-
+    await seedRows({ count: 5, baseTime: new Date("2026-04-29T18:00:00.000Z") });
+    const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
     expect(result.rows).toHaveLength(5);
     expect(result.hasMore).toBe(false);
   });
 
   it("returns empty result when table is empty", async () => {
-    const result = await readJournal({
-      db,
-      dialect: "postgresql",
-      limit: 20,
-    });
+    const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
     expect(result.rows).toEqual([]);
     expect(result.hasMore).toBe(false);
   });
 
-  it("legacy rows (scope_kind=null, summary columns null) surface as null fields", async () => {
+  it("rows with null scope surface scope=null and summary is always null", async () => {
     await seedRows({
       count: 3,
       baseTime: new Date("2026-04-29T18:00:00.000Z"),
       legacyMissingScope: true,
     });
-
-    const result = await readJournal({
-      db,
-      dialect: "postgresql",
-      limit: 20,
-    });
-
+    const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
     expect(result.rows).toHaveLength(3);
     expect(result.rows[0].scope).toBeNull();
     expect(result.rows[0].summary).toBeNull();
-    // Other fields populated as expected.
     expect(result.rows[0].source).toBe("ui");
     expect(result.rows[0].status).toBe("success");
   });

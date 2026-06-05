@@ -111,8 +111,8 @@ export interface PreCleanupExecutor {
 }
 
 // F10 PR 2: scope of the apply, persisted into the journal so the admin
-// NotificationCenter can render meaningful audit rows. Mirrors
-// `MigrationJournalScopeKind` from `schemas/migration-journal/types.ts`.
+// NotificationCenter can render meaningful audit rows. Plan C1 maps this onto
+// `SchemaEventScopeKind` from `schemas/schema-events/types.ts`.
 export interface MigrationJournalScope {
   kind: "collection" | "single" | "global" | "fresh-push";
   slug?: string;

@@ -11,8 +11,11 @@
 //
 //   -- UP
 //   <sql statements joined by semicolons + newlines>
+//   -- DOWN
+//   <inverse sql statements, or a placeholder comment>
 //
-// Per Q4=A (PR 2): no -- DOWN section. Forward-only model.
+// SP-2: a -- DOWN section is now emitted (auto-generated inverse, or a
+// placeholder comment when the migration has no automatic rollback).
 //
 // Per spec §6.1 Step 7: the `-- Checksum:` line in the header is
 // decorative for human readability. The canonical hash lives in the
@@ -30,6 +33,12 @@ export interface FormatArgs {
   dialect: SupportedDialect;
   /** SQL statements WITHOUT trailing semicolons. The formatter adds them. */
   sqlStatements: string[];
+  /**
+   * Inverse SQL statements (WITHOUT trailing semicolons) for the `-- DOWN`
+   * section. Empty array → a placeholder comment is emitted instead, marking
+   * the migration as having no automatic rollback (e.g. data-only or blank).
+   */
+  downSqlStatements: string[];
   /** Collection slugs covered by this migration. */
   collections: string[];
   singles: string[];
@@ -56,6 +65,10 @@ export function formatMigrationFile(args: FormatArgs): string {
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
   const body = args.sqlStatements.map(s => `${s};`).join("\n\n");
+  const downBody =
+    args.downSqlStatements.length > 0
+      ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
+      : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
 ${collectionLine}${singleLine}${componentLine}${userExtLine}-- Generated at: ${now}
@@ -63,6 +76,9 @@ ${collectionLine}${singleLine}${componentLine}${userExtLine}-- Generated at: ${n
 
 -- UP
 ${body}
+
+-- DOWN
+${downBody}
 `;
 }
 
@@ -80,6 +96,9 @@ export function formatBlankFile(
 
 -- UP
 
+
+-- DOWN
+-- (hand-write rollback SQL here, or leave empty if irreversible)
 `;
 }
 

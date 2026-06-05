@@ -64,6 +64,12 @@ vi.mock("../../../../database/drizzle-kit-lazy", () => ({
 // Imported AFTER mock setup so the mock applies.
 import { freshPushSchema } from "../fresh-push";
 
+// A one-table Drizzle schema so `drizzleTableNames(schema)` yields ["users"].
+async function fakeUsersSchema() {
+  const { pgTable, text } = await import("drizzle-orm/pg-core");
+  return { users: pgTable("users", { id: text("id").primaryKey() }) };
+}
+
 describe("freshPushSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -77,20 +83,45 @@ describe("freshPushSchema", () => {
   });
 
   describe("PostgreSQL", () => {
-    it("calls pushSchema().apply() and returns success", async () => {
+    // Minimal fake PG drizzle db: db.transaction(cb) runs cb with a tx that
+    // records executed SQL. The PG path no longer calls result.apply() — it
+    // filters statementsToExecute then runs the safe set inside a transaction.
+    function makePgDb() {
+      const tx = {
+        execute: vi.fn().mockImplementation(() => Promise.resolve()),
+      };
+      const db = {
+        transaction: vi
+          .fn()
+          .mockImplementation(async (cb: (t: typeof tx) => Promise<void>) => {
+            await cb(tx);
+          }),
+      };
+      return { db, tx };
+    }
+
+    it("executes safe statements in a transaction (not via apply)", async () => {
       mockPushSchemaResult = {
         hasDataLoss: false,
         warnings: [],
-        statementsToExecute: ["CREATE TABLE users (...)"],
+        statementsToExecute: ['CREATE TABLE "users" ("id" text)'],
         apply: vi.fn().mockResolvedValue(undefined),
       };
-      const fakeDb = {} as unknown;
+      const { db, tx } = makePgDb();
 
-      const result = await freshPushSchema("postgresql", fakeDb, {});
+      const result = await freshPushSchema(
+        "postgresql",
+        db,
+        await fakeUsersSchema()
+      );
 
       expect(result.applied).toBe(true);
-      expect(result.statementsExecuted).toEqual(["CREATE TABLE users (...)"]);
-      expect(mockPushSchemaResult.apply).toHaveBeenCalledOnce();
+      expect(result.statementsExecuted).toEqual([
+        'CREATE TABLE "users" ("id" text)',
+      ]);
+      expect(db.transaction).toHaveBeenCalledOnce();
+      expect(tx.execute).toHaveBeenCalledOnce();
+      expect(mockPushSchemaResult.apply).not.toHaveBeenCalled();
     });
 
     it("forwards hasDataLoss + warnings from drizzle-kit", async () => {
@@ -100,25 +131,95 @@ describe("freshPushSchema", () => {
         statementsToExecute: [],
         apply: vi.fn().mockResolvedValue(undefined),
       };
-      const result = await freshPushSchema("postgresql", {}, {});
+      const { db } = makePgDb();
+      const result = await freshPushSchema(
+        "postgresql",
+        db,
+        await fakeUsersSchema()
+      );
       expect(result.hasDataLoss).toBe(true);
       expect(result.warnings).toEqual(["dropping column foo"]);
     });
 
-    it("propagates errors from drizzle-kit's apply()", async () => {
+    it("filters out DROP TABLE for tables not in the schema", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       mockPushSchemaResult = {
         hasDataLoss: false,
         warnings: [],
-        statementsToExecute: [],
-        apply: vi.fn().mockRejectedValue(new Error("connection refused")),
+        statementsToExecute: [
+          'DROP TABLE "dc_articles"',
+          'ALTER TABLE "users" ADD COLUMN "email" text',
+        ],
+        apply: vi.fn(),
       };
-      await expect(freshPushSchema("postgresql", {}, {})).rejects.toThrow(
-        "connection refused"
+      const { db, tx } = makePgDb();
+
+      const result = await freshPushSchema(
+        "postgresql",
+        db,
+        await fakeUsersSchema()
       );
+
+      // Only the safe ALTER reaches the executor; the user-table DROP is gone.
+      expect(tx.execute).toHaveBeenCalledOnce();
+      expect(result.statementsExecuted).toEqual([
+        'ALTER TABLE "users" ADD COLUMN "email" text',
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Blocked DROP TABLE "dc_articles"')
+      );
+    });
+
+    it("propagates errors from statement execution", async () => {
+      mockPushSchemaResult = {
+        hasDataLoss: false,
+        warnings: [],
+        statementsToExecute: ['CREATE TABLE "users" ("id" text)'],
+        apply: vi.fn(),
+      };
+      const db = {
+        transaction: vi
+          .fn()
+          .mockImplementation(async (cb: (t: unknown) => Promise<void>) => {
+            await cb({
+              execute: vi
+                .fn()
+                .mockRejectedValue(new Error("connection refused")),
+            });
+          }),
+      };
+      await expect(
+        freshPushSchema("postgresql", db, await fakeUsersSchema())
+      ).rejects.toThrow("connection refused");
     });
   });
 
   describe("SQLite", () => {
+    it("filters out DROP TABLE for tables not in the schema", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockPushSchemaResult = {
+        hasDataLoss: false,
+        warnings: [],
+        statementsToExecute: ["DROP TABLE `dc_articles`"],
+        apply: vi.fn(),
+      };
+      const fakeDb = { run: vi.fn(), all: vi.fn().mockReturnValue([]) };
+      const { sqliteTable, text: sqlText } = await import(
+        "drizzle-orm/sqlite-core"
+      );
+      const schema = {
+        users: sqliteTable("users", { id: sqlText("id").primaryKey() }),
+      };
+
+      const result = await freshPushSchema("sqlite", fakeDb, schema);
+
+      expect(fakeDb.run).not.toHaveBeenCalled();
+      expect(result.statementsExecuted).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Blocked DROP TABLE "dc_articles"')
+      );
+    });
+
     it("returns empty result when drizzle-kit reports no statements", async () => {
       mockPushSchemaResult = {
         hasDataLoss: false,

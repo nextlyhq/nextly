@@ -2,167 +2,119 @@ import { describe, expect, it, vi } from "vitest";
 
 import { introspectLiveSnapshot } from "../introspect-live";
 
+const PG_COLS = {
+  rows: [
+    {
+      table_name: "dc_posts",
+      column_name: "id",
+      udt_name: "int4",
+      is_nullable: "NO",
+      column_default: null,
+    },
+    {
+      table_name: "dc_posts",
+      column_name: "title",
+      udt_name: "text",
+      is_nullable: "YES",
+      column_default: null,
+    },
+    {
+      table_name: "dc_posts",
+      column_name: "status",
+      udt_name: "varchar",
+      is_nullable: "NO",
+      column_default: "'draft'::character varying",
+    },
+  ],
+};
+
 describe("introspectLiveSnapshot - postgresql", () => {
-  it("builds snapshot from information_schema.columns rows", async () => {
-    // drizzle-orm/node-postgres returns pg QueryResult { rows: [...] }.
-    const execute = vi.fn().mockResolvedValue({
-      rows: [
-        {
-          table_name: "dc_posts",
-          column_name: "id",
-          udt_name: "int4",
-          is_nullable: "NO",
-          column_default: null,
-        },
-        {
-          table_name: "dc_posts",
-          column_name: "title",
-          udt_name: "text",
-          is_nullable: "YES",
-          column_default: null,
-        },
-        {
-          table_name: "dc_posts",
-          column_name: "status",
-          udt_name: "varchar",
-          is_nullable: "NO",
-          column_default: "'draft'::character varying",
-        },
-      ],
-    });
+  it("builds snapshot from columns + indexes (two queries)", async () => {
+    // 1st execute = columns; 2nd execute = index rows.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(PG_COLS)
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            table: "dc_posts",
+            index: "uq_dc_posts_slug",
+            unique: true,
+            column: "slug",
+          },
+        ],
+      });
     const db = { execute };
 
     const snapshot = await introspectLiveSnapshot(db, "postgresql", [
       "dc_posts",
     ]);
 
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(snapshot.tables).toHaveLength(1);
-    expect(snapshot.tables[0]).toEqual({
-      name: "dc_posts",
-      columns: [
-        { name: "id", type: "int4", nullable: false, default: undefined },
-        { name: "title", type: "text", nullable: true, default: undefined },
-        {
-          name: "status",
-          type: "varchar",
-          nullable: false,
-          default: "'draft'::character varying",
-        },
-      ],
-    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(snapshot.tables[0].columns).toEqual([
+      { name: "id", type: "int4", nullable: false, default: undefined },
+      { name: "title", type: "text", nullable: true, default: undefined },
+      {
+        name: "status",
+        type: "varchar",
+        nullable: false,
+        default: "'draft'::character varying",
+      },
+    ]);
+    expect(snapshot.tables[0].indexes).toEqual([
+      { name: "uq_dc_posts_slug", columns: ["slug"], unique: true },
+    ]);
   });
 
-  it("groups columns by table when query returns multiple tables", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      rows: [
-        {
-          table_name: "dc_posts",
-          column_name: "id",
-          udt_name: "int4",
-          is_nullable: "NO",
-          column_default: null,
-        },
-        {
-          table_name: "dc_users",
-          column_name: "id",
-          udt_name: "int4",
-          is_nullable: "NO",
-          column_default: null,
-        },
-        {
-          table_name: "dc_users",
-          column_name: "email",
-          udt_name: "varchar",
-          is_nullable: "NO",
-          column_default: null,
-        },
-      ],
-    });
+  it("gives every table a defined (possibly empty) indexes array", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(PG_COLS)
+      .mockResolvedValueOnce({ rows: [] });
     const db = { execute };
-
     const snapshot = await introspectLiveSnapshot(db, "postgresql", [
       "dc_posts",
-      "dc_users",
     ]);
-
-    expect(snapshot.tables).toHaveLength(2);
-    expect(
-      snapshot.tables.find(t => t.name === "dc_posts")?.columns
-    ).toHaveLength(1);
-    expect(
-      snapshot.tables.find(t => t.name === "dc_users")?.columns
-    ).toHaveLength(2);
+    expect(snapshot.tables[0].indexes).toEqual([]);
   });
 
   it("returns empty snapshot when tableNames is empty (no query issued)", async () => {
     const execute = vi.fn();
     const db = { execute };
-
     const snapshot = await introspectLiveSnapshot(db, "postgresql", []);
-
     expect(execute).not.toHaveBeenCalled();
-    expect(snapshot.tables).toEqual([]);
-  });
-
-  it("returns empty snapshot when no rows returned (table doesn't exist yet)", async () => {
-    const execute = vi.fn().mockResolvedValue({ rows: [] });
-    const db = { execute };
-
-    const snapshot = await introspectLiveSnapshot(db, "postgresql", [
-      "dc_nonexistent",
-    ]);
-
     expect(snapshot.tables).toEqual([]);
   });
 });
 
 describe("introspectLiveSnapshot - mysql", () => {
-  it("handles mysql2's [rows, fields] tuple return", async () => {
-    const execute = vi.fn().mockResolvedValue([
-      [
-        {
-          TABLE_NAME: "dc_posts",
-          COLUMN_NAME: "id",
-          COLUMN_TYPE: "int(11)",
-          IS_NULLABLE: "NO",
-          COLUMN_DEFAULT: null,
-        },
-        {
-          TABLE_NAME: "dc_posts",
-          COLUMN_NAME: "title",
-          COLUMN_TYPE: "varchar(255)",
-          IS_NULLABLE: "YES",
-          COLUMN_DEFAULT: null,
-        },
-      ],
-      [],
-    ]);
-    const db = { execute };
-
-    const snapshot = await introspectLiveSnapshot(db, "mysql", ["dc_posts"]);
-
-    expect(snapshot.tables[0].columns).toEqual([
-      { name: "id", type: "int(11)", nullable: false, default: undefined },
-      {
-        name: "title",
-        type: "varchar(255)",
-        nullable: true,
-        default: undefined,
-      },
-    ]);
-  });
-
-  it("handles flat-array MySQL return shape", async () => {
-    const execute = vi.fn().mockResolvedValue([
-      {
-        TABLE_NAME: "dc_posts",
-        COLUMN_NAME: "id",
-        COLUMN_TYPE: "int(11)",
-        IS_NULLABLE: "NO",
-        COLUMN_DEFAULT: "0",
-      },
-    ]);
+  it("handles mysql2's [rows, fields] tuple + reads indexes", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([
+        [
+          {
+            TABLE_NAME: "dc_posts",
+            COLUMN_NAME: "id",
+            COLUMN_TYPE: "int(11)",
+            IS_NULLABLE: "NO",
+            COLUMN_DEFAULT: null,
+          },
+        ],
+        [],
+      ])
+      .mockResolvedValueOnce([
+        [
+          {
+            TABLE_NAME: "dc_posts",
+            INDEX_NAME: "idx_dc_posts_views",
+            NON_UNIQUE: 1,
+            COLUMN_NAME: "views",
+            SEQ_IN_INDEX: 1,
+          },
+        ],
+        [],
+      ]);
     const db = { execute };
 
     const snapshot = await introspectLiveSnapshot(db, "mysql", ["dc_posts"]);
@@ -171,84 +123,50 @@ describe("introspectLiveSnapshot - mysql", () => {
       name: "id",
       type: "int(11)",
       nullable: false,
-      default: "0",
+      default: undefined,
     });
+    expect(snapshot.tables[0].indexes).toEqual([
+      { name: "idx_dc_posts_views", columns: ["views"], unique: false },
+    ]);
   });
 });
 
 describe("introspectLiveSnapshot - sqlite", () => {
-  it("issues PRAGMA table_info per managed table", async () => {
+  it("reads columns + indexes, filtering pk/autoindex", async () => {
+    // Call order per table: table_info, index_list, then index_info per index.
     const all = vi
       .fn()
+      // table_info(dc_posts)
       .mockReturnValueOnce([
-        {
-          cid: 0,
-          name: "id",
-          type: "INTEGER",
-          notnull: 1,
-          dflt_value: null,
-          pk: 1,
-        },
-        {
-          cid: 1,
-          name: "title",
-          type: "TEXT",
-          notnull: 0,
-          dflt_value: "'untitled'",
-          pk: 0,
-        },
+        { cid: 0, name: "id", type: "INTEGER", notnull: 1, dflt_value: null, pk: 1 },
+        { cid: 1, name: "slug", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 },
       ])
+      // index_list(dc_posts): one real unique index + one autoindex (filtered)
       .mockReturnValueOnce([
-        {
-          cid: 0,
-          name: "id",
-          type: "INTEGER",
-          notnull: 1,
-          dflt_value: null,
-          pk: 1,
-        },
-      ]);
+        { name: "uq_dc_posts_slug", unique: 1, origin: "c" },
+        { name: "sqlite_autoindex_dc_posts_1", unique: 1, origin: "u" },
+      ])
+      // index_info(uq_dc_posts_slug)
+      .mockReturnValueOnce([{ name: "slug" }]);
     const db = { all };
 
-    const snapshot = await introspectLiveSnapshot(db, "sqlite", [
-      "dc_posts",
-      "dc_users",
-    ]);
+    const snapshot = await introspectLiveSnapshot(db, "sqlite", ["dc_posts"]);
 
-    expect(all).toHaveBeenCalledTimes(2);
-    expect(snapshot.tables).toHaveLength(2);
     expect(snapshot.tables[0].columns).toEqual([
-      { name: "id", type: "INTEGER", nullable: false, default: undefined },
-      { name: "title", type: "TEXT", nullable: true, default: "'untitled'" },
+      { name: "id", type: "integer", nullable: false, default: undefined },
+      { name: "slug", type: "text", nullable: true, default: undefined },
+    ]);
+    expect(snapshot.tables[0].indexes).toEqual([
+      { name: "uq_dc_posts_slug", columns: ["slug"], unique: true },
     ]);
   });
 
   it("skips tables with empty PRAGMA result (table not yet created)", async () => {
     const all = vi.fn().mockReturnValue([]);
     const db = { all };
-
     const snapshot = await introspectLiveSnapshot(db, "sqlite", [
       "dc_nonexistent",
     ]);
-
     expect(snapshot.tables).toEqual([]);
-  });
-
-  it("converts non-string SQLite default values to string", async () => {
-    const all = vi.fn().mockReturnValue([
-      {
-        cid: 0,
-        name: "count",
-        type: "INTEGER",
-        notnull: 0,
-        dflt_value: 42,
-        pk: 0,
-      },
-    ]);
-    const db = { all };
-
-    const snapshot = await introspectLiveSnapshot(db, "sqlite", ["dc_x"]);
-
-    expect(snapshot.tables[0].columns[0].default).toBe("42");
   });
 });

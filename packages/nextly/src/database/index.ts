@@ -1,8 +1,22 @@
 import { env } from "../lib/env";
+import * as schemasMy from "../schemas/_dialect-bundles/mysql";
+import * as schemasPg from "../schemas/_dialect-bundles/postgres";
+import * as schemasSl from "../schemas/_dialect-bundles/sqlite";
 
-import * as schema from "./schema/index";
+/**
+ * Backwards-compatible `schema.postgres` / `schema.mysql` / `schema.sqlite`
+ * namespaces. Replaces the old `database/schema/<dialect>.ts` stubs deleted
+ * in Plan A Task 17. Each namespace is a flat re-export of every Drizzle
+ * table + relations the framework manages for the given dialect, drawn
+ * from the canonical `@nextly/schemas/<feature>/<dialect>` modules.
+ */
+const schema = {
+  postgres: schemasPg,
+  mysql: schemasMy,
+  sqlite: schemasSl,
+};
 
-export * as schema from "./schema/index";
+export { schema };
 export * from "./errors";
 export { env } from "../lib/env";
 

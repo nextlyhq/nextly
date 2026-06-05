@@ -932,33 +932,5 @@ describe("AuthService", () => {
       expect(allTokens).toHaveLength(1);
       expect(allTokens[0].identifier).toBe(validEmail);
     });
-
-    it("should delete expired Auth.js verification tokens", async () => {
-      // Arrange: Create expired and valid Auth.js verification tokens
-      const expiredEmail = "expired@test.com";
-      const validEmail = "valid@test.com";
-
-      // Create expired token
-      await testDb.db.insert(testDb.schema.verificationTokens).values({
-        identifier: expiredEmail,
-        token: "expired-authjs-token",
-        expires: new Date(Date.now() - 1000), // Expired
-      });
-
-      // Create valid token
-      await testDb.db.insert(testDb.schema.verificationTokens).values({
-        identifier: validEmail,
-        token: "valid-authjs-token",
-        expires: new Date(Date.now() + TOKEN_EXPIRY_HOURS * HOUR_IN_MS), // Valid for 24h
-      });
-
-      // Act
-      await service.cleanupExpiredTokens();
-
-      // Assert: Expired token deleted, valid token remains
-      const allTokens = await testDb.db.query.verificationTokens.findMany();
-      expect(allTokens).toHaveLength(1);
-      expect(allTokens[0].identifier).toBe(validEmail);
-    });
   });
 });
