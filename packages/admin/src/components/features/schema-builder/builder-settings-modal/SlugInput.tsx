@@ -1,4 +1,5 @@
-// Why: slug auto-derives from the singular name via toSnakeName. PR B
+// Why: slug auto-derives from the singular name (kebab for singles,
+// snake for collections/components — branching lives in BasicsTab). PR B
 // dropped the loud "AUTO" badge + "Edit" text button in favor of a
 // quieter, more dev-focused presentation: bold value + Lucide Pencil
 // icon button. PR G (feedback 2) removed the dim "Slug:" prefix --

@@ -226,6 +226,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
+                        tabIndex={-1}
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showPassword ? (
@@ -264,6 +265,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
                         onClick={() =>
                           setShowConfirmPassword(!showConfirmPassword)
                         }
+                        tabIndex={-1}
                         className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {showConfirmPassword ? (

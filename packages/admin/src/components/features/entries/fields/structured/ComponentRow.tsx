@@ -29,6 +29,7 @@ import type { FieldConfig } from "nextly/config";
 import { useState } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
+import { FieldRow } from "@admin/components/features/entries/EntryForm/FieldRow";
 import {
   GripVertical,
   ChevronDown,
@@ -36,9 +37,8 @@ import {
   Trash2,
   Puzzle,
 } from "@admin/components/icons";
+import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
-
-import { FieldRenderer } from "../FieldRenderer";
 
 // ============================================================
 // Types
@@ -246,15 +246,18 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <CardHeader className="p-3" noBorder>
+        <CardHeader
+          className="p-0 pl-2 pr-1 border-b border-primary/5 dark:border-primary/5 bg-primary/5/50 dark:bg-slate-900/50 hover:bg-primary/5 dark:hover:bg-slate-900/80 transition-colors"
+          noBorder
+        >
           <div className="flex items-center gap-2">
             {/* Drag Handle */}
             {isSortable && isInteractive && (
               <button
                 type="button"
                 className={cn(
-                  "cursor-grab active:cursor-grabbing p-1 rounded-none",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1",
+                  "cursor-grab active:cursor-grabbing p-2 rounded-none",
+                  "focus:outline-none",
                   "touch-none" // Prevent touch scrolling interference
                 )}
                 aria-label={`Drag to reorder ${label} ${index + 1}`}
@@ -274,8 +277,8 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
                 type="button"
                 className={cn(
                   "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
-                  "rounded-none px-1 py-0.5",
-                  "hover-unified focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
+                  "rounded-none px-2 py-3",
+                  "focus:outline-none"
                 )}
                 aria-expanded={isOpen}
               >
@@ -309,7 +312,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
                 variant="ghost"
                 size="icon"
                 onClick={onRemove}
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
                 aria-label={`Remove ${label} ${index + 1}`}
               >
                 <Trash2 className="h-4 w-4" />
@@ -322,21 +325,18 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
           <CardContent className="p-4 pt-0 space-y-4">
             {/* Render component fields */}
             {fields && fields.length > 0 ? (
-              fields.map((subField, idx) => {
-                // Only render fields with names
-                if (!("name" in subField) || !subField.name) {
-                  return null;
-                }
-                return (
-                  <FieldRenderer
-                    key={(subField as { name: string }).name || idx}
-                    field={subField}
+              (() => {
+                const rows = packFieldsIntoRows(fields);
+                return rows.map((row, i) => (
+                  <FieldRow
+                    key={i}
+                    fields={row}
                     basePath={basePath}
                     disabled={disabled}
                     readOnly={readOnly}
                   />
-                );
-              })
+                ));
+              })()
             ) : (
               <div className="text-sm text-muted-foreground text-center py-4">
                 No fields configured for this component.

@@ -500,15 +500,15 @@ export default function SingleBuilderEditPage({
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
-      <PageContainer className="flex-1">
-        <BuilderToolbar
-          config={SINGLE_BUILDER_CONFIG}
-          name={settings.singularName || slug}
-          locked={isLocked}
-          unsavedCount={unsavedCount}
-          onOpenSettings={() => setActive({ kind: "settings" })}
-          onSave={() => void handleSave()}
-        />
+      <BuilderToolbar
+        config={SINGLE_BUILDER_CONFIG}
+        name={settings.singularName || slug}
+        locked={isLocked}
+        unsavedCount={unsavedCount}
+        onOpenSettings={() => setActive({ kind: "settings" })}
+        onSave={() => void handleSave()}
+      />
+      <PageContainer className="flex-1 pb-0">
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}
