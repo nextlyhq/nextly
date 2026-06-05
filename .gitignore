@@ -81,3 +81,10 @@ yalc.lock
 # Playwright MCP session artifacts (browser snapshots + console logs).
 # Generated during local debugging sessions, never part of a commit.
 .playwright-mcp/
+
+# Local-only planning/spec docs (superpowers brainstorm + plan artifacts)
+# and hands-on local testing playbooks. Kept on disk for reference, never
+# committed.
+docs/superpowers/
+docs/guides/manual-testing-migrations.md
+docs/guides/testing-migrations.md
