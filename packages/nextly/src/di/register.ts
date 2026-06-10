@@ -476,13 +476,13 @@ async function applyPluginConfigTransformers(
 
   let transformed = config;
   for (const plugin of plugins) {
-    if (!plugin.config) continue;
+    if (!plugin.setup) continue;
     try {
-      transformed = plugin.config(transformed);
+      transformed = plugin.setup(transformed);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Plugin "${plugin.name}" config transformer failed: ${message}`
+        `Plugin "${plugin.name}" setup transformer failed: ${message}`
       );
     }
   }

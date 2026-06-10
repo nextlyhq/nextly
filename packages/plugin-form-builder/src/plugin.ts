@@ -178,9 +178,9 @@ export function formBuilder(
       description: "Create and manage forms with submission tracking",
     },
 
-    // -- Config transformer --------------------------------------------------
+    // -- Setup transformer ---------------------------------------------------
     // Automatically adds plugin collections so users don't have to spread them.
-    config(config: Parameters<NonNullable<NextlyPlugin["config"]>>[0]) {
+    setup(config: Parameters<NonNullable<NextlyPlugin["setup"]>>[0]) {
       const existing: CollectionConfig[] = config.collections || [];
       const formsSlug = resolvedConfig.formOverrides.slug;
       const submissionsSlug = resolvedConfig.formSubmissionOverrides.slug;

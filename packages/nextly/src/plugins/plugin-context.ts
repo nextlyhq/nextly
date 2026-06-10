@@ -425,13 +425,6 @@ export interface PluginDefinition {
   setup?: (config: NextlyServiceConfig) => NextlyServiceConfig;
 
   /**
-   * Configuration transformer (advanced).
-   *
-   * @deprecated Renamed to `setup` (D4). Will be removed; use `setup` instead.
-   */
-  config?: (config: NextlyServiceConfig) => NextlyServiceConfig;
-
-  /**
    * Plugin initialization function.
    *
    * Called after all services are registered.

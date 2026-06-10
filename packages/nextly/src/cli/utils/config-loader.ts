@@ -251,9 +251,9 @@ async function loadConfigInternal(
       let transformedConfig: any = { ...config };
 
       for (const plugin of plugins) {
-        if (plugin.config) {
+        if (plugin.setup) {
           try {
-            transformedConfig = plugin.config(transformedConfig);
+            transformedConfig = plugin.setup(transformedConfig);
           } catch (error) {
             throw new NextlyError({
               code: "INVALID_INPUT",
@@ -262,10 +262,9 @@ async function loadConfigInternal(
               logMessage: "Config loader error",
               logContext: {
                 configPath,
-                reason: "plugin-config-transformer-failed",
+                reason: "plugin-setup-transformer-failed",
                 pluginName: plugin.name,
-                cause:
-                  error instanceof Error ? error.message : String(error),
+                cause: error instanceof Error ? error.message : String(error),
               },
               cause: error instanceof Error ? error : undefined,
             });
