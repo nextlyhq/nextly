@@ -1,10 +1,20 @@
+import { createRequire } from "module";
 import path from "path";
 
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
+// Mirror the tsup `define` so `getCoreVersion()` resolves under test (D6).
+const require = createRequire(import.meta.url);
+const { version: coreVersion } = require("./package.json") as {
+  version: string;
+};
+
 export default defineConfig({
   plugins: [tsconfigPaths()],
+  define: {
+    __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
+  },
   resolve: {
     alias: {
       "@nextly/storage": path.resolve(__dirname, "./src/storage/index.ts"),
