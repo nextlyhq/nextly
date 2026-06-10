@@ -80,8 +80,11 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
       ];
     case "sqlite":
       return [
+        // PK is `NOT NULL` to match the Drizzle def: SQLite (unlike PG/MySQL)
+        // treats a bare `TEXT PRIMARY KEY` as nullable, so without it drizzle-kit
+        // sees a nullability diff and rebuilds the table on every push.
         `CREATE TABLE IF NOT EXISTS nextly_schema_events (
-          id TEXT PRIMARY KEY,
+          id TEXT PRIMARY KEY NOT NULL,
           event_type TEXT NOT NULL,
           status TEXT NOT NULL,
           source TEXT NOT NULL,
@@ -104,9 +107,8 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           superseded_at INTEGER,
           superseded_by TEXT
         )`,
-        `CREATE UNIQUE INDEX IF NOT EXISTS nextly_schema_events_filename_applied_idx
-          ON nextly_schema_events (filename)
-          WHERE event_type = 'file_apply' AND status = 'applied'`,
+        // No partial unique index on SQLite — see schemas/schema-events/sqlite.ts.
+        // "One applied row per file" is enforced in app code (matching MySQL).
         `CREATE INDEX IF NOT EXISTS nextly_schema_events_started_at_idx ON nextly_schema_events (started_at)`,
         `CREATE INDEX IF NOT EXISTS nextly_schema_events_scope_idx ON nextly_schema_events (scope_kind, scope_slug)`,
       ];

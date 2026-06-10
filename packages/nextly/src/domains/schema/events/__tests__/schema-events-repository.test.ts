@@ -50,6 +50,38 @@ describe("SchemaEventsRepository (sqlite)", () => {
     expect(await repo.isFileApplied("0001_init.sql")).toBe(true);
   });
 
+  it("markApplied(uniqueFilename) refuses a 2nd applied row for the same file", async () => {
+    // Replaces the SQLite partial unique index: the "one applied row per file"
+    // guard, now enforced atomically in code (drizzle-kit can't round-trip a
+    // SQLite partial index — drizzle-team/drizzle-orm#4688).
+    const id1 = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+    });
+    await repo.markApplied(id1, { uniqueFilename: "0001_init.sql" });
+    expect((await repo.findById(id1))?.status).toBe("applied");
+
+    // A racing second attempt for the same file is blocked from applying.
+    const id2 = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+    });
+    await repo.markApplied(id2, { uniqueFilename: "0001_init.sql" });
+    expect((await repo.findById(id2))?.status).toBe("in_progress");
+
+    // Exactly one applied row exists for the file.
+    const applies = await repo.findFileApplies("0001_init.sql");
+    expect(applies.filter(r => r.status === "applied")).toHaveLength(1);
+  });
+
+  it("markApplied without uniqueFilename still applies unconditionally", async () => {
+    const id = await repo.recordStart({ eventType: "dev_push", source: "ui" });
+    await repo.markApplied(id, { statementsExecuted: 1 });
+    expect((await repo.findById(id))?.status).toBe("applied");
+  });
+
   it("isFileApplied is latest-status-wins: a later rolled_back un-applies it", async () => {
     const id = await repo.recordStart({
       eventType: "file_apply",
@@ -83,7 +115,10 @@ describe("SchemaEventsRepository (sqlite)", () => {
       filename: "0002.sql",
     });
     await repo.markApplied(fileId, {});
-    await repo.supersede({ supersededEventIds: [consumedId], byEventId: fileId });
+    await repo.supersede({
+      supersededEventIds: [consumedId],
+      byEventId: fileId,
+    });
 
     // Even with a 1-day retention and far-future "now", the consumed row is
     // protected because it is referenced by the file_apply row.

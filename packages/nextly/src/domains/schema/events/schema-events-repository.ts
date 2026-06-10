@@ -76,6 +76,17 @@ export interface MarkAppliedInput {
   statementsExecuted?: number | null;
   renamesApplied?: number | null;
   durationMs?: number | null;
+  /**
+   * When set, the row is marked `applied` ONLY if no OTHER applied `file_apply`
+   * row already exists for this filename — the atomic "one applied row per
+   * file" guard. This replaces the SQLite partial unique index, which
+   * drizzle-kit 0.31.10 can't round-trip (drizzle-team/drizzle-orm#4688). On
+   * PG/MySQL the migrate lock already serializes runs; SQLite (single-writer,
+   * no explicit lock) relies on this check. If the guard blocks the update the
+   * row stays `in_progress` — a benign no-op meaning another run already
+   * applied the file.
+   */
+  uniqueFilename?: string | null;
 }
 
 export interface MarkFailedInput {
@@ -134,10 +145,22 @@ export class SchemaEventsRepository {
       set.renamesApplied = input.renamesApplied;
     }
     if (input.durationMs !== undefined) set.durationMs = input.durationMs;
-    await this.db
-      .update(this.table)
-      .set(set)
-      .where(sql`id = ${id}`);
+
+    // The NOT EXISTS subquery is wrapped in a derived table so MySQL accepts
+    // referencing the target table in an UPDATE (avoids error 1093); SQLite and
+    // Postgres accept it too.
+    const where = input.uniqueFilename
+      ? sql`id = ${id} AND NOT EXISTS (
+          SELECT 1 FROM (
+            SELECT 1 FROM nextly_schema_events
+             WHERE event_type = 'file_apply'
+               AND status = 'applied'
+               AND filename = ${input.uniqueFilename}
+               AND id <> ${id}
+          ) AS _dup
+        )`
+      : sql`id = ${id}`;
+    await this.db.update(this.table).set(set).where(where);
   }
 
   /** Transition a row to failed. */
@@ -278,9 +301,11 @@ export class SchemaEventsRepository {
   }
 
   /**
-   * MySQL has no partial unique index, so callers that mark a `file_apply`
-   * row applied must first check no other applied row exists for the same
-   * filename. Throws DUPLICATE on conflict. (PG/SQLite rely on the index.)
+   * Optional pre-flight check that throws DUPLICATE if a file is already
+   * applied. The authoritative "one applied row per file" guard is the
+   * conditional `markApplied({ uniqueFilename })` (atomic) plus the migrate
+   * lock that serializes runs on PG/MySQL; this is a softer, earlier signal.
+   * Only PG keeps a DB-level partial unique index; SQLite/MySQL enforce in code.
    */
   async assertFileNotAlreadyApplied(filename: string): Promise<void> {
     if (await this.isFileApplied(filename)) {

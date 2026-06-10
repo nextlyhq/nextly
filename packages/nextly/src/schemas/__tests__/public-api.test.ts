@@ -80,8 +80,11 @@ describe("schemas public API", () => {
       });
     });
 
-    it("excludes the migration ledger (bootstrapped out-of-band, not reconciled)", () => {
-      expect(schemas.CORE_TABLE_NAMES).not.toContain("nextly_schema_events");
+    it("includes the migration ledger as a first-class managed table", () => {
+      // nextly_schema_events is now a declared core table (it round-trips
+      // cleanly: NOT NULL PK, no SQLite partial index). It is still
+      // bootstrapped out-of-band so it exists before anything records into it.
+      expect(schemas.CORE_TABLE_NAMES).toContain("nextly_schema_events");
     });
   });
 
