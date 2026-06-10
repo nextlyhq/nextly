@@ -11,6 +11,8 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { EventBus } from "../events/event-bus";
+import { getEventBus } from "../events/event-bus";
 import type { HookHandler, HookType } from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
@@ -21,6 +23,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
+import { getCoreVersion } from "./core-version";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -170,11 +173,29 @@ export interface PluginContext {
   };
 
   /**
-   * Infrastructure access.
-   *
-   * Provides access to low-level infrastructure:
-   * - Database: Direct Drizzle database access (use with caution)
-   * - Logger: Logging interface for plugin diagnostics
+   * @experimental Raw Drizzle database instance — the full escape hatch (D33).
+   * Unmanaged: bypasses validation/hooks/RBAC/events. Prefer `services`.
+   */
+  db: DatabaseInstance;
+
+  /** @experimental Logger for plugin diagnostics. */
+  logger: Logger;
+
+  /**
+   * @experimental Post-commit, observe-only, best-effort event bus (D8/D51).
+   * Use a hook to modify/abort; use an event to react/notify.
+   */
+  events: EventBus;
+
+  /**
+   * @experimental Running Nextly core version, for feature-detection (D6).
+   * e.g. "0.0.2-alpha.21".
+   */
+  nextlyVersion: string;
+
+  /**
+   * @deprecated Use top-level `db`/`logger` instead. Temporary back-compat
+   * alias removed once consumers migrate (P1/T13).
    */
   infra: {
     /** Drizzle database instance for direct queries */
@@ -558,6 +579,10 @@ export function createPluginContext(
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 
+  // Route isolated event-handler diagnostics through the resolved logger.
+  const events = getEventBus();
+  events.setLogger(logger);
+
   return {
     services: {
       collections: collectionService,
@@ -565,6 +590,11 @@ export function createPluginContext(
       media: mediaService,
       email: emailService,
     },
+    db,
+    logger,
+    events,
+    nextlyVersion: getCoreVersion(),
+    // Deprecated alias — kept until consumers migrate (P1/T13).
     infra: {
       db,
       logger,
