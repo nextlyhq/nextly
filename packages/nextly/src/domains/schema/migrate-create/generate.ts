@@ -25,7 +25,10 @@ import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { buildDesiredTableFromFields } from "../pipeline/diff/build-from-fields";
+import {
+  buildDesiredTableFromComponentFields,
+  buildDesiredTableFromFields,
+} from "../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
   NextlySchemaSnapshot,
@@ -265,8 +268,14 @@ export function buildDesiredSnapshotFromConfig(
     );
   }
   for (const c of components) {
-    // Components don't carry a status column — defaults to off.
-    tables.push(buildDesiredTableFromFields(c.tableName, c.fields, dialect));
+    // Components use the component builder (system columns _parent_id,
+    // _parent_table, _parent_field, _order, _component_type — not the
+    // collection slug/title), matching what the apply pipeline builds. Using
+    // the collection builder here produced a snapshot that diverged from the
+    // real component table and broke `migrate:resolve --applied`.
+    tables.push(
+      buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect)
+    );
   }
   return { tables };
 }
