@@ -492,7 +492,10 @@ export async function runFileMigrations(args: {
       });
       try {
         const n = await executeSql(m.upSql);
-        await repo.markApplied(id, { statementsExecuted: n });
+        await repo.markApplied(id, {
+          statementsExecuted: n,
+          uniqueFilename: filename,
+        });
       } catch (err) {
         await repo.markFailed(id, {
           errorMessage: err instanceof Error ? err.message : String(err),

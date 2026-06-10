@@ -837,7 +837,10 @@ export class PushSchemaPipeline {
             );
           }
         }
-        const safe = filterUnsafeStatements(emittedStatements, desiredTableNames);
+        const safe = filterUnsafeStatements(
+          emittedStatements,
+          desiredTableNames
+        );
 
         try {
           await this.deps.executor.executeStatements(tx, safe);

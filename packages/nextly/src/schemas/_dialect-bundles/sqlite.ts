@@ -63,3 +63,5 @@ export { siteSettingsSqlite as siteSettings } from "../site-settings/sqlite";
 export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-field-definitions/sqlite";
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
+
+export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";

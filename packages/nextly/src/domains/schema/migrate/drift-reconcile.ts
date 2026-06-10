@@ -33,7 +33,7 @@ export interface ReconcileRepo {
   }): Promise<string>;
   markApplied(
     id: string,
-    args: { statementsExecuted?: number | null }
+    args: { statementsExecuted?: number | null; uniqueFilename?: string | null }
   ): Promise<void>;
   markFailed(
     id: string,
@@ -109,7 +109,10 @@ export async function reconcileFile(
     });
     try {
       const statementsExecuted = await executeSql(file.sql);
-      await repo.markApplied(id, { statementsExecuted });
+      await repo.markApplied(id, {
+        statementsExecuted,
+        uniqueFilename: file.filename,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await repo.markFailed(id, {
@@ -133,7 +136,10 @@ export async function reconcileFile(
       filename: file.filename,
       sha256: file.sha256 ?? null,
     });
-    await repo.markApplied(id, { statementsExecuted: 0 });
+    await repo.markApplied(id, {
+      statementsExecuted: 0,
+      uniqueFilename: file.filename,
+    });
     const supersedable = (await args.supersedableEventIds?.()) ?? [];
     if (supersedable.length > 0) {
       await repo.supersede({ supersededEventIds: supersedable, byEventId: id });
