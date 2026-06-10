@@ -24,6 +24,8 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type { PluginSelf } from "./self";
+import { resolvePluginSelf } from "./self";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -192,6 +194,13 @@ export interface PluginContext {
    * e.g. "0.0.2-alpha.21".
    */
   nextlyVersion: string;
+
+  /**
+   * @experimental Resolved names for this plugin's own entities (D54). Read
+   * `ctx.self.collections[...]` instead of hardcoding slugs so the P2 remap can
+   * rename them transparently. Identity-resolved in P1.
+   */
+  self: PluginSelf;
 
   /**
    * @deprecated Use top-level `db`/`logger` instead. Temporary back-compat
@@ -558,7 +567,12 @@ export function createPluginContext(
       collection: string,
       handler: HookHandler
     ) => void;
-  }
+  },
+  /**
+   * The plugin this context is built for — used to resolve `ctx.self` (D54).
+   * Optional so the factory stays usable without a plugin (empty `self`).
+   */
+  plugin?: PluginDefinition
 ): PluginContext {
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
@@ -594,6 +608,9 @@ export function createPluginContext(
     logger,
     events,
     nextlyVersion: getCoreVersion(),
+    self: plugin
+      ? resolvePluginSelf(plugin)
+      : { name: "", collections: {}, singles: {} },
     // Deprecated alias — kept until consumers migrate (P1/T13).
     infra: {
       db,

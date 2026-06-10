@@ -1480,20 +1480,32 @@ async function initializePlugins(
     }
   };
 
-  const pluginContext = createPluginContext(
-    getServiceForPlugin as Parameters<typeof createPluginContext>[0],
-    {
-      register: (hookType, collection, handler) => {
-        pluginHookRegistry.register(hookType, collection, handler);
-      },
-      unregister: (hookType, collection, handler) => {
-        pluginHookRegistry.unregister(hookType, collection, handler);
-      },
-    }
-  );
+  const hookBridge = {
+    register: (
+      hookType: Parameters<typeof pluginHookRegistry.register>[0],
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.register>[2]
+    ) => {
+      pluginHookRegistry.register(hookType, collection, handler);
+    },
+    unregister: (
+      hookType: Parameters<typeof pluginHookRegistry.unregister>[0],
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.unregister>[2]
+    ) => {
+      pluginHookRegistry.unregister(hookType, collection, handler);
+    },
+  };
 
   for (const plugin of plugins) {
     if (!plugin.init) continue;
+    // Build a per-plugin context so `ctx.self` resolves to this plugin's own
+    // entities (D54).
+    const pluginContext = createPluginContext(
+      getServiceForPlugin as Parameters<typeof createPluginContext>[0],
+      hookBridge,
+      plugin
+    );
     try {
       await plugin.init(pluginContext);
       logger.info?.(`Plugin "${plugin.name}" initialized`);
