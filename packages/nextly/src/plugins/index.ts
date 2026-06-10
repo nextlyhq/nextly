@@ -20,3 +20,5 @@ export {
   type PluginDefinition,
   type PluginHookRegistry,
 } from "./plugin-context";
+
+export type { PluginContributions } from "./contributions";

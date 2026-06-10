@@ -1,0 +1,52 @@
+{
+  "name": "@nextlyhq/plugin-sdk",
+  "version": "0.0.1",
+  "description": "Nextly Plugin SDK — the experimental, author-facing surface for building Nextly plugins.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "clean": "rimraf dist",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "nextly": "workspace:*"
+  },
+  "devDependencies": {
+    "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "nextly": "workspace:*",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "keywords": [
+    "nextly",
+    "plugin",
+    "sdk",
+    "nextly-plugin"
+  ]
+}

@@ -8,12 +8,14 @@
  * @since 0.1.0
  */
 
-import type { CollectionConfig, PluginDefinition } from "nextly";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import type { CollectionConfig } from "nextly";
 // `getCollectionsHandler` runs inside Next.js request handlers, so it
 // lives behind the runtime subpath. Importing from
 // the root would drag Next.js subpaths into Node-only contexts (CLI,
 // config loaders) that pull this plugin via `nextly.config.ts`.
 import { getCollectionsHandler } from "nextly/runtime";
+// Author against the SDK — the stable, experimental plugin boundary (D43).
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
@@ -167,9 +169,10 @@ export function formBuilder(
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
 
-  const plugin: NextlyPlugin = {
+  const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     version: "0.0.8",
+    nextly: ">=0.0.2-alpha.21",
     collections: [formsCol, submissionsCol],
 
     admin: {
@@ -177,9 +180,9 @@ export function formBuilder(
       description: "Create and manage forms with submission tracking",
     },
 
-    // -- Config transformer --------------------------------------------------
+    // -- Setup transformer ---------------------------------------------------
     // Automatically adds plugin collections so users don't have to spread them.
-    config(config: Parameters<NonNullable<NextlyPlugin["config"]>>[0]) {
+    setup(config: Parameters<NonNullable<NextlyPlugin["setup"]>>[0]) {
       const existing: CollectionConfig[] = config.collections || [];
       const formsSlug = resolvedConfig.formOverrides.slug;
       const submissionsSlug = resolvedConfig.formSubmissionOverrides.slug;
@@ -224,7 +227,7 @@ export function formBuilder(
         }
       );
     },
-  };
+  });
 
   return {
     plugin,

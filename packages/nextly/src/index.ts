@@ -346,6 +346,7 @@ export {
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginContext,
+  type PluginContributions,
   type PluginDefinition,
   type PluginHookRegistry,
 } from "./plugins";
