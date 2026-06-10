@@ -50,8 +50,10 @@ import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import { getCoreVersion } from "../plugins/core-version";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import { resolvePlugins } from "../plugins/resolve";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
@@ -256,9 +258,24 @@ export async function registerServices(
   }
 
   // ----------------------------------------
-  // Layer 0: Process Plugin Config Transformers
+  // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
-  const transformedConfig = await applyPluginConfigTransformers(config);
+  // Validate core/dependency compatibility (D6) and topologically sort by
+  // declared dependencies (D5), failing fast with a great error (D7). The
+  // resolved order drives BOTH setup and init below. Runs over all plugins
+  // (including disabled ones) so schema stays deterministic (D49).
+  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
+    coreVersion: getCoreVersion(),
+  });
+  const resolvedConfig: NextlyServiceConfig = {
+    ...config,
+    plugins: resolvedPlugins,
+  };
+
+  // ----------------------------------------
+  // Layer 0b: Process Plugin Config Transformers (resolved order)
+  // ----------------------------------------
+  const transformedConfig = await applyPluginConfigTransformers(resolvedConfig);
 
   const {
     adapter: providedAdapter,
