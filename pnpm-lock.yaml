@@ -987,6 +987,9 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:*
         version: link:../admin
+      '@nextlyhq/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
