@@ -170,6 +170,7 @@ export function formBuilder(
   const plugin: NextlyPlugin = {
     name: "@nextlyhq/plugin-form-builder",
     version: "0.0.8",
+    nextly: ">=0.0.2-alpha.21",
     collections: [formsCol, submissionsCol],
 
     admin: {

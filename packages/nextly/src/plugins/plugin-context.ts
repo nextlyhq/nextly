@@ -20,6 +20,7 @@ import type { UserService } from "../services/users/user-service";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
+import type { PluginContributions } from "./contributions";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -361,41 +362,74 @@ export interface PluginDefinition {
   name: string;
 
   /**
-   * Plugin version (semver format recommended).
-   * Helps with debugging and compatibility checks.
+   * Plugin semver version.
+   * Required so that other plugins' `dependsOn` ranges can be checked (D5/D39).
    */
-  version?: string;
+  version: string;
+
+  /**
+   * @experimental Core-compatibility range, boot-checked (D6). May span majors,
+   * e.g. `'^1 || ^2'`. Prereleases (alpha/beta) count as in-range.
+   */
+  nextly: string;
+
+  /**
+   * @experimental Required plugin dependencies → version range (D5).
+   * Plugins are topologically sorted so dependencies initialize first.
+   */
+  dependsOn?: Record<string, string>;
+
+  /**
+   * @experimental Enhance-if-present dependencies → version range (D5).
+   * Absent optional deps are fine; present-but-incompatible fails fast.
+   */
+  optionalDependsOn?: Record<string, string>;
+
+  /**
+   * @experimental Default `true`. `false` skips behavior (init/hooks/events/
+   * routes/admin) but STILL applies declarative schema (D49). Behavior-skip is
+   * wired in P1.
+   */
+  enabled?: boolean;
+
+  /**
+   * @experimental Declarative contributions (D1) — introspectable without running
+   * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
+   */
+  contributes?: PluginContributions;
 
   /**
    * Collections provided by this plugin.
    *
-   * These collections are automatically merged with user collections
-   * in defineConfig(). Users don't need to manually spread plugin collections.
-   *
-   * @example
-   * ```typescript
-   * // Plugin definition
-   * const myPlugin: PluginDefinition = {
-   *   name: 'my-plugin',
-   *   collections: [FormsCollection, SubmissionsCollection],
-   * };
-   *
-   * // User config - collections are auto-merged
-   * export default defineConfig({
-   *   plugins: [myPlugin],
-   *   collections: [Posts, Users], // Plugin collections added automatically
-   * });
-   * ```
+   * @deprecated Prefer `contributes.collections` (wired by the schema pipeline in
+   * P2). Still read by the admin sidebar (routeHandler) — kept for backward
+   * compatibility and merged today via the plugin's own `setup` transformer.
    */
   collections?: CollectionConfig[];
 
   /**
    * Admin configuration for sidebar placement and plugin metadata.
    *
-   * Controls where the plugin's items appear in the sidebar
-   * and provides metadata for the plugin settings page.
+   * Controls where the plugin's items appear in the sidebar and provides metadata
+   * for the plugin settings page. (P5 reconciles this with `contributes.admin`.)
    */
   admin?: PluginAdminConfig;
+
+  /**
+   * @experimental Escape-hatch config transformer; all `setup`s run before any
+   * `init` (D4). Don't mutate the config — spread and return a new object.
+   *
+   * @param config - Current configuration
+   * @returns Modified configuration
+   */
+  setup?: (config: NextlyServiceConfig) => NextlyServiceConfig;
+
+  /**
+   * Configuration transformer (advanced).
+   *
+   * @deprecated Renamed to `setup` (D4). Will be removed; use `setup` instead.
+   */
+  config?: (config: NextlyServiceConfig) => NextlyServiceConfig;
 
   /**
    * Plugin initialization function.
@@ -408,15 +442,10 @@ export interface PluginDefinition {
   init?: (context: PluginContext) => Promise<void> | void;
 
   /**
-   * Configuration transformer (advanced).
-   *
-   * Allows plugins to modify the config before service initialization.
-   * Use with caution - this runs before services are available.
-   *
-   * @param config - Current configuration
-   * @returns Modified configuration
+   * @experimental Teardown on shutdown / HMR / test teardown (D4).
+   * Invocation is wired in P1.
    */
-  config?: (config: NextlyServiceConfig) => NextlyServiceConfig;
+  destroy?: (context: PluginContext) => Promise<void> | void;
 }
 
 // ============================================================
