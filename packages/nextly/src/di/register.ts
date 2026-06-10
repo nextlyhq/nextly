@@ -1515,6 +1515,10 @@ async function initializePlugins(
   };
 
   for (const plugin of plugins) {
+    // D49: `enabled: false` skips behavior (init/hooks/events/destroy). The
+    // plugin's `setup` already ran in applyPluginConfigTransformers, so its
+    // declarative schema is still applied.
+    if (plugin.enabled === false) continue;
     if (!plugin.init) continue;
     // Build a per-plugin context so `ctx.self` resolves to this plugin's own
     // entities (D54).
