@@ -165,8 +165,11 @@ describe("ensureFirstRunSetup", () => {
     const probeCalls = (
       adapter.tableExists as unknown as { mock: { calls: string[][] } }
     ).mock.calls;
-    expect(probeCalls.length).toBe(1);
-    expect(probeCalls[0][0]).toBe("nextly_schema_events");
+    // Probes the Nextly-namespaced ledger (not a generic `users` table). The
+    // post-push bootstrap guard probes the same table again, so don't pin the
+    // exact count — pin that every probe targets nextly_schema_events.
+    expect(probeCalls.length).toBeGreaterThanOrEqual(1);
+    expect(probeCalls.every(c => c[0] === "nextly_schema_events")).toBe(true);
   });
 
   it("bootstraps the nextly_schema_events ledger via executeQuery when missing", async () => {
@@ -188,5 +191,39 @@ describe("ensureFirstRunSetup", () => {
     // The ledger DDL must be executed out-of-band so the journal/builder
     // endpoints don't fail with "relation nextly_schema_events does not exist".
     expect(adapter.executeQuery).toHaveBeenCalledWith(fakeLedgerDdl[0]);
+  });
+
+  it("skips the out-of-band ledger bootstrap when freshPushSchema already created it", async () => {
+    // Regression for the MySQL duplicate-index abort: the ledger is now in
+    // getDialectTables, so freshPushSchema creates it (+ its indexes). Re-running
+    // getSchemaEventsDdl would then `CREATE INDEX` again — and MySQL's raw DDL has
+    // no IF NOT EXISTS, so it throws. The bootstrap must be skipped once the ledger
+    // exists. Stateful probe: missing at the top (setup runs), present afterwards.
+    let probeCount = 0;
+    const adapter: FakeAdapter = {
+      dialect: "mysql",
+      getDrizzle: () => ({}),
+      executeQuery: vi.fn(async () => undefined),
+      tableExists: vi.fn(async (name: string) => {
+        if (name !== "nextly_schema_events") return false;
+        probeCount += 1;
+        return probeCount > 1; // false on the top probe, true after freshPushSchema
+      }),
+    };
+
+    const result = await ensureFirstRunSetup({
+      adapter,
+      logger: fakeLogger,
+      deps: {
+        freshPushSchema: vi
+          .fn()
+          .mockResolvedValue({ statementsExecuted: [], applied: true }),
+        getDialectTables: () => fakeStaticTables,
+        getSchemaEventsDdl: () => fakeLedgerDdl,
+      },
+    });
+
+    expect(result.ranSetup).toBe(true);
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
   });
 });

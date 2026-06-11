@@ -98,13 +98,15 @@ export async function ensureFirstRunSetup(
       staticTables
     );
 
-    // Bootstrap the `nextly_schema_events` ledger out-of-band as a belt-and-
-    // suspenders over `freshPushSchema` (which now also creates it). Idempotent
-    // — the DDL uses CREATE TABLE/INDEX IF NOT EXISTS. Guarantees the ledger
-    // exists even if the push path is ever changed, so the probe above flips
-    // true and the schema journal / builder endpoints don't 500.
-    for (const stmt of deps.getSchemaEventsDdl(dialect)) {
-      await adapter.executeQuery(stmt);
+    // `freshPushSchema` above already creates the ledger (it is in
+    // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
+    // somehow still missing — re-running the raw DDL when it already exists
+    // would fail on MySQL, whose `CREATE INDEX` has no IF NOT EXISTS. Mirrors
+    // `migrate.ts`'s `ensureLedger` guard.
+    if (!(await adapter.tableExists(PROBE_TABLE))) {
+      for (const stmt of deps.getSchemaEventsDdl(dialect)) {
+        await adapter.executeQuery(stmt);
+      }
     }
 
     const durationMs = Date.now() - start;
