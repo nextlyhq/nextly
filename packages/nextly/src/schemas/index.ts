@@ -46,6 +46,7 @@ import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { mediaTables } from "./media";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
+import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
@@ -76,14 +77,13 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     ...Object.values(auditTables(dialect)),
     ...Object.values(nextlyMetaTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
-    // NOTE: `nextly_schema_events` (the migration ledger) is intentionally
-    // NOT part of the reconcile desired-state. It is bootstrapped out-of-band
-    // via `getSchemaEventsDdl` (by `nextly upgrade` and `nextly migrate`'s
-    // Phase-1 prelude) — you cannot reconcile the ledger via the same diff
-    // engine that records into it, and its raw-DDL shape differs from the
-    // drizzle-kit-introspected shape on some dialects (e.g. SQLite PK
-    // nullability). It is also excluded from `getDialectTables` for the same
-    // reason, so `applyCore` never touches it.
+    // `nextly_schema_events` (the migration ledger) is a first-class managed
+    // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
+    // it exists before `nextly migrate` records into it, but it now round-trips
+    // cleanly against this definition (NOT NULL PK; no SQLite partial index —
+    // drizzle-kit 0.31.10 can't round-trip one, drizzle-team/drizzle-orm#4688),
+    // so declaring it here is a no-op when the on-disk table already matches.
+    ...Object.values(schemaEventsTables(dialect)),
   ];
 
   // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
@@ -160,9 +160,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "user_field_definitions",
   "email_providers",
   "email_templates",
-  // `nextly_schema_events` is deliberately omitted — the ledger is
-  // bootstrapped out-of-band (getSchemaEventsDdl), not reconciled. See
-  // getCoreSchema above.
+  "nextly_schema_events",
 ] as const;
 
 /** Prefixes that identify managed user tables (dc_, single_, comp_). */

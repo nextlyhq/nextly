@@ -42,15 +42,12 @@ export interface EnsureFirstRunSetupDeps {
   getDialectTables: (dialect: string) => Record<string, unknown>;
   /**
    * Raw CREATE-TABLE/-INDEX DDL for the `nextly_schema_events` ledger. The
-   * ledger is deliberately excluded from `getDialectTables` (drizzle-kit's
-   * pushSchema would treat it as drift and prompt), so it is bootstrapped
-   * out-of-band here — mirroring `nextly migrate`'s `ensureLedger`. Without
-   * this, an app-boot-initialized DB never gets the ledger and every
-   * `nextly_schema_events` query (e.g. the schema journal) fails.
+   * ledger is also in `getDialectTables`, so `freshPushSchema` above creates
+   * it — but we still bootstrap it out-of-band here (idempotent IF NOT EXISTS)
+   * to mirror `nextly migrate`'s `ensureLedger`: the ledger must exist before
+   * anything records into it, independent of the push path.
    */
-  getSchemaEventsDdl: (
-    dialect: "postgresql" | "mysql" | "sqlite"
-  ) => string[];
+  getSchemaEventsDdl: (dialect: "postgresql" | "mysql" | "sqlite") => string[];
 }
 
 export interface EnsureFirstRunSetupArgs {
@@ -101,13 +98,15 @@ export async function ensureFirstRunSetup(
       staticTables
     );
 
-    // Bootstrap the `nextly_schema_events` ledger out-of-band (it is not in
-    // `getDialectTables`). Idempotent — the DDL uses CREATE TABLE/INDEX IF NOT
-    // EXISTS. Without this, app-boot leaves the ledger missing and the probe
-    // above stays false on every boot (re-running setup each time), while the
-    // schema journal + builder endpoints fail with "relation does not exist".
-    for (const stmt of deps.getSchemaEventsDdl(dialect)) {
-      await adapter.executeQuery(stmt);
+    // `freshPushSchema` above already creates the ledger (it is in
+    // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
+    // somehow still missing — re-running the raw DDL when it already exists
+    // would fail on MySQL, whose `CREATE INDEX` has no IF NOT EXISTS. Mirrors
+    // `migrate.ts`'s `ensureLedger` guard.
+    if (!(await adapter.tableExists(PROBE_TABLE))) {
+      for (const stmt of deps.getSchemaEventsDdl(dialect)) {
+        await adapter.executeQuery(stmt);
+      }
     }
 
     const durationMs = Date.now() - start;
