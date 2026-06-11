@@ -51,7 +51,10 @@ import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import { getCoreVersion } from "../plugins/core-version";
-import type { PluginDefinition } from "../plugins/plugin-context";
+import type {
+  PluginContext,
+  PluginDefinition,
+} from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -231,6 +234,11 @@ export interface ServiceMap {
 // Stored on globalThis to survive ESM module duplication in Next.js/Turbopack.
 const globalForReg = globalThis as unknown as {
   __nextly_isRegistered?: boolean;
+  /** Resolved plugins + their contexts, for reverse-order destroy on shutdown (D4). */
+  __nextly_pluginTeardown?: Array<{
+    plugin: PluginDefinition;
+    context: PluginContext;
+  }>;
 };
 
 // ============================================================
@@ -445,7 +453,9 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
-  await initializePlugins(
+  // Stash the resolved plugins + their contexts so shutdownServices can run
+  // destroy() in reverse order (D4).
+  globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
     resolvedLogger,
@@ -1452,9 +1462,9 @@ async function initializePlugins(
   adapterDrizzleDb: DatabaseInstance,
   logger: Logger,
   hookRegistry: HookRegistry | undefined
-): Promise<void> {
+): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
   const plugins = transformedConfig.plugins ?? [];
-  if (plugins.length === 0) return;
+  if (plugins.length === 0) return [];
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
@@ -1514,19 +1524,26 @@ async function initializePlugins(
     },
   };
 
+  const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
+    [];
+
   for (const plugin of plugins) {
     // D49: `enabled: false` skips behavior (init/hooks/events/destroy). The
     // plugin's `setup` already ran in applyPluginConfigTransformers, so its
     // declarative schema is still applied.
     if (plugin.enabled === false) continue;
-    if (!plugin.init) continue;
+
     // Build a per-plugin context so `ctx.self` resolves to this plugin's own
-    // entities (D54).
+    // entities (D54). Built for every enabled plugin (even without `init`) so
+    // `destroy` has a context at shutdown.
     const pluginContext = createPluginContext(
       getServiceForPlugin as Parameters<typeof createPluginContext>[0],
       hookBridge,
       plugin
     );
+    teardown.push({ plugin, context: pluginContext });
+
+    if (!plugin.init) continue;
     try {
       await plugin.init(pluginContext);
       logger.info?.(`Plugin "${plugin.name}" initialized`);
@@ -1537,6 +1554,8 @@ async function initializePlugins(
       );
     }
   }
+
+  return teardown;
 }
 
 // ============================================================
@@ -1567,6 +1586,22 @@ export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
     return;
   }
+
+  // Run plugin destroy() in REVERSE init order (mirror of setup→init), each
+  // isolated so one failing teardown can't block the others or the disconnect
+  // (D4/D7). Runs before the adapter disconnects so destroy can still use db.
+  const teardown = globalForReg.__nextly_pluginTeardown ?? [];
+  for (let i = teardown.length - 1; i >= 0; i--) {
+    const { plugin, context } = teardown[i];
+    if (!plugin.destroy) continue;
+    try {
+      await plugin.destroy(context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
+    }
+  }
+  globalForReg.__nextly_pluginTeardown = undefined;
 
   try {
     if (container.has("adapter")) {
