@@ -62,14 +62,20 @@ describe("SchemaEventsRepository (sqlite)", () => {
     await repo.markApplied(id1, { uniqueFilename: "0001_init.sql" });
     expect((await repo.findById(id1))?.status).toBe("applied");
 
-    // A racing second attempt for the same file is blocked from applying.
+    // A racing second attempt for the same file is blocked from applying. Its
+    // row is resolved to `superseded` (not left dangling at `in_progress`) so
+    // `migrate:status` doesn't show a stuck row and callers don't read a false
+    // "still running" state. markApplied returns false to signal the block.
     const id2 = await repo.recordStart({
       eventType: "file_apply",
       source: "cli-migrate",
       filename: "0001_init.sql",
     });
-    await repo.markApplied(id2, { uniqueFilename: "0001_init.sql" });
-    expect((await repo.findById(id2))?.status).toBe("in_progress");
+    const applied2 = await repo.markApplied(id2, {
+      uniqueFilename: "0001_init.sql",
+    });
+    expect(applied2).toBe(false);
+    expect((await repo.findById(id2))?.status).toBe("superseded");
 
     // Exactly one applied row exists for the file.
     const applies = await repo.findFileApplies("0001_init.sql");

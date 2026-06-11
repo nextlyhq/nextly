@@ -26,7 +26,7 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
-          started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          started_at TIMESTAMPTZ NOT NULL,
           ended_at TIMESTAMPTZ,
           duration_ms INTEGER,
           applied_by TEXT,
