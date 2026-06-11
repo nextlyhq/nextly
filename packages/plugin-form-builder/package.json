@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-form-builder",
-  "version": "0.0.2-alpha.21",
+  "version": "0.0.2-alpha.22",
   "description": "Visual form builder plugin for Nextly with Code-First and Schema Builder support",
   "license": "MIT",
   "type": "module",
@@ -45,9 +45,9 @@
     "@hookform/resolvers": "^3.3.4"
   },
   "peerDependencies": {
-    "@nextlyhq/admin": "0.0.2-alpha.21",
-    "nextly": "0.0.2-alpha.21",
-    "@nextlyhq/ui": "0.0.2-alpha.21",
+    "@nextlyhq/admin": "0.0.2-alpha.22",
+    "nextly": "0.0.2-alpha.22",
+    "@nextlyhq/ui": "0.0.2-alpha.22",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
     "react": "^18.0.0 || ^19.0.0",
