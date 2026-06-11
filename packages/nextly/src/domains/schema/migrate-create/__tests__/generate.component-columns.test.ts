@@ -40,4 +40,30 @@ describe("buildDesiredSnapshotFromConfig — components", () => {
     expect(cols).not.toContain("slug");
     expect(cols).not.toContain("title");
   });
+
+  it("emits the parent composite index (matches the apply pipeline)", () => {
+    const snap = buildDesiredSnapshotFromConfig(
+      [],
+      [],
+      [
+        {
+          slug: "test_comp",
+          tableName: "comp_test_comp",
+          fields: [{ name: "content", type: "text" }],
+        },
+      ],
+      "postgresql"
+    );
+
+    const table = snap.tables.find(t => t.name === "comp_test_comp");
+    const parentIdx = (table?.indexes ?? []).find(
+      i =>
+        [...i.columns].sort().join(",") ===
+        ["_parent_id", "_parent_table", "_parent_field"].sort().join(",")
+    );
+    // Without this index the snapshot diverges from the apply-pipeline table
+    // and `migrate:resolve --applied` verify emits a spurious drop_index.
+    expect(parentIdx).toBeDefined();
+    expect(parentIdx?.unique).toBe(false);
+  });
 });
