@@ -46,6 +46,7 @@ import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
+import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
@@ -1543,16 +1544,24 @@ async function initializePlugins(
     );
     teardown.push({ plugin, context: pluginContext });
 
-    if (!plugin.init) continue;
-    try {
-      await plugin.init(pluginContext);
-      logger.info?.(`Plugin "${plugin.name}" initialized`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Plugin "${plugin.name}" initialization failed: ${message}`
-      );
+    if (plugin.init) {
+      try {
+        await plugin.init(pluginContext);
+        logger.info?.(`Plugin "${plugin.name}" initialized`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Plugin "${plugin.name}" initialization failed: ${message}`
+        );
+      }
     }
+
+    // Post-init lifecycle event (D8) — best-effort, observe-only; other plugins
+    // that subscribed in their own init can react.
+    getEventBus().emit("plugin.initialized", {
+      name: plugin.name,
+      version: plugin.version,
+    });
   }
 
   return teardown;
