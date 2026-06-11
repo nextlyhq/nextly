@@ -351,6 +351,16 @@ export {
   type PluginHookRegistry,
 } from "./plugins";
 
+// Plugin event bus (D8/D51) — `ctx.events` surface + types.
+export {
+  EventBus,
+  getEventBus,
+  resetEventBus,
+  type EventEnvelope,
+  type EventHandler,
+  type EventName,
+} from "./events";
+
 // ============================================================
 // COLLECTIONS & FIELD TYPES
 // ============================================================

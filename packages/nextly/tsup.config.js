@@ -16,6 +16,8 @@ const { version: coreVersion } = require("./package.json");
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
 const serverEntries = [
   "src/index.ts",
+  // Testing subpath: createTestNextly harness (D46). Server-only.
+  "src/testing.ts",
   // Runtime subpath: aggregates everything that
   // (transitively) imports next/navigation, next/cache, next/headers.
   // Templates' catch-all admin route imports from
