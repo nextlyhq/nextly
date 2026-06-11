@@ -87,3 +87,5 @@ export { siteSettingsPg as siteSettings } from "../site-settings/postgres";
 export { userFieldDefinitionsPg as userFieldDefinitions } from "../user-field-definitions/postgres";
 export { emailProvidersPg as emailProviders } from "../email-providers/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
+
+export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/postgres";

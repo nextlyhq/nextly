@@ -114,13 +114,40 @@ type ComponentDef = {
 // Minimal duck-typed surfaces of registry services used here.
 interface CollectionRegistrySurface {
   syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
+  // All registered collections (code + UI) — keeps UI-created ones in the
+  // desired schema so drizzle-kit doesn't treat them as orphan drops. Optional
+  // so partial resolver fakes still satisfy the type.
+  getAllCollections?(): Promise<
+    Array<{
+      slug?: string;
+      tableName?: string;
+      fields?: unknown[];
+      status?: boolean;
+    }>
+  >;
+  updateMigrationStatus(slug: string, status: string): Promise<unknown>;
 }
 interface SingleRegistrySurface {
   syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
+  // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
+  // for UI-created singles. Optional for partial resolver fakes.
+  getAllSingles?(): Promise<
+    Array<{
+      slug?: string;
+      tableName?: string;
+      fields?: unknown[];
+      status?: boolean;
+    }>
+  >;
 }
 interface ComponentRegistrySurface {
   syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
+  // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
+  // for UI-created components (components have no status column). Optional.
+  getAllComponents?(): Promise<
+    Array<{ slug?: string; tableName?: string; fields?: unknown[] }>
+  >;
 }
 interface SchemaRegistrySurface {
   registerDynamicSchema(tableName: string, table: unknown): void;
@@ -504,6 +531,90 @@ export async function reloadNextlyConfig(opts?: {
   // Nothing to apply across collections, singles, or components.
   if (!hasChanges) return;
 
+  // Preserve registered collections that aren't in the code config (e.g.
+  // UI-created ones). HMR only knows nextly.config.ts, but SQLite/MySQL ignore
+  // tablesFilter and introspect the whole DB, so a managed table missing from
+  // the desired schema is flagged as an orphan DROP/rename. Mirror the UI-save
+  // path (buildFullDesiredSchema); code-config entries take precedence.
+  try {
+    const collectionRegistry = (await resolve(
+      "collectionRegistryService"
+    )) as CollectionRegistrySurface;
+    if (typeof collectionRegistry?.getAllCollections === "function") {
+      const dbCollections = await collectionRegistry.getAllCollections();
+      for (const c of dbCollections) {
+        if (!c?.slug || !c?.tableName) continue;
+        if (desiredCollections[c.slug]) continue; // code config wins
+        desiredCollections[c.slug] = {
+          slug: c.slug,
+          tableName: c.tableName,
+          fields: (c.fields ?? []) as DesiredCollection["fields"],
+          status: c.status === true,
+        };
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.warn(
+      `[Nextly HMR] Could not load existing collections to preserve them ` +
+        `during code-first apply: ${msg}. UI-created collections may be ` +
+        `flagged for drop this cycle.`
+    );
+  }
+
+  // Same preservation for singles created via the UI (registry-only).
+  try {
+    const singleRegistry = (await resolve(
+      "singleRegistryService"
+    )) as SingleRegistrySurface;
+    if (typeof singleRegistry?.getAllSingles === "function") {
+      const dbSingles = await singleRegistry.getAllSingles();
+      for (const s of dbSingles) {
+        if (!s?.slug || !s?.tableName) continue;
+        if (desiredSingles[s.slug]) continue; // code config wins
+        desiredSingles[s.slug] = {
+          slug: s.slug,
+          tableName: s.tableName,
+          fields: (s.fields ?? []) as DesiredSingle["fields"],
+          status: s.status === true,
+        };
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.warn(
+      `[Nextly HMR] Could not load existing singles to preserve them ` +
+        `during code-first apply: ${msg}. UI-created singles may be ` +
+        `flagged for drop this cycle.`
+    );
+  }
+
+  // Same preservation for components created via the UI (registry-only).
+  try {
+    const componentRegistry = (await resolve(
+      "componentRegistryService"
+    )) as ComponentRegistrySurface;
+    if (typeof componentRegistry?.getAllComponents === "function") {
+      const dbComponents = await componentRegistry.getAllComponents();
+      for (const c of dbComponents) {
+        if (!c?.slug || !c?.tableName) continue;
+        if (desiredComponents[c.slug]) continue; // code config wins
+        desiredComponents[c.slug] = {
+          slug: c.slug,
+          tableName: c.tableName,
+          fields: (c.fields ?? []) as DesiredComponent["fields"],
+        };
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.warn(
+      `[Nextly HMR] Could not load existing components to preserve them ` +
+        `during code-first apply: ${msg}. UI-created components may be ` +
+        `flagged for drop this cycle.`
+    );
+  }
+
   // One batch pipeline call with the full snapshot. The pipeline runs its
   // own introspect + diff inside (the gate's diff above is for safety
   // classification only), so it's self-contained.
@@ -590,6 +701,21 @@ export async function reloadNextlyConfig(opts?: {
           status: c.status === true,
         }));
       await registry.syncCodeFirstCollections(codeFirstConfigs);
+
+      // registerCollection defaults migration_status to 'pending'; the pipeline
+      // just created any missing tables, so mark them 'applied' (mirrors the
+      // singles branch / di/register.ts). Without this a code collection added
+      // after initial setup shows "pending" forever. Absent in the pre-pipeline
+      // liveByTable snapshot ⇒ just created.
+      for (const target of targets) {
+        if (!liveByTable.has(target.tableName)) {
+          try {
+            await registry.updateMigrationStatus(target.slug, "applied");
+          } catch {
+            // Non-fatal: migration status is metadata only.
+          }
+        }
+      }
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.

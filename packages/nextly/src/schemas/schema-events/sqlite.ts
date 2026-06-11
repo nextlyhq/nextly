@@ -9,14 +9,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { sql } from "drizzle-orm";
-import {
-  sqliteTable,
-  text,
-  integer,
-  index,
-  uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type {
   SchemaEventScopeKind,
@@ -63,11 +56,11 @@ export const nextlySchemaEventsSqlite = sqliteTable(
     supersededBy: text("superseded_by"),
   },
   table => [
-    uniqueIndex("nextly_schema_events_filename_applied_idx")
-      .on(table.filename)
-      .where(
-        sql`${table.eventType} = 'file_apply' AND ${table.status} = 'applied'`
-      ),
+    // No partial unique index on SQLite (unlike PG): drizzle-kit 0.31.10 can't
+    // round-trip a SQLite partial index, which churns DROP/CREATE INDEX on every
+    // push once this table is in the apply pipeline's desired schema. "One
+    // applied row per file" is enforced in app code (SchemaEventsRepository),
+    // matching MySQL.
     index("nextly_schema_events_started_at_idx").on(table.startedAt),
     index("nextly_schema_events_scope_idx").on(
       table.scopeKind,

@@ -356,8 +356,18 @@ export function buildDesiredTableFromComponentFields(
     });
   }
 
-  // Component tables have no slug; they get the system created_at index only.
-  const indexes: IndexSpec[] = [];
+  // Component tables have no slug. They get a composite index on the parent-link
+  // columns plus the system created_at index — mirroring component-schema-service.ts
+  // (idx_<table>_parent). The parent index is required so the migrate:create snapshot
+  // matches the table the apply pipeline builds; otherwise the live index reads as an
+  // unmanaged extra and `migrate:resolve --applied` verify emits a spurious drop_index.
+  const indexes: IndexSpec[] = [
+    {
+      name: `idx_${tableName}_parent`,
+      columns: ["_parent_id", "_parent_table", "_parent_field"],
+      unique: false,
+    },
+  ];
   if (columns.some(c => c.name === "created_at")) {
     indexes.push({
       name: `idx_${tableName}_created_at`,

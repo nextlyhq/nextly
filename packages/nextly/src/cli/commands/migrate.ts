@@ -490,18 +490,30 @@ export async function runFileMigrations(args: {
         filename,
         sha256: m.checksum,
       });
+      let didApply: boolean;
       try {
         const n = await executeSql(m.upSql);
-        await repo.markApplied(id, { statementsExecuted: n });
+        didApply = await repo.markApplied(id, {
+          statementsExecuted: n,
+          uniqueFilename: filename,
+        });
       } catch (err) {
         await repo.markFailed(id, {
           errorMessage: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
-      applied++;
-      remaining--;
-      logger.success(`Applied ${filename}`);
+      if (didApply) {
+        applied++;
+        remaining--;
+        logger.success(`Applied ${filename}`);
+      } else {
+        // Another run applied this file first (concurrent-apply race); our row
+        // was recorded as superseded. Don't double-count or report a false apply.
+        logger.warn(
+          `${filename} was already applied by a concurrent run; skipping.`
+        );
+      }
       continue;
     }
 
