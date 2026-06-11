@@ -51,7 +51,7 @@ import { resolvePluginSelf } from "./self";
  *
  *     // Register a global hook (all collections)
  *     nextly.hooks.on('afterCreate', '*', async (context) => {
- *       nextly.infra.logger.info(`Created ${context.collection}:${context.data?.id}`);
+ *       nextly.logger.info(`Created ${context.collection}:${context.data?.id}`);
  *     });
  *   }
  * });
@@ -120,9 +120,11 @@ export interface PluginHookRegistry {
  * Plugins receive this context during initialization, providing
  * access to all Nextly services and infrastructure.
  *
- * The context is organized into logical groups:
- * - `services`: Core business logic services (collections, users, media)
- * - `infra`: Infrastructure components (database, logger)
+ * The context provides:
+ * - `services`: Core business logic services (collections, users, media, email)
+ * - `db` / `logger`: Raw database escape hatch + diagnostics logger
+ * - `events`: Post-commit, observe-only event bus
+ * - `self` / `nextlyVersion`: Resolved own-entity names + core version
  * - `config`: Read-only configuration
  * - `hooks`: Hook registration for lifecycle events
  *
@@ -149,7 +151,7 @@ export interface PluginHookRegistry {
  *     });
  *
  *     // Use infrastructure
- *     nextly.infra.logger.info('MyPlugin initialized');
+ *     nextly.logger.info('MyPlugin initialized');
  *   }
  * });
  * ```
@@ -201,17 +203,6 @@ export interface PluginContext {
    * rename them transparently. Identity-resolved in P1.
    */
   self: PluginSelf;
-
-  /**
-   * @deprecated Use top-level `db`/`logger` instead. Temporary back-compat
-   * alias removed once consumers migrate (P1/T13).
-   */
-  infra: {
-    /** Drizzle database instance for direct queries */
-    db: DatabaseInstance;
-    /** Logger for plugin diagnostics */
-    logger: Logger;
-  };
 
   /**
    * Read-only configuration.
@@ -369,7 +360,7 @@ export interface PluginAdminConfig {
  *   async init(nextly) {
  *     // Log all create/update/delete operations
  *     const logOperation = async (context) => {
- *       nextly.infra.logger.info('Audit', {
+ *       nextly.logger.info('Audit', {
  *         collection: context.collection,
  *         operation: context.operation,
  *         user: context.user?.id,
@@ -460,7 +451,7 @@ export interface PluginDefinition {
    * Called after all services are registered.
    * Receives PluginContext for service access and hook registration.
    *
-   * @param context - PluginContext with services, infra, config, hooks
+   * @param context - PluginContext with services, db, logger, events, config, hooks
    */
   init?: (context: PluginContext) => Promise<void> | void;
 
@@ -611,11 +602,6 @@ export function createPluginContext(
     self: plugin
       ? resolvePluginSelf(plugin)
       : { name: "", collections: {}, singles: {} },
-    // Deprecated alias — kept until consumers migrate (P1/T13).
-    infra: {
-      db,
-      logger,
-    },
     config: Object.freeze({ ...config }),
     hooks: pluginHooks,
   };

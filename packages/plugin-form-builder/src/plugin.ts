@@ -207,7 +207,7 @@ export function formBuilder(
       if (g[guardKey]) return;
       g[guardKey] = true;
 
-      nextly.infra.logger.info("Form Builder plugin initialized", {
+      nextly.logger.info("Form Builder plugin initialized", {
         formsCollection: resolvedConfig.formOverrides.slug,
         submissionsCollection: submissionSlug,
         enabledFields: Object.entries(resolvedConfig.fields)
@@ -366,7 +366,7 @@ async function handleSubmissionCreated(
           : notification.to;
 
       if (!to) {
-        nextly.infra.logger.warn?.(
+        nextly.logger.warn?.(
           "Form Builder: empty recipient, skipping notification",
           { notificationId: notification.id, formSlug: form.slug }
         );
@@ -394,14 +394,14 @@ async function handleSubmissionCreated(
         }
       );
 
-      nextly.infra.logger.info?.("Form Builder: notification sent", {
+      nextly.logger.info?.("Form Builder: notification sent", {
         formSlug: form.slug,
         to,
         templateSlug: notification.templateSlug,
         attachmentCount: fileAttachments.length,
       });
     } catch (err) {
-      nextly.infra.logger.error?.("Form Builder: notification failed", {
+      nextly.logger.error?.("Form Builder: notification failed", {
         notificationId: notification.id,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -420,7 +420,7 @@ async function fetchParentForm(
   try {
     const handler = getCollectionsHandler();
     if (!handler) {
-      nextly.infra.logger.warn?.(
+      nextly.logger.warn?.(
         "Form Builder: CollectionsHandler unavailable, skipping notifications"
       );
       return null;
@@ -438,7 +438,7 @@ async function fetchParentForm(
     }
     return null;
   } catch (err) {
-    nextly.infra.logger.error?.("Form Builder: failed to fetch form", {
+    nextly.logger.error?.("Form Builder: failed to fetch form", {
       formId,
       error: err instanceof Error ? err.message : String(err),
     });

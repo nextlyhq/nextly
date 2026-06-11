@@ -363,7 +363,7 @@ export async function triggerWebhooks(
  * // In submission handler - fire and forget
  * fireWebhooks(
  *   { event: 'submission.created', form, submission },
- *   pluginContext.infra.logger
+ *   pluginContext.logger
  * );
  *
  * // Continue with response immediately

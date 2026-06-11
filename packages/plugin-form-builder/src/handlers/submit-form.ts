@@ -130,7 +130,7 @@ export async function submitForm(
   const { formSlug, data, metadata } = options;
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
-  const { logger } = pluginContext.infra;
+  const { logger } = pluginContext;
 
   try {
     // 1. Fetch form configuration

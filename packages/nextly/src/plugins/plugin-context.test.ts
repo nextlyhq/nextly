@@ -58,10 +58,10 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(ctx.nextlyVersion).toBe(getCoreVersion());
   });
 
-  it("keeps infra as a backward-compatible alias (removed in T13)", () => {
-    const { ctx, db, logger } = makeCtx();
-    expect(ctx.infra.db).toBe(db);
-    expect(ctx.infra.logger).toBe(logger);
+  it("no longer exposes the deprecated infra alias", () => {
+    const { ctx } = makeCtx();
+    // @ts-expect-error infra was removed in P1/T13 — db/logger are top-level.
+    expect(ctx.infra).toBeUndefined();
   });
 
   it("leaves the services shape unchanged", () => {
