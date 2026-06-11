@@ -31,6 +31,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -57,6 +58,30 @@ import {
   getTableName,
   generateSlug,
 } from "./collection-utils";
+
+/**
+ * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
+ * best-effort: fired after the operation's transaction has committed and its
+ * after* hooks have run, and wrapped so a missing/erroring bus can never break
+ * the mutation. Use a hook (in-transaction) to modify/abort; use this to react.
+ */
+function emitCollectionEvent(
+  action: "created" | "updated" | "deleted",
+  collection: string,
+  data: Record<string, unknown>,
+  user: unknown
+): void {
+  try {
+    getEventBus().emit(`collection.${collection}.${action}`, {
+      collection,
+      id: (data as { id?: unknown }).id,
+      data,
+      user,
+    });
+  } catch {
+    // Best-effort — never surface event-dispatch failures to the caller.
+  }
+}
 
 /**
  * Convert any thrown error into the legacy CollectionServiceResult shape.
@@ -675,6 +700,9 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // Post-commit reaction event (D8/D51).
+      emitCollectionEvent("created", params.collectionName, entry, params.user);
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
         if (
@@ -1200,6 +1228,14 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // Post-commit reaction event (D8/D51).
+      emitCollectionEvent(
+        "updated",
+        params.collectionName,
+        updated,
+        params.user
+      );
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
         if (
@@ -1418,6 +1454,14 @@ export class CollectionMutationService extends BaseService {
           params.user,
           sharedContext
         )
+      );
+
+      // Post-commit reaction event (D8/D51).
+      emitCollectionEvent(
+        "deleted",
+        params.collectionName,
+        deleted,
+        params.user
       );
 
       return {
