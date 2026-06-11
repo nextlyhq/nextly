@@ -82,9 +82,9 @@ export interface MarkAppliedInput {
    * file" guard. This replaces the SQLite partial unique index, which
    * drizzle-kit 0.31.10 can't round-trip (drizzle-team/drizzle-orm#4688). On
    * PG/MySQL the migrate lock already serializes runs; SQLite (single-writer,
-   * no explicit lock) relies on this check. If the guard blocks the update the
-   * row stays `in_progress` — a benign no-op meaning another run already
-   * applied the file.
+   * no explicit lock) relies on this check. If the guard blocks the update,
+   * `markApplied` resolves the row to `superseded` and returns `false` (another
+   * run already applied the file).
    */
   uniqueFilename?: string | null;
 }
@@ -132,8 +132,18 @@ export class SchemaEventsRepository {
     return id;
   }
 
-  /** Transition a row to applied. */
-  async markApplied(id: string, input: MarkAppliedInput): Promise<void> {
+  /**
+   * Transition a row to applied. Returns whether this call actually applied it.
+   *
+   * With `uniqueFilename`, the update is guarded so only one applied `file_apply`
+   * row can exist per file (replaces the SQLite partial unique index, which
+   * drizzle-kit can't round-trip — drizzle-team/drizzle-orm#4688). If another
+   * run already applied the file (a concurrent-apply race), the guard matches
+   * zero rows and this returns `false`; the row is then resolved to `superseded`
+   * so it doesn't dangle at `in_progress` (which would read as a stuck migration
+   * in `migrate:status`). Without `uniqueFilename` it always applies.
+   */
+  async markApplied(id: string, input: MarkAppliedInput): Promise<boolean> {
     const set: Record<string, unknown> = {
       status: "applied",
       endedAt: new Date(),
@@ -146,21 +156,43 @@ export class SchemaEventsRepository {
     }
     if (input.durationMs !== undefined) set.durationMs = input.durationMs;
 
+    if (!input.uniqueFilename) {
+      await this.db
+        .update(this.table)
+        .set(set)
+        .where(sql`id = ${id}`);
+      return true;
+    }
+
     // The NOT EXISTS subquery is wrapped in a derived table so MySQL accepts
     // referencing the target table in an UPDATE (avoids error 1093); SQLite and
     // Postgres accept it too.
-    const where = input.uniqueFilename
-      ? sql`id = ${id} AND NOT EXISTS (
-          SELECT 1 FROM (
-            SELECT 1 FROM nextly_schema_events
-             WHERE event_type = 'file_apply'
-               AND status = 'applied'
-               AND filename = ${input.uniqueFilename}
-               AND id <> ${id}
-          ) AS _dup
-        )`
-      : sql`id = ${id}`;
-    await this.db.update(this.table).set(set).where(where);
+    await this.db.update(this.table).set(set)
+      .where(sql`id = ${id} AND NOT EXISTS (
+        SELECT 1 FROM (
+          SELECT 1 FROM nextly_schema_events
+           WHERE event_type = 'file_apply'
+             AND status = 'applied'
+             AND filename = ${input.uniqueFilename}
+             AND id <> ${id}
+        ) AS _dup
+      )`);
+
+    // A zero-row update (guard blocked) leaves the row at in_progress. Drivers
+    // don't expose affected-row counts uniformly across the three dialects, so
+    // read the resulting status: if it didn't reach applied, another run won the
+    // race — resolve this row to superseded so it doesn't dangle, and report it.
+    const row = await this.findById(id);
+    if (row?.status === "applied") return true;
+    await this.db
+      .update(this.table)
+      .set({
+        status: "superseded",
+        supersededAt: new Date(),
+        endedAt: new Date(),
+      })
+      .where(sql`id = ${id}`);
+    return false;
   }
 
   /** Transition a row to failed. */

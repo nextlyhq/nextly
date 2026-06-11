@@ -34,7 +34,7 @@ export interface ReconcileRepo {
   markApplied(
     id: string,
     args: { statementsExecuted?: number | null; uniqueFilename?: string | null }
-  ): Promise<void>;
+  ): Promise<boolean>;
   markFailed(
     id: string,
     args: { errorMessage?: string | null; errorJson?: unknown }
