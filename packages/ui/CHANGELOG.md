@@ -1,5 +1,32 @@
 # @nextlyhq/ui
 
+## 0.0.2-alpha.22
+
+### Patch Changes
+
+- [#87](https://github.com/nextlyhq/nextly/pull/87) [`bdece5c`](https://github.com/nextlyhq/nextly/commit/bdece5c41872f0f9cb71b4fc43dca034fabdbfe5) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Fix code-first / HMR schema applies wrongly dropping managed tables on SQLite & MySQL.
+
+  On SQLite and MySQL, drizzle-kit's `pushSchema` ignores `tablesFilter` and introspects the whole database, so any managed table missing from the desired schema was flagged as a data-losing "orphan" DROP — failing the apply and offering the table as a spurious rename source. Three cases are fixed:
+  - **Schema-events ledger (`nextly_schema_events`)** is now a first-class managed core table (declared in `getCoreSchema` / `getDialectTables` / `CORE_TABLE_NAMES`), so no schema path — apply, HMR, `migrate`, or `db:sync` — ever treats it as an orphan drop or offers it as a spurious rename target. To make it round-trip cleanly, the SQLite primary key gains an explicit `NOT NULL` (SQLite, unlike PG/MySQL, treats a bare `TEXT PRIMARY KEY` as nullable) and the SQLite partial unique index is dropped — drizzle-kit 0.31.10 cannot round-trip a SQLite partial index ([drizzle-team/drizzle-orm#4688](https://github.com/drizzle-team/drizzle-orm/issues/4688)), and keeping it churned `DROP/CREATE INDEX` on every push. Postgres keeps its partial unique index. The "one applied row per file" guarantee is now enforced in code on all dialects: an atomic conditional `markApplied` (sets `applied` only when no other applied row exists for the filename) plus the existing cross-process migrate lock.
+  - **UI-created collections, singles, and components** are now preserved during a code-first HMR apply: every DB-registered resource is included in the desired schema (code-config entries take precedence), so adding a collection in code no longer drops resources created via the admin UI.
+  - **Migration status**: a collection added in code after the initial DB setup is now marked `applied` once its table is created, instead of showing `pending` forever in the builder listing (mirrors the existing singles behaviour).
+
+- [#87](https://github.com/nextlyhq/nextly/pull/87) [`faf14cd`](https://github.com/nextlyhq/nextly/commit/faf14cdfe644e3c0ecdb84c691289d01e6c80010) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Fix fresh-database first-run aborting on MySQL.
+
+  Now that `nextly_schema_events` is a core table, `freshPushSchema` creates it (and its indexes) during first-run setup. The setup then also replayed the out-of-band `getSchemaEventsDdl` unconditionally, and the MySQL raw DDL's `CREATE INDEX` has no `IF NOT EXISTS`, so it failed with a duplicate-index error and first-run reported failure on a fresh MySQL database. The out-of-band bootstrap is now guarded by a `tableExists` check (matching `nextly migrate`'s `ensureLedger`), so it only runs as a fallback when the ledger is genuinely missing.
+
+- [#87](https://github.com/nextlyhq/nextly/pull/87) [`17f0353`](https://github.com/nextlyhq/nextly/commit/17f0353fb0d21086171278a6f9cbf0470e9775f4) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Fix `nextly migrate:create` generating the wrong schema for components.
+
+  The migration snapshot generator built component tables with the **collection** table-builder, so they came out with `slug`/`title` and were missing the component embedding columns (`_parent_id`, `_parent_table`, `_parent_field`, `_order`, `_component_type`). The generated snapshot then diverged from the real component table the apply pipeline creates, which made `nextly migrate:resolve --applied` fail its schema-match verification for any project with a component. Components now use `buildDesiredTableFromComponentFields`, matching the apply path.
+
+- [#87](https://github.com/nextlyhq/nextly/pull/87) [`7f465db`](https://github.com/nextlyhq/nextly/commit/7f465db7721381a10c458fca6cc182164c0651a4) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Fix `nextly migrate:create` omitting the component parent index, which broke `migrate:resolve --applied`.
+
+  The apply pipeline always creates a composite index (`idx_<table>_parent` on `_parent_id`, `_parent_table`, `_parent_field`) for component tables, but the migration-snapshot builder did not emit it. So the live index looked like an unmanaged extra and `nextly migrate:resolve --applied` failed verification ("Live schema does not match the target snapshot") for any project with a component. The snapshot builder now emits the parent index, matching the apply pipeline.
+
+- [#87](https://github.com/nextlyhq/nextly/pull/87) [`7cae340`](https://github.com/nextlyhq/nextly/commit/7cae34051c5739bfd9afa78bf9c901a6d934b8d4) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Fix two `nextly_schema_events` ledger edge cases on the code-first schema path.
+  - **Postgres index/default churn:** the ledger's raw bootstrap DDL declared `started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`, but the Drizzle def supplies the value app-side (`$defaultFn`) with no SQL default. Now that the ledger is a core table flowing through drizzle-kit's Postgres diff, that mismatch made every push/migrate emit `ALTER COLUMN started_at DROP DEFAULT`. The raw DDL now omits the redundant default (matching the MySQL/SQLite ledger DDL and the `id` column), so the ledger round-trips cleanly with no churn. Added a Postgres round-trip integration test alongside the existing SQLite one.
+  - **`markApplied` race no-op:** when the "one applied row per file" guard blocked a concurrent second apply, the losing row was left dangling at `in_progress` and the caller still logged a success. `markApplied` now resolves the blocked row to `superseded` and returns whether it applied, and `nextly migrate` reports the file as already-applied-by-a-concurrent-run instead of a false success.
+
 ## 0.0.2-alpha.21
 
 ### Patch Changes
