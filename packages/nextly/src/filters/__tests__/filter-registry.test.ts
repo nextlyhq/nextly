@@ -64,4 +64,46 @@ describe("FilterRegistry", () => {
     resetFilterRegistry();
     expect(getFilterRegistry().hasFilters("x")).toBe(false);
   });
+
+  it("threads value through async filters in order", async () => {
+    reg.addFilter<number>("async", async v => v + 1);
+    reg.addFilter<number>("async", async v => v * 2);
+    expect(await reg.applyFilters("async", 3, {})).toBe(8); // (3+1)*2
+  });
+
+  it("removeAction detaches an action so it no longer runs", async () => {
+    const calls: string[] = [];
+    const fn = async () => {
+      calls.push("ran");
+    };
+    reg.addAction("b", fn);
+    reg.removeAction("b", fn);
+    await reg.runActions("b", undefined, {});
+    expect(calls).toEqual([]);
+  });
+
+  it("hasFilters/hasActions reflect presence correctly", async () => {
+    const fn = (v: number) => v;
+    const act = async () => {};
+    expect(reg.hasFilters("z")).toBe(false);
+    expect(reg.hasActions("z")).toBe(false);
+    reg.addFilter<number>("z", fn);
+    reg.addAction("z", act);
+    expect(reg.hasFilters("z")).toBe(true);
+    expect(reg.hasActions("z")).toBe(true);
+    reg.removeFilter<number>("z", fn);
+    reg.removeAction("z", act);
+    expect(reg.hasFilters("z")).toBe(false);
+    expect(reg.hasActions("z")).toBe(false);
+  });
+
+  it("clear() wipes both maps so applyFilters returns input unchanged", async () => {
+    reg.addFilter<number>("c", v => v + 99);
+    const act = async () => {};
+    reg.addAction("c", act);
+    reg.clear();
+    expect(reg.hasFilters("c")).toBe(false);
+    expect(reg.hasActions("c")).toBe(false);
+    expect(await reg.applyFilters("c", 7, {})).toBe(7);
+  });
 });

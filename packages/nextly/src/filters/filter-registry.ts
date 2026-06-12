@@ -14,21 +14,38 @@
  * @module filters/filter-registry
  */
 
+/**
+ * @experimental The seam/registry key used by BOTH filters and actions (D63).
+ * Pass this as the `name` argument to `addFilter`, `addAction`, `applyFilters`,
+ * `runActions`, and `removeFilter`/`removeAction`.
+ */
 export type FilterName = string;
+
+/** @experimental A value-transforming handler registered via {@link FilterRegistry.addFilter} (D63). */
 export type Filter<V = unknown, C = unknown> = (
   value: V,
   context: C
 ) => V | Promise<V>;
+
+/** @experimental A side-effect handler registered via {@link FilterRegistry.addAction} (D63). */
 export type Action<P = unknown, C = unknown> = (
   payload: P,
   context: C
 ) => void | Promise<void>;
 
+/** @experimental Minimal logger shape for filter/action error diagnostics (D63). */
 export interface FilterLogger {
   warn?(message: string, meta?: unknown): void;
   error?(message: string, meta?: unknown): void;
 }
 
+/**
+ * @experimental Typed, async, error-isolated filter and action registry (D63).
+ *
+ * Filters thread a value through each registered handler in registration order;
+ * actions fire for side effects only. A throwing handler is logged and skipped —
+ * the value/execution continues with the remaining handlers.
+ */
 export class FilterRegistry {
   private filters = new Map<FilterName, Filter[]>();
   private actions = new Map<FilterName, Action[]>();
@@ -74,10 +91,7 @@ export class FilterRegistry {
       try {
         acc = await (fn as Filter<V, C>)(acc, context);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const text = `[filters] filter "${name}" threw: ${message}`;
-        if (this.logger?.error) this.logger.error(text, { name, err });
-        else console.error(text);
+        this.logError("filter", name, err);
         // keep acc as it was before this throwing filter
       }
     }
@@ -119,10 +133,7 @@ export class FilterRegistry {
       try {
         await (fn as Action<P, C>)(payload, context);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const text = `[filters] action "${name}" threw: ${message}`;
-        if (this.logger?.error) this.logger.error(text, { name, err });
-        else console.error(text);
+        this.logError("action", name, err);
         // isolate and continue with the next action
       }
     }
@@ -139,6 +150,17 @@ export class FilterRegistry {
 
   hasActions(name: FilterName): boolean {
     return (this.actions.get(name)?.length ?? 0) > 0;
+  }
+
+  private logError(
+    kind: "filter" | "action",
+    name: string,
+    err: unknown
+  ): void {
+    const message = err instanceof Error ? err.message : String(err);
+    const text = `[filters] ${kind} for "${name}" threw and was ${kind === "filter" ? "skipped" : "isolated"}: ${message}`;
+    if (this.logger?.error) this.logger.error(text, err);
+    else console.error(text, err);
   }
 }
 

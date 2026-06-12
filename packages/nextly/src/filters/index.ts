@@ -12,6 +12,7 @@ export {
   type CoreFilterSeam,
   type EmailPayloadFilterValue,
   type EmailFilterContext,
+  type EmailAfterSendValue,
   type NavCollectionItem,
   type NavFilterContext,
   type ListQueryWhere,
