@@ -19,3 +19,12 @@ export {
   emitAuthEvent,
   emitMediaEvent,
 } from "./domain-events";
+
+export {
+  DocumentEvents,
+  AuthEvents,
+  MediaEvents,
+  type DocumentEventName,
+  type AuthEventName,
+  type MediaEventName,
+} from "./event-names";

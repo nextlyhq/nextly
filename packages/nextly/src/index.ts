@@ -361,6 +361,12 @@ export {
   type EventEnvelope,
   type EventHandler,
   type EventName,
+  DocumentEvents,
+  AuthEvents,
+  MediaEvents,
+  type DocumentEventName,
+  type AuthEventName,
+  type MediaEventName,
 } from "./events";
 
 // Plugin filter/action registry (D63) — ctx.filters / ctx.actions surface + seam types.
