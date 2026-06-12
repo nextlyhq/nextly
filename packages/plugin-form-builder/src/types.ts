@@ -40,6 +40,26 @@ export interface EmailConfig {
 }
 
 /**
+ * @experimental A resolved outgoing form notification (template-based) as built
+ * by the submission handler, before it is sent. This is the value transformed by
+ * the `form-builder.beforeEmail` D63 filter seam.
+ */
+export interface FormEmailNotification {
+  /** Resolved recipient address. */
+  to: string;
+  /** Email template slug to render. */
+  templateSlug: string;
+  /** Template variables (submitted data + form metadata). */
+  variables: Record<string, unknown>;
+  /** Email provider id; undefined = system default. */
+  providerId?: string;
+  /** CC addresses, if any. */
+  cc?: string[];
+  /** BCC addresses, if any. */
+  bcc?: string[];
+}
+
+/**
  * A single email notification integration stored on a form.
  * Matches the shape saved by the form builder admin UI.
  */
@@ -290,25 +310,24 @@ export interface FormBuilderPluginOptions {
   /**
    * Hook called before sending email notifications.
    *
-   * Allows modifying, adding, or filtering emails before they are sent.
-   * Return the modified emails array.
+   * Runs as the `form-builder.beforeEmail` D63 filter: the resolved outgoing
+   * notifications (template + recipient + variables) are threaded through this
+   * callback before they are sent. Allows modifying, adding, or filtering the
+   * outgoing notifications. Return the modified array.
    *
    * @example
    * ```typescript
    * beforeEmail: async ({ emails, form, submission }) => {
-   *   // Add BCC to all emails
-   *   return emails.map(email => ({
-   *     ...email,
-   *     bcc: ['archive@example.com'],
-   *   }));
+   *   // Add BCC to all outgoing notifications
+   *   return emails.map((e) => ({ ...e, bcc: ['archive@example.com'] }));
    * }
    * ```
    */
   beforeEmail?: (args: {
-    emails: EmailConfig[];
+    emails: FormEmailNotification[];
     form: FormDocument;
     submission: SubmissionDocument;
-  }) => Promise<EmailConfig[]> | EmailConfig[];
+  }) => Promise<FormEmailNotification[]> | FormEmailNotification[];
 
   /**
    * Email notification settings.

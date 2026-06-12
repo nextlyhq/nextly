@@ -22,6 +22,9 @@ import { submissionsCollection } from "./collections/submissions";
 import type {
   FormNotificationItem,
   FormBuilderPluginOptions,
+  FormEmailNotification,
+  FormDocument,
+  SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "./types";
 
@@ -218,6 +221,22 @@ export function formBuilder(
       (nextly as NextlyWithFormBuilderConfig).__formBuilderConfig =
         resolvedConfig;
 
+      // D63: run the user's beforeEmail config as a filter on the form-builder seam.
+      if (resolvedConfig.beforeEmail) {
+        nextly.filters.add(
+          "form-builder.beforeEmail",
+          (
+            emails: FormEmailNotification[],
+            ctx: { form: FormDocument; submission: SubmissionDocument }
+          ) =>
+            resolvedConfig.beforeEmail!({
+              emails,
+              form: ctx.form,
+              submission: ctx.submission,
+            })
+        );
+      }
+
       // Register afterCreate hook for email notifications
       nextly.hooks.on(
         "afterCreate",
@@ -350,6 +369,10 @@ async function handleSubmissionCreated(
 
   const seen = new Set<string>();
 
+  // -- Build phase: resolve each enabled notification into an outgoing
+  // descriptor (the value the D63 seam transforms).
+  const emails: FormEmailNotification[] = [];
+
   for (const notification of notifications) {
     if (!notification.enabled || !notification.templateSlug) continue;
 
@@ -359,50 +382,79 @@ async function handleSubmissionCreated(
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const to =
+      notification.recipientType === "field"
+        ? resolveFieldRef(notification.to, submittedData)
+        : notification.to;
+
+    if (!to) {
+      nextly.logger.warn?.(
+        "Form Builder: empty recipient, skipping notification",
+        { notificationId: notification.id, formSlug: form.slug }
+      );
+      continue;
+    }
+
+    const cc =
+      Array.isArray(notification.cc) && notification.cc.length
+        ? notification.cc
+        : undefined;
+    const bcc =
+      Array.isArray(notification.bcc) && notification.bcc.length
+        ? notification.bcc
+        : undefined;
+
+    emails.push({
+      to,
+      templateSlug: notification.templateSlug,
+      variables: {
+        ...submittedData,
+        formName: form.name,
+        submissionId: submission.id,
+      },
+      providerId: notification.providerId,
+      cc,
+      bcc,
+    });
+  }
+
+  if (emails.length === 0) return;
+
+  // -- Seam: thread the outgoing notifications through the D63 filter so user
+  // config (and any other registered handler) can modify/filter them.
+  const finalEmails = await nextly.filters.apply<
+    FormEmailNotification[],
+    { form: FormDocument; submission: SubmissionDocument }
+  >("form-builder.beforeEmail", emails, {
+    form: form as unknown as FormDocument,
+    submission: submission as unknown as SubmissionDocument,
+  });
+
+  // -- Send phase: send the (possibly transformed) outgoing notifications.
+  for (const email of finalEmails) {
     try {
-      const to =
-        notification.recipientType === "field"
-          ? resolveFieldRef(notification.to, submittedData)
-          : notification.to;
-
-      if (!to) {
-        nextly.logger.warn?.(
-          "Form Builder: empty recipient, skipping notification",
-          { notificationId: notification.id, formSlug: form.slug }
-        );
-        continue;
-      }
-
-      const cc =
-        Array.isArray(notification.cc) && notification.cc.length
-          ? notification.cc
-          : undefined;
-      const bcc =
-        Array.isArray(notification.bcc) && notification.bcc.length
-          ? notification.bcc
-          : undefined;
-
       await emailService.sendWithTemplate(
-        notification.templateSlug,
-        to,
-        { ...submittedData, formName: form.name, submissionId: submission.id },
+        email.templateSlug,
+        email.to,
+        email.variables,
         {
-          providerId: notification.providerId,
-          cc,
-          bcc,
+          providerId: email.providerId,
+          cc: email.cc,
+          bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         }
       );
 
       nextly.logger.info?.("Form Builder: notification sent", {
         formSlug: form.slug,
-        to,
-        templateSlug: notification.templateSlug,
+        to: email.to,
+        templateSlug: email.templateSlug,
         attachmentCount: fileAttachments.length,
       });
     } catch (err) {
       nextly.logger.error?.("Form Builder: notification failed", {
-        notificationId: notification.id,
+        to: email.to,
+        templateSlug: email.templateSlug,
         error: err instanceof Error ? err.message : String(err),
       });
     }
