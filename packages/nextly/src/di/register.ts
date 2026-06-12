@@ -46,12 +46,18 @@ import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
+import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import type { PluginDefinition } from "../plugins/plugin-context";
+import { getCoreVersion } from "../plugins/core-version";
+import type {
+  PluginContext,
+  PluginDefinition,
+} from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import { resolvePlugins } from "../plugins/resolve";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
@@ -229,6 +235,11 @@ export interface ServiceMap {
 // Stored on globalThis to survive ESM module duplication in Next.js/Turbopack.
 const globalForReg = globalThis as unknown as {
   __nextly_isRegistered?: boolean;
+  /** Resolved plugins + their contexts, for reverse-order destroy on shutdown (D4). */
+  __nextly_pluginTeardown?: Array<{
+    plugin: PluginDefinition;
+    context: PluginContext;
+  }>;
 };
 
 // ============================================================
@@ -256,9 +267,24 @@ export async function registerServices(
   }
 
   // ----------------------------------------
-  // Layer 0: Process Plugin Config Transformers
+  // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
-  const transformedConfig = await applyPluginConfigTransformers(config);
+  // Validate core/dependency compatibility (D6) and topologically sort by
+  // declared dependencies (D5), failing fast with a great error (D7). The
+  // resolved order drives BOTH setup and init below. Runs over all plugins
+  // (including disabled ones) so schema stays deterministic (D49).
+  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
+    coreVersion: getCoreVersion(),
+  });
+  const resolvedConfig: NextlyServiceConfig = {
+    ...config,
+    plugins: resolvedPlugins,
+  };
+
+  // ----------------------------------------
+  // Layer 0b: Process Plugin Config Transformers (resolved order)
+  // ----------------------------------------
+  const transformedConfig = await applyPluginConfigTransformers(resolvedConfig);
 
   const {
     adapter: providedAdapter,
@@ -428,7 +454,9 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
-  await initializePlugins(
+  // Stash the resolved plugins + their contexts so shutdownServices can run
+  // destroy() in reverse order (D4).
+  globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
     resolvedLogger,
@@ -1435,9 +1463,9 @@ async function initializePlugins(
   adapterDrizzleDb: DatabaseInstance,
   logger: Logger,
   hookRegistry: HookRegistry | undefined
-): Promise<void> {
+): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
   const plugins = transformedConfig.plugins ?? [];
-  if (plugins.length === 0) return;
+  if (plugins.length === 0) return [];
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
@@ -1480,30 +1508,63 @@ async function initializePlugins(
     }
   };
 
-  const pluginContext = createPluginContext(
-    getServiceForPlugin as Parameters<typeof createPluginContext>[0],
-    {
-      register: (hookType, collection, handler) => {
-        pluginHookRegistry.register(hookType, collection, handler);
-      },
-      unregister: (hookType, collection, handler) => {
-        pluginHookRegistry.unregister(hookType, collection, handler);
-      },
-    }
-  );
+  const hookBridge = {
+    register: (
+      hookType: Parameters<typeof pluginHookRegistry.register>[0],
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.register>[2]
+    ) => {
+      pluginHookRegistry.register(hookType, collection, handler);
+    },
+    unregister: (
+      hookType: Parameters<typeof pluginHookRegistry.unregister>[0],
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.unregister>[2]
+    ) => {
+      pluginHookRegistry.unregister(hookType, collection, handler);
+    },
+  };
+
+  const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
+    [];
 
   for (const plugin of plugins) {
-    if (!plugin.init) continue;
-    try {
-      await plugin.init(pluginContext);
-      logger.info?.(`Plugin "${plugin.name}" initialized`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Plugin "${plugin.name}" initialization failed: ${message}`
-      );
+    // D49: `enabled: false` skips behavior (init/hooks/events/destroy). The
+    // plugin's `setup` already ran in applyPluginConfigTransformers, so its
+    // declarative schema is still applied.
+    if (plugin.enabled === false) continue;
+
+    // Build a per-plugin context so `ctx.self` resolves to this plugin's own
+    // entities (D54). Built for every enabled plugin (even without `init`) so
+    // `destroy` has a context at shutdown.
+    const pluginContext = createPluginContext(
+      getServiceForPlugin as Parameters<typeof createPluginContext>[0],
+      hookBridge,
+      plugin
+    );
+    teardown.push({ plugin, context: pluginContext });
+
+    if (plugin.init) {
+      try {
+        await plugin.init(pluginContext);
+        logger.info?.(`Plugin "${plugin.name}" initialized`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Plugin "${plugin.name}" initialization failed: ${message}`
+        );
+      }
     }
+
+    // Post-init lifecycle event (D8) — best-effort, observe-only; other plugins
+    // that subscribed in their own init can react.
+    getEventBus().emit("plugin.initialized", {
+      name: plugin.name,
+      version: plugin.version,
+    });
   }
+
+  return teardown;
 }
 
 // ============================================================
@@ -1534,6 +1595,22 @@ export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
     return;
   }
+
+  // Run plugin destroy() in REVERSE init order (mirror of setup→init), each
+  // isolated so one failing teardown can't block the others or the disconnect
+  // (D4/D7). Runs before the adapter disconnects so destroy can still use db.
+  const teardown = globalForReg.__nextly_pluginTeardown ?? [];
+  for (let i = teardown.length - 1; i >= 0; i--) {
+    const { plugin, context } = teardown[i];
+    if (!plugin.destroy) continue;
+    try {
+      await plugin.destroy(context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
+    }
+  }
+  globalForReg.__nextly_pluginTeardown = undefined;
 
   try {
     if (container.has("adapter")) {

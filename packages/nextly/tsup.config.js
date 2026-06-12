@@ -1,4 +1,5 @@
 import { cpSync, existsSync } from "fs";
+import { createRequire } from "module";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -6,9 +7,17 @@ import { defineConfig } from "tsup";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Inject the package version so `getCoreVersion()` (plugins/core-version.ts)
+// can supply the resolver a concrete `coreVersion` without reading a file at
+// runtime (D6).
+const require = createRequire(import.meta.url);
+const { version: coreVersion } = require("./package.json");
+
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
 const serverEntries = [
   "src/index.ts",
+  // Testing subpath: createTestNextly harness (D46). Server-only.
+  "src/testing.ts",
   // Runtime subpath: aggregates everything that
   // (transitively) imports next/navigation, next/cache, next/headers.
   // Templates' catch-all admin route imports from
@@ -79,6 +88,9 @@ const sharedConfig = {
   outDir: "dist",
   sourcemap: false,
   tsconfig: "tsconfig.json",
+  define: {
+    __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
+  },
   external: [
     // Database drivers — kept external (CJS native modules can't be bundled into ESM)
     "better-sqlite3",

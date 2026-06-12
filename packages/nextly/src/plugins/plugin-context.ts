@@ -11,6 +11,8 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { EventBus } from "../events/event-bus";
+import { getEventBus } from "../events/event-bus";
 import type { HookHandler, HookType } from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
@@ -21,6 +23,9 @@ import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
+import { getCoreVersion } from "./core-version";
+import type { PluginSelf } from "./self";
+import { resolvePluginSelf } from "./self";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -46,7 +51,7 @@ import type { PluginContributions } from "./contributions";
  *
  *     // Register a global hook (all collections)
  *     nextly.hooks.on('afterCreate', '*', async (context) => {
- *       nextly.infra.logger.info(`Created ${context.collection}:${context.data?.id}`);
+ *       nextly.logger.info(`Created ${context.collection}:${context.data?.id}`);
  *     });
  *   }
  * });
@@ -115,9 +120,11 @@ export interface PluginHookRegistry {
  * Plugins receive this context during initialization, providing
  * access to all Nextly services and infrastructure.
  *
- * The context is organized into logical groups:
- * - `services`: Core business logic services (collections, users, media)
- * - `infra`: Infrastructure components (database, logger)
+ * The context provides:
+ * - `services`: Core business logic services (collections, users, media, email)
+ * - `db` / `logger`: Raw database escape hatch + diagnostics logger
+ * - `events`: Post-commit, observe-only event bus
+ * - `self` / `nextlyVersion`: Resolved own-entity names + core version
  * - `config`: Read-only configuration
  * - `hooks`: Hook registration for lifecycle events
  *
@@ -144,7 +151,7 @@ export interface PluginHookRegistry {
  *     });
  *
  *     // Use infrastructure
- *     nextly.infra.logger.info('MyPlugin initialized');
+ *     nextly.logger.info('MyPlugin initialized');
  *   }
  * });
  * ```
@@ -170,18 +177,32 @@ export interface PluginContext {
   };
 
   /**
-   * Infrastructure access.
-   *
-   * Provides access to low-level infrastructure:
-   * - Database: Direct Drizzle database access (use with caution)
-   * - Logger: Logging interface for plugin diagnostics
+   * @experimental Raw Drizzle database instance — the full escape hatch (D33).
+   * Unmanaged: bypasses validation/hooks/RBAC/events. Prefer `services`.
    */
-  infra: {
-    /** Drizzle database instance for direct queries */
-    db: DatabaseInstance;
-    /** Logger for plugin diagnostics */
-    logger: Logger;
-  };
+  db: DatabaseInstance;
+
+  /** @experimental Logger for plugin diagnostics. */
+  logger: Logger;
+
+  /**
+   * @experimental Post-commit, observe-only, best-effort event bus (D8/D51).
+   * Use a hook to modify/abort; use an event to react/notify.
+   */
+  events: EventBus;
+
+  /**
+   * @experimental Running Nextly core version, for feature-detection (D6).
+   * e.g. "0.0.2-alpha.21".
+   */
+  nextlyVersion: string;
+
+  /**
+   * @experimental Resolved names for this plugin's own entities (D54). Read
+   * `ctx.self.collections[...]` instead of hardcoding slugs so the P2 remap can
+   * rename them transparently. Identity-resolved in P1.
+   */
+  self: PluginSelf;
 
   /**
    * Read-only configuration.
@@ -339,7 +360,7 @@ export interface PluginAdminConfig {
  *   async init(nextly) {
  *     // Log all create/update/delete operations
  *     const logOperation = async (context) => {
- *       nextly.infra.logger.info('Audit', {
+ *       nextly.logger.info('Audit', {
  *         collection: context.collection,
  *         operation: context.operation,
  *         user: context.user?.id,
@@ -430,7 +451,7 @@ export interface PluginDefinition {
    * Called after all services are registered.
    * Receives PluginContext for service access and hook registration.
    *
-   * @param context - PluginContext with services, infra, config, hooks
+   * @param context - PluginContext with services, db, logger, events, config, hooks
    */
   init?: (context: PluginContext) => Promise<void> | void;
 
@@ -537,7 +558,12 @@ export function createPluginContext(
       collection: string,
       handler: HookHandler
     ) => void;
-  }
+  },
+  /**
+   * The plugin this context is built for — used to resolve `ctx.self` (D54).
+   * Optional so the factory stays usable without a plugin (empty `self`).
+   */
+  plugin?: PluginDefinition
 ): PluginContext {
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
@@ -558,6 +584,10 @@ export function createPluginContext(
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 
+  // Route isolated event-handler diagnostics through the resolved logger.
+  const events = getEventBus();
+  events.setLogger(logger);
+
   return {
     services: {
       collections: collectionService,
@@ -565,10 +595,13 @@ export function createPluginContext(
       media: mediaService,
       email: emailService,
     },
-    infra: {
-      db,
-      logger,
-    },
+    db,
+    logger,
+    events,
+    nextlyVersion: getCoreVersion(),
+    self: plugin
+      ? resolvePluginSelf(plugin)
+      : { name: "", collections: {}, singles: {} },
     config: Object.freeze({ ...config }),
     hooks: pluginHooks,
   };

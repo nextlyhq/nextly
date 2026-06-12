@@ -5,7 +5,8 @@
  * `@experimental` until first-party plugins have exercised it (D55). `ctx.services`
  * is the highest-scrutiny surface and stays experimental the longest.
  *
- * Added in later phases: `useCan`/`<Can>` (P3/P5), `createTestNextly` (P1).
+ * Added in later phases: `useCan`/`<Can>` (P3/P5). `createTestNextly` (P1) lives
+ * on the `@nextlyhq/plugin-sdk/testing` subpath.
  */
 export { definePlugin } from "nextly";
 
@@ -17,3 +18,6 @@ export type {
 } from "nextly";
 
 export type { HookType, HookHandler, HookContext } from "nextly";
+
+// Event bus (D8/D51) — `ctx.events` surface + types.
+export type { EventBus, EventEnvelope, EventHandler, EventName } from "nextly";

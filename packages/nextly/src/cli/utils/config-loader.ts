@@ -30,8 +30,24 @@ import {
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
 import { NextlyError } from "../../errors/index";
+import { getCoreVersion } from "../../plugins/core-version";
+import type { PluginDefinition } from "../../plugins/plugin-context";
+import { resolvePlugins } from "../../plugins/resolve";
 
 import { bundleAndRequire } from "./config-bundler";
+
+/**
+ * Validate (D6) and topologically order (D5) the configured plugins using the
+ * single shared resolver — the SAME resolver the runtime uses (register.ts), so
+ * CLI and runtime agree on order and fail identically (D6). Fail-fast (D7).
+ * The CLI then runs each plugin's `setup` in this order.
+ */
+export function orderConfigPlugins(
+  plugins: PluginDefinition[]
+): PluginDefinition[] {
+  if (plugins.length === 0) return plugins;
+  return resolvePlugins(plugins, { coreVersion: getCoreVersion() });
+}
 
 /**
  * Options for loading the config file.
@@ -245,10 +261,12 @@ async function loadConfigInternal(
 
     let config = defineConfig(rawConfig);
 
-    const plugins = config.plugins ?? [];
+    // Resolve (validate + topo order) before running setups, mirroring the
+    // runtime boot (register.ts) so both paths agree (D5/D6/D7).
+    const plugins = orderConfigPlugins(config.plugins ?? []);
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let transformedConfig: any = { ...config };
+      let transformedConfig: any = { ...config, plugins };
 
       for (const plugin of plugins) {
         if (plugin.setup) {
