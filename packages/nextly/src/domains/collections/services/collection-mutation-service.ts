@@ -704,6 +704,17 @@ export class CollectionMutationService extends BaseService {
       // Post-commit reaction event (D8/D51).
       emitCollectionEvent("created", params.collectionName, entry, params.user);
 
+      // D69: a document created directly as `published` is a publish event too.
+      // (No statusChanged on create — there is no prior status to transition from.)
+      const createdStatus = (entry as { status?: unknown }).status;
+      if (createdStatus === "published") {
+        emitDocumentEvent("published", params.collectionName, {
+          id: (entry as { id?: unknown }).id,
+          data: { ...entry },
+          user: params.user,
+        });
+      }
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
         if (
@@ -1239,24 +1250,26 @@ export class CollectionMutationService extends BaseService {
 
       // D69 document-level status events. Status is a user-defined field;
       // emit only when a `status` field value actually changed on update.
-      const previousStatus = (
-        existingEntry as Record<string, unknown> | undefined
-      )?.status;
-      const nextStatus = (updated as Record<string, unknown>)?.status;
+      // `data` is shallow-snapshotted so async subscribers aren't exposed to the
+      // in-place JSON-field deserialization that happens below for the response.
+      const previousStatus =
+        ((existingEntry as Record<string, unknown>).status as
+          | string
+          | undefined) ?? null;
+      const nextStatus = (updated as { status?: unknown }).status;
       if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
-        emitDocumentEvent("statusChanged", params.collectionName, {
+        const docBase = {
           id: (updated as { id?: unknown }).id,
+          data: { ...(updated as Record<string, unknown>) },
+          user: params.user,
+        };
+        emitDocumentEvent("statusChanged", params.collectionName, {
+          ...docBase,
           previousStatus,
           status: nextStatus,
-          data: updated,
-          user: params.user,
         });
         if (nextStatus === "published" && previousStatus !== "published") {
-          emitDocumentEvent("published", params.collectionName, {
-            id: (updated as { id?: unknown }).id,
-            data: updated,
-            user: params.user,
-          });
+          emitDocumentEvent("published", params.collectionName, docBase);
         }
       }
 

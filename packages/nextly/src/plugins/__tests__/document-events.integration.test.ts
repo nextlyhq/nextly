@@ -17,27 +17,41 @@ const articles = () =>
     fields: [text({ name: "title" }), text({ name: "status" })],
   });
 
+/**
+ * Build a watcher plugin that captures `document.statusChanged` and
+ * `document.published` payloads into the caller-owned arrays. Each test passes
+ * its own test-local arrays so assertions can never collide across tests, even
+ * though `createTestNextly` teardown already resets the bus per boot.
+ */
+const watchDocumentEvents = (
+  name: string,
+  statusChanged: Array<Record<string, unknown>>,
+  published: Array<Record<string, unknown>>
+) =>
+  definePlugin({
+    name,
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    init(ctx) {
+      ctx.events.on<Record<string, unknown>>("document.statusChanged", e => {
+        statusChanged.push(e.payload);
+      });
+      ctx.events.on<Record<string, unknown>>("document.published", e => {
+        published.push(e.payload);
+      });
+    },
+  });
+
 describe("document.* post-commit status events (D69)", () => {
-  it("emits document.statusChanged AND document.published on draft->published", async () => {
+  it("update draft->published emits BOTH statusChanged AND published", async () => {
     const statusChanged: Array<Record<string, unknown>> = [];
     const published: Array<Record<string, unknown>> = [];
-    const watcher = definePlugin({
-      name: "@test/watch-status",
-      version: "1.0.0",
-      nextly: ">=0.0.0",
-      init(ctx) {
-        ctx.events.on<Record<string, unknown>>("document.statusChanged", e => {
-          statusChanged.push(e.payload);
-        });
-        ctx.events.on<Record<string, unknown>>("document.published", e => {
-          published.push(e.payload);
-        });
-      },
-    });
 
     current = await createTestNextly({
       collections: [articles()],
-      plugins: [watcher],
+      plugins: [
+        watchDocumentEvents("@test/watch-up", statusChanged, published),
+      ],
     });
 
     const created = await current.nextly.create({
@@ -64,26 +78,15 @@ describe("document.* post-commit status events (D69)", () => {
     expect(published[0]).toMatchObject({ collection: "articles", id });
   });
 
-  it("emits NEITHER document.* event when status does not change", async () => {
+  it("non-status update emits NEITHER document.* event", async () => {
     const statusChanged: Array<Record<string, unknown>> = [];
     const published: Array<Record<string, unknown>> = [];
-    const watcher = definePlugin({
-      name: "@test/watch-status-noop",
-      version: "1.0.0",
-      nextly: ">=0.0.0",
-      init(ctx) {
-        ctx.events.on("document.statusChanged", e => {
-          statusChanged.push(e.payload as Record<string, unknown>);
-        });
-        ctx.events.on("document.published", e => {
-          published.push(e.payload as Record<string, unknown>);
-        });
-      },
-    });
 
     current = await createTestNextly({
       collections: [articles()],
-      plugins: [watcher],
+      plugins: [
+        watchDocumentEvents("@test/watch-noop", statusChanged, published),
+      ],
     });
 
     const created = await current.nextly.create({
@@ -103,33 +106,35 @@ describe("document.* post-commit status events (D69)", () => {
     expect(published).toHaveLength(0);
   });
 
-  it("emits document.statusChanged only (NOT published) on published->draft", async () => {
+  it("update published->draft emits statusChanged only (NOT published)", async () => {
     const statusChanged: Array<Record<string, unknown>> = [];
     const published: Array<Record<string, unknown>> = [];
-    const watcher = definePlugin({
-      name: "@test/watch-status-down",
-      version: "1.0.0",
-      nextly: ">=0.0.0",
-      init(ctx) {
-        ctx.events.on<Record<string, unknown>>("document.statusChanged", e => {
-          statusChanged.push(e.payload);
-        });
-        ctx.events.on("document.published", e => {
-          published.push(e.payload as Record<string, unknown>);
-        });
-      },
-    });
 
     current = await createTestNextly({
       collections: [articles()],
-      plugins: [watcher],
+      plugins: [
+        watchDocumentEvents("@test/watch-down", statusChanged, published),
+      ],
     });
 
     const created = await current.nextly.create({
       collection: "articles",
-      data: { title: "T", status: "published" },
+      data: { title: "T", status: "draft" },
     });
     const id = (created.item as { id: string }).id;
+
+    // Transition IN first (draft->published) so there is a published row to
+    // transition out of. Settle, then clear so we only assert on the
+    // published->draft transition below.
+    await current.nextly.update({
+      collection: "articles",
+      id,
+      data: { status: "published" },
+    });
+    await current.events.settle();
+
+    statusChanged.length = 0;
+    published.length = 0;
 
     await current.nextly.update({
       collection: "articles",
@@ -146,5 +151,28 @@ describe("document.* post-commit status events (D69)", () => {
       status: "draft",
     });
     expect(published).toHaveLength(0);
+  });
+
+  it("create directly as published emits document.published (NOT statusChanged)", async () => {
+    const statusChanged: Array<Record<string, unknown>> = [];
+    const published: Array<Record<string, unknown>> = [];
+
+    current = await createTestNextly({
+      collections: [articles()],
+      plugins: [
+        watchDocumentEvents("@test/watch-create", statusChanged, published),
+      ],
+    });
+
+    const created = await current.nextly.create({
+      collection: "articles",
+      data: { title: "T", status: "published" },
+    });
+    const id = (created.item as { id: string }).id;
+    await current.events.settle();
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ collection: "articles", id });
+    expect(statusChanged).toHaveLength(0);
   });
 });
