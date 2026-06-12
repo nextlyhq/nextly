@@ -14,6 +14,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors";
+import {
+  getFilterRegistry,
+  FilterSeams,
+  type EmailPayloadFilterValue,
+  type EmailFilterContext,
+  type EmailAfterSendValue,
+} from "../../../filters";
 import { getBaseUrl } from "../../../lib/get-base-url";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
@@ -265,16 +272,49 @@ export class EmailService extends BaseService {
 
     const { adapter, from } = await this.resolveProvider(options.providerId);
 
-    try {
-      const result = await adapter.send({
+    // D63 seam: let plugins transform the assembled email payload before dispatch.
+    const filtered = await getFilterRegistry().applyFilters<
+      EmailPayloadFilterValue,
+      EmailFilterContext
+    >(
+      FilterSeams.EmailBeforeSend,
+      {
         to: options.to,
         from,
         subject: options.subject,
         html: options.html,
+        plainText: options.plainText,
         cc: options.cc,
         bcc: options.bcc,
+      },
+      { providerId: options.providerId }
+    );
+
+    try {
+      const result = await adapter.send({
+        to: filtered.to,
+        from: filtered.from,
+        subject: filtered.subject,
+        html: filtered.html,
+        cc: filtered.cc,
+        bcc: filtered.bcc,
         attachments: resolvedAttachments,
       });
+
+      // D63 action seam: ordered, isolated side-effects after a send attempt.
+      await getFilterRegistry().runActions<
+        EmailAfterSendValue,
+        EmailFilterContext
+      >(
+        FilterSeams.EmailAfterSend,
+        {
+          to: filtered.to,
+          subject: filtered.subject,
+          success: result.success,
+          messageId: result.messageId,
+        },
+        { providerId: options.providerId }
+      );
 
       if (result.success) {
         this.logger.info("Email sent successfully", {
