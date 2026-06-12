@@ -86,10 +86,35 @@ describe("reloadNextlyConfig", () => {
 
   // Build a service resolver fake. Returns the service or undefined per
   // service name. Tests pass this into reloadNextlyConfig via opts.resolver.
-  function buildResolver(opts?: { withAdapter?: boolean }) {
+  function buildResolver(opts?: {
+    withAdapter?: boolean;
+    allCollections?: Array<{
+      slug: string;
+      tableName: string;
+      fields?: unknown[];
+      status?: boolean;
+      source?: string;
+    }>;
+    allSingles?: Array<{
+      slug: string;
+      tableName: string;
+      fields?: unknown[];
+      status?: boolean;
+      source?: string;
+    }>;
+    allComponents?: Array<{
+      slug: string;
+      tableName: string;
+      fields?: unknown[];
+      source?: string;
+    }>;
+  }) {
     const withAdapter = opts?.withAdapter ?? true;
     const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
     const registerDynamicSchemaSpy = vi.fn();
+    const updateCollectionMigrationStatusSpy = vi
+      .fn()
+      .mockResolvedValue(undefined);
     const services: Record<string, unknown> = {
       logger: { warn: warnSpy, info: vi.fn(), error: errorSpy },
       // The DI key is "adapter" (renamed from "databaseAdapter" — see the
@@ -104,12 +129,20 @@ describe("reloadNextlyConfig", () => {
         : undefined,
       collectionRegistryService: {
         syncCodeFirstCollections: vi.fn().mockResolvedValue({}),
+        // Mirrors CollectionRegistryService.getAllCollections — the DB-backed
+        // list of every registered collection (code + UI). Defaults to empty.
+        getAllCollections: vi
+          .fn()
+          .mockResolvedValue(opts?.allCollections ?? []),
+        updateMigrationStatus: updateCollectionMigrationStatusSpy,
       },
       singleRegistryService: {
         syncCodeFirstSingles: vi.fn().mockResolvedValue({}),
+        getAllSingles: vi.fn().mockResolvedValue(opts?.allSingles ?? []),
       },
       componentRegistryService: {
         syncCodeFirstComponents: syncCodeFirstComponentsSpy,
+        getAllComponents: vi.fn().mockResolvedValue(opts?.allComponents ?? []),
       },
       schemaRegistry: {
         registerDynamicSchema: registerDynamicSchemaSpy,
@@ -119,6 +152,7 @@ describe("reloadNextlyConfig", () => {
     return Object.assign((name: string) => services[name], {
       syncCodeFirstComponentsSpy,
       registerDynamicSchemaSpy,
+      updateCollectionMigrationStatusSpy,
     });
   }
 
@@ -243,6 +277,168 @@ describe("reloadNextlyConfig", () => {
     expect(call.source).toBe("code");
     expect(call.promptChannel).toBe("terminal");
     expect(Object.keys(call.desired.collections)).toEqual(["posts"]);
+  });
+
+  it("preserves UI-created collections (registry-only) in the desired schema so a code-first apply never drops them", async () => {
+    // User's exact scenario: a `test_collection` exists (created via the admin
+    // UI, so it lives in the DB/registry but NOT in nextly.config.ts). The user
+    // then adds `code_collection` in code. The HMR apply must include
+    // test_collection in the desired schema, otherwise drizzle-kit (which, on
+    // SQLite, introspects the whole DB) flags dc_test_collection as a
+    // data-losing orphan DROP and the apply fails.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "code_collection",
+            tableName: "dc_code_collection",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    // Live DB has neither code table yet → dc_code_collection is a new table.
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const resolver = buildResolver({
+      allCollections: [
+        // The new code collection (already covered by the config loop).
+        {
+          slug: "code_collection",
+          tableName: "dc_code_collection",
+          fields: [{ name: "body", type: "text" }],
+        },
+        // The pre-existing UI collection — must be preserved.
+        {
+          slug: "test_collection",
+          tableName: "dc_test_collection",
+          fields: [{ name: "note", type: "text" }],
+          source: "ui",
+        },
+      ],
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const call = pipelineApplySpy.mock.calls[0]?.[0] as {
+      desired: { collections: Record<string, { tableName: string }> };
+    };
+    const keys = Object.keys(call.desired.collections);
+    expect(keys).toContain("code_collection"); // the code change itself
+    expect(keys).toContain("test_collection"); // UI collection PRESERVED
+    expect(call.desired.collections.test_collection?.tableName).toBe(
+      "dc_test_collection"
+    );
+  });
+
+  it("marks a newly-created code-first collection as 'applied' after a successful apply", async () => {
+    // User's bug: a collection added in code AFTER initial DB setup gets its
+    // table created by the HMR apply, but registerCollection defaults
+    // migration_status to 'pending' and nothing flips it — so the builder
+    // listing shows "pending" forever. Mirrors the singles branch.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      },
+    });
+    // dc_books absent from the live DB → it's a brand-new table.
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const resolver = buildResolver();
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "books",
+      "applied"
+    );
+  });
+
+  it("preserves UI-created singles (registry-only) in the desired schema", async () => {
+    // A code change (new single) triggers the apply; a pre-existing UI single
+    // must ride along in the desired schema so drizzle-kit doesn't drop it.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(buildSnapshot([])); // single_settings is new
+
+    const resolver = buildResolver({
+      allSingles: [
+        {
+          slug: "settings",
+          tableName: "single_settings",
+          fields: [{ name: "site_name", type: "text" }],
+        },
+        {
+          slug: "ui_single",
+          tableName: "single_ui_single",
+          fields: [{ name: "x", type: "text" }],
+          source: "ui",
+        },
+      ],
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const call = pipelineApplySpy.mock.calls[0]?.[0] as {
+      desired: { singles: Record<string, { tableName: string }> };
+    };
+    const keys = Object.keys(call.desired.singles);
+    expect(keys).toContain("settings"); // code change
+    expect(keys).toContain("ui_single"); // UI single PRESERVED
+  });
+
+  it("preserves UI-created components (registry-only) in the desired schema", async () => {
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        components: [
+          { slug: "hero", fields: [{ name: "title", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(buildSnapshot([])); // comp_hero is new
+
+    const resolver = buildResolver({
+      allComponents: [
+        {
+          slug: "hero",
+          tableName: "comp_hero",
+          fields: [{ name: "title", type: "text" }],
+        },
+        {
+          slug: "ui_comp",
+          tableName: "comp_ui_comp",
+          fields: [{ name: "y", type: "text" }],
+          source: "ui",
+        },
+      ],
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const call = pipelineApplySpy.mock.calls[0]?.[0] as {
+      desired: { components: Record<string, { tableName: string }> };
+    };
+    const keys = Object.keys(call.desired.components);
+    expect(keys).toContain("hero"); // code change
+    expect(keys).toContain("ui_comp"); // UI component PRESERVED
   });
 
   it("lets a drop+add pair (rename candidate) flow through to the pipeline", async () => {
