@@ -255,6 +255,7 @@ export class EmailService extends BaseService {
     to: string;
     subject: string;
     html: string;
+    plainText?: string;
     providerId?: string;
     cc?: string[];
     bcc?: string[];
