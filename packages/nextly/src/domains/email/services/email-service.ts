@@ -255,7 +255,6 @@ export class EmailService extends BaseService {
     to: string;
     subject: string;
     html: string;
-    plainText?: string;
     providerId?: string;
     cc?: string[];
     bcc?: string[];
@@ -272,8 +271,12 @@ export class EmailService extends BaseService {
 
     const { adapter, from } = await this.resolveProvider(options.providerId);
 
+    const registry = getFilterRegistry();
+
     // D63 seam: let plugins transform the assembled email payload before dispatch.
-    const filtered = await getFilterRegistry().applyFilters<
+    // Outside try/catch intentionally — the filter registry isolates per-handler
+    // throws and never propagates, so a buggy plugin can't break sending.
+    const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
       EmailFilterContext
     >(
@@ -283,7 +286,6 @@ export class EmailService extends BaseService {
         from,
         subject: options.subject,
         html: options.html,
-        plainText: options.plainText,
         cc: options.cc,
         bcc: options.bcc,
       },
@@ -302,10 +304,7 @@ export class EmailService extends BaseService {
       });
 
       // D63 action seam: ordered, isolated side-effects after a send attempt.
-      await getFilterRegistry().runActions<
-        EmailAfterSendValue,
-        EmailFilterContext
-      >(
+      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
         FilterSeams.EmailAfterSend,
         {
           to: filtered.to,
@@ -318,8 +317,8 @@ export class EmailService extends BaseService {
 
       if (result.success) {
         this.logger.info("Email sent successfully", {
-          to: options.to,
-          subject: options.subject,
+          to: filtered.to,
+          subject: filtered.subject,
           messageId: result.messageId,
           cc: options.cc ?? [],
           bcc: options.bcc ?? [],
@@ -327,16 +326,26 @@ export class EmailService extends BaseService {
         });
       } else {
         this.logger.warn("Email send returned unsuccessful", {
-          to: options.to,
-          subject: options.subject,
+          to: filtered.to,
+          subject: filtered.subject,
         });
       }
 
       return result;
     } catch (error) {
+      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
+        FilterSeams.EmailAfterSend,
+        {
+          to: filtered.to,
+          subject: filtered.subject,
+          success: false,
+          messageId: undefined,
+        },
+        { providerId: options.providerId }
+      );
       this.logger.error("Failed to send email", {
-        to: options.to,
-        subject: options.subject,
+        to: filtered.to,
+        subject: filtered.subject,
         error: error instanceof Error ? error.message : String(error),
       });
       return { success: false };

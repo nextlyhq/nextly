@@ -49,11 +49,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import {
-  isNotFoundError,
-  mergeConfig,
-  sliceListResult,
-} from "./helpers";
+import { isNotFoundError, mergeConfig, sliceListResult } from "./helpers";
 
 /**
  * `nextly.email.*` namespace — send raw or template-based emails.
@@ -75,7 +71,6 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         to,
         subject: args.subject,
         html: args.html,
-        plainText: args.text,
         providerId: args.providerId,
         attachments: args.attachments,
       });
@@ -118,9 +113,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
  * non-CRUD action whose primary value is the resulting record itself.
  */
 export interface EmailProvidersNamespace {
-  find(
-    args?: FindEmailProvidersArgs
-  ): Promise<ListResult<EmailProviderRecord>>;
+  find(args?: FindEmailProvidersArgs): Promise<ListResult<EmailProviderRecord>>;
   findByID(
     args: FindEmailProviderByIDArgs
   ): Promise<EmailProviderRecord | null>;
@@ -222,9 +215,7 @@ export function createEmailProvidersNamespace(
  * because they're non-CRUD actions with domain-specific return types.
  */
 export interface EmailTemplatesNamespace {
-  find(
-    args?: FindEmailTemplatesArgs
-  ): Promise<ListResult<EmailTemplateRecord>>;
+  find(args?: FindEmailTemplatesArgs): Promise<ListResult<EmailTemplateRecord>>;
   findByID(
     args: FindEmailTemplateByIDArgs
   ): Promise<EmailTemplateRecord | null>;

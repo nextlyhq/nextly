@@ -157,4 +157,55 @@ describe("EmailService — D63 filter/action seams", () => {
       })
     );
   });
+
+  it("email.afterSend action fires with success:false when adapter throws", async () => {
+    const captured: unknown[] = [];
+    getFilterRegistry().addAction(FilterSeams.EmailAfterSend, payload => {
+      captured.push(payload);
+    });
+
+    const adapterSend = vi
+      .fn<EmailProviderAdapter["send"]>()
+      .mockRejectedValue(new Error("smtp down"));
+    const providerAdapter: EmailProviderAdapter = { send: adapterSend };
+
+    const providerService = {
+      getProviderDecrypted: vi.fn(),
+      getDefaultProviderDecrypted: vi.fn().mockResolvedValue({
+        id: "p1",
+        type: "resend",
+        fromEmail: "no-reply@test.local",
+        fromName: null,
+        configuration: { apiKey: "k" },
+        isActive: true,
+      }),
+    } as unknown as EmailProviderService;
+
+    const templateService = {
+      getTemplateBySlug: vi.fn(),
+      getLayout: vi.fn(),
+    } as unknown as EmailTemplateService;
+
+    const service = new EmailService(
+      makeAdapter(),
+      logger,
+      providerService,
+      templateService,
+      undefined,
+      undefined
+    );
+
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => providerAdapter;
+
+    const result = await service.send({
+      to: "fail@b.com",
+      subject: "Failing",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: false });
+    expect(captured).toEqual([expect.objectContaining({ success: false })]);
+  });
 });

@@ -14,7 +14,6 @@ export interface EmailPayloadFilterValue {
   from: string;
   subject: string;
   html: string;
-  plainText?: string;
   cc?: string[];
   bcc?: string[];
 }
