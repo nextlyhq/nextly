@@ -18,6 +18,7 @@ import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
+import { resetFilterRegistry } from "../filters";
 import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
 import type { HookRegistry } from "../hooks/hook-registry";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -137,6 +138,7 @@ export async function createTestNextly(
   await shutdownServices();
   resetHookRegistry();
   resetEventBus();
+  resetFilterRegistry();
   resetNextlyInstance();
 
   let adapter = opts.adapter;
@@ -182,6 +184,7 @@ export async function createTestNextly(
       await shutdownServices();
       resetHookRegistry();
       resetEventBus();
+      resetFilterRegistry();
       resetNextlyInstance();
     },
   };

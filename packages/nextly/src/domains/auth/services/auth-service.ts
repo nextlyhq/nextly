@@ -17,6 +17,7 @@ import type { MinimalUser } from "@nextly/types/auth";
 // catches via try/catch or lets the unified error handler convert to JSON.
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
+import { emitAuthEvent } from "../../../events/domain-events";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
@@ -144,6 +145,8 @@ export class AuthService extends BaseService {
         { error: err instanceof Error ? err.message : String(err) }
       );
     }
+
+    emitAuthEvent("registered", { userId: newUser.id, email: newUser.email });
 
     return newUser;
   }
@@ -274,6 +277,8 @@ export class AuthService extends BaseService {
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+
+    emitAuthEvent("passwordChanged", { userId });
   }
 
   /**
@@ -496,6 +501,8 @@ export class AuthService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
+    emitAuthEvent("passwordReset", { email });
+
     return { email };
   }
 
@@ -668,6 +675,8 @@ export class AuthService extends BaseService {
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+
+    emitAuthEvent("emailVerified", { email });
 
     return { email };
   }

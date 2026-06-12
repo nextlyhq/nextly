@@ -21,3 +21,30 @@ export type { HookType, HookHandler, HookContext } from "nextly";
 
 // Event bus (D8/D51) — `ctx.events` surface + types.
 export type { EventBus, EventEnvelope, EventHandler, EventName } from "nextly";
+
+// Event-name constants (D69) — document/auth/media families.
+export {
+  DocumentEvents,
+  AuthEvents,
+  MediaEvents,
+  type DocumentEventName,
+  type AuthEventName,
+  type MediaEventName,
+} from "nextly";
+
+// Filter/action registry (D63) — ctx.filters / ctx.actions surface + seam types.
+export {
+  FilterSeams,
+  type Filter,
+  type Action,
+  type CoreFilterSeam,
+  type PluginFilterRegistry,
+  type PluginActionRegistry,
+  type EmailPayloadFilterValue,
+  type EmailFilterContext,
+  type EmailAfterSendValue,
+  type NavCollectionItem,
+  type NavFilterContext,
+  type ListQueryWhere,
+  type ListQueryFilterContext,
+} from "nextly";

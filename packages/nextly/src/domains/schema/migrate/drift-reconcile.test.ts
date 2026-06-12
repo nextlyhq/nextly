@@ -24,7 +24,10 @@ function fakeRepo(): ReconcileRepo & {
   const state = {
     starts: 0,
     applied: [] as Array<{ statementsExecuted?: number | null }>,
-    superseded: [] as Array<{ supersededEventIds: string[]; byEventId: string }>,
+    superseded: [] as Array<{
+      supersededEventIds: string[];
+      byEventId: string;
+    }>,
   };
   return {
     ...state,
@@ -34,7 +37,7 @@ function fakeRepo(): ReconcileRepo & {
     },
     markApplied: (_id, args) => {
       state.applied.push(args);
-      return Promise.resolve();
+      return Promise.resolve(true);
     },
     markFailed: () => Promise.resolve(),
     supersede: args => {
@@ -44,7 +47,11 @@ function fakeRepo(): ReconcileRepo & {
   } as never;
 }
 
-const file = { filename: "0006_x.sql", sql: "CREATE TABLE b (id text);", path: "m/0006_x.sql" };
+const file = {
+  filename: "0006_x.sql",
+  sql: "CREATE TABLE b (id text);",
+  path: "m/0006_x.sql",
+};
 
 describe("reconcileFile (Phase 2 three-state)", () => {
   it("IN_SYNC: live ≡ before → runs the SQL and records file_apply", async () => {

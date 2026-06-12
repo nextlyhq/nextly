@@ -49,6 +49,7 @@
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
 import { NextlyError } from "../../../errors";
+import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
 import { toAbsoluteMediaUrl } from "../../../lib/media-variant";
 import type { MediaService as LegacyMediaService } from "../../../services/media";
@@ -342,6 +343,11 @@ export class MediaService {
       filename: result.data.filename,
     });
 
+    emitMediaEvent("uploaded", {
+      mediaId: result.data.id,
+      filename: result.data.filename,
+    });
+
     return this.mapToMediaFile(result.data);
   }
 
@@ -481,6 +487,8 @@ export class MediaService {
     }
 
     this.logger.info("Media file deleted", { mediaId });
+
+    emitMediaEvent("deleted", { mediaId });
   }
 
   /**

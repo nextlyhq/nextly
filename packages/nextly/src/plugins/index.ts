@@ -16,8 +16,10 @@ export {
   createPluginContext,
   type PluginAdminAppearance,
   type PluginAdminConfig,
+  type PluginActionRegistry,
   type PluginContext,
   type PluginDefinition,
+  type PluginFilterRegistry,
   type PluginHookRegistry,
 } from "./plugin-context";
 

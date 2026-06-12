@@ -349,6 +349,8 @@ export {
   type PluginContributions,
   type PluginDefinition,
   type PluginHookRegistry,
+  type PluginFilterRegistry,
+  type PluginActionRegistry,
 } from "./plugins";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
@@ -359,7 +361,32 @@ export {
   type EventEnvelope,
   type EventHandler,
   type EventName,
+  DocumentEvents,
+  AuthEvents,
+  MediaEvents,
+  type DocumentEventName,
+  type AuthEventName,
+  type MediaEventName,
 } from "./events";
+
+// Plugin filter/action registry (D63) — ctx.filters / ctx.actions surface + seam types.
+export {
+  FilterRegistry,
+  getFilterRegistry,
+  resetFilterRegistry,
+  FilterSeams,
+  type Filter,
+  type Action,
+  type FilterName,
+  type CoreFilterSeam,
+  type EmailPayloadFilterValue,
+  type EmailFilterContext,
+  type EmailAfterSendValue,
+  type NavCollectionItem,
+  type NavFilterContext,
+  type ListQueryWhere,
+  type ListQueryFilterContext,
+} from "./filters";
 
 // ============================================================
 // COLLECTIONS & FIELD TYPES

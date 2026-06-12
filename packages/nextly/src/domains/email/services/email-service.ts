@@ -14,6 +14,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors";
+import {
+  getFilterRegistry,
+  FilterSeams,
+  type EmailPayloadFilterValue,
+  type EmailFilterContext,
+  type EmailAfterSendValue,
+} from "../../../filters";
 import { getBaseUrl } from "../../../lib/get-base-url";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
@@ -265,21 +272,54 @@ export class EmailService extends BaseService {
 
     const { adapter, from } = await this.resolveProvider(options.providerId);
 
-    try {
-      const result = await adapter.send({
+    const registry = getFilterRegistry();
+
+    // D63 seam: let plugins transform the assembled email payload before dispatch.
+    // Outside try/catch intentionally — the filter registry isolates per-handler
+    // throws and never propagates, so a buggy plugin can't break sending.
+    const filtered = await registry.applyFilters<
+      EmailPayloadFilterValue,
+      EmailFilterContext
+    >(
+      FilterSeams.EmailBeforeSend,
+      {
         to: options.to,
         from,
         subject: options.subject,
         html: options.html,
         cc: options.cc,
         bcc: options.bcc,
+      },
+      { providerId: options.providerId }
+    );
+
+    try {
+      const result = await adapter.send({
+        to: filtered.to,
+        from: filtered.from,
+        subject: filtered.subject,
+        html: filtered.html,
+        cc: filtered.cc,
+        bcc: filtered.bcc,
         attachments: resolvedAttachments,
       });
 
+      // D63 action seam: ordered, isolated side-effects after a send attempt.
+      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
+        FilterSeams.EmailAfterSend,
+        {
+          to: filtered.to,
+          subject: filtered.subject,
+          success: result.success,
+          messageId: result.messageId,
+        },
+        { providerId: options.providerId }
+      );
+
       if (result.success) {
         this.logger.info("Email sent successfully", {
-          to: options.to,
-          subject: options.subject,
+          to: filtered.to,
+          subject: filtered.subject,
           messageId: result.messageId,
           cc: options.cc ?? [],
           bcc: options.bcc ?? [],
@@ -287,16 +327,26 @@ export class EmailService extends BaseService {
         });
       } else {
         this.logger.warn("Email send returned unsuccessful", {
-          to: options.to,
-          subject: options.subject,
+          to: filtered.to,
+          subject: filtered.subject,
         });
       }
 
       return result;
     } catch (error) {
+      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
+        FilterSeams.EmailAfterSend,
+        {
+          to: filtered.to,
+          subject: filtered.subject,
+          success: false,
+          messageId: undefined,
+        },
+        { providerId: options.providerId }
+      );
       this.logger.error("Failed to send email", {
-        to: options.to,
-        subject: options.subject,
+        to: filtered.to,
+        subject: filtered.subject,
         error: error instanceof Error ? error.message : String(error),
       });
       return { success: false };

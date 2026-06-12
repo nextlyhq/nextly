@@ -37,6 +37,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
   resolveStatusFilter,
@@ -298,6 +299,25 @@ export class CollectionQueryService extends BaseService {
 
       await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
 
+      // D63 seam: let plugins transform the structured list-query `where`.
+      // Guarded by hasFilters so default behavior (no plugins) is unchanged —
+      // we do NOT activate the dormant beforeOperation `whereFromHook` path here.
+      const filterRegistry = getFilterRegistry();
+      const listQueryWhere = filterRegistry.hasFilters(
+        FilterSeams.CollectionsListQuery
+      )
+        ? await filterRegistry.applyFilters(
+            FilterSeams.CollectionsListQuery,
+            params.where ?? {},
+            {
+              collection: params.collectionName,
+              userId: params.user?.id,
+              search: params.search,
+              limit: params.limit,
+            }
+          )
+        : params.where;
+
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
 
@@ -381,9 +401,8 @@ export class CollectionQueryService extends BaseService {
 
       // Extract geo filters (near, within) that must be applied in JS
       // These operators can't be translated to SQL for cross-database support
-      const { geoFilters, cleanedWhere: whereAfterGeo } = extractGeoFilters(
-        params.where
-      );
+      const { geoFilters, cleanedWhere: whereAfterGeo } =
+        extractGeoFilters(listQueryWhere);
       const hasGeoFilters = geoFilters.length > 0;
 
       // ============================================================

@@ -13,6 +13,8 @@ import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
+import type { Action, Filter } from "../filters";
+import { getFilterRegistry } from "../filters";
 import type { HookHandler, HookType } from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
@@ -108,6 +110,34 @@ export interface PluginHookRegistry {
     collection: string,
     handler: HookHandler<T>
   ): void;
+}
+
+/**
+ * @experimental Typed filter registry exposed to plugins (D63).
+ * Register transforms on named seams, or define + apply your own seams.
+ */
+export interface PluginFilterRegistry {
+  add<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
+  remove<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
+  apply<V = unknown, C = unknown>(
+    name: string,
+    value: V,
+    context: C
+  ): Promise<V>;
+}
+
+/**
+ * @experimental Typed action registry exposed to plugins (D63).
+ * Register ordered, error-isolated side-effects on named seams, or run your own.
+ */
+export interface PluginActionRegistry {
+  add<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
+  remove<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
+  run<P = unknown, C = unknown>(
+    name: string,
+    payload: P,
+    context: C
+  ): Promise<void>;
 }
 
 // ============================================================
@@ -219,6 +249,12 @@ export interface PluginContext {
    * database operations on collections.
    */
   hooks: PluginHookRegistry;
+
+  /** @experimental Typed filter registry (D63). Transform values at named seams. */
+  filters: PluginFilterRegistry;
+
+  /** @experimental Typed action registry (D63). Ordered side-effects at named seams. */
+  actions: PluginActionRegistry;
 }
 
 // ============================================================
@@ -588,6 +624,21 @@ export function createPluginContext(
   const events = getEventBus();
   events.setLogger(logger);
 
+  const filterRegistry = getFilterRegistry();
+  filterRegistry.setLogger(logger);
+  const pluginFilters: PluginFilterRegistry = {
+    add: (name, fn) => filterRegistry.addFilter(name, fn),
+    remove: (name, fn) => filterRegistry.removeFilter(name, fn),
+    apply: (name, value, context) =>
+      filterRegistry.applyFilters(name, value, context),
+  };
+  const pluginActions: PluginActionRegistry = {
+    add: (name, fn) => filterRegistry.addAction(name, fn),
+    remove: (name, fn) => filterRegistry.removeAction(name, fn),
+    run: (name, payload, context) =>
+      filterRegistry.runActions(name, payload, context),
+  };
+
   return {
     services: {
       collections: collectionService,
@@ -604,5 +655,7 @@ export function createPluginContext(
       : { name: "", collections: {}, singles: {} },
     config: Object.freeze({ ...config }),
     hooks: pluginHooks,
+    filters: pluginFilters,
+    actions: pluginActions,
   };
 }

@@ -1544,6 +1544,13 @@ async function initializePlugins(
     );
     teardown.push({ plugin, context: pluginContext });
 
+    // Register custom event names this plugin declares (D9) so its emits
+    // don't trigger an "undeclared event" warning.
+    const declaredEvents = plugin.contributes?.events?.map(e => e.name) ?? [];
+    if (declaredEvents.length > 0) {
+      getEventBus().registerDeclaredEvents(declaredEvents);
+    }
+
     if (plugin.init) {
       try {
         await plugin.init(pluginContext);
