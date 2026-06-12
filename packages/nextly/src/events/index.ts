@@ -12,3 +12,10 @@ export {
   type EventHandler,
   type EventName,
 } from "./event-bus";
+
+export {
+  safeEmit,
+  emitDocumentEvent,
+  emitAuthEvent,
+  emitMediaEvent,
+} from "./domain-events";

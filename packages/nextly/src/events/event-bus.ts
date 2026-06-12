@@ -39,7 +39,13 @@ export type EventHandler<P = unknown> = (
  * Reserved framework-emitted event prefixes. Emitting a name under one of these
  * never warns even if no plugin declared it (the host owns them).
  */
-const RESERVED_EVENT_PREFIXES = ["plugin.", "collection.", "auth."];
+const RESERVED_EVENT_PREFIXES = [
+  "plugin.",
+  "collection.",
+  "auth.",
+  "document.",
+  "media.",
+];
 
 export class EventBus {
   private handlers: Map<EventName, Set<EventHandler>> = new Map();
