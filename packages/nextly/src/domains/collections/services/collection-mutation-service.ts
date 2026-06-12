@@ -31,6 +31,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
@@ -1235,6 +1236,29 @@ export class CollectionMutationService extends BaseService {
         updated,
         params.user
       );
+
+      // D69 document-level status events. Status is a user-defined field;
+      // emit only when a `status` field value actually changed on update.
+      const previousStatus = (
+        existingEntry as Record<string, unknown> | undefined
+      )?.status;
+      const nextStatus = (updated as Record<string, unknown>)?.status;
+      if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
+        emitDocumentEvent("statusChanged", params.collectionName, {
+          id: (updated as { id?: unknown }).id,
+          previousStatus,
+          status: nextStatus,
+          data: updated,
+          user: params.user,
+        });
+        if (nextStatus === "published" && previousStatus !== "published") {
+          emitDocumentEvent("published", params.collectionName, {
+            id: (updated as { id?: unknown }).id,
+            data: updated,
+            user: params.user,
+          });
+        }
+      }
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
