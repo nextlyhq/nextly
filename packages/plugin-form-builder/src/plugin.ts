@@ -20,6 +20,7 @@ import { getCollectionsHandler } from "nextly/runtime";
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
 import type {
+  BeforeEmailFilterContext,
   FormNotificationItem,
   FormBuilderPluginOptions,
   FormEmailNotification,
@@ -225,14 +226,12 @@ export function formBuilder(
       if (resolvedConfig.beforeEmail) {
         nextly.filters.add(
           "form-builder.beforeEmail",
-          (
-            emails: FormEmailNotification[],
-            ctx: { form: FormDocument; submission: SubmissionDocument }
-          ) =>
+          (emails: FormEmailNotification[], ctx: BeforeEmailFilterContext) =>
             resolvedConfig.beforeEmail!({
               emails,
-              form: ctx.form,
-              submission: ctx.submission,
+              // Boundary: loose runtime documents → the user's typed contract.
+              form: ctx.form as unknown as FormDocument,
+              submission: ctx.submission as unknown as SubmissionDocument,
             })
         );
       }
@@ -415,6 +414,7 @@ async function handleSubmissionCreated(
       providerId: notification.providerId,
       cc,
       bcc,
+      notificationId: notification.id,
     });
   }
 
@@ -424,11 +424,8 @@ async function handleSubmissionCreated(
   // config (and any other registered handler) can modify/filter them.
   const finalEmails = await nextly.filters.apply<
     FormEmailNotification[],
-    { form: FormDocument; submission: SubmissionDocument }
-  >("form-builder.beforeEmail", emails, {
-    form: form as unknown as FormDocument,
-    submission: submission as unknown as SubmissionDocument,
-  });
+    BeforeEmailFilterContext
+  >("form-builder.beforeEmail", emails, { form, submission });
 
   // -- Send phase: send the (possibly transformed) outgoing notifications.
   for (const email of finalEmails) {
@@ -449,12 +446,14 @@ async function handleSubmissionCreated(
         formSlug: form.slug,
         to: email.to,
         templateSlug: email.templateSlug,
+        notificationId: email.notificationId,
         attachmentCount: fileAttachments.length,
       });
     } catch (err) {
       nextly.logger.error?.("Form Builder: notification failed", {
         to: email.to,
         templateSlug: email.templateSlug,
+        notificationId: email.notificationId,
         error: err instanceof Error ? err.message : String(err),
       });
     }

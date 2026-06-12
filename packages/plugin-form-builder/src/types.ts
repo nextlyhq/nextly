@@ -57,6 +57,14 @@ export interface FormEmailNotification {
   cc?: string[];
   /** BCC addresses, if any. */
   bcc?: string[];
+  /** Source notification id; undefined for filter-injected emails. */
+  notificationId?: string;
+}
+
+/** @experimental Context passed to the `form-builder.beforeEmail` filter seam. */
+export interface BeforeEmailFilterContext {
+  form: Record<string, unknown>;
+  submission: Record<string, unknown>;
 }
 
 /**

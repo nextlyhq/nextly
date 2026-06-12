@@ -94,6 +94,7 @@ describe("form-builder.beforeEmail D63 filter seam (A8)", () => {
       },
     });
 
+    expect(form).toMatchObject({ item: { id: expect.any(String) } });
     const formId = (form as { item: { id: string } }).item.id;
 
     // Creating a submission fires the awaited afterCreate hook →
