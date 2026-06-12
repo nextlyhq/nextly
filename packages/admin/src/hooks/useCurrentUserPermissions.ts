@@ -176,14 +176,16 @@ export function useCurrentUserPermissions() {
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
   // permissions payload.
-  const { data, isLoading, error } = useQuery<UserPermissionsResponse>({
-    queryKey: ["currentUserPermissions"],
-    queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),
-    enabled: isPrivateRoute,
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
-  });
+  const { data, isLoading, isPending, error } =
+    useQuery<UserPermissionsResponse>({
+      queryKey: ["currentUserPermissions"],
+      queryFn: () =>
+        protectedApi.get<UserPermissionsResponse>("/me/permissions"),
+      enabled: isPrivateRoute,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+    });
 
   const permissions = data?.permissions ?? [];
   const isSuperAdmin = data?.isSuperAdmin ?? false;
@@ -219,7 +221,7 @@ export function useCurrentUserPermissions() {
     permissions,
     roles,
     isSuperAdmin,
-    isLoading,
+    isLoading: isLoading || isPending,
     error,
     hasPermission,
     canAccessCollection,
