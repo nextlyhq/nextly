@@ -260,7 +260,7 @@
     "dotenv": "^17.2.2",
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "^0.45.2",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.1",
     "execa": "^9.6.0",
     "file-type": "^21",
     "isomorphic-dompurify": "^2",
