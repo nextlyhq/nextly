@@ -47,6 +47,8 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
   NEXTLY_SCHEMA_RELATION_TARGET_MISSING: 400,
+  // Plugin platform (P2b) — schema extend (contributes.extend).
+  NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
 } as const;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import type { CollectionConfig } from "../../collections/config/define-collection";
+import type { FieldConfig } from "../../collections/fields/types";
 import type { ComponentConfig } from "../../components/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { SingleConfig } from "../../singles/config/types";
@@ -158,5 +159,94 @@ describe("applyPluginSchemaContributions (slug collisions — D13)", () => {
         []
       )
     ).not.toThrow();
+  });
+});
+
+const field = (name: string): FieldConfig =>
+  ({ name, type: "text" }) as unknown as FieldConfig;
+const collWith = (slug: string, ...names: string[]): CollectionConfig =>
+  ({ slug, fields: names.map(field) }) as unknown as CollectionConfig;
+const fieldNames = (
+  entity: { fields?: { name?: string }[] } | undefined
+): string[] => (entity?.fields ?? []).map(f => f.name ?? "");
+
+describe("applyPluginSchemaContributions — contributes.extend (D12)", () => {
+  const extendError = (fn: () => unknown): NextlyError => {
+    try {
+      fn();
+    } catch (err) {
+      return err as NextlyError;
+    }
+    throw new Error("expected applyPluginSchemaContributions to throw");
+  };
+
+  it("appends extend fields to the target collection", () => {
+    const result = applyPluginSchemaContributions(
+      cfg({ collections: [collWith("posts", "title")] }),
+      [
+        plugin("@t/seo", {
+          extend: [{ target: "posts", fields: [field("seoTitle")] }],
+        }),
+      ]
+    );
+    const posts = (result.collections ?? []).find(c => c.slug === "posts");
+    expect(fieldNames(posts)).toEqual(["title", "seoTitle"]);
+  });
+
+  it("applies an array target to each listed entity", () => {
+    const result = applyPluginSchemaContributions(
+      cfg({
+        collections: [collWith("posts", "title"), collWith("pages", "title")],
+      }),
+      [
+        plugin("@t/seo", {
+          extend: [{ target: ["posts", "pages"], fields: [field("seoTitle")] }],
+        }),
+      ]
+    );
+    expect(
+      fieldNames((result.collections ?? []).find(c => c.slug === "posts"))
+    ).toContain("seoTitle");
+    expect(
+      fieldNames((result.collections ?? []).find(c => c.slug === "pages"))
+    ).toContain("seoTitle");
+  });
+
+  it("can extend a collection contributed by an earlier plugin", () => {
+    const result = applyPluginSchemaContributions(cfg({}), [
+      plugin("@t/forms", { collections: [collWith("forms", "name")] }),
+      plugin("@t/seo", {
+        extend: [{ target: "forms", fields: [field("seoTitle")] }],
+      }),
+    ]);
+    expect(
+      fieldNames((result.collections ?? []).find(c => c.slug === "forms"))
+    ).toEqual(["name", "seoTitle"]);
+  });
+
+  it("does not mutate the input target entity", () => {
+    const posts = collWith("posts", "title");
+    applyPluginSchemaContributions(cfg({ collections: [posts] }), [
+      plugin("@t/seo", {
+        extend: [{ target: "posts", fields: [field("seoTitle")] }],
+      }),
+    ]);
+    expect(fieldNames(posts)).toEqual(["title"]); // original untouched
+  });
+
+  it("throws NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN for an unknown/builder-only target", () => {
+    const err = extendError(() =>
+      applyPluginSchemaContributions(
+        cfg({ collections: [collWith("posts", "title")] }),
+        [
+          plugin("@t/seo", {
+            extend: [{ target: "ghost", fields: [field("x")] }],
+          }),
+        ]
+      )
+    );
+    expect(err.code).toBe("NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN");
+    expect(err.logContext?.reason).toBe("extend-target-unknown");
+    expect(err.logContext?.target).toBe("ghost");
   });
 });

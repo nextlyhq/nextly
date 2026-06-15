@@ -20,14 +20,19 @@
  * @module plugins/schema/apply-contributions
  */
 
+import type { FieldConfig } from "../../collections/fields/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginDefinition } from "../plugin-context";
-import { slugCollisionError } from "../schema-error";
+import { extendTargetUnknownError, slugCollisionError } from "../schema-error";
 
 type EntityKind = "collection" | "single" | "component";
 
 interface Slugged {
   slug: string;
+}
+
+interface Fielded extends Slugged {
+  fields?: FieldConfig[];
 }
 
 interface PluginEntry<T> {
@@ -68,9 +73,60 @@ function mergeKind<T extends Slugged>(
 }
 
 /**
+ * Append `fields` to the entity in `arr` whose slug is `target`, returning a NEW
+ * array with the touched entity cloned (purity). Returns false if not found.
+ */
+function tryExtend<T extends Fielded>(
+  arr: T[],
+  target: string,
+  fields: FieldConfig[]
+): boolean {
+  const idx = arr.findIndex(e => e.slug === target);
+  if (idx === -1) return false;
+  arr[idx] = { ...arr[idx], fields: [...(arr[idx].fields ?? []), ...fields] };
+  return true;
+}
+
+/**
+ * Apply every plugin's `contributes.extend` (D12): append the declared fields to
+ * the target entity (found by slug across the merged collections/singles/
+ * components). `target` may be a slug or an array of slugs (applied to each).
+ * An unknown target fails fast (D12) — this is also how extending a Builder-only
+ * entity fails loud during the code-first gap (R2). Pure: clones touched arrays.
+ */
+function applyExtends(
+  collections: NextlyServiceConfig["collections"],
+  singles: NextlyServiceConfig["singles"],
+  components: NextlyServiceConfig["components"],
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles" | "components"> {
+  const cols = [...(collections ?? [])];
+  const sin = [...(singles ?? [])];
+  const comp = [...(components ?? [])];
+
+  for (const plugin of plugins) {
+    for (const clause of plugin.contributes?.extend ?? []) {
+      const targets = Array.isArray(clause.target)
+        ? clause.target
+        : [clause.target];
+      for (const target of targets) {
+        const applied =
+          tryExtend(cols, target, clause.fields) ||
+          tryExtend(sin, target, clause.fields) ||
+          tryExtend(comp, target, clause.fields);
+        if (!applied) throw extendTargetUnknownError(target, plugin.name);
+      }
+    }
+  }
+
+  return { collections: cols, singles: sin, components: comp };
+}
+
+/**
  * @experimental Merge plugin `contributes` schema into the config. Pure — does
  * not mutate `config` or `plugins`. Throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a
- * plugin-involved slug collision (D13).
+ * plugin-involved slug collision (D13) and `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN`
+ * for an `extend` against an unknown target (D12).
  */
 export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
@@ -92,5 +148,9 @@ export function applyPluginSchemaContributions(
     plugins.map(p => ({ owner: p.name, entities: p.contributes?.components }))
   );
 
-  return { ...config, collections, singles, components };
+  // Second pass: apply `extend` over the fully-merged entity set (a plugin may
+  // extend a code, own, or earlier-plugin entity).
+  const extended = applyExtends(collections, singles, components, plugins);
+
+  return { ...config, ...extended };
 }

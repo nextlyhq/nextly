@@ -19,3 +19,22 @@ export function slugCollisionError(
     logContext: { reason: "slug-collision", kind, slug, owners },
   });
 }
+
+/**
+ * Fail-fast boot error when a plugin's `contributes.extend` targets a slug that
+ * is not in the merged schema (D12). This is also how extending a Builder-only
+ * entity fails loud during the code-first-only gap (R2): Builder entities are
+ * not in the code-first merged config, so they read as unknown targets here.
+ */
+export function extendTargetUnknownError(
+  target: string,
+  owner: string
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN",
+    statusCode: 400,
+    publicMessage: "Schema configuration is invalid.",
+    logMessage: `Plugin "${owner}" extends unknown entity "${target}" (not a code-first or plugin collection/single/component in the merged schema)`,
+    logContext: { reason: "extend-target-unknown", target, owner },
+  });
+}
