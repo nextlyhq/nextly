@@ -29,10 +29,12 @@ import {
   defineConfig,
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
+import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors/index";
 import { getCoreVersion } from "../../plugins/core-version";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { resolvePlugins } from "../../plugins/resolve";
+import { applyPluginSchemaContributions } from "../../plugins/schema/apply-contributions";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -47,6 +49,33 @@ export function orderConfigPlugins(
 ): PluginDefinition[] {
   if (plugins.length === 0) return plugins;
   return resolvePlugins(plugins, { coreVersion: getCoreVersion() });
+}
+
+/**
+ * Merge a plugin-`setup()`-transformed config back onto the base config and fold
+ * declarative plugin schema contributions (D3/D12) via the SAME shared function
+ * the runtime boot uses (`applyPluginSchemaContributions` in `register.ts`), so
+ * the CLI and runtime produce the same merged schema (D50). Threads
+ * collections, singles, AND components — components were previously dropped by
+ * the field-whitelist merge-back. Exported for unit/parity testing.
+ */
+export function mergeSetupResultIntoConfig(
+  base: SanitizedNextlyConfig,
+  transformed: SanitizedNextlyConfig,
+  plugins: PluginDefinition[]
+): SanitizedNextlyConfig {
+  const folded = applyPluginSchemaContributions(
+    transformed as unknown as NextlyServiceConfig,
+    plugins
+  );
+  return {
+    ...base,
+    collections: folded.collections ?? base.collections,
+    singles: folded.singles ?? base.singles,
+    components: folded.components ?? base.components,
+    plugins: transformed.plugins ?? base.plugins,
+    storage: transformed.storage ?? base.storage,
+  };
 }
 
 /**
@@ -290,13 +319,7 @@ async function loadConfigInternal(
         }
       }
 
-      config = {
-        ...config,
-        collections: transformedConfig.collections ?? config.collections,
-        singles: transformedConfig.singles ?? config.singles,
-        plugins: transformedConfig.plugins ?? config.plugins,
-        storage: transformedConfig.storage ?? config.storage,
-      };
+      config = mergeSetupResultIntoConfig(config, transformedConfig, plugins);
 
       debugLog(
         options,

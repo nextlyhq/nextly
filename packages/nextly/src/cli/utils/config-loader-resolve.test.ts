@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
+import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
+import type { CollectionConfig } from "../../collections/config/define-collection";
+import type { ComponentConfig } from "../../components/config/types";
 import type { PluginDefinition } from "../../plugins/plugin-context";
+import type { SingleConfig } from "../../singles/config/types";
 
-import { orderConfigPlugins } from "./config-loader";
+import {
+  mergeSetupResultIntoConfig,
+  orderConfigPlugins,
+} from "./config-loader";
 
 const plugin = (
   name: string,
@@ -51,5 +58,40 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
 
   it("returns an empty array unchanged", () => {
     expect(orderConfigPlugins([])).toEqual([]);
+  });
+});
+
+describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
+  const coll = (slug: string) =>
+    ({ slug, fields: [] }) as unknown as CollectionConfig;
+  const single = (slug: string) =>
+    ({ slug, fields: [] }) as unknown as SingleConfig;
+  const comp = (slug: string) =>
+    ({ slug, fields: [] }) as unknown as ComponentConfig;
+  const base = (): SanitizedNextlyConfig =>
+    ({
+      collections: [],
+      singles: [],
+      components: [],
+    }) as unknown as SanitizedNextlyConfig;
+
+  it("folds plugin contributes.{collections,singles,components} into the config (components threaded)", () => {
+    const plugins = [
+      plugin("@t/p", {
+        contributes: {
+          collections: [coll("p-coll")],
+          singles: [single("p-single")],
+          components: [comp("p-comp")],
+        },
+      }),
+    ];
+    const transformed = { ...base(), plugins } as SanitizedNextlyConfig;
+
+    const result = mergeSetupResultIntoConfig(base(), transformed, plugins);
+
+    expect((result.collections ?? []).map(c => c.slug)).toContain("p-coll");
+    expect((result.singles ?? []).map(s => s.slug)).toContain("p-single");
+    // components were dropped by the old whitelist merge-back — must survive now.
+    expect((result.components ?? []).map(c => c.slug)).toContain("p-comp");
   });
 });
