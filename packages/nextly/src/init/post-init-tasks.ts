@@ -9,6 +9,7 @@
  */
 
 import { getService } from "../di/register";
+import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 
 /**
  * Run idempotent post-initialization tasks after services are registered.
@@ -62,9 +63,10 @@ export async function runPostInitTasks(): Promise<void> {
     // Silently skip — userExtSchemaService may not be registered
   }
 
-  // Seed system + collection + single permissions (idempotent).
+  // Seed system + collection + single + plugin custom permissions (idempotent).
   // Ensures CRUD permissions exist for every collection (4 each) and single (2 each),
-  // plus all system resource permissions. New permissions are auto-assigned to super_admin.
+  // plus all system resource permissions and plugin-declared custom permissions
+  // (D36). New permissions are auto-assigned to super_admin.
   try {
     const permissionSeedService = getService("permissionSeedService");
     const systemResult = await permissionSeedService.seedSystemPermissions();
@@ -72,10 +74,16 @@ export async function runPostInitTasks(): Promise<void> {
       await permissionSeedService.seedAllCollectionPermissions();
     const singleResult = await permissionSeedService.seedAllSinglePermissions();
 
+    const config = getService("config");
+    const customResult = await permissionSeedService.seedCustomPermissions(
+      collectCustomPermissions(config, config.plugins ?? [])
+    );
+
     const allNewIds = [
       ...systemResult.newPermissionIds,
       ...collectionResult.newPermissionIds,
       ...singleResult.newPermissionIds,
+      ...customResult.newPermissionIds,
     ];
 
     if (allNewIds.length > 0) {
