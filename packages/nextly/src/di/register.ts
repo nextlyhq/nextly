@@ -63,7 +63,10 @@ import {
   validateCrossPluginRelations,
   validateMergedRelations,
 } from "../plugins/schema/validate-relations";
-import type { FieldDefinition } from "../schemas/dynamic-collections";
+import type {
+  CollectionSource,
+  FieldDefinition,
+} from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
@@ -827,6 +830,16 @@ async function syncCodeFirstCollections(
     }
   }
 
+  // Provenance (D14): tag each collection by who contributed it. A slug that a
+  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
+  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
+  const sourceBySlug = new Map<string, CollectionSource>();
+  for (const plugin of transformedConfig.plugins ?? []) {
+    for (const contributed of plugin.contributes?.collections ?? []) {
+      sourceBySlug.set(contributed.slug, `plugin:${plugin.name}`);
+    }
+  }
+
   const codeFirstConfigs: CodeFirstCollectionConfig[] =
     transformedConfig.collections.map(collection => ({
       slug: collection.slug,
@@ -839,6 +852,7 @@ async function syncCodeFirstCollections(
       tableName: collection.dbName,
       timestamps: collection.timestamps,
       admin: collection.admin,
+      source: sourceBySlug.get(collection.slug) ?? "code",
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
       status: collection.status === true,
