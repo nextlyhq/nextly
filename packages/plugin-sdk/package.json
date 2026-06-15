@@ -15,6 +15,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.mjs"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.mjs"
     }
   },
   "files": [
@@ -32,12 +36,30 @@
     "node": ">=20.0.0"
   },
   "peerDependencies": {
-    "nextly": "workspace:*"
+    "@nextlyhq/admin": "workspace:*",
+    "nextly": "workspace:*",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@nextlyhq/admin": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@types/react": "^19.0.0",
     "nextly": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.8"

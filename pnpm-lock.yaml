@@ -1023,15 +1023,27 @@ importers:
 
   packages/plugin-sdk:
     devDependencies:
+      '@nextlyhq/admin':
+        specifier: workspace:*
+        version: link:../admin
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.0
       nextly:
         specifier: workspace:*
         version: link:../nextly
+      react:
+        specifier: ^19.0.0
+        version: 19.2.0
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.0(react@19.2.0)
       tsup:
         specifier: ^8.5.0
         version: 8.5.0(jiti@2.6.1)(postcss@8.5.14)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
