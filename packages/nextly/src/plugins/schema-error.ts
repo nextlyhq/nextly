@@ -57,3 +57,44 @@ export function extendFieldDuplicateError(
     logContext: { reason: "extend-field-duplicate", target, field, owner },
   });
 }
+
+/**
+ * Fail-fast boot error when a `relationTo` points at a slug that is not a
+ * collection in the merged schema (nor a core target users/media) (D15).
+ */
+export function relationTargetMissingError(
+  source: string,
+  field: string,
+  target: string
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+    statusCode: 400,
+    publicMessage: "Schema configuration is invalid.",
+    logMessage: `Field "${field}" on "${source}" has relationTo "${target}", which is not a collection in the merged schema`,
+    logContext: { reason: "relation-target-missing", source, field, target },
+  });
+}
+
+/**
+ * Fail-fast boot error when a plugin relates to another plugin's entity without
+ * declaring `dependsOn` on it (D15).
+ */
+export function crossPluginRelationError(
+  sourcePlugin: string,
+  targetPlugin: string,
+  target: string
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION",
+    statusCode: 409,
+    publicMessage: "Schema configuration is invalid.",
+    logMessage: `Plugin "${sourcePlugin}" relates to "${target}" owned by plugin "${targetPlugin}" but does not declare dependsOn["${targetPlugin}"]`,
+    logContext: {
+      reason: "cross-plugin-relation-missing-depends-on",
+      sourcePlugin,
+      targetPlugin,
+      target,
+    },
+  });
+}
