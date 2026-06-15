@@ -296,3 +296,97 @@ describe("applyPluginSchemaContributions — extend field collisions (D13)", () 
     expect(err.logContext?.field).toBe("seoTitle");
   });
 });
+
+const relField = (name: string, relationTo: string): FieldConfig =>
+  ({ name, type: "relationship", relationTo }) as unknown as FieldConfig;
+const collFields = (slug: string, fields: FieldConfig[]): CollectionConfig =>
+  ({ slug, fields }) as unknown as CollectionConfig;
+const renamingPlugin = (
+  name: string,
+  contributes: PluginContributions,
+  renameMap: Record<string, string>
+): PluginDefinition => ({ ...plugin(name, contributes), renameMap });
+const relationTo = (
+  entity: { fields?: { relationTo?: string }[] } | undefined
+) => entity?.fields?.[0]?.relationTo;
+
+describe("applyPluginSchemaContributions — renames (D54)", () => {
+  const renameError = (fn: () => unknown): NextlyError => {
+    try {
+      fn();
+    } catch (err) {
+      return err as NextlyError;
+    }
+    throw new Error("expected applyPluginSchemaContributions to throw");
+  };
+
+  it("renames a contributed collection slug in the merged config", () => {
+    const result = applyPluginSchemaContributions(cfg({}), [
+      renamingPlugin(
+        "@t/fb",
+        { collections: [coll("forms")] },
+        {
+          forms: "contact-forms",
+        }
+      ),
+    ]);
+    expect(slugs(result.collections)).toEqual(["contact-forms"]);
+  });
+
+  it("rewrites the plugin's own relationTo to the renamed slug", () => {
+    const result = applyPluginSchemaContributions(cfg({}), [
+      renamingPlugin(
+        "@t/fb",
+        {
+          collections: [
+            coll("forms"),
+            collFields("submissions", [relField("form", "forms")]),
+          ],
+        },
+        { forms: "contact-forms" }
+      ),
+    ]);
+    const submissions = (result.collections ?? []).find(
+      c => c.slug === "submissions"
+    );
+    expect(relationTo(submissions)).toBe("contact-forms");
+  });
+
+  it("does not rewrite a relationTo pointing at a non-renamed slug", () => {
+    const result = applyPluginSchemaContributions(
+      cfg({ collections: [coll("posts")] }),
+      [
+        renamingPlugin(
+          "@t/fb",
+          {
+            collections: [
+              coll("forms"),
+              collFields("submissions", [relField("post", "posts")]),
+            ],
+          },
+          { forms: "contact-forms" }
+        ),
+      ]
+    );
+    const submissions = (result.collections ?? []).find(
+      c => c.slug === "submissions"
+    );
+    expect(relationTo(submissions)).toBe("posts");
+  });
+
+  it("throws NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET for a renameMap key the plugin does not contribute", () => {
+    const err = renameError(() =>
+      applyPluginSchemaContributions(cfg({}), [
+        renamingPlugin(
+          "@t/fb",
+          { collections: [coll("forms")] },
+          {
+            ghost: "x",
+          }
+        ),
+      ])
+    );
+    expect(err.code).toBe("NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET");
+    expect(err.logContext?.reason).toBe("rename-unknown-target");
+  });
+});

@@ -77,6 +77,23 @@ export function relationTargetMissingError(
 }
 
 /**
+ * Fail-fast boot error when a plugin's `.rename()` targets a slug it does not
+ * contribute (a typo or stale rename) (D54).
+ */
+export function renameUnknownTargetError(
+  target: string,
+  owner: string
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET",
+    statusCode: 400,
+    publicMessage: "Schema configuration is invalid.",
+    logMessage: `Plugin "${owner}" renames "${target}", which is not one of its contributed collections/singles/components`,
+    logContext: { reason: "rename-unknown-target", target, owner },
+  });
+}
+
+/**
  * Fail-fast boot error when a plugin relates to another plugin's entity without
  * declaring `dependsOn` on it (D15).
  */

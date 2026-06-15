@@ -51,6 +51,8 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
   NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: 409,
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
+  // Plugin platform (P2c) — framework remap (.rename()).
+  NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
 } as const;

@@ -26,10 +26,16 @@ import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
   extendTargetUnknownError,
+  renameUnknownTargetError,
   slugCollisionError,
 } from "../schema-error";
 
 type EntityKind = "collection" | "single" | "component";
+
+type RenamedContributes = Pick<
+  NonNullable<PluginDefinition["contributes"]>,
+  "collections" | "singles" | "components"
+>;
 
 interface Slugged {
   slug: string;
@@ -138,30 +144,101 @@ function applyExtends(
   return { collections: cols, singles: sin, components: comp };
 }
 
+/** Rewrite a relationship field's `relationTo` through the rename map. */
+function rewriteRelations(
+  fields: FieldConfig[] | undefined,
+  map: Record<string, string>
+): FieldConfig[] | undefined {
+  if (!fields) return fields;
+  return fields.map(field => {
+    const rel = field as { type?: string; relationTo?: string | string[] };
+    if (rel.type !== "relationship" || rel.relationTo == null) return field;
+    const resolve = (target: string) => map[target] ?? target;
+    const relationTo = Array.isArray(rel.relationTo)
+      ? rel.relationTo.map(resolve)
+      : resolve(rel.relationTo);
+    return { ...field, relationTo } as FieldConfig;
+  });
+}
+
+/** Clone an entity with its slug renamed + own `relationTo` references rewritten. */
+function renameEntity<T extends Fielded>(
+  entity: T,
+  map: Record<string, string>
+): T {
+  return {
+    ...entity,
+    slug: map[entity.slug] ?? entity.slug,
+    fields: rewriteRelations(entity.fields, map),
+  };
+}
+
+/**
+ * Apply a plugin's `renameMap` (D54): rename its contributed entity slugs and
+ * rewrite its OWN internal `relationTo` to the renamed slugs (a target that is
+ * not a renamed own slug is left untouched). Validates every rename key is a
+ * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
+ * the plugin's declared contributes unchanged when there is no rename map.
+ */
+function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
+  const contributes = plugin.contributes;
+  const map = plugin.renameMap;
+  if (!contributes || !map || Object.keys(map).length === 0) {
+    return {
+      collections: contributes?.collections,
+      singles: contributes?.singles,
+      components: contributes?.components,
+    };
+  }
+
+  const ownSlugs = new Set<string>([
+    ...(contributes.collections ?? []).map(e => e.slug),
+    ...(contributes.singles ?? []).map(e => e.slug),
+    ...(contributes.components ?? []).map(e => e.slug),
+  ]);
+  for (const key of Object.keys(map)) {
+    if (!ownSlugs.has(key)) throw renameUnknownTargetError(key, plugin.name);
+  }
+
+  return {
+    collections: contributes.collections?.map(e => renameEntity(e, map)),
+    singles: contributes.singles?.map(e => renameEntity(e, map)),
+    components: contributes.components?.map(e => renameEntity(e, map)),
+  };
+}
+
 /**
  * @experimental Merge plugin `contributes` schema into the config. Pure — does
- * not mutate `config` or `plugins`. Throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a
- * plugin-involved slug collision (D13) and `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN`
- * for an `extend` against an unknown target (D12).
+ * not mutate `config` or `plugins`. Applies each plugin's `renameMap` (D54)
+ * before merging, then throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a plugin-
+ * involved slug collision (D13) and `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for an
+ * `extend` against an unknown target (D12).
  */
 export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
+  // Apply renames once per plugin (declared slugs → resolved), then fold the
+  // resolved entities into the merged config.
+  const renamed = plugins.map(p => ({
+    owner: p.name,
+    contributes: renamePluginContributes(p),
+  }));
+
   const collections = mergeKind(
     "collection",
     config.collections ?? [],
-    plugins.map(p => ({ owner: p.name, entities: p.contributes?.collections }))
+    renamed.map(r => ({ owner: r.owner, entities: r.contributes.collections }))
   );
   const singles = mergeKind(
     "single",
     config.singles ?? [],
-    plugins.map(p => ({ owner: p.name, entities: p.contributes?.singles }))
+    renamed.map(r => ({ owner: r.owner, entities: r.contributes.singles }))
   );
   const components = mergeKind(
     "component",
     config.components ?? [],
-    plugins.map(p => ({ owner: p.name, entities: p.contributes?.components }))
+    renamed.map(r => ({ owner: r.owner, entities: r.contributes.components }))
   );
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
