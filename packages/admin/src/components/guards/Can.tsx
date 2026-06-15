@@ -1,11 +1,14 @@
-import type { PermissionSlug } from "nextly";
 import type { ReactNode } from "react";
 
 import { useCan } from "../../hooks/useCan";
 
 export interface CanProps {
-  /** Permission slug required to render `children` (e.g. "manage-seo"). */
-  permission: PermissionSlug;
+  /**
+   * Permission slug required to render `children` (`${action}-${resource}`,
+   * e.g. `"manage-seo"`). Assignable from `PermissionSlug` (`@nextlyhq/plugin-sdk`);
+   * typed `string` because admin's bundled d.ts cannot reference nextly types.
+   */
+  permission: string;
   /** Rendered when the user lacks the permission (default: nothing). */
   fallback?: ReactNode;
   children: ReactNode;
