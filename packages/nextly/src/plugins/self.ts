@@ -31,17 +31,24 @@ export interface PluginSelf {
  * top-level `collections` field still used by first-party plugins.
  */
 export function resolvePluginSelf(plugin: PluginDefinition): PluginSelf {
+  // Key = the plugin's DECLARED slug (what the author writes in code); value =
+  // the RESOLVED slug after `.rename()` (D54). Identity when unmapped, so a
+  // plugin reading `ctx.self.collections.<declaredSlug>` works whether or not
+  // an integrator renamed it.
+  const map = plugin.renameMap ?? {};
+  const resolve = (slug: string): string => map[slug] ?? slug;
+
   const collections: Record<string, string> = {};
   for (const c of plugin.contributes?.collections ?? []) {
-    collections[c.slug] = c.slug;
+    collections[c.slug] = resolve(c.slug);
   }
   for (const c of plugin.collections ?? []) {
-    collections[c.slug] = c.slug;
+    collections[c.slug] = resolve(c.slug);
   }
 
   const singles: Record<string, string> = {};
   for (const s of plugin.contributes?.singles ?? []) {
-    singles[s.slug] = s.slug;
+    singles[s.slug] = resolve(s.slug);
   }
 
   return { name: plugin.name, collections, singles };
