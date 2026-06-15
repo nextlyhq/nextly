@@ -52,6 +52,7 @@ import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import { getCoreVersion } from "../plugins/core-version";
+import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import type {
   PluginContext,
   PluginDefinition,
@@ -312,6 +313,10 @@ export async function registerServices(
   // relationship validation runs at boot.
   validateMergedRelations(transformedConfig);
   validateCrossPluginRelations(resolvedPlugins);
+
+  // Fail fast on invalid plugin-declared custom permissions (D36). Validation
+  // only here; the list is re-derived + seeded in runPostInitTasks.
+  collectCustomPermissions(transformedConfig, resolvedPlugins);
 
   const {
     adapter: providedAdapter,

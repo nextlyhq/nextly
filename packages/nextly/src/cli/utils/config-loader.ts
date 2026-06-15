@@ -32,6 +32,7 @@ import {
 import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors/index";
 import { getCoreVersion } from "../../plugins/core-version";
+import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { resolvePlugins } from "../../plugins/resolve";
 import { applyPluginSchemaContributions } from "../../plugins/schema/apply-contributions";
@@ -330,6 +331,13 @@ async function loadConfigInternal(
       // so CLI and runtime agree (D50).
       validateMergedRelations(config as unknown as NextlyServiceConfig);
       validateCrossPluginRelations(plugins);
+
+      // Fail fast on invalid plugin-declared custom permissions (D36) — same
+      // collector the runtime boot runs (register.ts), so both paths agree (D50).
+      collectCustomPermissions(
+        config as unknown as NextlyServiceConfig,
+        plugins
+      );
 
       debugLog(
         options,

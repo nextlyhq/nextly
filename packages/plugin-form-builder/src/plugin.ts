@@ -182,6 +182,17 @@ export function formBuilder(
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
+      // Custom permission (D36) — gates submission export beyond CRUD. The
+      // canonical example third-party plugin authors copy.
+      permissions: [
+        {
+          action: "export",
+          resource: "submissions",
+          label: "Export Submissions",
+          description: "Export form submissions as CSV/JSON",
+          group: "Form Builder",
+        },
+      ],
     },
 
     admin: {
