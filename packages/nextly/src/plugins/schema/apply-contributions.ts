@@ -144,19 +144,38 @@ function applyExtends(
   return { collections: cols, singles: sin, components: comp };
 }
 
-/** Rewrite a relationship field's `relationTo` through the rename map. */
+/**
+ * Rewrite relationship `relationTo` through the rename map, recursing into the
+ * nested `fields` of container fields (`group`/`repeater`) so a plugin's own
+ * relations follow the rename wherever they are declared, not just at the top
+ * level (D54). `group` and `repeater` are the only field-builder containers
+ * that nest other fields.
+ */
 function rewriteRelations(
   fields: FieldConfig[] | undefined,
   map: Record<string, string>
 ): FieldConfig[] | undefined {
   if (!fields) return fields;
+  const resolve = (target: string) => map[target] ?? target;
   return fields.map(field => {
-    const rel = field as { type?: string; relationTo?: string | string[] };
-    if (rel.type !== "relationship" || rel.relationTo == null) return field;
-    const resolve = (target: string) => map[target] ?? target;
-    const relationTo = Array.isArray(rel.relationTo)
-      ? rel.relationTo.map(resolve)
-      : resolve(rel.relationTo);
+    const f = field as {
+      type?: string;
+      relationTo?: string | string[];
+      fields?: FieldConfig[];
+    };
+    if (
+      (f.type === "group" || f.type === "repeater") &&
+      Array.isArray(f.fields)
+    ) {
+      return {
+        ...field,
+        fields: rewriteRelations(f.fields, map),
+      } as FieldConfig;
+    }
+    if (f.type !== "relationship" || f.relationTo == null) return field;
+    const relationTo = Array.isArray(f.relationTo)
+      ? f.relationTo.map(resolve)
+      : resolve(f.relationTo);
     return { ...field, relationTo } as FieldConfig;
   });
 }
@@ -242,7 +261,10 @@ export function applyPluginSchemaContributions(
   );
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
-  // extend a code, own, or earlier-plugin entity).
+  // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
+  // against the merged (post-rename) slugs and is NOT itself rewritten through a
+  // rename map — a plugin extending its own renamed entity must target the
+  // renamed slug. (No current plugin extends its own entity.)
   const extended = applyExtends(collections, singles, components, plugins);
 
   return { ...config, ...extended };

@@ -299,6 +299,8 @@ describe("applyPluginSchemaContributions — extend field collisions (D13)", () 
 
 const relField = (name: string, relationTo: string): FieldConfig =>
   ({ name, type: "relationship", relationTo }) as unknown as FieldConfig;
+const groupField = (name: string, fields: FieldConfig[]): FieldConfig =>
+  ({ name, type: "group", fields }) as unknown as FieldConfig;
 const collFields = (slug: string, fields: FieldConfig[]): CollectionConfig =>
   ({ slug, fields }) as unknown as CollectionConfig;
 const renamingPlugin = (
@@ -350,6 +352,29 @@ describe("applyPluginSchemaContributions — renames (D54)", () => {
       c => c.slug === "submissions"
     );
     expect(relationTo(submissions)).toBe("contact-forms");
+  });
+
+  it("rewrites a relationTo nested inside a group/repeater container field", () => {
+    const result = applyPluginSchemaContributions(cfg({}), [
+      renamingPlugin(
+        "@t/fb",
+        {
+          collections: [
+            coll("forms"),
+            collFields("submissions", [
+              groupField("settings", [relField("form", "forms")]),
+            ]),
+          ],
+        },
+        { forms: "contact-forms" }
+      ),
+    ]);
+    const submissions = (result.collections ?? []).find(
+      c => c.slug === "submissions"
+    ) as unknown as {
+      fields: { fields?: { relationTo?: string }[] }[];
+    };
+    expect(submissions.fields[0].fields?.[0]?.relationTo).toBe("contact-forms");
   });
 
   it("does not rewrite a relationTo pointing at a non-renamed slug", () => {

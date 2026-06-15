@@ -87,6 +87,10 @@ function pluginEntities(plugin: PluginDefinition): FieldedEntity[] {
  * declares `dependsOn` on that plugin (D15). Relations to code/core entities or
  * to the plugin's own entities need no declaration. Throws
  * `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`.
+ *
+ * Evaluated against DECLARED slugs (before any `renameMap` is applied): renames
+ * only touch a plugin's own slugs and its own internal relations, so ownership
+ * — which is what this check keys on — is unaffected by an install-time rename.
  */
 export function validateCrossPluginRelations(
   plugins: PluginDefinition[]
