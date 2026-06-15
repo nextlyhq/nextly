@@ -35,7 +35,10 @@ import { getCoreVersion } from "../../plugins/core-version";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { resolvePlugins } from "../../plugins/resolve";
 import { applyPluginSchemaContributions } from "../../plugins/schema/apply-contributions";
-import { validateMergedRelations } from "../../plugins/schema/validate-relations";
+import {
+  validateCrossPluginRelations,
+  validateMergedRelations,
+} from "../../plugins/schema/validate-relations";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -322,9 +325,11 @@ async function loadConfigInternal(
 
       config = mergeSetupResultIntoConfig(config, transformedConfig, plugins);
 
-      // Validate relationships against the merged schema (D15) — same check the
-      // runtime boot runs, so CLI and runtime agree (D50).
+      // Validate relationships against the merged schema + require dependsOn
+      // for cross-plugin relations (D15) — same checks the runtime boot runs,
+      // so CLI and runtime agree (D50).
       validateMergedRelations(config as unknown as NextlyServiceConfig);
+      validateCrossPluginRelations(plugins);
 
       debugLog(
         options,

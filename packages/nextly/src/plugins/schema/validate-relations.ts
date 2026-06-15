@@ -13,7 +13,11 @@
  */
 
 import type { NextlyServiceConfig } from "../../di/register";
-import { relationTargetMissingError } from "../schema-error";
+import type { PluginDefinition } from "../plugin-context";
+import {
+  crossPluginRelationError,
+  relationTargetMissingError,
+} from "../schema-error";
 
 // Mirrors CORE_RELATION_TARGETS in domains/schema/ui-schema/cross-file.ts —
 // built-in collections that are always valid relationship targets.
@@ -62,6 +66,59 @@ export function validateMergedRelations(config: NextlyServiceConfig): void {
             fieldEntry.name ?? "",
             target
           );
+        }
+      }
+    }
+  }
+}
+
+/** All entities a plugin contributes (collections + singles + components). */
+function pluginEntities(plugin: PluginDefinition): FieldedEntity[] {
+  const c = plugin.contributes;
+  return [
+    ...((c?.collections ?? []) as unknown as FieldedEntity[]),
+    ...((c?.singles ?? []) as unknown as FieldedEntity[]),
+    ...((c?.components ?? []) as unknown as FieldedEntity[]),
+  ];
+}
+
+/**
+ * @experimental Enforce that a plugin relating to ANOTHER plugin's entity
+ * declares `dependsOn` on that plugin (D15). Relations to code/core entities or
+ * to the plugin's own entities need no declaration. Throws
+ * `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`.
+ */
+export function validateCrossPluginRelations(
+  plugins: PluginDefinition[]
+): void {
+  // slug → owning plugin name (plugin-contributed entities only).
+  const owner = new Map<string, string>();
+  for (const plugin of plugins) {
+    for (const entity of pluginEntities(plugin)) {
+      owner.set(entity.slug, plugin.name);
+    }
+  }
+
+  for (const plugin of plugins) {
+    for (const entity of pluginEntities(plugin)) {
+      for (const fieldEntry of entity.fields ?? []) {
+        if (
+          fieldEntry.type !== "relationship" ||
+          fieldEntry.relationTo == null
+        ) {
+          continue;
+        }
+        const targets = Array.isArray(fieldEntry.relationTo)
+          ? fieldEntry.relationTo
+          : [fieldEntry.relationTo];
+        for (const target of targets) {
+          if (typeof target !== "string") continue;
+          const targetOwner = owner.get(target);
+          if (targetOwner && targetOwner !== plugin.name) {
+            if (!(plugin.dependsOn ?? {})[targetOwner]) {
+              throw crossPluginRelationError(plugin.name, targetOwner, target);
+            }
+          }
         }
       }
     }

@@ -59,7 +59,10 @@ import type {
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
 import { applyPluginSchemaContributions } from "../plugins/schema/apply-contributions";
-import { validateMergedRelations } from "../plugins/schema/validate-relations";
+import {
+  validateCrossPluginRelations,
+  validateMergedRelations,
+} from "../plugins/schema/validate-relations";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
@@ -301,9 +304,11 @@ export async function registerServices(
     resolvedPlugins
   );
 
-  // Validate every relationTo (code + plugin) against the merged schema (D15).
-  // This is the only place relationship validation runs at boot.
+  // Validate every relationTo (code + plugin) against the merged schema, and
+  // require dependsOn for cross-plugin relations (D15). The only place
+  // relationship validation runs at boot.
   validateMergedRelations(transformedConfig);
+  validateCrossPluginRelations(resolvedPlugins);
 
   const {
     adapter: providedAdapter,
