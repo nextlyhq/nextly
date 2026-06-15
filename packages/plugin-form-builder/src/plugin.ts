@@ -192,7 +192,15 @@ export function formBuilder(
     // -- Init ----------------------------------------------------------------
     // Registers an afterCreate hook on submissions to send email notifications.
     init(nextly: NextlyInstance) {
-      const submissionSlug = resolvedConfig.formSubmissionOverrides.slug;
+      // Resolve our OWN submissions slug through ctx.self (D54), so the hook
+      // follows a framework `.rename()` as well as our formSubmissionOverrides
+      // option. The declared slug is the key; ctx.self maps it to the resolved
+      // (possibly renamed) slug. Identity when not renamed.
+      const declaredSubmissionsSlug =
+        resolvedConfig.formSubmissionOverrides.slug;
+      const submissionSlug =
+        nextly.self.collections[declaredSubmissionsSlug] ??
+        declaredSubmissionsSlug;
 
       // Prevent duplicate hook registration in Next.js dev mode
       const guardKey = `__formBuilder_afterCreate_${submissionSlug}`;
