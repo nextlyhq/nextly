@@ -250,3 +250,49 @@ describe("applyPluginSchemaContributions — contributes.extend (D12)", () => {
     expect(err.logContext?.target).toBe("ghost");
   });
 });
+
+describe("applyPluginSchemaContributions — extend field collisions (D13)", () => {
+  const caught = (fn: () => unknown): NextlyError => {
+    try {
+      fn();
+    } catch (err) {
+      return err as NextlyError;
+    }
+    throw new Error("expected applyPluginSchemaContributions to throw");
+  };
+
+  it("throws when extend adds a field already on the target", () => {
+    const err = caught(() =>
+      applyPluginSchemaContributions(
+        cfg({ collections: [collWith("posts", "title")] }),
+        [
+          plugin("@t/seo", {
+            extend: [{ target: "posts", fields: [field("title")] }],
+          }),
+        ]
+      )
+    );
+    expect(err.code).toBe("NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE");
+    expect(err.logContext?.reason).toBe("extend-field-duplicate");
+    expect(err.logContext?.field).toBe("title");
+    expect(err.logContext?.target).toBe("posts");
+  });
+
+  it("throws when two plugins extend the same target with the same field", () => {
+    const err = caught(() =>
+      applyPluginSchemaContributions(
+        cfg({ collections: [collWith("posts", "title")] }),
+        [
+          plugin("@t/a", {
+            extend: [{ target: "posts", fields: [field("seoTitle")] }],
+          }),
+          plugin("@t/b", {
+            extend: [{ target: "posts", fields: [field("seoTitle")] }],
+          }),
+        ]
+      )
+    );
+    expect(err.code).toBe("NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE");
+    expect(err.logContext?.field).toBe("seoTitle");
+  });
+});

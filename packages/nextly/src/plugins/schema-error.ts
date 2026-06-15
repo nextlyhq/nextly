@@ -38,3 +38,22 @@ export function extendTargetUnknownError(
     logContext: { reason: "extend-target-unknown", target, owner },
   });
 }
+
+/**
+ * Fail-fast boot error when a plugin's `contributes.extend` adds a field whose
+ * name already exists on the target (case-insensitive) — either the target's
+ * own field or one added by an earlier plugin's extend (D13).
+ */
+export function extendFieldDuplicateError(
+  target: string,
+  field: string,
+  owner: string
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE",
+    statusCode: 409,
+    publicMessage: "Schema configuration is invalid.",
+    logMessage: `Plugin "${owner}" extends "${target}" with a duplicate field "${field}"`,
+    logContext: { reason: "extend-field-duplicate", target, field, owner },
+  });
+}

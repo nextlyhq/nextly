@@ -23,7 +23,11 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginDefinition } from "../plugin-context";
-import { extendTargetUnknownError, slugCollisionError } from "../schema-error";
+import {
+  extendFieldDuplicateError,
+  extendTargetUnknownError,
+  slugCollisionError,
+} from "../schema-error";
 
 type EntityKind = "collection" | "single" | "component";
 
@@ -79,11 +83,23 @@ function mergeKind<T extends Slugged>(
 function tryExtend<T extends Fielded>(
   arr: T[],
   target: string,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  owner: string
 ): boolean {
   const idx = arr.findIndex(e => e.slug === target);
   if (idx === -1) return false;
-  arr[idx] = { ...arr[idx], fields: [...(arr[idx].fields ?? []), ...fields] };
+  const existing = arr[idx].fields ?? [];
+  const seen = new Set(
+    existing.map(f => (f as { name?: string }).name?.toLowerCase())
+  );
+  for (const f of fields) {
+    const name = (f as { name?: string }).name;
+    if (name && seen.has(name.toLowerCase())) {
+      throw extendFieldDuplicateError(target, name, owner);
+    }
+    if (name) seen.add(name.toLowerCase());
+  }
+  arr[idx] = { ...arr[idx], fields: [...existing, ...fields] };
   return true;
 }
 
@@ -111,9 +127,9 @@ function applyExtends(
         : [clause.target];
       for (const target of targets) {
         const applied =
-          tryExtend(cols, target, clause.fields) ||
-          tryExtend(sin, target, clause.fields) ||
-          tryExtend(comp, target, clause.fields);
+          tryExtend(cols, target, clause.fields, plugin.name) ||
+          tryExtend(sin, target, clause.fields, plugin.name) ||
+          tryExtend(comp, target, clause.fields, plugin.name);
         if (!applied) throw extendTargetUnknownError(target, plugin.name);
       }
     }
