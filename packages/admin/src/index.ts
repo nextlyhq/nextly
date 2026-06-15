@@ -78,6 +78,8 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 
 // Custom hooks
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
+// Permission gating (D36) — client-side UX checks for admin + plugin UI.
+export { useCan } from "./hooks/useCan";
 export { useRowSelection } from "./hooks/useRowSelection";
 export type {
   UseRowSelectionOptions,
