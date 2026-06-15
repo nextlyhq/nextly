@@ -99,28 +99,41 @@ export function validateCrossPluginRelations(
     }
   }
 
-  for (const plugin of plugins) {
-    for (const entity of pluginEntities(plugin)) {
-      for (const fieldEntry of entity.fields ?? []) {
+  // Check each relationship field's relationTo: if it targets an entity owned
+  // by a DIFFERENT plugin, the source plugin must declare dependsOn on it.
+  const checkFields = (
+    fields: RelationField[] | undefined,
+    source: PluginDefinition
+  ): void => {
+    for (const fieldEntry of fields ?? []) {
+      if (fieldEntry.type !== "relationship" || fieldEntry.relationTo == null) {
+        continue;
+      }
+      const targets = Array.isArray(fieldEntry.relationTo)
+        ? fieldEntry.relationTo
+        : [fieldEntry.relationTo];
+      for (const target of targets) {
+        if (typeof target !== "string") continue;
+        const targetOwner = owner.get(target);
         if (
-          fieldEntry.type !== "relationship" ||
-          fieldEntry.relationTo == null
+          targetOwner &&
+          targetOwner !== source.name &&
+          !(source.dependsOn ?? {})[targetOwner]
         ) {
-          continue;
-        }
-        const targets = Array.isArray(fieldEntry.relationTo)
-          ? fieldEntry.relationTo
-          : [fieldEntry.relationTo];
-        for (const target of targets) {
-          if (typeof target !== "string") continue;
-          const targetOwner = owner.get(target);
-          if (targetOwner && targetOwner !== plugin.name) {
-            if (!(plugin.dependsOn ?? {})[targetOwner]) {
-              throw crossPluginRelationError(plugin.name, targetOwner, target);
-            }
-          }
+          throw crossPluginRelationError(source.name, targetOwner, target);
         }
       }
+    }
+  };
+
+  for (const plugin of plugins) {
+    for (const entity of pluginEntities(plugin)) {
+      checkFields(entity.fields, plugin);
+    }
+    // Relations injected via `contributes.extend` are owned by the EXTENDING
+    // plugin, so they must also declare dependsOn for cross-plugin targets (D15).
+    for (const clause of plugin.contributes?.extend ?? []) {
+      checkFields(clause.fields, plugin);
     }
   }
 }

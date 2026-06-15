@@ -120,4 +120,26 @@ describe("validateCrossPluginRelations (D15 — cross-plugin dependsOn)", () => 
     });
     expect(() => validateCrossPluginRelations([d])).not.toThrow();
   });
+
+  it("requires dependsOn for a cross-plugin relation added via contributes.extend", () => {
+    const b = plug("@t/b", {
+      contributes: {
+        extend: [{ target: "posts", fields: [rel("formRef", "forms")] }],
+      },
+    });
+    const err = caught(() => validateCrossPluginRelations([a, b]));
+    expect(err.code).toBe("NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION");
+    expect(err.logContext?.sourcePlugin).toBe("@t/b");
+    expect(err.logContext?.targetPlugin).toBe("@t/a");
+  });
+
+  it("accepts a cross-plugin extend relation when dependsOn is declared", () => {
+    const b = plug("@t/b", {
+      contributes: {
+        extend: [{ target: "posts", fields: [rel("formRef", "forms")] }],
+      },
+      dependsOn: { "@t/a": ">=1.0.0" },
+    });
+    expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
+  });
 });
