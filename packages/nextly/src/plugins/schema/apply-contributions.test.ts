@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { ComponentConfig } from "../../components/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
@@ -96,5 +97,66 @@ describe("applyPluginSchemaContributions (fold — D3/D12)", () => {
     expect(slugs(result.collections)).toEqual([]);
     expect(slugs(result.singles)).toEqual([]);
     expect(slugs(result.components)).toEqual([]);
+  });
+});
+
+describe("applyPluginSchemaContributions (slug collisions — D13)", () => {
+  const collisionError = (fn: () => unknown): NextlyError => {
+    try {
+      fn();
+    } catch (err) {
+      return err as NextlyError;
+    }
+    throw new Error("expected applyPluginSchemaContributions to throw");
+  };
+
+  it("throws when two plugins contribute the same collection slug", () => {
+    const err = collisionError(() =>
+      applyPluginSchemaContributions(cfg({}), [
+        plugin("plugin-a", { collections: [coll("forms")] }),
+        plugin("plugin-b", { collections: [coll("forms")] }),
+      ])
+    );
+
+    expect(err).toBeInstanceOf(NextlyError);
+    expect(err.code).toBe("NEXTLY_SCHEMA_SLUG_COLLISION");
+    expect(err.logContext?.reason).toBe("slug-collision");
+    expect(err.logContext?.slug).toBe("forms");
+    expect(err.logContext?.owners).toEqual(
+      expect.arrayContaining(["plugin-a", "plugin-b"])
+    );
+  });
+
+  it("throws when a plugin collection slug collides with a code collection", () => {
+    const err = collisionError(() =>
+      applyPluginSchemaContributions(cfg({ collections: [coll("posts")] }), [
+        plugin("plugin-a", { collections: [coll("posts")] }),
+      ])
+    );
+
+    expect(err.code).toBe("NEXTLY_SCHEMA_SLUG_COLLISION");
+    expect(err.logContext?.owners).toEqual(
+      expect.arrayContaining(["code", "plugin-a"])
+    );
+  });
+
+  it("does NOT treat a collection and a single sharing a slug as a collision (separate namespaces)", () => {
+    expect(() =>
+      applyPluginSchemaContributions(cfg({}), [
+        plugin("plugin-a", {
+          collections: [coll("shared")],
+          singles: [single("shared")],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("does NOT newly throw on pre-existing code-vs-code duplicate slugs (G2 — plugin-free path unchanged)", () => {
+    expect(() =>
+      applyPluginSchemaContributions(
+        cfg({ collections: [coll("dup"), coll("dup")] }),
+        []
+      )
+    ).not.toThrow();
   });
 });
