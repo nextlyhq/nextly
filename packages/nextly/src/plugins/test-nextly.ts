@@ -21,7 +21,10 @@ import { getEventBus, resetEventBus } from "../events/event-bus";
 import { resetFilterRegistry } from "../filters";
 import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
 import type { HookRegistry } from "../hooks/hook-registry";
-import type { FieldDefinition } from "../schemas/dynamic-collections";
+import {
+  clearCachedSnapshot,
+  clearLiveSnapshots,
+} from "../init/schema-snapshot-cache";
 import type { Logger } from "../services/shared";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
@@ -65,65 +68,13 @@ export interface TestNextly {
 const defaultTestLogger: Logger = {
   debug() {},
   info() {},
-  // The runtime auto-sync warns when it can't create code-first tables on
-  // SQLite (drizzle-kit's interactive rename prompt — a P2 pipeline gap);
-  // `ensureCollectionTables` below compensates, so that warn is benign noise.
+  // Silenced so the boot doesn't flood test output; real failures still
+  // surface via error().
   warn() {},
   error(message, meta) {
     console.error(message, meta ?? "");
   },
 };
-
-/** Split generated migration SQL into individually-executable statements. */
-function splitSqlStatements(sql: string): string[] {
-  return sql
-    .split("--> statement-breakpoint")
-    .map(chunk =>
-      chunk
-        .split("\n")
-        .filter(line => !line.trim().startsWith("--"))
-        .join("\n")
-        .trim()
-    )
-    .filter(statement => statement.length > 0);
-}
-
-/**
- * Create physical tables for code-first collections directly, non-
- * interactively. The runtime auto-sync (registerServices) can't create them on
- * SQLite without hitting drizzle-kit's interactive rename prompt, so we mirror
- * the established `generateMigrationSQL` + `executeQuery` path that the single
- * and component dispatchers use. The runtime schema descriptors are already
- * registered in the resolver during boot, so once the physical table exists
- * CRUD works.
- */
-async function ensureCollectionTables(
-  adapter: TestAdapter,
-  collections: CollectionConfig[] | undefined
-): Promise<void> {
-  if (!collections || collections.length === 0) return;
-
-  const { DynamicCollectionSchemaService } = await import(
-    "../domains/dynamic-collections/services/dynamic-collection-schema-service"
-  );
-  const dialect = adapter.getCapabilities().dialect;
-  const schemaService = new DynamicCollectionSchemaService(undefined, dialect);
-
-  for (const collection of collections) {
-    const base = collection.dbName ?? collection.slug.replace(/-/g, "_");
-    const tableName = base.startsWith("dc_") ? base : `dc_${base}`;
-    if (await adapter.tableExists(tableName)) continue;
-
-    const sql = schemaService.generateMigrationSQL(
-      tableName,
-      (collection.fields ?? []) as unknown as FieldDefinition[],
-      { hasStatus: (collection as { status?: boolean }).status === true }
-    );
-    for (const statement of splitSqlStatements(sql)) {
-      await adapter.executeQuery(statement);
-    }
-  }
-}
 
 /**
  * Boot a real, isolated Nextly instance on in-memory SQLite.
@@ -140,6 +91,14 @@ export async function createTestNextly(
   resetEventBus();
   resetFilterRegistry();
   resetNextlyInstance();
+  // Each boot is a fresh, distinct in-memory database. The schema-snapshot
+  // cache (D52) is a globalThis singleton scoped to a single live DB; if left
+  // warm from a prior boot it makes the runtime auto-sync skip the push
+  // ("schema unchanged"), so the new DB never gets its tables. Clear it so
+  // every boot pushes its full desired schema (replaces the old
+  // ensureCollectionTables workaround).
+  clearCachedSnapshot();
+  clearLiveSnapshots();
 
   let adapter = opts.adapter;
   if (!adapter) {
@@ -168,9 +127,9 @@ export async function createTestNextly(
     components: opts.components,
   });
 
-  // Create code-first collection tables non-interactively (the SQLite runtime
-  // auto-sync can't — see ensureCollectionTables).
-  await ensureCollectionTables(adapter, opts.collections);
+  // Physical tables for code-first + plugin-contributed collections are created
+  // non-interactively by the runtime auto-sync during registerServices (the
+  // applyDesiredSchema add_table fast-path), so no harness-side DDL is needed.
 
   return {
     nextly: getNextly(),
@@ -186,6 +145,8 @@ export async function createTestNextly(
       resetEventBus();
       resetFilterRegistry();
       resetNextlyInstance();
+      clearCachedSnapshot();
+      clearLiveSnapshots();
     },
   };
 }

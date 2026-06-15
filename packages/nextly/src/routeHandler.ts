@@ -65,6 +65,7 @@ import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
+import { pluginCollectionSlugs } from "./plugins/plugin-admin-meta";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -968,11 +969,9 @@ async function handleAdminMetaRequest(): Promise<Response> {
       ? { ...plugin.admin?.appearance, ...hostOverride.appearance }
       : plugin.admin?.appearance;
 
-    // Resolve plugin collections from the plugin definition.
-    // Plugins should set `collections` on the plugin object so the
-    // admin-meta API can serve which collections belong to each plugin.
-    const pluginCollections = plugin.collections ?? [];
-
+    // Resolve which collections belong to each plugin for the admin sidebar.
+    // Dual-reads `contributes.collections` (P2) and the deprecated top-level
+    // `collections` so migrated and legacy plugins both render.
     return {
       name: plugin.name,
       version: plugin.version,
@@ -982,7 +981,7 @@ async function handleAdminMetaRequest(): Promise<Response> {
       order: hostOverride?.order ?? plugin.admin?.order,
       after: hostOverride?.after ?? plugin.admin?.after,
       appearance: effectiveAppearance,
-      collections: pluginCollections.map(c => c.slug),
+      collections: pluginCollectionSlugs(plugin),
     };
   });
   if (plugins.length > 0) {

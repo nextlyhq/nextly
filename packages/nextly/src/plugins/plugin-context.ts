@@ -496,6 +496,27 @@ export interface PluginDefinition {
    * Invocation is wired in P1.
    */
   destroy?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Framework-owned entity remap (D54). Rename this plugin's
+   * contributed entity slugs at registration — declared slug → new slug — to
+   * avoid collisions or match house naming. Returns a NEW definition; the
+   * plugin keeps working because it references its own entities via `ctx.self`.
+   *
+   * @example
+   * ```ts
+   * defineConfig({ plugins: [formBuilder().plugin.rename({ forms: "contact-forms" })] })
+   * ```
+   */
+  rename?: (map: Record<string, string>) => PluginDefinition;
+
+  /**
+   * @internal Accumulated declared-slug → new-slug map from `rename()`.
+   * Consumed by the schema fold (renames merged slugs + the plugin's own
+   * `relationTo`) and by `resolvePluginSelf` (builds `ctx.self`). Not for
+   * plugin authors to set directly.
+   */
+  renameMap?: Record<string, string>;
 }
 
 // ============================================================
@@ -527,7 +548,18 @@ export interface PluginDefinition {
  * ```
  */
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
-  return definition;
+  const withRename: PluginDefinition = {
+    ...definition,
+    // Framework remap (D54): returns a NEW definition with the rename map
+    // merged. The original is left untouched (pure); chainable.
+    rename(map: Record<string, string>): PluginDefinition {
+      return definePlugin({
+        ...withRename,
+        renameMap: { ...(withRename.renameMap ?? {}), ...map },
+      });
+    },
+  };
+  return withRename;
 }
 
 /**

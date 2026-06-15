@@ -58,7 +58,15 @@ import type {
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
-import type { FieldDefinition } from "../schemas/dynamic-collections";
+import { applyPluginSchemaContributions } from "../plugins/schema/apply-contributions";
+import {
+  validateCrossPluginRelations,
+  validateMergedRelations,
+} from "../plugins/schema/validate-relations";
+import type {
+  CollectionSource,
+  FieldDefinition,
+} from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
@@ -284,7 +292,26 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
-  const transformedConfig = await applyPluginConfigTransformers(resolvedConfig);
+  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+
+  // ----------------------------------------
+  // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
+  // ----------------------------------------
+  // Merge `contributes.{collections,singles,components}` into the config so the
+  // downstream registry/sync/migration machinery treats them like ordinary
+  // code-first entities. Runs over ALL resolved plugins (incl. disabled — D49)
+  // and fails fast on plugin-involved slug collisions (D13). The CLI applies the
+  // SAME fold (config-loader.ts) so both paths agree (D50).
+  const transformedConfig = applyPluginSchemaContributions(
+    setupConfig,
+    resolvedPlugins
+  );
+
+  // Validate every relationTo (code + plugin) against the merged schema, and
+  // require dependsOn for cross-plugin relations (D15). The only place
+  // relationship validation runs at boot.
+  validateMergedRelations(transformedConfig);
+  validateCrossPluginRelations(resolvedPlugins);
 
   const {
     adapter: providedAdapter,
@@ -803,6 +830,16 @@ async function syncCodeFirstCollections(
     }
   }
 
+  // Provenance (D14): tag each collection by who contributed it. A slug that a
+  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
+  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
+  const sourceBySlug = new Map<string, CollectionSource>();
+  for (const plugin of transformedConfig.plugins ?? []) {
+    for (const contributed of plugin.contributes?.collections ?? []) {
+      sourceBySlug.set(contributed.slug, `plugin:${plugin.name}`);
+    }
+  }
+
   const codeFirstConfigs: CodeFirstCollectionConfig[] =
     transformedConfig.collections.map(collection => ({
       slug: collection.slug,
@@ -815,6 +852,7 @@ async function syncCodeFirstCollections(
       tableName: collection.dbName,
       timestamps: collection.timestamps,
       admin: collection.admin,
+      source: sourceBySlug.get(collection.slug) ?? "code",
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
       status: collection.status === true,

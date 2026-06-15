@@ -702,6 +702,14 @@ export interface CollectionConfig {
   fields: FieldConfig[];
 
   /**
+   * @experimental Internal/private storage (D30). The collection stays in the
+   * merged schema — relatable and accessible via `ctx.services` / raw `ctx.db` —
+   * but is hidden from the content-admin navigation (implies `admin.hidden`).
+   * Intended for plugin-private collections (e.g. a plugin's internal records).
+   */
+  internal?: boolean;
+
+  /**
    * Display labels for the Admin UI.
    * If not provided, labels are auto-generated from the slug.
    */
@@ -1023,6 +1031,9 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
     timestamps: config.timestamps ?? true,
     admin: {
       ...config.admin,
+      // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden
+      // still wins if set. The collection remains fully functional otherwise.
+      hidden: config.internal === true ? true : config.admin?.hidden,
       pagination: {
         defaultLimit: config.admin?.pagination?.defaultLimit ?? 10,
         limits: config.admin?.pagination?.limits ?? [10, 25, 50, 100],

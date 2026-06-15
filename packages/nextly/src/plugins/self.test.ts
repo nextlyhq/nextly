@@ -32,3 +32,30 @@ describe("resolvePluginSelf (identity resolution — D54 shape, P1)", () => {
     expect(self.singles).toEqual({});
   });
 });
+
+describe("resolvePluginSelf (rename resolution — D54, P2c)", () => {
+  it("maps a declared slug (key) to its renamed slug (value)", () => {
+    const self = resolvePluginSelf({
+      name: "@t/fb",
+      contributes: {
+        collections: [{ slug: "forms" }, { slug: "submissions" }],
+      },
+      renameMap: { forms: "contact-forms" },
+    } as unknown as PluginDefinition);
+
+    // Declared key stays; value is the resolved (renamed) slug.
+    expect(self.collections.forms).toBe("contact-forms");
+    // Unmapped entities resolve to themselves.
+    expect(self.collections.submissions).toBe("submissions");
+  });
+
+  it("resolves renamed singles too", () => {
+    const self = resolvePluginSelf({
+      name: "@t/s",
+      contributes: { singles: [{ slug: "settings" }] },
+      renameMap: { settings: "site-settings" },
+    } as unknown as PluginDefinition);
+
+    expect(self.singles.settings).toBe("site-settings");
+  });
+});
