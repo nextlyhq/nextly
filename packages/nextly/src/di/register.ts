@@ -58,6 +58,7 @@ import type {
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
+import { applyPluginSchemaContributions } from "../plugins/schema/apply-contributions";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
@@ -284,7 +285,20 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
-  const transformedConfig = await applyPluginConfigTransformers(resolvedConfig);
+  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+
+  // ----------------------------------------
+  // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
+  // ----------------------------------------
+  // Merge `contributes.{collections,singles,components}` into the config so the
+  // downstream registry/sync/migration machinery treats them like ordinary
+  // code-first entities. Runs over ALL resolved plugins (incl. disabled — D49)
+  // and fails fast on plugin-involved slug collisions (D13). The CLI applies the
+  // SAME fold (config-loader.ts) so both paths agree (D50).
+  const transformedConfig = applyPluginSchemaContributions(
+    setupConfig,
+    resolvedPlugins
+  );
 
   const {
     adapter: providedAdapter,
