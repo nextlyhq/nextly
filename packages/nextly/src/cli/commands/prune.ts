@@ -39,7 +39,10 @@ interface RunPruneArgs {
     CollectionRegistryService,
     "findOrphanedCollections" | "deleteCollection"
   >;
-  adapter: { executeQuery(sql: string): Promise<unknown> };
+  adapter: {
+    executeQuery(sql: string): Promise<unknown>;
+    getCapabilities(): { dialect: string };
+  };
   currentSlugs: string[];
   force: boolean;
 }
@@ -59,12 +62,19 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     return { orphans: slugs, dropped: [] };
   }
 
+  // Dialect-safe identifier quoting + FK-safe drop, mirroring the sibling drop
+  // sites (collection-sync-service.ts): MySQL uses backticks; Postgres needs
+  // CASCADE; SQLite uses neither.
+  const { dialect } = args.adapter.getCapabilities();
+  const q = dialect === "mysql" ? "`" : '"';
+  const cascade = dialect !== "sqlite" && dialect !== "mysql" ? " CASCADE" : "";
+
   const dropped: string[] = [];
   for (const orphan of orphans) {
     // Drop the physical data table, then the metadata row (force-bypass the
     // pipeline lock — prune is the explicit, authorized drop path).
     await args.adapter.executeQuery(
-      `DROP TABLE IF EXISTS "${orphan.tableName}"`
+      `DROP TABLE IF EXISTS ${q}${orphan.tableName}${q}${cascade}`
     );
     await args.registry.deleteCollection(orphan.slug, { force: true });
     dropped.push(orphan.slug);
@@ -120,6 +130,7 @@ export async function runPruneCommand(
       registry,
       adapter: adapter as unknown as {
         executeQuery(sql: string): Promise<unknown>;
+        getCapabilities(): { dialect: string };
       },
       currentSlugs,
       force: options.force ?? false,
