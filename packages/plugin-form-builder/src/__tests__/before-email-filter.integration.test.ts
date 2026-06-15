@@ -53,18 +53,17 @@ describe("form-builder.beforeEmail D63 filter seam (A8)", () => {
   it("transforms the outgoing notification through the real submission flow", async () => {
     const recorded: FormEmailNotification[][] = [];
 
-    const { plugin, collections } = formBuilder({
+    const { plugin } = formBuilder({
       beforeEmail: ({ emails }) => {
         recorded.push(emails);
         return emails.map(e => ({ ...e, to: "redirected@example.com" }));
       },
     });
 
-    // Pass the plugin's collections via `collections:` too, so the harness
-    // physically creates their SQLite tables (the runtime auto-sync can't do
-    // this non-interactively). The plugin's `setup` dedupes by slug, so they
-    // aren't double-registered.
-    current = await createTestNextly({ plugins: [plugin], collections });
+    // The plugin contributes its collections; the P2 fold + runtime auto-sync
+    // create their SQLite tables. No `collections:` arg is needed — passing them
+    // too would now be a slug collision with the contributed ones (D13).
+    current = await createTestNextly({ plugins: [plugin] });
 
     const email = current.getService("emailService");
     const sendSpy = vi

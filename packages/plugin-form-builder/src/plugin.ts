@@ -177,27 +177,16 @@ export function formBuilder(
     name: "@nextlyhq/plugin-form-builder",
     version: "0.0.8",
     nextly: ">=0.0.2-alpha.21",
-    collections: [formsCol, submissionsCol],
+
+    // Declarative schema (P2/D12): the merged pipeline folds these into the
+    // app schema — no manual `setup()` append needed. Just register the plugin.
+    contributes: {
+      collections: [formsCol, submissionsCol],
+    },
 
     admin: {
       order: 50,
       description: "Create and manage forms with submission tracking",
-    },
-
-    // -- Setup transformer ---------------------------------------------------
-    // Automatically adds plugin collections so users don't have to spread them.
-    setup(config: Parameters<NonNullable<NextlyPlugin["setup"]>>[0]) {
-      const existing: CollectionConfig[] = config.collections || [];
-      const formsSlug = resolvedConfig.formOverrides.slug;
-      const submissionsSlug = resolvedConfig.formSubmissionOverrides.slug;
-
-      const toAdd: CollectionConfig[] = [];
-      if (!existing.some((c: CollectionConfig) => c.slug === formsSlug))
-        toAdd.push(formsCol);
-      if (!existing.some((c: CollectionConfig) => c.slug === submissionsSlug))
-        toAdd.push(submissionsCol);
-
-      return { ...config, collections: [...existing, ...toAdd] };
     },
 
     // -- Init ----------------------------------------------------------------

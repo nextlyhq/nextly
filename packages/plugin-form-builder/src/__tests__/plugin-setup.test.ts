@@ -1,14 +1,17 @@
 import { describe, it, expect } from "vitest";
+
 import { formBuilder } from "../plugin";
 
-describe("form-builder setup() transformer", () => {
-  it("merges plugin collections via setup (renamed from config)", () => {
+describe("form-builder declarative schema (P2 / R4)", () => {
+  it("contributes forms + submissions via contributes.collections", () => {
     const { plugin } = formBuilder();
-    expect(typeof plugin.setup).toBe("function");
-
-    const out = plugin.setup!({ collections: [] } as never);
-    const slugs = (out.collections ?? []).map((c: { slug: string }) => c.slug);
+    const slugs = (plugin.contributes?.collections ?? []).map(c => c.slug);
     expect(slugs).toContain("forms");
     expect(slugs).toContain("form-submissions");
+  });
+
+  it("no longer ships a setup() transformer (schema is fully declarative)", () => {
+    const { plugin } = formBuilder();
+    expect(plugin.setup).toBeUndefined();
   });
 });
