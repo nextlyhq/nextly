@@ -23,4 +23,8 @@ export {
   type PluginHookRegistry,
 } from "./plugin-context";
 
-export type { PluginContributions } from "./contributions";
+export type {
+  PluginContributions,
+  PluginPermission,
+  PermissionSlug,
+} from "./contributions";

@@ -5,8 +5,8 @@
  * `@experimental` until first-party plugins have exercised it (D55). `ctx.services`
  * is the highest-scrutiny surface and stays experimental the longest.
  *
- * Added in later phases: `useCan`/`<Can>` (P3/P5). `createTestNextly` (P1) lives
- * on the `@nextlyhq/plugin-sdk/testing` subpath.
+ * Added in P3b: `useCan`/`<Can>` (D36 client) + the `secret` field (D37).
+ * `createTestNextly` (P1) lives on the `@nextlyhq/plugin-sdk/testing` subpath.
  */
 export { definePlugin } from "nextly";
 
@@ -15,6 +15,8 @@ export type {
   PluginContributions,
   PluginContext,
   PluginHookRegistry,
+  PluginPermission,
+  PermissionSlug,
 } from "nextly";
 
 export type { HookType, HookHandler, HookContext } from "nextly";
