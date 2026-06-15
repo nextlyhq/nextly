@@ -414,13 +414,17 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
   }
 
-  async deleteCollection(slug: string): Promise<void> {
+  async deleteCollection(
+    slug: string,
+    options?: { force?: boolean }
+  ): Promise<void> {
     this.logger.debug("Deleting collection", { slug });
 
     const existing = await this.getCollection(slug);
 
-    if (existing.locked) {
+    if (existing.locked && !options?.force) {
       // Generic forbidden message; lock policy detail goes to logContext.
+      // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
       throw NextlyError.forbidden({
         logContext: { reason: "collection-locked-delete", slug },
       });

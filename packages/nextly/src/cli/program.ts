@@ -29,6 +29,7 @@ import { registerMigrateResolveCommand } from "./commands/migrate-resolve";
 // prefers a new corrective migration or migrate:fresh.
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
+import { registerPruneCommand } from "./commands/prune";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
@@ -205,6 +206,7 @@ function registerCommands(program: Command): void {
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
+  registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
 
