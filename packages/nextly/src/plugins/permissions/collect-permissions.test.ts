@@ -98,4 +98,48 @@ describe("collectCustomPermissions", () => {
   it("returns [] for a plugin-free config", () => {
     expect(collectCustomPermissions(cfg(["posts"]), [])).toEqual([]);
   });
+
+  it("folds app-level config.permissions with owner 'app' (D36)", () => {
+    const out = collectCustomPermissions(
+      {
+        ...cfg(),
+        permissions: [{ action: "export", resource: "reports" }],
+      } as unknown as NextlyServiceConfig,
+      []
+    );
+    expect(out).toEqual([
+      {
+        action: "export",
+        resource: "reports",
+        slug: "export-reports",
+        name: "Export Reports",
+        description: undefined,
+        owner: "app",
+      },
+    ]);
+  });
+
+  it("throws when an app permission duplicates a plugin permission", () => {
+    expect(() =>
+      collectCustomPermissions(
+        {
+          ...cfg(),
+          permissions: [{ action: "export", resource: "submissions" }],
+        } as unknown as NextlyServiceConfig,
+        [plugin("@acme/a", [{ action: "export", resource: "submissions" }])]
+      )
+    ).toThrow();
+  });
+
+  it("throws when an app permission shadows a collection CRUD permission", () => {
+    expect(() =>
+      collectCustomPermissions(
+        {
+          ...cfg(["posts"]),
+          permissions: [{ action: "read", resource: "posts" }],
+        } as unknown as NextlyServiceConfig,
+        []
+      )
+    ).toThrow();
+  });
 });
