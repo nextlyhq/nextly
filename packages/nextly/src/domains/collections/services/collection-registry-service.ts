@@ -178,6 +178,21 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getAllRecords(options);
   }
 
+  /**
+   * Find pipeline-managed collections (code/plugin) that are no longer in the
+   * current config — orphans left after a plugin or code collection was removed
+   * (D14). They are RETAINED (never auto-dropped); `nextly prune` drops them
+   * explicitly. Builder (`ui`) collections are excluded — they are managed via
+   * the Visual Builder, not the code config.
+   */
+  async findOrphanedCollections(
+    currentSlugs: string[]
+  ): Promise<DynamicCollectionRecord[]> {
+    const current = new Set(currentSlugs);
+    const all = await this.getAllCollections();
+    return all.filter(r => isPipelineSource(r.source) && !current.has(r.slug));
+  }
+
   async listCollections(
     options?: ListCollectionsOptions
   ): Promise<ListCollectionsResult> {
@@ -773,7 +788,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           ? JSON.parse(hooks)
           : hooks
         : undefined,
-      source: r.source as "code" | "ui" | "built-in",
+      source: r.source as CollectionSource,
       locked: r.locked as boolean,
       // Why: read the new status meta-column, defaulting to false for rows
       // written before this column existed (legacy data without status set).
