@@ -269,7 +269,7 @@
     "lexical": "^0.38.2",
     "mime-types": "^3.0.2",
     "mysql2": "^3.0.0",
-    "nodemailer": "^8.0.5",
+    "nodemailer": "^8.0.9",
     "pg": "^8.0.0",
     "picocolors": "^1.1.1",
     "resend": "^6.9.2",
