@@ -36,6 +36,7 @@
     "fix-singles-sidebar-and-timestamps",
     "fix-status-column-strip",
     "flat-bugs-float",
+    "hmr-component-runtime-schema",
     "initial-alpha-release",
     "migrate-create-component-columns",
     "migrate-create-component-parent-index",
