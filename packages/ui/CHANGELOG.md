@@ -1,5 +1,13 @@
 # @nextlyhq/ui
 
+## 0.0.2-alpha.24
+
+### Patch Changes
+
+- [#103](https://github.com/nextlyhq/nextly/pull/103) [`01f3f7a`](https://github.com/nextlyhq/nextly/commit/01f3f7a22eb2e85fb6987b43264c07e993872fa7) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Forward `cc`/`bcc` consistently across every email send path.
+
+  `nextly.email.send` and `nextly.email.sendWithTemplate` (Direct API) now accept and forward `cc`/`bcc` — they are added to `SendEmailArgs` and `SendTemplateEmailArgs`. Previously the Direct API namespace silently dropped both fields, so only the REST route (`/api/email/send-with-template`) honored them. `EmailService.sendWithTemplate` also dropped `cc`/`bcc` on its code-first template fallback branch while the DB-template branch already forwarded them; both branches now forward them. Empty `cc`/`bcc` arrays are not forwarded, so they don't override the "no options" path.
+
 ## 0.0.2-alpha.23
 
 ### Patch Changes
