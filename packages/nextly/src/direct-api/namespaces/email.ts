@@ -49,11 +49,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import {
-  isNotFoundError,
-  mergeConfig,
-  sliceListResult,
-} from "./helpers";
+import { isNotFoundError, mergeConfig, sliceListResult } from "./helpers";
 
 /**
  * `nextly.email.*` namespace — send raw or template-based emails.
@@ -76,6 +72,9 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         subject: args.subject,
         html: args.html,
         plainText: args.text,
+        // Forward cc/bcc so the Direct API matches the REST route and service.
+        cc: args.cc,
+        bcc: args.bcc,
         providerId: args.providerId,
         attachments: args.attachments,
       });
@@ -92,9 +91,15 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
 
       const sendOptions: {
         providerId?: string;
+        cc?: string[];
+        bcc?: string[];
         attachments?: typeof args.attachments;
       } = {};
       if (args.providerId) sendOptions.providerId = args.providerId;
+      // Only set cc/bcc when non-empty so an empty array doesn't make
+      // sendOptions truthy and override the "no options" undefined below.
+      if (args.cc?.length) sendOptions.cc = args.cc;
+      if (args.bcc?.length) sendOptions.bcc = args.bcc;
       if (args.attachments) sendOptions.attachments = args.attachments;
 
       const result = await ctx.emailSendService.sendWithTemplate(
@@ -118,9 +123,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
  * non-CRUD action whose primary value is the resulting record itself.
  */
 export interface EmailProvidersNamespace {
-  find(
-    args?: FindEmailProvidersArgs
-  ): Promise<ListResult<EmailProviderRecord>>;
+  find(args?: FindEmailProvidersArgs): Promise<ListResult<EmailProviderRecord>>;
   findByID(
     args: FindEmailProviderByIDArgs
   ): Promise<EmailProviderRecord | null>;
@@ -222,9 +225,7 @@ export function createEmailProvidersNamespace(
  * because they're non-CRUD actions with domain-specific return types.
  */
 export interface EmailTemplatesNamespace {
-  find(
-    args?: FindEmailTemplatesArgs
-  ): Promise<ListResult<EmailTemplateRecord>>;
+  find(args?: FindEmailTemplatesArgs): Promise<ListResult<EmailTemplateRecord>>;
   findByID(
     args: FindEmailTemplateByIDArgs
   ): Promise<EmailTemplateRecord | null>;
