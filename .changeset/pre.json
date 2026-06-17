@@ -31,6 +31,7 @@
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
     "date-field-coercion-singles-components",
+    "email-cc-bcc-forwarding",
     "first-run-ledger-bootstrap-guard",
     "fix-cli-prompt-for-folder-when-missing",
     "fix-singles-sidebar-and-timestamps",
