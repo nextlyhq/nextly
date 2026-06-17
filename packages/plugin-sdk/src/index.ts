@@ -50,3 +50,6 @@ export {
   type ListQueryWhere,
   type ListQueryFilterContext,
 } from "nextly";
+
+// Secrets (D37) — redact secret config/env values at every leak vector.
+export { Secret, secret, isSecret } from "./secret";

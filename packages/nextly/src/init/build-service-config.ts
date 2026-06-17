@@ -119,6 +119,12 @@ export function buildServiceConfig(
       }
     }
 
+    // If app-level custom permissions not explicitly provided, use from
+    // nextly.config.ts so they seed alongside plugin permissions (D36).
+    if (!serviceConfig.permissions && nextlyConfig?.permissions) {
+      serviceConfig.permissions = nextlyConfig.permissions;
+    }
+
     // If users config not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.users && nextlyConfig?.users) {
       serviceConfig.users = nextlyConfig.users;

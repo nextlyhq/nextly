@@ -1,5 +1,6 @@
 import type { NextlyServiceConfig } from "../../di/register";
 import { isSystemResource } from "../../schemas/_zod/rbac";
+import type { PluginPermission } from "../contributions";
 import { permissionCollisionError } from "../permission-error";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -45,49 +46,57 @@ export function collectCustomPermissions(
   const seen = new Map<string, string>(); // `${action}:${resource}` -> first owner
   const out: CollectedPermission[] = [];
 
-  for (const plugin of plugins) {
-    for (const perm of plugin.contributes?.permissions ?? []) {
-      const { action, resource } = perm;
-      const key = `${action}:${resource}`;
+  // One declared custom permission from a given owner ("app" or a plugin name).
+  // Shared by the app and plugin passes so both validate + collide identically.
+  const consider = (perm: PluginPermission, owner: string): void => {
+    const { action, resource } = perm;
+    const key = `${action}:${resource}`;
 
-      const prev = seen.get(key);
-      if (prev !== undefined) {
-        throw permissionCollisionError(
-          action,
-          resource,
-          [prev, plugin.name],
-          "duplicate-permission"
-        );
-      }
-      if (isSystemResource(resource)) {
-        throw permissionCollisionError(
-          action,
-          resource,
-          [plugin.name],
-          "system-resource-reserved"
-        );
-      }
-      if (
-        (CRUD_ACTIONS.has(action) && collectionSlugs.has(resource)) ||
-        (SINGLE_ACTIONS.has(action) && singleSlugs.has(resource))
-      ) {
-        throw permissionCollisionError(
-          action,
-          resource,
-          [plugin.name],
-          "crud-permission-reserved"
-        );
-      }
-
-      seen.set(key, plugin.name);
-      out.push({
+    const prev = seen.get(key);
+    if (prev !== undefined) {
+      throw permissionCollisionError(
         action,
         resource,
-        slug: `${action}-${resource}`,
-        name: perm.label ?? `${titleCase(action)} ${titleCase(resource)}`,
-        description: perm.description,
-        owner: plugin.name,
-      });
+        [prev, owner],
+        "duplicate-permission"
+      );
+    }
+    if (isSystemResource(resource)) {
+      throw permissionCollisionError(
+        action,
+        resource,
+        [owner],
+        "system-resource-reserved"
+      );
+    }
+    if (
+      (CRUD_ACTIONS.has(action) && collectionSlugs.has(resource)) ||
+      (SINGLE_ACTIONS.has(action) && singleSlugs.has(resource))
+    ) {
+      throw permissionCollisionError(
+        action,
+        resource,
+        [owner],
+        "crud-permission-reserved"
+      );
+    }
+
+    seen.set(key, owner);
+    out.push({
+      action,
+      resource,
+      slug: `${action}-${resource}`,
+      name: perm.label ?? `${titleCase(action)} ${titleCase(resource)}`,
+      description: perm.description,
+      owner,
+    });
+  };
+
+  // App-declared permissions first (owner "app"), then each plugin's (D36).
+  for (const perm of config.permissions ?? []) consider(perm, "app");
+  for (const plugin of plugins) {
+    for (const perm of plugin.contributes?.permissions ?? []) {
+      consider(perm, plugin.name);
     }
   }
 
