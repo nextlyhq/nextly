@@ -296,6 +296,10 @@ export interface SendEmailArgs extends DirectAPIConfig {
   text?: string;
   /** Override the "from" address */
   from?: string;
+  /** CC recipients (carbon copy). */
+  cc?: string[];
+  /** BCC recipients (blind carbon copy). */
+  bcc?: string[];
   /** Use a specific provider instead of the default */
   providerId?: string;
   /**
@@ -318,6 +322,10 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
   variables?: Record<string, string>;
   /** Override the "from" address */
   from?: string;
+  /** CC recipients (carbon copy). */
+  cc?: string[];
+  /** BCC recipients (blind carbon copy). */
+  bcc?: string[];
   /** Use a specific provider instead of the default */
   providerId?: string;
   /**
