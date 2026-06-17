@@ -216,6 +216,11 @@ export class EmailService extends BaseService {
         subject: result.subject,
         html: result.html,
         providerId: options?.providerId,
+        // Forward cc/bcc here too — the DB-template path already does, and
+        // omitting them on this branch silently dropped them for code-first
+        // templates.
+        cc: options?.cc,
+        bcc: options?.bcc,
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
       });
