@@ -51,6 +51,7 @@ import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import type { PluginPermission } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import type {
@@ -163,6 +164,9 @@ export interface NextlyServiceConfig {
 
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
+
+  /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
+  permissions?: PluginPermission[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];

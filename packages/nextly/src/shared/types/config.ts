@@ -16,6 +16,7 @@ import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
 import type { AdminPlacement } from "../../plugins/admin-placement";
+import type { PluginPermission } from "../../plugins/contributions";
 import type {
   PluginAdminAppearance,
   PluginDefinition,
@@ -605,6 +606,9 @@ export interface NextlyConfig {
   /** Plugins to extend Nextly functionality. */
   plugins?: PluginDefinition[];
 
+  /** @experimental Custom permissions declared by the app (seeded like plugin permissions, D36). */
+  permissions?: PluginPermission[];
+
   /** Security configuration for headers, CORS, uploads, and sanitization. */
   security?: SecurityConfig;
 
@@ -667,6 +671,9 @@ export interface SanitizedNextlyConfig {
 
   /** Plugins to extend Nextly functionality (empty array if none configured). */
   plugins: PluginDefinition[];
+
+  /** @experimental App-declared custom permissions (undefined if none). Seeded like plugin permissions (D36). */
+  permissions?: PluginPermission[];
 
   /** Security configuration for headers, CORS, uploads, and sanitization. */
   security?: SecurityConfig;
@@ -832,6 +839,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],
+    permissions: config.permissions,
     security: config.security,
     admin: config.admin,
   };
