@@ -17,6 +17,7 @@ import { useState, useCallback, useMemo, useRef } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEntries,
@@ -29,10 +30,7 @@ import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
-import {
-  getComponent,
-  type InjectionPointProps,
-} from "@admin/lib/plugins/component-registry";
+import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
 import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -536,9 +534,6 @@ export function EntryList({ collectionSlug }: EntryListProps) {
 
   // Resolve BeforeListTable injection component if configured
   const beforeListTablePath = collection?.admin?.components?.BeforeListTable;
-  const BeforeListTable = beforeListTablePath
-    ? getComponent(beforeListTablePath)
-    : undefined;
 
   // Props for injection point components
   const injectionPointProps: InjectionPointProps = {
@@ -593,7 +588,12 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       </div>
 
       {/* BeforeListTable injection point */}
-      {BeforeListTable && <BeforeListTable {...injectionPointProps} />}
+      {beforeListTablePath && (
+        <PluginSlot
+          path={beforeListTablePath}
+          props={injectionPointProps as unknown as Record<string, unknown>}
+        />
+      )}
 
       {/* Content */}
       {entries.length === 0 && !entriesLoading && !search ? (

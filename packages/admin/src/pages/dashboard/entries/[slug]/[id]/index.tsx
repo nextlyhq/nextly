@@ -23,6 +23,7 @@ import {
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
@@ -397,7 +398,10 @@ export default function EditEntryPage({
               entryTitle={entryTitle}
             />
           </div>
-          <CustomEditView {...customViewProps} />
+          <PluginSlot
+            path={customEditViewPath}
+            props={customViewProps as unknown as Record<string, unknown>}
+          />
         </PageContainer>
       </QueryErrorBoundary>
     );
