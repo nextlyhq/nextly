@@ -65,7 +65,7 @@ import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
-import { pluginCollectionSlugs } from "./plugins/plugin-admin-meta";
+import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import {
@@ -969,35 +969,10 @@ async function handleAdminMetaRequest(): Promise<Response> {
     }
   }
 
-  // Collect plugin metadata from registered plugins with host override resolution
+  // Collect plugin metadata from registered plugins with host override
+  // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const plugins = (config?.plugins ?? []).map(plugin => {
-    const pluginSlug = plugin.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    const hostOverride = pluginOverrides?.[pluginSlug];
-
-    // Shallow merge appearance: host override fields win, author defaults preserved
-    const effectiveAppearance = hostOverride?.appearance
-      ? { ...plugin.admin?.appearance, ...hostOverride.appearance }
-      : plugin.admin?.appearance;
-
-    // Resolve which collections belong to each plugin for the admin sidebar.
-    // Dual-reads `contributes.collections` (P2) and the deprecated top-level
-    // `collections` so migrated and legacy plugins both render.
-    return {
-      name: plugin.name,
-      version: plugin.version,
-      description: plugin.admin?.description,
-      placement:
-        hostOverride?.placement ?? plugin.admin?.placement ?? "plugins",
-      order: hostOverride?.order ?? plugin.admin?.order,
-      after: hostOverride?.after ?? plugin.admin?.after,
-      appearance: effectiveAppearance,
-      collections: pluginCollectionSlugs(plugin),
-    };
-  });
+  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     payload.plugins = plugins;
   }
