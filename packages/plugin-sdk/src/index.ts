@@ -17,6 +17,8 @@ export type {
   PluginHookRegistry,
   PluginPermission,
   PermissionSlug,
+  ServiceOpts,
+  AuthUser,
 } from "nextly";
 
 export type { HookType, HookHandler, HookContext } from "nextly";

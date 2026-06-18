@@ -64,9 +64,18 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(ctx.infra).toBeUndefined();
   });
 
-  it("leaves the services shape unchanged", () => {
+  it("keeps the services shape; collections is ServiceOpts-wrapped (D35)", () => {
     const { ctx, collections, email } = makeCtx();
-    expect(ctx.services.collections).toBe(collections);
+    // D35: collections is wrapped for ServiceOpts elevation — a distinct Proxy
+    // that delegates to the raw service, no longer the raw instance itself.
+    expect(ctx.services.collections).not.toBe(collections);
+    // The shape and the non-collection services are unchanged.
     expect(ctx.services.email).toBe(email);
+    expect(Object.keys(ctx.services).sort()).toEqual([
+      "collections",
+      "email",
+      "media",
+      "users",
+    ]);
   });
 });

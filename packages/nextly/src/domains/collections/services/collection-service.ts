@@ -387,6 +387,7 @@ export class CollectionService extends BaseService {
       {
         collectionName,
         user: context.user,
+        overrideAccess: context.overrideAccess,
       },
       data
     );
@@ -431,6 +432,7 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.listEntries({
       collectionName,
       user: context.user,
+      overrideAccess: context.overrideAccess,
       page,
       limit,
     });
@@ -471,6 +473,7 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       user: context.user,
+      overrideAccess: context.overrideAccess,
     });
 
     if (!result.success) {
@@ -521,6 +524,7 @@ export class CollectionService extends BaseService {
         collectionName,
         entryId,
         user: context.user,
+        overrideAccess: context.overrideAccess,
       },
       data
     );
@@ -576,6 +580,7 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       user: context.user,
+      overrideAccess: context.overrideAccess,
     });
 
     if (!result.success) {

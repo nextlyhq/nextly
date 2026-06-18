@@ -56,6 +56,12 @@ export interface RequestContext {
   locale?: string;
   /** Unique request identifier for tracing/logging */
   requestId?: string;
+  /**
+   * @experimental Bypass the access check for this operation (D35 system
+   * elevation). Validation/hooks/events still run — only the access check is
+   * skipped. Default: undefined (enforce access).
+   */
+  overrideAccess?: boolean;
 }
 
 /**
