@@ -1,13 +1,11 @@
-import type {
-  PluginRouteContext,
-  PluginRoute,
-  RouteMethod,
-} from "./route-types";
+import type { PluginContext } from "../plugin-context";
+
+import type { PluginRoute, RouteMethod } from "./route-types";
 
 /**
  * A route registered at boot: the plugin's declared {@link PluginRoute}, its
- * namespaced full path, and the plugin's boot-built base context (cloned per
- * request with `user`/`params` added by the dispatcher).
+ * namespaced full path, and the plugin's boot-built base {@link PluginContext}
+ * (the dispatcher clones it per request, adding `user`/`params`).
  */
 export interface RegisteredRoute {
   pluginName: string;
@@ -15,7 +13,7 @@ export interface RegisteredRoute {
   /** Namespaced path: `/plugins/<pluginName><route.path>`. */
   fullPath: string;
   route: PluginRoute;
-  baseCtx: PluginRouteContext;
+  baseCtx: PluginContext;
   /** Pre-split path segments (literal, or `:name` capture) for matching. */
   segments: string[];
 }
@@ -24,7 +22,7 @@ export interface RegisteredRoute {
 export interface RouteMatch {
   pluginName: string;
   route: PluginRoute;
-  baseCtx: PluginRouteContext;
+  baseCtx: PluginContext;
   params: Record<string, string>;
 }
 
@@ -43,7 +41,7 @@ export class PluginRouteRegistry {
   register(
     pluginName: string,
     route: PluginRoute,
-    baseCtx: PluginRouteContext
+    baseCtx: PluginContext
   ): void {
     const fullPath = `/plugins/${pluginName}${route.path}`;
     this.routes.push({

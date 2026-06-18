@@ -30,6 +30,7 @@ import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
 
 import type { PluginDefinition } from "./plugin-context";
+import { resetPluginRouteRegistry } from "./routes/route-registry";
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
 
@@ -90,6 +91,7 @@ export async function createTestNextly(
   resetHookRegistry();
   resetEventBus();
   resetFilterRegistry();
+  resetPluginRouteRegistry();
   resetNextlyInstance();
   // Each boot is a fresh, distinct in-memory database. The schema-snapshot
   // cache (D52) is a globalThis singleton scoped to a single live DB; if left
@@ -144,6 +146,7 @@ export async function createTestNextly(
       resetHookRegistry();
       resetEventBus();
       resetFilterRegistry();
+      resetPluginRouteRegistry();
       resetNextlyInstance();
       clearCachedSnapshot();
       clearLiveSnapshots();
