@@ -55,6 +55,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
+  // Plugin platform (P4) — contributes.routes collection (D25).
+  NEXTLY_ROUTE_COLLISION: 409,
+  NEXTLY_ROUTE_INVALID_PATH: 400,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

@@ -60,6 +60,8 @@ import type {
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
+import { collectPluginRoutes } from "../plugins/routes/collect-routes";
+import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import { applyPluginSchemaContributions } from "../plugins/schema/apply-contributions";
 import {
   validateCrossPluginRelations,
@@ -1514,6 +1516,10 @@ async function initializePlugins(
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return [];
 
+  // Collect + validate contributed routes BEFORE any init runs so a route
+  // collision / invalid path fails the boot fast (D25/D7), before side effects.
+  const collectedRoutes = collectPluginRoutes(plugins);
+
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
   const getServiceForPlugin = <
@@ -1616,6 +1622,25 @@ async function initializePlugins(
       name: plugin.name,
       version: plugin.version,
     });
+  }
+
+  // Register contributed routes into the global registry (D25). Rebuilt every
+  // boot (cleared first) so HMR / re-registration never accumulates. Each route
+  // carries its plugin's boot-built context; the dispatcher adds per-request
+  // user/params at call time.
+  const routeRegistry = getPluginRouteRegistry();
+  routeRegistry.clear();
+  if (collectedRoutes.length > 0) {
+    const contextByPlugin = new Map(
+      teardown.map(t => [t.plugin.name, t.context])
+    );
+    for (const collected of collectedRoutes) {
+      const context = contextByPlugin.get(collected.pluginName);
+      if (context) {
+        routeRegistry.register(collected.pluginName, collected.route, context);
+      }
+    }
+    logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
 
   return teardown;

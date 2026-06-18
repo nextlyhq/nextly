@@ -66,6 +66,8 @@ import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { pluginCollectionSlugs } from "./plugins/plugin-admin-meta";
+import { runPluginRoute } from "./plugins/routes/dispatch";
+import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -599,6 +601,18 @@ async function handleServiceRequest(
   // Extract search parameters from the request URL
   const url = new URL(req.url);
   const searchParams = url.searchParams;
+
+  // Plugin-contributed routes (D25), namespaced under /plugins/<name>. They own
+  // their secure-by-default auth (D28) and are matched BEFORE the built-in REST
+  // router (which would 400 on these paths). The verb wrappers' withSecurity()
+  // already applies CORS/rate-limit/headers around this.
+  const pluginRouteMatch = getPluginRouteRegistry().match(
+    httpMethod,
+    "/" + params.join("/")
+  );
+  if (pluginRouteMatch) {
+    return runPluginRoute(req, pluginRouteMatch);
+  }
 
   const { service, operation, method, routeParams } = parseRestRoute(
     params,
