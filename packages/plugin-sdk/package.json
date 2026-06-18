@@ -3,6 +3,15 @@
   "version": "0.0.1",
   "description": "Nextly Plugin SDK — the experimental, author-facing surface for building Nextly plugins.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/plugin-sdk"
+  },
+  "homepage": "https://nextlyhq.com/docs/plugins",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
   "type": "module",
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",

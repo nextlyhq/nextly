@@ -1,0 +1,133 @@
+# @nextlyhq/plugin-sdk
+
+The author-facing SDK for building [Nextly](https://nextlyhq.com) plugins.
+
+> **⚠️ Experimental — alpha. Not ready for production.**
+>
+> Public plugin support — stable APIs, documentation guarantees, and the official
+> plugin gallery — lands at the Nextly **beta** release. This package is published
+> for the small group of internal alpha authors building first-party plugins.
+> **Surfaces, names, and behaviour will change without notice.** Do not rely on it
+> for production or serious development work yet.
+
+## What this package is
+
+`@nextlyhq/plugin-sdk` re-exports **exactly** the public, semver-protected plugin
+surface — nothing internal. **This package _is_ the stability boundary** (D40/D43):
+if it's not exported here (or from a subpath below), it is not part of the public
+plugin API and may change at any time.
+
+You can build a plugin against `nextly` directly, but importing from
+`@nextlyhq/plugin-sdk` guarantees you only touch the supported surface.
+
+## Install
+
+```bash
+npm install @nextlyhq/plugin-sdk
+# nextly is a peer dependency; @nextlyhq/admin + react are optional peers
+# (only needed for the /client and /admin entries).
+```
+
+Add the `nextly-plugin` keyword to your plugin's `package.json` so it's
+discoverable, and declare a `nextly` core-compatibility range (see below).
+
+## Entry points
+
+| Import                         | Use it for                                                                                                         | Needs React?        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------- |
+| `@nextlyhq/plugin-sdk`         | `definePlugin`, the `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`          | No (Node-safe)      |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly` — boot a real Nextly on in-memory SQLite for integration tests                                  | No                  |
+| `@nextlyhq/plugin-sdk/client`  | `useCan` / `<Can>` — client-side permission gating in admin components                                             | Yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent(s)` / `registerKnownPlugin` — register the React components your `contributes.admin` references | Yes (optional peer) |
+
+The default `.` entry is React-free, so a plugin with no admin UI never pulls
+React into a Node context.
+
+## Quick start
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export const myPlugin = (opts: MyPluginOptions = {}) =>
+  definePlugin({
+    name: "@acme/nextly-plugin-hello",
+    version: "0.1.0",
+    nextly: "^0.0.2-alpha", // core-compatibility range, boot-checked (D6)
+    contributes: {
+      collections: [Greetings],
+      permissions: [
+        { action: "send", resource: "greeting", label: "Send Greeting" },
+      ],
+    },
+    init(ctx) {
+      // react to events (observe-only, post-commit); resolve your own slugs via ctx.self (D54)
+      ctx.events.on(
+        `collection.${ctx.self.collections.greetings}.created`,
+        () => {
+          ctx.logger.info("greeting created");
+        }
+      );
+    },
+    destroy(ctx) {
+      // teardown on shutdown / HMR / test teardown
+    },
+  });
+```
+
+Register it in a host app:
+
+```ts
+// nextly.config.ts
+import { defineConfig } from "nextly";
+import { myPlugin } from "@acme/nextly-plugin-hello";
+
+export default defineConfig({
+  plugins: [myPlugin()],
+});
+```
+
+## The plugin model (one-minute tour)
+
+- **`definePlugin({...})`** returns a `PluginDefinition`: declarative **`contributes`**
+  (collections, singles, components, `extend`, permissions, events, routes, admin UI)
+  plus imperative **`setup` → `init` → `destroy`** lifecycle functions. All plugins'
+  `setup`s run before any `init`; load order is a topological sort over `dependsOn`.
+- **`ctx` (in `init`/`destroy`)** gives you: `services` (managed, secure-by-default
+  data access — pass `{ as: "system" }` to elevate), `db` (raw Drizzle escape hatch),
+  `hooks` (in-transaction, modify/abort), `events` (post-commit, observe-only),
+  `filters`/`actions` (typed seams), `self` (your entities' resolved slugs after any
+  host `.rename()`), `logger`, `config`, and `nextlyVersion`.
+- **Hooks vs events:** need to modify or abort an operation → use a **hook**; need to
+  react/notify after it commits → use an **event** (best-effort, may be dropped).
+- **`ctx.self`** is how you reference your own collections/singles by their _resolved_
+  slug, so your plugin keeps working when an integrator renames an entity via
+  `plugin.rename({...})`. Never hardcode your own slugs in `init`.
+
+## Stability & versioning policy
+
+- **Everything is `@experimental`** until first-party plugins have exercised it (D55).
+  `ctx.services` is the highest-scrutiny surface and stays experimental the longest.
+- **The public surface** (`definePlugin`/`contributes`/lifecycle, `ctx.services`, hook
+  types, event names + payloads, and these SDK exports) is what becomes semver-protected
+  at stabilization — breaking it will require a Nextly **major** (D40).
+- **Deprecations** will warn, keep at least a one-major support window, and ship with a
+  migration guide (D41). During alpha, this guarantee does **not** yet apply — pin a
+  version and read the release notes before upgrading.
+- **Declare a `nextly` range** in your `definePlugin` (e.g. `"^1 || ^2"`); it's checked
+  at boot and may span majors. Use `ctx.nextlyVersion` for runtime feature detection.
+
+## Author guide
+
+See the full plugin author guide, API reference, and error-code reference in the
+[Nextly docs](https://nextlyhq.com/docs/plugins). Scaffold a new plugin with:
+
+```bash
+npm create nextly-app -- --template plugin
+```
+
+which generates the package anatomy plus an embedded `dev/` playground (a minimal
+Nextly app on SQLite with hot-reload) for iterating on your plugin locally.
+
+## License
+
+MIT
