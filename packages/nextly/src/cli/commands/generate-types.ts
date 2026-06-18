@@ -39,6 +39,7 @@ import {
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
+import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
@@ -93,6 +94,8 @@ interface ResolvedGenerateTypesOptions extends GenerateTypesCommandOptions {
 interface GenerationResult {
   /** Path to generated TypeScript types file */
   typesFile?: string;
+  /** Path to the generated admin component import map, when plugins contribute admin UI (D60) */
+  componentImportMapFile?: string;
   /** Number of collection interfaces generated */
   collectionCount: number;
   /** Number of single interfaces generated */
@@ -271,6 +274,22 @@ async function generateTypes(
 
   result.typesFile = typesFilePath;
   logger.debug(`Written types to: ${typesFilePath}`);
+
+  // Write the admin component import map (D60), alongside the types file, when
+  // any plugin contributes admin components. Importing this generated module
+  // from the app self-registers those components (no manual host imports), and
+  // sidesteps the dynamic auto-registration race. No-op when there are none.
+  const importMap = buildImportMapArtifact(
+    config.plugins ?? [],
+    typesOutputPath
+  );
+  if (importMap) {
+    const importMapPath = resolve(cwd, importMap.path);
+    await ensureDir(dirname(importMapPath));
+    await writeFile(importMapPath, importMap.code, "utf-8");
+    result.componentImportMapFile = importMapPath;
+    logger.debug(`Written plugin admin import map to: ${importMapPath}`);
+  }
 
   // Generate Zod schemas if enabled
   if (options.zod !== false) {

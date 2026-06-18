@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginDefinition } from "../plugin-context";
 import {
   buildComponentImportMap,
+  buildImportMapArtifact,
   collectAdminComponentPaths,
 } from "./component-import-map";
 
@@ -72,5 +73,24 @@ describe("buildComponentImportMap (D60)", () => {
     const code = buildComponentImportMap([]);
     expect(code).toContain("export {};");
     expect(code).not.toContain("registerComponents");
+  });
+});
+
+describe("buildImportMapArtifact (D60)", () => {
+  it("returns the map placed alongside the generated types file", () => {
+    const p = plugin({ settings: { component: "@acme/x/admin#Settings" } });
+    const artifact = buildImportMapArtifact([p], "./src/types/nextly-types.ts");
+
+    expect(artifact).not.toBeNull();
+    expect(artifact?.path.replace(/\\/g, "/")).toMatch(
+      /src\/types\/plugin-admin-imports\.generated\.ts$/
+    );
+    expect(artifact?.code).toContain("registerComponents");
+  });
+
+  it("returns null when no plugin contributes admin components", () => {
+    const p = plugin({ menu: [{ label: "X", to: "/x" }] }); // menu has no component
+    expect(buildImportMapArtifact([p], "./types.ts")).toBeNull();
+    expect(buildImportMapArtifact([], "./types.ts")).toBeNull();
   });
 });
