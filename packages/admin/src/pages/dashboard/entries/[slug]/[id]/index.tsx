@@ -23,6 +23,7 @@ import {
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
@@ -397,17 +398,33 @@ export default function EditEntryPage({
               entryTitle={entryTitle}
             />
           </div>
-          <CustomEditView {...customViewProps} />
+          <PluginSlot
+            path={customEditViewPath}
+            props={customViewProps as unknown as Record<string, unknown>}
+          />
         </PageContainer>
       </QueryErrorBoundary>
     );
   }
 
   // Default: render the EntryForm directly. Breadcrumbs were removed from
-  // form, not the header chrome.
+  // form, not the header chrome. Before/AfterEdit injection points (D23) are
+  // resolved + isolated via PluginSlot around the form.
+  const beforeEditPath = collection.admin?.components?.BeforeEdit;
+  const afterEditPath = collection.admin?.components?.AfterEdit;
+  const editInjectionProps: Record<string, unknown> = {
+    collectionSlug: slug,
+    entryId: id,
+    collection: collection,
+    entry: entryData,
+  };
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
+        {beforeEditPath && (
+          <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+        )}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
@@ -416,6 +433,9 @@ export default function EditEntryPage({
           onDelete={handleDelete}
           onCancel={handleCancel}
         />
+        {afterEditPath && (
+          <PluginSlot path={afterEditPath} props={editInjectionProps} />
+        )}
       </PageContainer>
     </QueryErrorBoundary>
   );

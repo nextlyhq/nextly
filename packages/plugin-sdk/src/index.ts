@@ -30,6 +30,17 @@ export type {
   RouteMethod,
 } from "nextly";
 
+// Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
+// The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
+export type {
+  ComponentPath,
+  PluginAdminContributions,
+  PluginAdminPage,
+  PluginAdminWidget,
+  PluginCollectionView,
+  PluginMenuItem,
+} from "nextly";
+
 export type { HookType, HookHandler, HookContext } from "nextly";
 
 // Event bus (D8/D51) — `ctx.events` surface + types.

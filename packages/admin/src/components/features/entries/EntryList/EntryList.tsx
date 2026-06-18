@@ -17,6 +17,7 @@ import { useState, useCallback, useMemo, useRef } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEntries,
@@ -29,10 +30,7 @@ import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
-import {
-  getComponent,
-  type InjectionPointProps,
-} from "@admin/lib/plugins/component-registry";
+import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
 import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -534,17 +532,21 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // Custom Components from Plugins
   // ---------------------------------------------------------------------------
 
-  // Resolve BeforeListTable injection component if configured
+  // Resolve plugin/collection admin component overrides (D23). All resolved +
+  // isolated via PluginSlot.
   const beforeListTablePath = collection?.admin?.components?.BeforeListTable;
-  const BeforeListTable = beforeListTablePath
-    ? getComponent(beforeListTablePath)
-    : undefined;
+  const afterListTablePath = collection?.admin?.components?.AfterListTable;
+  const listViewPath = collection?.admin?.components?.views?.List?.Component;
 
   // Props for injection point components
   const injectionPointProps: InjectionPointProps = {
     collectionSlug,
     collection: collection as unknown as Record<string, unknown>,
   };
+  const injectionProps = injectionPointProps as unknown as Record<
+    string,
+    unknown
+  >;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -593,10 +595,14 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       </div>
 
       {/* BeforeListTable injection point */}
-      {BeforeListTable && <BeforeListTable {...injectionPointProps} />}
+      {beforeListTablePath && (
+        <PluginSlot path={beforeListTablePath} props={injectionProps} />
+      )}
 
-      {/* Content */}
-      {entries.length === 0 && !entriesLoading && !search ? (
+      {/* Content — a plugin List override replaces the default table (D23) */}
+      {listViewPath ? (
+        <PluginSlot path={listViewPath} props={injectionProps} />
+      ) : entries.length === 0 && !entriesLoading && !search ? (
         <EntryEmptyState
           collectionName={labels.plural}
           singularName={labels.singular}
@@ -635,6 +641,11 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           onColumnVisibilityChange={onColumnVisibilityChange}
           onResetColumnVisibility={resetColumnVisibility}
         />
+      )}
+
+      {/* AfterListTable injection point (D23) */}
+      {afterListTablePath && (
+        <PluginSlot path={afterListTablePath} props={injectionProps} />
       )}
 
       {/* Bulk Delete Confirmation Dialog */}

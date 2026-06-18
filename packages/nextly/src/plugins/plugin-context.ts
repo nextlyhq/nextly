@@ -474,8 +474,10 @@ export interface PluginDefinition {
   /**
    * Admin configuration for sidebar placement and plugin metadata.
    *
-   * Controls where the plugin's items appear in the sidebar and provides metadata
-   * for the plugin settings page. (P5 reconciles this with `contributes.admin`.)
+   * Controls where the plugin's items appear in the sidebar (placement/order)
+   * and its appearance + settings-page blurb. This is **complementary** to
+   * `contributes.admin` (P5): `admin` = placement & appearance; `contributes.admin`
+   * = the declarative menu/pages/settings/views surface. Both are retained.
    */
   admin?: PluginAdminConfig;
 

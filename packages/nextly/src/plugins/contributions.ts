@@ -3,6 +3,7 @@ import type { FieldConfig } from "../collections/fields/types";
 import type { ComponentConfig } from "../components/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
+import type { PluginAdminContributions } from "./admin-contributions";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
@@ -30,8 +31,8 @@ export type PermissionSlug = string;
  * WITHOUT running the plugin.
  *
  * @experimental Each key is *consumed* by a phase: collections/singles/components/
- * extend → P2 (merge pipeline); permissions → P3; events → P1; routes → P4. The
- * `admin` (P5) key is added in that phase.
+ * extend → P2 (merge pipeline); permissions → P3; events → P1; routes → P4;
+ * admin → P5 (menu/pages/settings/views; widgets reserved for M8).
  */
 export interface PluginContributions {
   /** @experimental New plugin-owned collections. Merged by the schema pipeline (P2, D3/D12). */
@@ -48,4 +49,10 @@ export interface PluginContributions {
   events?: Array<{ name: string }>;
   /** @experimental HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
   routes?: PluginRoute[];
+  /**
+   * @experimental Admin UI contributions (P5, D19–D23): menu (D20), pages +
+   * settings (D21), per-collection view overrides (D23). `widgets` (D22) is
+   * RESERVED — deferred to M8 (D58); not rendered in P5.
+   */
+  admin?: PluginAdminContributions;
 }

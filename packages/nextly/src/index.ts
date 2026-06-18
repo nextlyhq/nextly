@@ -358,6 +358,12 @@ export {
   type PluginRouteHandler,
   type Middleware,
   type RouteMethod,
+  type ComponentPath,
+  type PluginAdminContributions,
+  type PluginAdminPage,
+  type PluginAdminWidget,
+  type PluginCollectionView,
+  type PluginMenuItem,
 } from "./plugins";
 
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
