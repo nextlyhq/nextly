@@ -108,6 +108,7 @@ export type { ExternalToast, ToastT } from "sonner";
 export { ErrorBoundary } from "./components/shared/error-boundary";
 export { QueryErrorBoundary } from "./components/shared/query-error-boundary";
 export type { QueryErrorBoundaryProps } from "./components/shared/query-error-boundary";
+export { PluginComponentBoundary } from "./components/shared/plugin-component-boundary";
 
 // Error Fallback Components
 export {
