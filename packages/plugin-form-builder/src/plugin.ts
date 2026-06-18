@@ -193,6 +193,29 @@ export function formBuilder(
           group: "Form Builder",
         },
       ],
+      // HTTP route (P4/D25) — exported at
+      // /api/plugins/@nextlyhq/plugin-form-builder/submissions/export. Secure by
+      // default (D28): gated by the custom `export-submissions` permission. Reads
+      // via the secure-by-default service path as the authed user (D35) and
+      // resolves its OWN slug through `ctx.self` (D54). The canonical
+      // contributes.routes example for third-party authors.
+      routes: [
+        {
+          method: "GET",
+          path: "/submissions/export",
+          requiredPermission: "export-submissions",
+          handler: async (_req, ctx) => {
+            const declaredSlug = resolvedConfig.formSubmissionOverrides.slug;
+            const slug = ctx.self.collections[declaredSlug] ?? declaredSlug;
+            const result = await ctx.services.collections.listEntries(
+              slug,
+              {},
+              { as: "user", user: ctx.user ?? undefined }
+            );
+            return Response.json({ items: result.data });
+          },
+        },
+      ],
     },
 
     admin: {
