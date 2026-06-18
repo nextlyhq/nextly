@@ -109,6 +109,7 @@ export { ErrorBoundary } from "./components/shared/error-boundary";
 export { QueryErrorBoundary } from "./components/shared/query-error-boundary";
 export type { QueryErrorBoundaryProps } from "./components/shared/query-error-boundary";
 export { PluginComponentBoundary } from "./components/shared/plugin-component-boundary";
+export { PluginSlot } from "./components/shared/plugin-slot";
 
 // Error Fallback Components
 export {
