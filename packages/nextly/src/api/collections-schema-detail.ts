@@ -30,6 +30,11 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import { getNextlyLogger } from "../observability/logger";
+import {
+  applyPluginAdminViews,
+  type CollectionWithAdmin,
+} from "../plugins/admin-views";
+import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
@@ -136,8 +141,18 @@ export const GET = withErrorHandler(
       });
     }
 
+    // Fold plugin-contributed view overrides (contributes.admin.views, D23)
+    // onto this collection's admin.components so the existing client resolution
+    // (Edit/List + before/after injection) renders them. Collection/Builder
+    // slots win; plugin views fill empties only.
+    const config = getHandlerConfig();
+    const [collectionWithViews] = applyPluginAdminViews(
+      [collection as unknown as CollectionWithAdmin],
+      config?.plugins ?? []
+    );
+
     return respondDoc({
-      ...collection,
+      ...(collectionWithViews as unknown as typeof collection),
       fields: enrichedFields,
     } as unknown as typeof collection);
   }
