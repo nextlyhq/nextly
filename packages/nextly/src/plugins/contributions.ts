@@ -1,6 +1,7 @@
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { FieldConfig } from "../collections/fields/types";
 import type { ComponentConfig } from "../components/config/types";
+import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { SingleConfig } from "../singles/config/types";
 
 import type { PluginAdminContributions } from "./admin-contributions";
@@ -21,10 +22,16 @@ export interface PluginPermission {
 
 /**
  * @experimental A permission identifier — the `${action}-${resource}` slug
- * (e.g. `'export-submissions'`). A plain `string` until typed-slug codegen
- * (P6, D47) narrows it.
+ * (e.g. `'export-submissions'`).
+ *
+ * When generated types exist (run `nextly generate:types`), this narrows to the
+ * union of seeded permission slugs (CRUD per collection/single + custom plugin/
+ * app permissions, D36/D47). Without generated types — or when no permissions
+ * are present — it falls back to `string` (same convention as `CollectionSlug`).
  */
-export type PermissionSlug = string;
+export type PermissionSlug = GeneratedTypes extends { permissions: infer P }
+  ? keyof P & string
+  : string;
 
 /**
  * Declarative, introspectable plugin contributions (D1). The host can read these
