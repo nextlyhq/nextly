@@ -6,8 +6,8 @@
 export function SettingsPage() {
   return (
     <div style={{ padding: 24 }}>
-      <h1>{{ pluginName }}</h1>
-      <p>Plugin settings go here. Edit `src/admin/SettingsPage.tsx`.</p>
+      <h1>Plugin Settings</h1>
+      <p>Settings UI goes here. Edit src/admin/SettingsPage.tsx.</p>
     </div>
   );
 }
