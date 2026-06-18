@@ -532,14 +532,21 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // Custom Components from Plugins
   // ---------------------------------------------------------------------------
 
-  // Resolve BeforeListTable injection component if configured
+  // Resolve plugin/collection admin component overrides (D23). All resolved +
+  // isolated via PluginSlot.
   const beforeListTablePath = collection?.admin?.components?.BeforeListTable;
+  const afterListTablePath = collection?.admin?.components?.AfterListTable;
+  const listViewPath = collection?.admin?.components?.views?.List?.Component;
 
   // Props for injection point components
   const injectionPointProps: InjectionPointProps = {
     collectionSlug,
     collection: collection as unknown as Record<string, unknown>,
   };
+  const injectionProps = injectionPointProps as unknown as Record<
+    string,
+    unknown
+  >;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -589,14 +596,13 @@ export function EntryList({ collectionSlug }: EntryListProps) {
 
       {/* BeforeListTable injection point */}
       {beforeListTablePath && (
-        <PluginSlot
-          path={beforeListTablePath}
-          props={injectionPointProps as unknown as Record<string, unknown>}
-        />
+        <PluginSlot path={beforeListTablePath} props={injectionProps} />
       )}
 
-      {/* Content */}
-      {entries.length === 0 && !entriesLoading && !search ? (
+      {/* Content — a plugin List override replaces the default table (D23) */}
+      {listViewPath ? (
+        <PluginSlot path={listViewPath} props={injectionProps} />
+      ) : entries.length === 0 && !entriesLoading && !search ? (
         <EntryEmptyState
           collectionName={labels.plural}
           singularName={labels.singular}
@@ -635,6 +641,11 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           onColumnVisibilityChange={onColumnVisibilityChange}
           onResetColumnVisibility={resetColumnVisibility}
         />
+      )}
+
+      {/* AfterListTable injection point (D23) */}
+      {afterListTablePath && (
+        <PluginSlot path={afterListTablePath} props={injectionProps} />
       )}
 
       {/* Bulk Delete Confirmation Dialog */}

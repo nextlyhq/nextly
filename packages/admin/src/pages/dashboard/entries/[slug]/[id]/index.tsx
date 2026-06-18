@@ -408,10 +408,23 @@ export default function EditEntryPage({
   }
 
   // Default: render the EntryForm directly. Breadcrumbs were removed from
-  // form, not the header chrome.
+  // form, not the header chrome. Before/AfterEdit injection points (D23) are
+  // resolved + isolated via PluginSlot around the form.
+  const beforeEditPath = collection.admin?.components?.BeforeEdit;
+  const afterEditPath = collection.admin?.components?.AfterEdit;
+  const editInjectionProps: Record<string, unknown> = {
+    collectionSlug: slug,
+    entryId: id,
+    collection: collection,
+    entry: entryData,
+  };
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
+        {beforeEditPath && (
+          <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+        )}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
@@ -420,6 +433,9 @@ export default function EditEntryPage({
           onDelete={handleDelete}
           onCancel={handleCancel}
         />
+        {afterEditPath && (
+          <PluginSlot path={afterEditPath} props={editInjectionProps} />
+        )}
       </PageContainer>
     </QueryErrorBoundary>
   );
