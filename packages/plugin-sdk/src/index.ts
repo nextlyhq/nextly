@@ -21,6 +21,15 @@ export type {
   AuthUser,
 } from "nextly";
 
+// Plugin HTTP routes (P4, D25/D26/D27) — `contributes.routes` author surface.
+export type {
+  PluginRoute,
+  PluginRouteContext,
+  PluginRouteHandler,
+  Middleware,
+  RouteMethod,
+} from "nextly";
+
 export type { HookType, HookHandler, HookContext } from "nextly";
 
 // Event bus (D8/D51) — `ctx.events` surface + types.

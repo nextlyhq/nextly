@@ -28,3 +28,12 @@ export type {
   PluginPermission,
   PermissionSlug,
 } from "./contributions";
+
+// Plugin HTTP routes (P4, D25/D26/D27) — `contributes.routes` surface.
+export type {
+  PluginRoute,
+  PluginRouteContext,
+  PluginRouteHandler,
+  Middleware,
+  RouteMethod,
+} from "./routes/route-types";

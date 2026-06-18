@@ -353,6 +353,11 @@ export {
   type PluginHookRegistry,
   type PluginFilterRegistry,
   type PluginActionRegistry,
+  type PluginRoute,
+  type PluginRouteContext,
+  type PluginRouteHandler,
+  type Middleware,
+  type RouteMethod,
 } from "./plugins";
 
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
