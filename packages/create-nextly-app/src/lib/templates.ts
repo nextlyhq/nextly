@@ -39,6 +39,22 @@ export const AVAILABLE_TEMPLATES: readonly TemplateManifest[] = [
     recommendedDatabase: "any",
     release: "alpha",
   },
+  {
+    name: "plugin",
+    label: "Plugin",
+    description: "Build a reusable Nextly plugin (publishable npm package)",
+    hint: "Plugin package + embedded /dev playground; no schema approach",
+    // Plugins don't ask code-first vs visual, ship no app frontend, and bring
+    // their own collections — they are a publishable library, not an app.
+    approaches: [],
+    defaultApproach: null,
+    collections: [],
+    singles: [],
+    hasDemoData: false,
+    hasFrontendPages: false,
+    recommendedDatabase: "sqlite",
+    release: "alpha",
+  },
 ] as const;
 
 /**

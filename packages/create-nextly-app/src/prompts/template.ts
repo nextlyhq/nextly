@@ -31,6 +31,11 @@ export function getTemplatePromptOptions(): Array<{
       hint: "Posts, authors, categories, clean design",
     },
     {
+      value: "plugin",
+      label: "Plugin",
+      hint: "Build a reusable Nextly plugin + embedded /dev playground",
+    },
+    {
       value: "_coming_soon",
       label: pc.dim("More templates coming soon"),
       hint: "website, portfolio, e-commerce",

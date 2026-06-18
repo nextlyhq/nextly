@@ -33,11 +33,8 @@ program
     "-y, --yes",
     "Skip prompts and use defaults (blank template, SQLite, local storage)"
   )
-  .option("-t, --template <template>", "Project template (blank, blog)")
-  .option(
-    "-a, --approach <approach>",
-    "Schema approach (code-first, visual)"
-  )
+  .option("-t, --template <template>", "Project template (blank, blog, plugin)")
+  .option("-a, --approach <approach>", "Schema approach (code-first, visual)")
   .option("-d, --database <db>", "Database type (sqlite, postgresql, mysql)")
   .option("-b, --branch <branch>", "Git branch for template download", "main")
   .option(
@@ -93,7 +90,9 @@ Examples:
         if (projectName) {
           const nameError = validateProjectName(projectName);
           if (nameError) {
-            console.error(`Error: Invalid project name '${projectName}'. ${nameError}.`);
+            console.error(
+              `Error: Invalid project name '${projectName}'. ${nameError}.`
+            );
             process.exit(1);
           }
         }
@@ -101,7 +100,7 @@ Examples:
         const projectType = options.template as ProjectType | undefined;
 
         // Validate --template flag
-        const validTypes = ["blank", "blog"];
+        const validTypes = ["blank", "blog", "plugin"];
         if (projectType && !validTypes.includes(projectType)) {
           console.error(
             `Error: Template '${projectType}' is not available. Use: ${validTypes.join(", ")}`
