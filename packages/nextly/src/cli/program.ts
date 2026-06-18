@@ -29,6 +29,7 @@ import { registerMigrateResolveCommand } from "./commands/migrate-resolve";
 // prefers a new corrective migration or migrate:fresh.
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
+import { registerPluginsCommand } from "./commands/plugins";
 import { registerPruneCommand } from "./commands/prune";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
@@ -215,6 +216,9 @@ function registerCommands(program: Command): void {
 
   // Permissions commands
   program.addCommand(createPermissionsCleanupCommand());
+
+  // Plugin introspection (D48) — `nextly plugins list` / `info`.
+  registerPluginsCommand(program);
 
   // Telemetry sub-command (status/enable/disable/reset)
   registerTelemetryCommand(program);
