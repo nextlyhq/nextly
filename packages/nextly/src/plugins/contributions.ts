@@ -3,6 +3,8 @@ import type { FieldConfig } from "../collections/fields/types";
 import type { ComponentConfig } from "../components/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
+import type { PluginRoute } from "./routes/route-types";
+
 /**
  * @experimental A plugin-declared custom permission (D36). CRUD permissions are
  * auto-seeded per collection/single slug separately — declare only NON-CRUD
@@ -27,9 +29,9 @@ export type PermissionSlug = string;
  * Declarative, introspectable plugin contributions (D1). The host can read these
  * WITHOUT running the plugin.
  *
- * @experimental Contract surface only in P0 — each key is *consumed* by a later
- * phase: collections/singles/components/extend → P2 (merge pipeline); permissions
- * → P3; events → P1. `routes` (P4) and `admin` (P5) keys are added in those phases.
+ * @experimental Each key is *consumed* by a phase: collections/singles/components/
+ * extend → P2 (merge pipeline); permissions → P3; events → P1; routes → P4. The
+ * `admin` (P5) key is added in that phase.
  */
 export interface PluginContributions {
   /** @experimental New plugin-owned collections. Merged by the schema pipeline (P2, D3/D12). */
@@ -44,4 +46,6 @@ export interface PluginContributions {
   permissions?: PluginPermission[];
   /** @experimental Custom event names this plugin may emit (P1, D9). */
   events?: Array<{ name: string }>;
+  /** @experimental HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
+  routes?: PluginRoute[];
 }
