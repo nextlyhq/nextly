@@ -1,0 +1,142 @@
+---
+title: Plugin Author Guide
+description: Build a Nextly plugin — the lifecycle, the plugin context, and the scaffold → dev → test → publish loop.
+---
+
+> **Warning: Plugins are not ready for use.**
+>
+> The plugin API is **experimental** (alpha) and changes without notice until the Nextly **beta** release. This guide is for the small group of internal authors building first-party plugins. Build the public surface from `@nextlyhq/plugin-sdk` — it is the stability boundary.
+
+A plugin extends Nextly with new collections, hooks, events, routes, permissions, and admin UI — without modifying core. This guide covers how to write one and the local loop for iterating on it.
+
+## Scaffold a plugin
+
+```bash
+npm create nextly-app -- --template plugin
+```
+
+This generates a publishable package whose plugin code lives in `src/` plus an embedded `dev/` playground — a minimal Nextly app on SQLite with hot-reload that **registers your plugin** so you can exercise it in a real admin. `dev/` is never published (only `dist/` ships).
+
+```
+my-plugin/
+├── src/                 # your plugin (published as dist/)
+│   ├── index.ts
+│   ├── plugin.ts        # definePlugin(...)
+│   ├── collections/
+│   └── admin/
+├── dev/                 # local playground — NOT published
+│   ├── nextly.config.ts # registers your plugin
+│   ├── next.config.ts   # source-mode HMR for src/
+│   └── instrumentation.ts
+└── package.json         # files: ["dist"]; nextly-plugin keyword
+```
+
+## The plugin object
+
+Author with `definePlugin` from `@nextlyhq/plugin-sdk`:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export const myPlugin = (opts: MyPluginOptions = {}) =>
+  definePlugin({
+    name: "@acme/nextly-plugin-greetings",
+    version: "0.1.0",
+    nextly: "^1.0.0", // core-compatibility range, boot-checked (may span majors)
+    dependsOn: {}, // required plugin deps → version range
+    enabled: true, // false skips behavior but keeps schema (D49)
+    contributes: {
+      /* declarative nouns — see below */
+    },
+    setup(config) {
+      return config;
+    }, // escape hatch — all setups run before any init
+    init(ctx) {
+      /* runtime wiring */
+    },
+    destroy(ctx) {
+      /* teardown on shutdown / HMR / test */
+    },
+  });
+```
+
+### `contributes` (declarative)
+
+`contributes` is data the host can read **without running your plugin** (so the admin and codegen can reason about it):
+
+- `collections` / `singles` / `components` — new, plugin-owned schema entities.
+- `extend` — add fields to existing entities by slug.
+- `permissions` — custom (non-CRUD) permissions; CRUD is auto-seeded per collection/single.
+- `events` — custom event names you may emit.
+- `routes` — HTTP endpoints, namespaced under `/api/plugins/<name>/…`, secure by default.
+- `admin` — menu, pages, settings, and per-collection view overrides (referenced by string component path).
+
+### Lifecycle
+
+`contributes → setup → init → destroy`. All plugins' `setup`s run before any `init`. Load order is a **topological sort** over `dependsOn` (array order breaks ties). A missing/incompatible/cyclic dependency is a **fail-fast boot error** (see the [error reference](/docs/plugins/error-reference)).
+
+## The plugin context (`ctx`)
+
+`init(ctx)` and `destroy(ctx)` receive:
+
+| Field | Use |
+|---|---|
+| `ctx.services` | Managed data access — **secure by default** (acts as the ambient user, RBAC on). Pass `{ as: "system" }` to elevate. Validation/hooks/events always run. |
+| `ctx.db` | Raw Drizzle escape hatch — **unmanaged** (you own consistency + portability). |
+| `ctx.hooks` | In-transaction hooks — can **modify or abort** an operation. |
+| `ctx.events` | Post-commit event bus — **observe-only, best-effort** (may be dropped). React/notify here. |
+| `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
+| `ctx.self` | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this. |
+| `ctx.logger` | Structured logging. |
+| `ctx.config` | Read-only Nextly config. |
+| `ctx.nextlyVersion` | The running core version (feature detection). |
+
+**Hooks vs events:** need to change or block an operation → use a **hook**; need to react after it commits → use an **event**.
+
+**Never hardcode your own slugs** in `init`. Use `ctx.self` so your plugin keeps working when an integrator renames an entity:
+
+```ts
+init(ctx) {
+  ctx.hooks.on("afterCreate", ctx.self.collections.submissions, sendEmail);
+  ctx.events.on(`collection.${ctx.self.collections.submissions}.created`, notify);
+}
+```
+
+## The dev loop
+
+```bash
+pnpm install
+pnpm dev          # runs the dev/ playground (next dev) → open /admin
+```
+
+Editing files under `src/` hot-reloads the playground (the `dev/next.config.ts` transpiles your plugin source). Your plugin's `destroy()` runs on each reload, so clean up subscriptions there.
+
+> **HMR gotcha:** Nextly's registries (hooks, events, filters) survive hot-reload because they live on `globalThis`. If *you* keep state in a module-scoped singleton, it will be recreated on every reload and your subscriptions lost. Register through `ctx.hooks`/`ctx.events`/`ctx.filters` instead.
+
+## Test
+
+```ts
+import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";
+import { myPlugin } from "../src";
+
+const t = await createTestNextly({
+  plugins: [myPlugin()],
+  collections: myPlugin().contributes.collections,
+});
+// drive t.nextly / assert t.hooks, t.events, inspect t.adapter …
+await t.destroy();
+```
+
+`createTestNextly` boots a real Nextly on in-memory SQLite and runs your full lifecycle.
+
+## Type safety (codegen)
+
+Run `nextly generate:types` in the consuming app to narrow `CollectionSlug`, `PermissionSlug`, and `EventName` to the real, installed values — including your plugin's. When a plugin contributes admin components, the same command emits a `plugin-admin-imports.generated.ts` import map so those React components load with no manual host imports.
+
+## Publish
+
+Build (`tsup`), publish to npm, and add the `nextly-plugin` keyword to `package.json` so it's discoverable. Declare an honest `nextly` range. See the [API reference](/docs/plugins/api-reference) for the full public surface and the [error reference](/docs/plugins/error-reference) for boot-error meanings.
+
+## Stability
+
+Everything is `@experimental` until first-party plugins exercise it. `ctx.services` is the highest-scrutiny surface. The public surface becomes semver-protected at stabilization (breaking it = a Nextly major). Pin versions during alpha.

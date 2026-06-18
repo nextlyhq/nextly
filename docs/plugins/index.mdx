@@ -51,45 +51,47 @@ export default defineConfig({
 
 Every plugin implements the `PluginDefinition` interface from `nextly`. The lifecycle has two phases:
 
-### 1. Configuration Phase
+### 1. Declarative + setup phase
 
-Before services start, Nextly calls each plugin's optional `config()` function. This lets plugins inject collections, modify settings, or add fields to existing collections.
+Plugins declare schema, permissions, routes, and admin UI in `contributes` (read by the host without running the plugin). Before services start, Nextly also runs each plugin's optional `setup(config)` escape hatch — all `setup`s run before any `init`. Don't mutate the config; spread and return a new object.
 
 ```typescript
-const plugin: PluginDefinition = {
-  name: 'my-plugin',
-  version: '1.0.0',
-  collections: [MyCollection],
+import { definePlugin } from '@nextlyhq/plugin-sdk';
 
-  config(config) {
-    // Merge plugin collections with user collections
-    return {
-      ...config,
-      collections: [...(config.collections || []), ...myCollections],
-    };
+export const myPlugin = definePlugin({
+  name: '@acme/nextly-plugin-example',
+  version: '1.0.0',
+  nextly: '^1.0.0',
+  contributes: {
+    collections: [MyCollection], // merged automatically by the pipeline
   },
-};
+  setup(config) {
+    return { ...config }; // escape hatch for advanced config transforms
+  },
+});
 ```
 
 ### 2. Initialization Phase
 
-After all services are registered, Nextly calls each plugin's `init()` function with a `PluginContext`. This context provides access to:
+After all services are registered, Nextly calls each plugin's `init(ctx)` with a `PluginContext`. It provides:
 
-- **`services`** -- Collection CRUD, user management, media handling, and email sending
-- **`infra`** -- Direct database access and logger
-- **`config`** -- Read-only Nextly configuration
-- **`hooks`** -- Hook registration for lifecycle events
+- **`services`** -- managed, secure-by-default data access (`{ as: 'system' }` to elevate)
+- **`db`** -- raw Drizzle escape hatch (unmanaged)
+- **`hooks`** / **`events`** / **`filters`** / **`actions`** -- in-transaction hooks, post-commit events, typed seams
+- **`self`** -- your entities' resolved slugs after any host `.rename()`
+- **`logger`**, **`config`**, **`nextlyVersion`**
 
 ```typescript
-import { definePlugin } from 'nextly';
+import { definePlugin } from '@nextlyhq/plugin-sdk';
 
 export const auditPlugin = definePlugin({
   name: 'audit-log',
   version: '1.0.0',
+  nextly: '^1.0.0',
 
-  async init(nextly) {
-    nextly.hooks.on('afterCreate', '*', async (context) => {
-      nextly.infra.logger.info('Created entry', {
+  async init(ctx) {
+    ctx.hooks.on('afterCreate', '*', async (context) => {
+      ctx.logger.info('Created entry', {
         collection: context.collection,
         id: context.data?.id,
       });
@@ -97,6 +99,8 @@ export const auditPlugin = definePlugin({
   },
 });
 ```
+
+See the **[Plugin Author Guide](/docs/plugins/author-guide)** for the full workflow.
 
 ## Plugin Admin Integration
 
@@ -146,6 +150,9 @@ export default defineConfig({
 
 ## Next Steps
 
+- [Plugin Author Guide](/docs/plugins/author-guide) -- build a plugin: lifecycle, `ctx`, and the scaffold → dev → test → publish loop
+- [Plugin API Reference](/docs/plugins/api-reference) -- the public `@nextlyhq/plugin-sdk` surface
+- [Plugin Error Reference](/docs/plugins/error-reference) -- fail-fast boot errors and how to fix them
 - [Form Builder Plugin](/docs/plugins/form-builder) -- set up dynamic forms with drag-and-drop building, submission tracking, and notifications
 - [Configuration Reference](/docs/configuration/nextly-config) -- full `defineConfig` options including the `plugins` array
 - [Admin Customization](/docs/admin/customization) -- override plugin sidebar placement and appearance

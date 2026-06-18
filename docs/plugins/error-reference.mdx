@@ -1,0 +1,49 @@
+---
+title: Plugin Error Reference
+description: The fail-fast boot errors a plugin can trigger — what each means and how to fix it.
+---
+
+> **Warning: Plugins are not ready for use.** The plugin API is experimental (alpha).
+
+Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops startup with a specific error rather than failing later in unclear ways. Each error is a `NextlyError` with a stable `code`; the specific cause is in `logContext.reason`. (The user-facing `message` is generic — assert on `code` / `logContext.reason` in tests.)
+
+## Resolution
+
+| Code | Status | Cause | Fix |
+|---|---|---|---|
+| `PLUGIN_RESOLUTION_ERROR` | 500 | A `dependsOn` is missing, a dependency cycle exists, or a `nextly`/dependency version range is incompatible with what's installed. `logContext.reason` ∈ `missing-dependency`, `dependency-cycle`, `invalid-nextly-range`, `core-incompatible`, `version-incompatible`, `optional-version-incompatible`. | Install/declare the missing dependency, break the cycle, or widen/correct the version range. |
+
+## Schema
+
+| Code | Status | Cause | Fix |
+|---|---|---|---|
+| `NEXTLY_SCHEMA_SLUG_COLLISION` | 409 | Two sources (a plugin and code/another plugin) contribute the same collection/single/component slug. | Rename one entity, or have the integrator `.rename()` the plugin's slug. |
+| `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` | 400 | A `relationTo` points at a slug that isn't in the merged schema. | Point the relationship at an existing slug (core `users`/`media` are always valid). |
+| `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` | 400 | `contributes.extend` targets a slug that doesn't exist in the merged schema (e.g. a Builder-only entity during the code-first gap). | Target an existing code/plugin entity, or declare a `dependsOn` on the plugin that owns it. |
+| `NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE` | 409 | `contributes.extend` adds a field name already present on the target. | Use a different field name (configurable field names resolve collisions). |
+| `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION` | 409 | A plugin relates to (or extends with a relation into) another plugin's entity without declaring `dependsOn` on it. | Add the other plugin to `dependsOn`. |
+| `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET` | 400 | `.rename({ from: to })` names a `from` slug the plugin doesn't contribute. | Rename only slugs the plugin actually declares. |
+
+## Permissions
+
+| Code | Status | Cause | Fix |
+|---|---|---|---|
+| `NEXTLY_PERMISSION_COLLISION` | 409 | A custom permission duplicates another, targets a reserved system resource, or reuses an auto-seeded CRUD `(action, resource)`. `logContext.reason` ∈ `duplicate-permission`, `system-resource-reserved`, `crud-permission-reserved`. | Choose a unique `(action, resource)`; don't redeclare CRUD permissions (they're auto-seeded). |
+
+## Routes
+
+| Code | Status | Cause | Fix |
+|---|---|---|---|
+| `NEXTLY_ROUTE_COLLISION` | 409 | Two routes share the same `(method, full path)` after namespacing under `/api/plugins/<name>`. | Give each route a distinct method/path. |
+| `NEXTLY_ROUTE_INVALID_PATH` | 400 | A route `path` does not start with `/`. | Start the path with `/` (e.g. `/export`). |
+
+## Inspecting plugins
+
+Use the CLI to see what's installed and detect issues without booting the app:
+
+```bash
+nextly plugins list                 # table of plugins + contributions
+nextly plugins info <name>          # one plugin's details
+```
+
+A resolution error surfaces here too (the commands run the same validation).

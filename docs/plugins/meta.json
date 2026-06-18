@@ -1,4 +1,10 @@
 {
   "title": "Plugins",
-  "pages": ["index", "form-builder"]
+  "pages": [
+    "index",
+    "author-guide",
+    "api-reference",
+    "error-reference",
+    "form-builder"
+  ]
 }

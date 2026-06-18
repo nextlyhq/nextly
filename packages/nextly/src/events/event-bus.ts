@@ -15,14 +15,26 @@
  * @module events/event-bus
  */
 
+import type { GeneratedTypes } from "../direct-api/types/shared";
+
 /** Minimal logger shape used for isolated-failure diagnostics. */
 interface EventLogger {
   warn?: (message: string, meta?: Record<string, unknown>) => void;
   error?: (message: string, meta?: Record<string, unknown>) => void;
 }
 
-/** Event name. Loosely typed in P1; codegen-typed names land with D47/P6. */
-export type EventName = string;
+/**
+ * Event name.
+ *
+ * When generated types exist (run `nextly generate:types`), this narrows to the
+ * union of known event names (per-collection `collection.*` events, the core
+ * document/auth/media families, `plugin.initialized`, and each plugin's declared
+ * `contributes.events`, D47). Without generated types it falls back to `string`
+ * (same convention as `CollectionSlug`), so arbitrary names still emit/subscribe.
+ */
+export type EventName = GeneratedTypes extends { events: infer E }
+  ? keyof E & string
+  : string;
 
 /** The envelope every handler receives. */
 export interface EventEnvelope<P = unknown> {
