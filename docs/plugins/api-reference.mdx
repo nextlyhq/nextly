@@ -1,0 +1,129 @@
+---
+title: Plugin API Reference
+description: The public, experimental plugin surface re-exported by @nextlyhq/plugin-sdk.
+---
+
+> **Warning: Plugins are not ready for use.** Everything here is `@experimental` (alpha) and may change without notice until the Nextly beta. `@nextlyhq/plugin-sdk` **is** the stability boundary — if it isn't exported there, it isn't public.
+
+## Entry points
+
+| Import | Surface | React? |
+|---|---|---|
+| `@nextlyhq/plugin-sdk` | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()` | no |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly` | no |
+| `@nextlyhq/plugin-sdk/client` | `useCan`, `<Can>` | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin` | `registerComponent`, `registerComponents`, `registerKnownPlugin` | yes (optional peer) |
+
+## `definePlugin(def): PluginDefinition`
+
+```ts
+interface PluginDefinition {
+  name: string;
+  version: string;
+  nextly: string;                              // core-compat range (boot-checked, may span majors)
+  dependsOn?: Record<string, string>;          // required deps → version range
+  optionalDependsOn?: Record<string, string>;  // enhance-if-present
+  enabled?: boolean;                           // default true; false = skip behavior, keep schema
+  contributes?: PluginContributions;
+  setup?:   (config: NextlyConfig) => NextlyConfig;   // all setups before any init
+  init?:    (ctx: PluginContext) => void | Promise<void>;
+  destroy?: (ctx: PluginContext) => void | Promise<void>;
+  rename?:  (map: Record<string, string>) => PluginDefinition;  // integrator-side remap (D54)
+}
+```
+
+## `PluginContributions`
+
+```ts
+interface PluginContributions {
+  collections?: CollectionConfig[];
+  singles?:     SingleConfig[];
+  components?:  ComponentConfig[];
+  extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
+  permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
+  events?:      Array<{ name: string }>;
+  routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware? }
+  admin?: {
+    menu?:     PluginMenuItem[];               // { label, to, icon?, order?, requiredPermission?, children? }
+    pages?:    PluginAdminPage[];              // { path, component, requiredPermission? }
+    settings?: { component: ComponentPath };
+    views?:    Record<string, PluginCollectionView>; // list/edit/before*/after* by collection slug
+    // widgets?: RESERVED (M8 / D58) — not rendered yet
+  };
+}
+```
+
+Component references are string paths: `"<package>/<path>#<Export>"`, e.g. `"@acme/x/admin#ReportsPage"`.
+
+## `PluginContext` (`ctx`)
+
+```ts
+interface PluginContext {
+  services: NextlyServices;       // managed, secure-by-default; .collections supports { as: 'user' | 'system' }
+  db: DatabaseInstance;           // raw Drizzle escape hatch (unmanaged)
+  hooks: PluginHookRegistry;      // in-transaction, modify/abort
+  events: EventBus;               // post-commit, observe-only, best-effort
+  filters: PluginFilterRegistry;  // transform values on typed seams (D63)
+  actions: PluginActionRegistry;  // ordered side-effects on typed seams (D63)
+  self: { name: string; collections: Record<string,string>; singles: Record<string,string> }; // resolved slugs (D54)
+  config: Readonly<NextlyConfig>;
+  logger: Logger;
+  nextlyVersion: string;
+}
+```
+
+### Secure-by-default services (D35)
+
+```ts
+// Acts as the current user (RBAC enforced):
+await ctx.services.collections.listEntries(slug, {}, { as: "user", user: ctx.user });
+// Privileged work — explicit, visible elevation:
+await ctx.services.collections.createEntry(slug, data, { as: "system" });
+```
+
+## Hooks & events
+
+```ts
+ctx.hooks.on(type, collectionSlug | "*", handler);   // beforeCreate/afterCreate/… — can modify/abort
+ctx.events.on(eventName, handler);                   // observe-only; e.g. `collection.${slug}.created`
+ctx.events.emit(eventName, payload);                 // declare custom names in contributes.events
+```
+
+Event-name constants are exported: `DocumentEvents`, `AuthEvents`, `MediaEvents`.
+
+## Typed slugs (codegen)
+
+`CollectionSlug`, `SingleSlug`, `PermissionSlug`, and `EventName` are `string` by default and **narrow to the installed unions** once `nextly generate:types` runs. Author code stays valid either way.
+
+## Client (`/client`)
+
+```ts
+useCan(permission: string): boolean;
+const Can: React.FC<{ permission: string; fallback?: ReactNode; children: ReactNode }>;
+```
+
+## Admin registration (`/admin`)
+
+```ts
+registerComponent(path, Component);
+registerComponents({ [path]: Component });
+registerKnownPlugin(packagePrefix, async () => { /* register */ });
+```
+
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you — import it once in the app and your `contributes.admin` components load with no manual wiring.
+
+## Testing (`/testing`)
+
+```ts
+createTestNextly(opts: { plugins: PluginDefinition[]; collections?: CollectionConfig[] }):
+  Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
+```
+
+## Secrets
+
+```ts
+secret(value): Secret<T>;   // auto-redacts in logs / JSON / inspect; .reveal() to read
+isSecret(v): boolean;
+```
+
+See the [author guide](/docs/plugins/author-guide) for the full workflow and the [error reference](/docs/plugins/error-reference) for boot-error meanings.
