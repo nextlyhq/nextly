@@ -216,6 +216,38 @@ export function formBuilder(
           },
         },
       ],
+      // Admin UI (P5/D19–D23) — the canonical contributes.admin example. Paths
+      // are the components form-builder's `/admin` module self-registers (kept
+      // as literals so this node entry stays React-free). menu (D20) links to
+      // the forms collection; settings (D21) renders the builder UI at
+      // /admin/plugins/<slug>; a custom page (D21) is gated by export-submissions;
+      // a submissions beforeList view (D23) injects the filter above the list.
+      admin: {
+        menu: [
+          {
+            label: "Forms",
+            to: `/admin/collections/${resolvedConfig.formOverrides.slug}`,
+            icon: "file-text",
+            order: 50,
+            requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
+          },
+        ],
+        settings: {
+          component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
+        },
+        pages: [
+          {
+            path: "submissions",
+            component: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+            requiredPermission: "export-submissions",
+          },
+        ],
+        views: {
+          [resolvedConfig.formSubmissionOverrides.slug]: {
+            beforeList: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+          },
+        },
+      },
     },
 
     admin: {
