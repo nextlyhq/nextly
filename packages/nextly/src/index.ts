@@ -355,6 +355,10 @@ export {
   type PluginActionRegistry,
 } from "./plugins";
 
+// Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
+export type { ServiceOpts } from "./plugins/service-opts";
+export type { AuthUser } from "./types/auth";
+
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
   EventBus,
