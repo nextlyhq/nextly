@@ -8,6 +8,7 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 
+import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import type { RouteMatch } from "./route-registry";
 import type { PluginRoute, PluginRouteContext } from "./route-types";
@@ -87,8 +88,13 @@ export async function runPluginRoute(
     params: matched.params,
   };
 
+  const run = composeMiddleware(
+    matched.route.middleware ?? [],
+    matched.route.handler
+  );
+
   try {
-    return await matched.route.handler(req, ctx);
+    return await run(req, ctx);
   } catch (err) {
     return toErrorResponse(req, err);
   }
