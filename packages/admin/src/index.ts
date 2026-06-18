@@ -111,6 +111,15 @@ export type { QueryErrorBoundaryProps } from "./components/shared/query-error-bo
 export { PluginComponentBoundary } from "./components/shared/plugin-component-boundary";
 export { PluginSlot } from "./components/shared/plugin-slot";
 
+// Plugin admin component registration (D19) — author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`.
+export {
+  registerComponent,
+  registerComponents,
+  registerKnownPlugin,
+  type ComponentPath,
+} from "./lib/plugins/component-registry";
+
 // Error Fallback Components
 export {
   PageErrorFallback,

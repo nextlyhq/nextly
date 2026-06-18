@@ -29,6 +29,16 @@ export type {
   PermissionSlug,
 } from "./contributions";
 
+// Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
+export type {
+  ComponentPath,
+  PluginAdminContributions,
+  PluginAdminPage,
+  PluginAdminWidget,
+  PluginCollectionView,
+  PluginMenuItem,
+} from "./admin-contributions";
+
 // Plugin HTTP routes (P4, D25/D26/D27) — `contributes.routes` surface.
 export type {
   PluginRoute,
