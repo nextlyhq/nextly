@@ -31,20 +31,19 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { ComponentConfig } from "../../components/config/types";
+import type { NextlyServiceConfig } from "../../di/register";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
-import {
-  toSingularLabel,
-  toPluralLabel,
-} from "../../shared/lib/pluralization";
+import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
@@ -247,12 +246,22 @@ async function generateTypes(
     generateModuleAugmentation: generateDeclare,
   };
 
+  // Permission slugs + event names for typed PermissionSlug/EventName (D47).
+  // `config` is the already-merged config (plugin contributions folded by
+  // loadConfig); `config.plugins` is the resolved plugin list.
+  const { permissionSlugs, eventNames } = collectCodegenNames(
+    config as unknown as NextlyServiceConfig,
+    config.plugins ?? []
+  );
+
   const typeGenerator = new TypeGenerator(typeGeneratorOptions);
   const typesFile = typeGenerator.generateTypesFile(
     records,
     singleRecords,
     componentRecords,
-    userFieldRecords
+    userFieldRecords,
+    permissionSlugs,
+    eventNames
   );
 
   // Resolve and write types file
