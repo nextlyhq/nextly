@@ -28,6 +28,10 @@ import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
+import {
+  wrapCollectionsForPlugin,
+  type PluginCollectionService,
+} from "./service-opts";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -196,8 +200,11 @@ export interface PluginContext {
    * - Media: File upload and management
    */
   services: {
-    /** Collection service for CRUD operations on dynamic collections */
-    collections: CollectionService;
+    /**
+     * Collection service for CRUD on dynamic collections. Access methods accept
+     * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system (D35).
+     */
+    collections: PluginCollectionService;
     /** User service for user management */
     users: UserService;
     /** Media service for file operations */
@@ -673,7 +680,7 @@ export function createPluginContext(
 
   return {
     services: {
-      collections: collectionService,
+      collections: wrapCollectionsForPlugin(collectionService),
       users: userService,
       media: mediaService,
       email: emailService,

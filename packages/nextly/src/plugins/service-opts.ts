@@ -1,4 +1,5 @@
 import { NextlyError } from "../errors/nextly-error";
+import type { CollectionService } from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
@@ -39,4 +40,71 @@ export function resolveServiceOpts(opts: ServiceOpts): {
     };
   }
   return { overrideAccess: true };
+}
+
+/**
+ * The collection-facade access methods, mapped to the position of their trailing
+ * `RequestContext` argument. The wrapper translates a `ServiceOpts` passed at this
+ * position into a `RequestContext` (D35).
+ */
+type AccessMethod =
+  | "createEntry"
+  | "listEntries"
+  | "findEntryById"
+  | "updateEntry"
+  | "deleteEntry";
+
+const CONTEXT_INDEX: Record<AccessMethod, number> = {
+  createEntry: 2,
+  listEntries: 2,
+  findEntryById: 2,
+  updateEntry: 3,
+  deleteEntry: 2,
+};
+
+/** Replace a method's trailing `RequestContext` arg with an optional `ServiceOpts`. */
+type ReplaceTrailingContext<F> = F extends (
+  ...args: [...infer Head, RequestContext]
+) => infer R
+  ? (...args: [...Head, ServiceOpts?]) => R
+  : F;
+
+/** @experimental Plugin-facing collection service: access methods take `ServiceOpts` (D35). */
+export type PluginCollectionService = Omit<CollectionService, AccessMethod> & {
+  [K in AccessMethod]: ReplaceTrailingContext<CollectionService[K]>;
+};
+
+/**
+ * Wrap the collection facade so its access methods accept a trailing `ServiceOpts`
+ * (translated to a `RequestContext` via {@link resolveServiceOpts}). Non-access
+ * members pass through. The wrapped methods are async, so a `ServiceOpts` misuse
+ * (e.g. `as:'user'` with no user) surfaces as a rejection. Plugins never touch
+ * `overrideAccess` directly (D35).
+ */
+export function wrapCollectionsForPlugin(
+  collections: CollectionService
+): PluginCollectionService {
+  return new Proxy(collections, {
+    get(target, prop, receiver) {
+      const orig = Reflect.get(target, prop, receiver) as unknown;
+      if (typeof orig !== "function") return orig;
+      const fn = orig as (...args: unknown[]) => unknown;
+      const idx = (CONTEXT_INDEX as Record<string, number | undefined>)[
+        prop as string
+      ];
+      if (idx === undefined) return fn.bind(target);
+      return async (...args: unknown[]) => {
+        const resolved = resolveServiceOpts((args[idx] as ServiceOpts) ?? {});
+        const next = [...args];
+        next[idx] = {
+          user: resolved.user,
+          overrideAccess: resolved.overrideAccess,
+        };
+        return (fn as (...a: unknown[]) => Promise<unknown>).apply(
+          target,
+          next
+        );
+      };
+    },
+  }) as unknown as PluginCollectionService;
 }
