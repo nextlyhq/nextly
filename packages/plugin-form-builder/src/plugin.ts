@@ -49,10 +49,8 @@ type NextlyWithFormBuilderConfig = NextlyInstance & {
 function resolveConfig(
   options: FormBuilderPluginOptions
 ): ResolvedFormBuilderConfig {
-  const formOverrides =
-    options.formOverrides || options.collections?.forms || {};
-  const submissionOverrides =
-    options.formSubmissionOverrides || options.collections?.submissions || {};
+  const formOverrides = options.formOverrides || {};
+  const submissionOverrides = options.formSubmissionOverrides || {};
 
   return {
     formOverrides: {
@@ -175,7 +173,8 @@ export function formBuilder(
 
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
-    version: "0.0.8",
+    // Keep in sync with package.json `version` (guarded by package-metadata.test).
+    version: "0.0.2-alpha.22",
     nextly: ">=0.0.2-alpha.21",
 
     // Declarative schema (P2/D12): the merged pipeline folds these into the

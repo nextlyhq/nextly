@@ -115,26 +115,6 @@ export const FORM_BUILDER_VIEW_PATH: ComponentPath =
 export const SUBMISSIONS_FILTER_PATH: ComponentPath =
   "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter";
 
-/**
- * Register Form Builder admin components with the Nextly admin panel.
- *
- * @deprecated This function is no longer needed. Components are auto-registered
- * when the admin detects the Form Builder plugin's component paths in collection configs.
- *
- * @example
- * ```typescript
- * // No manual registration needed! Just add the plugin to your config:
- * export default defineConfig({
- *   plugins: [formBuilderPlugin.plugin],
- * });
- * ```
- */
-export function registerFormBuilderAdminComponents(): void {
-  registerComponents({
-    [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
-  });
-}
-
 // ============================================================================
 // Auto-Registration with Admin
 // ============================================================================

@@ -218,7 +218,9 @@ export async function submitForm(
     const submission = await collections.createEntry(
       pluginConfig.formSubmissionOverrides.slug,
       submissionData,
-      {} // Empty context - submission creation is public
+      // Public form submission — create as system (D35). No ambient user; an
+      // empty context already resolves to system, but be explicit.
+      { as: "system" }
     );
 
     logger.info?.("Form submission created successfully", {
@@ -255,18 +257,14 @@ export async function submitForm(
 // ============================================================
 
 /**
- * Fetch a form by its slug.
- *
- * Uses listEntries and filters by slug client-side.
- * Note: For production with large numbers of forms, consider using
- * direct database queries with WHERE clause support.
+ * Fetch a form by its slug via a service-level `where` query (D56).
  *
  * @param slug - Form slug
  * @param pluginConfig - Plugin configuration
  * @param pluginContext - Plugin context
  * @returns Form document or null if not found
  */
-async function fetchFormBySlug(
+export async function fetchFormBySlug(
   slug: string,
   pluginConfig: ResolvedFormBuilderConfig,
   pluginContext: PluginContext
@@ -274,26 +272,16 @@ async function fetchFormBySlug(
   try {
     const { collections } = pluginContext.services;
 
-    // List all forms and filter by slug
-    // Note: This approach works for small-medium form counts.
-    // For large-scale deployments, use direct database queries.
+    // D56: resolve the form by slug via a service-level `where` query (P7a)
+    // instead of fetching every form and filtering client-side. Forms are
+    // public config the plugin owns, so the read runs as system.
     const result = await collections.listEntries(
       pluginConfig.formOverrides.slug,
-      {
-        pagination: { limit: 100 }, // Fetch enough to find the form
-      },
-      {} // Empty context for public access
+      { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
+      { as: "system" }
     );
 
-    if (!result.data || result.data.length === 0) {
-      return null;
-    }
-
-    // Find form by slug
-    const form = result.data.find(
-      (entry: unknown) => (entry as FormDocument).slug === slug
-    );
-
+    const form = result.data?.[0];
     return form ? (form as unknown as FormDocument) : null;
   } catch {
     return null;
@@ -511,40 +499,33 @@ export async function getFormSubmissionStats(
   }
 
   try {
-    // Fetch all submissions for this form
-    // Note: For large-scale use, implement pagination or direct DB queries
-    const result = await collections.listEntries(
-      pluginConfig.formSubmissionOverrides.slug,
-      {
-        pagination: { limit: 1000 }, // Reasonable limit for stats
-      },
-      {}
-    );
+    const submissionsSlug = pluginConfig.formSubmissionOverrides.slug;
+    const sys = { as: "system" } as const;
+    const base = { form: { equals: form.id } };
 
-    if (!result.data) {
-      return { total: 0, new: 0, read: 0, archived: 0 };
-    }
+    // D56: count per status server-side (P7a) instead of listing every
+    // submission and counting client-side. Stats run as system (plugin-owned
+    // aggregate over submissions for this form).
+    const [total, newCount, read, archived] = await Promise.all([
+      collections.count(submissionsSlug, { where: base }, sys),
+      collections.count(
+        submissionsSlug,
+        { where: { ...base, status: { equals: "new" } } },
+        sys
+      ),
+      collections.count(
+        submissionsSlug,
+        { where: { ...base, status: { equals: "read" } } },
+        sys
+      ),
+      collections.count(
+        submissionsSlug,
+        { where: { ...base, status: { equals: "archived" } } },
+        sys
+      ),
+    ]);
 
-    // Filter submissions for this form and count by status
-    const submissions = result.data.filter(
-      (entry: unknown) => (entry as { form: string }).form === form.id
-    );
-
-    const stats = {
-      total: submissions.length,
-      new: 0,
-      read: 0,
-      archived: 0,
-    };
-
-    for (const sub of submissions) {
-      const status = (sub as unknown as { status: string }).status;
-      if (status === "new") stats.new++;
-      else if (status === "read") stats.read++;
-      else if (status === "archived") stats.archived++;
-    }
-
-    return stats;
+    return { total, new: newCount, read, archived };
   } catch {
     return null;
   }
