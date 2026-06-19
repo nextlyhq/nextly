@@ -367,8 +367,17 @@ export {
 } from "./plugins";
 
 // Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
-export type { ServiceOpts } from "./plugins/service-opts";
+export type {
+  ServiceOpts,
+  PluginCollectionService,
+} from "./plugins/service-opts";
 export type { AuthUser } from "./types/auth";
+
+// Managed data access (D56) — bulk-create result for
+// `ctx.services.collections.createMany`. Rich-query options (`QueryOptions`
+// with where/sort/depth/select) + `PaginatedResult` are exported with the other
+// shared service types above.
+export type { BatchOperationResult } from "./domains/collections/services/collection-types";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {

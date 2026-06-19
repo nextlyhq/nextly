@@ -7,6 +7,8 @@ function mockCollections() {
     createEntry: vi.fn().mockResolvedValue({ id: "1" }),
     findEntryById: vi.fn().mockResolvedValue({ id: "1" }),
     updateEntry: vi.fn().mockResolvedValue({ id: "1" }),
+    count: vi.fn().mockResolvedValue(3),
+    createMany: vi.fn().mockResolvedValue({ successful: 1, failed: 0 }),
     listCollections: vi.fn().mockResolvedValue([]), // non-access passthrough
   };
 }
@@ -91,6 +93,42 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
       { title: "b" },
       SYSTEM_CTX
     );
+  });
+
+  it("count translates the trailing opts (index 2, D56)", async () => {
+    const m = mockCollections();
+    await wrapCollectionsForPlugin(m as never).count(
+      "vault",
+      { where: { a: { equals: 1 } } },
+      { as: "system" }
+    );
+    expect(m.count).toHaveBeenCalledWith(
+      "vault",
+      { where: { a: { equals: 1 } } },
+      SYSTEM_CTX
+    );
+  });
+
+  it("createMany translates the trailing opts (index 2, D56)", async () => {
+    const m = mockCollections();
+    await wrapCollectionsForPlugin(m as never).createMany(
+      "vault",
+      [{ title: "a" }],
+      { as: "system" }
+    );
+    expect(m.createMany).toHaveBeenCalledWith(
+      "vault",
+      [{ title: "a" }],
+      SYSTEM_CTX
+    );
+  });
+
+  it("count as:'user' with no user rejects before delegating (D56)", async () => {
+    const m = mockCollections();
+    await expect(
+      wrapCollectionsForPlugin(m as never).count("vault", {}, { as: "user" })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(m.count).not.toHaveBeenCalled();
   });
 
   it("non-access methods pass through unchanged", async () => {

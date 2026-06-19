@@ -52,7 +52,9 @@ type AccessMethod =
   | "listEntries"
   | "findEntryById"
   | "updateEntry"
-  | "deleteEntry";
+  | "deleteEntry"
+  | "count"
+  | "createMany";
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
   createEntry: 2,
@@ -60,6 +62,9 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
   findEntryById: 2,
   updateEntry: 3,
   deleteEntry: 2,
+  // D56 additions — trailing context at arg index 2.
+  count: 2,
+  createMany: 2,
 };
 
 /** Replace a method's trailing `RequestContext` arg with an optional `ServiceOpts`. */
