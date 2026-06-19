@@ -17,7 +17,8 @@
       "@nextlyhq/storage-vercel-blob",
       "@nextlyhq/plugin-form-builder",
       "@nextlyhq/plugin-sdk",
-      "@nextlyhq/plugin-seo"
+      "@nextlyhq/plugin-seo",
+      "@nextlyhq/plugin-redirects"
     ]
   ],
   "linked": [],

@@ -1,0 +1,79 @@
+{
+  "name": "@nextlyhq/plugin-redirects",
+  "version": "0.0.2-alpha.22",
+  "description": "Redirects plugin for Nextly — admin-managed redirects + a Next.js middleware helper",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "import": "./dist/middleware.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup src/index.ts src/middleware.ts --format esm --dts --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "nextly": "0.0.2-alpha.22",
+    "@nextlyhq/plugin-sdk": "workspace:*",
+    "next": "^14.0.0 || ^15.0.0 || ^16.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "next": "^16.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.8",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "nextly": "workspace:*",
+    "@nextlyhq/plugin-sdk": "workspace:*"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "nextly-plugin",
+    "plugin",
+    "redirects",
+    "cms",
+    "headless-cms"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/plugin-redirects"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "homepage": "https://nextlyhq.com",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
+  "author": "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)"
+}
