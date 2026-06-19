@@ -10,11 +10,6 @@
 
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
-// `getCollectionsHandler` runs inside Next.js request handlers, so it
-// lives behind the runtime subpath. Importing from
-// the root would drag Next.js subpaths into Node-only contexts (CLI,
-// config loaders) that pull this plugin via `nextly.config.ts`.
-import { getCollectionsHandler } from "nextly/runtime";
 // Author against the SDK — the stable, experimental plugin boundary (D43).
 
 import { formsCollection } from "./collections/forms";
@@ -525,31 +520,21 @@ async function handleSubmissionCreated(
 /**
  * Fetch the parent form document for a submission.
  */
-async function fetchParentForm(
+export async function fetchParentForm(
   config: ResolvedFormBuilderConfig,
   formId: string,
   nextly: NextlyInstance
 ): Promise<Record<string, unknown> | null> {
   try {
-    const handler = getCollectionsHandler();
-    if (!handler) {
-      nextly.logger.warn?.(
-        "Form Builder: CollectionsHandler unavailable, skipping notifications"
-      );
-      return null;
-    }
-    const result = await handler.getEntry({
-      collectionName: config.formOverrides.slug,
-      entryId: formId,
-      overrideAccess: true,
-    });
-    const fromData = result?.data;
-    if (fromData) return fromData as Record<string, unknown>;
-    const fromDoc = (result as { doc?: unknown } | undefined)?.doc;
-    if (fromDoc && typeof fromDoc === "object") {
-      return fromDoc as Record<string, unknown>;
-    }
-    return null;
+    // D35/D56: read the parent form through the secure managed service as
+    // system — the afterCreate hook runs without an ambient user. Replaces the
+    // legacy `getCollectionsHandler()` + `overrideAccess` runtime path.
+    const form = await nextly.services.collections.findEntryById(
+      config.formOverrides.slug,
+      formId,
+      { as: "system" }
+    );
+    return form;
   } catch (err) {
     nextly.logger.error?.("Form Builder: failed to fetch form", {
       formId,
