@@ -63,11 +63,23 @@ import type {
   RequestContext,
   PaginatedResult,
   QueryOptions,
+  SortOptions,
   Logger,
 } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { WhereFilter } from "../query/query-operators";
 
 import type { CollectionMetadataService } from "./collection-metadata-service";
+
+/**
+ * Convert the structured {@link SortOptions} into the entry service's string
+ * sort format (`-field` = desc, `field` = asc). Returns `undefined` when no
+ * sort is requested so the entry service keeps its default ordering.
+ */
+function serializeSort(sort: SortOptions | undefined): string | undefined {
+  if (!sort) return undefined;
+  return sort.direction === "desc" ? `-${sort.field}` : sort.field;
+}
 
 /**
  * Collection metadata returned from operations
@@ -435,6 +447,10 @@ export class CollectionService extends BaseService {
       overrideAccess: context.overrideAccess,
       page,
       limit,
+      // D56: forward the rich-query options the facade previously dropped, so
+      // filtering/sorting through `ctx.services.collections` actually applies.
+      where: options.where as WhereFilter | undefined,
+      sort: serializeSort(options.sort),
     });
 
     if (!result.success || !result.data) {
