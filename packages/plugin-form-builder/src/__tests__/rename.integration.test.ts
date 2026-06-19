@@ -38,9 +38,14 @@ describe("form-builder framework .rename() (D54 / R4)", () => {
 
     // init() resolved the submissions slug via ctx.self, so the afterCreate
     // hook is registered on the RENAMED slug — proving the canonical pattern.
-    expect(current.hooks.hasHooks("afterCreate", "leads")).toBe(true);
-    expect(current.hooks.hasHooks("afterCreate", "form-submissions")).toBe(
-      false
+    // Use getHookCount (specific-slug only) rather than hasHooks: the harness
+    // now registers a global `afterCreate` "*" activity-log hook (matching
+    // production), which hasHooks would conflate with a per-slug hook.
+    expect(current.hooks.getHookCount("afterCreate", "leads")).toBeGreaterThan(
+      0
+    );
+    expect(current.hooks.getHookCount("afterCreate", "form-submissions")).toBe(
+      0
     );
   });
 });
