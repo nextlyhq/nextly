@@ -123,6 +123,12 @@ export async function createTestNextly(
     adapter,
     imageProcessor: getImageProcessor(),
     logger,
+    // Wire the (freshly reset) global hook registry into the collection
+    // services so the entry/query/mutation/bulk paths run hooks — without it
+    // those services get `hookRegistry: undefined` and any read/bulk-write
+    // through `ctx.services.collections` throws "executeBeforeOperation is not
+    // a function". Mirrors production boot (registerServices always gets one).
+    hookRegistry: getHookRegistry(),
     plugins: opts.plugins,
     collections: opts.collections,
     singles: opts.singles,
