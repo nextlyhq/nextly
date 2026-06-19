@@ -13,6 +13,7 @@ import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import type { FieldConfig } from "nextly";
 
 import { defaultSeoFields } from "./fields";
+import { createSitemapCache } from "./sitemap";
 
 /** A content document as seen by the sitemap builder (loose by design). */
 export type SeoEntry = Record<string, unknown> & {
@@ -59,6 +60,9 @@ export function defaultUrlFor(entry: SeoEntry, collection: string): string {
  */
 export function seo(opts: SeoPluginOptions): SeoPluginResult {
   const fields = opts.fields ?? defaultSeoFields();
+  // One cache per plugin instance, shared by the route handler (reads it) and
+  // the change-event subscriptions (invalidate it).
+  const sitemap = createSitemapCache(opts);
 
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-seo",
@@ -78,6 +82,36 @@ export function seo(opts: SeoPluginOptions): SeoPluginResult {
           group: "SEO",
         },
       ],
+      // D25/D28: public sitemap, namespaced under
+      // /api/plugins/@nextlyhq/plugin-seo/sitemap.xml. Apps expose it at the
+      // root via a next.config rewrite (see README).
+      routes: [
+        {
+          method: "GET",
+          path: "/sitemap.xml",
+          public: true,
+          handler: async (_req, ctx) => {
+            const xml = await sitemap.get(ctx.services);
+            return new Response(xml, {
+              headers: { "content-type": "application/xml; charset=utf-8" },
+            });
+          },
+        },
+      ],
+    },
+    // D8/D51: invalidate the cached sitemap when any target collection changes.
+    init(ctx) {
+      const guardKey = `__seo_events_${opts.collections.join(",")}`;
+      const g = globalThis as Record<string, unknown>;
+      if (g[guardKey]) return; // dev-mode HMR: subscribe once
+      g[guardKey] = true;
+      for (const slug of opts.collections) {
+        for (const action of ["created", "updated", "deleted"] as const) {
+          ctx.events.on(`collection.${slug}.${action}`, () =>
+            sitemap.invalidate()
+          );
+        }
+      }
     },
   });
 

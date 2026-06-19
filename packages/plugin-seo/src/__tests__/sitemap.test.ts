@@ -14,7 +14,11 @@ import { defineCollection, text } from "nextly";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { seo } from "../plugin";
-import { generateSitemap, type SitemapServices } from "../sitemap";
+import {
+  createSitemapCache,
+  generateSitemap,
+  type SitemapServices,
+} from "../sitemap";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -96,5 +100,28 @@ describe("generateSitemap (P7c, integration)", () => {
 
     expect(xml).toContain("<loc>https://x.com/pages/live</loc>");
     expect(xml).not.toContain("/pages/wip");
+  });
+});
+
+describe("createSitemapCache (P7c, unit)", () => {
+  it("caches the result until invalidated", async () => {
+    const listEntries = vi
+      .fn()
+      .mockResolvedValue({ data: [{ slug: "a", updatedAt: null }] });
+    const services = {
+      collections: { listEntries },
+    } as unknown as SitemapServices;
+    const cache = createSitemapCache({
+      collections: ["pages"],
+      baseUrl: "https://x.com",
+    });
+
+    await cache.get(services);
+    await cache.get(services);
+    expect(listEntries).toHaveBeenCalledTimes(1); // second get served from cache
+
+    cache.invalidate();
+    await cache.get(services);
+    expect(listEntries).toHaveBeenCalledTimes(2); // regenerated after invalidate
   });
 });
