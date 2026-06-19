@@ -9,6 +9,13 @@
  * @module domains/schema/ui-schema/merge
  * @since v0.0.3-alpha (Plan D2)
  */
+import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  type BuilderEntities,
+  type DeferredExtend,
+  resolveBuilderExtends,
+  type SchemaEntityLike,
+} from "../../../plugins/schema/apply-contributions";
 import type {
   UiSchemaEntity,
   UiSchemaManifest,
@@ -66,6 +73,58 @@ function mergeType(
     merged.push(uiToMinimal(e, prefix));
   }
   return merged;
+}
+
+/**
+ * Project a parsed ui-schema manifest into the `BuilderEntities` shape the plugin
+ * fold consumes for extend/relation resolution (P8). Only slug + fields are
+ * needed (`resolveBuilderExtends`/`finalizeRelationTargets` read those); the
+ * field shapes are structurally compatible with `FieldConfig` for that purpose.
+ */
+export function manifestToBuilderEntities(
+  manifest: UiSchemaManifest
+): BuilderEntities {
+  const toEntity = (e: UiSchemaEntity): SchemaEntityLike => ({
+    slug: e.slug,
+    fields: e.fields as unknown as FieldConfig[],
+  });
+  return {
+    collections: manifest.collections.map(toEntity),
+    singles: manifest.singles.map(toEntity),
+    components: manifest.components.map(toEntity),
+  };
+}
+
+/**
+ * Materialize plugin `contributes.extend` clauses that target Builder-made
+ * entities (P8): append the deferred extend fields to the matching ui-schema
+ * entity (by slug, across collections/singles/components), preserving every
+ * other property (labels, admin, status…) via the shared `resolveBuilderExtends`
+ * fold. The returned manifest then drives BOTH the migration table diff
+ * (`mergeUiEntities` → `generateMigration` emits the ADD COLUMN) AND the
+ * `dynamic_collections.fields` metadata upsert (so the runtime rebuilds the
+ * table with the extra columns). Throws `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN`
+ * if a deferred target matches no Builder entity (a real typo — already caught
+ * at config load, re-checked here defensively). Pure.
+ */
+export function applyDeferredExtendsToManifest(
+  manifest: UiSchemaManifest,
+  deferred: DeferredExtend[]
+): UiSchemaManifest {
+  if (deferred.length === 0) return manifest;
+  // ui-schema `FieldNode`s are structurally compatible with what the extend
+  // resolver reads (slug + field names); cast across the field-shape boundary.
+  const resolved = resolveBuilderExtends(deferred, {
+    collections: manifest.collections as unknown as SchemaEntityLike[],
+    singles: manifest.singles as unknown as SchemaEntityLike[],
+    components: manifest.components as unknown as SchemaEntityLike[],
+  });
+  return {
+    ...manifest,
+    collections: resolved.collections as unknown as UiSchemaEntity[],
+    singles: resolved.singles as unknown as UiSchemaEntity[],
+    components: resolved.components as unknown as UiSchemaEntity[],
+  };
 }
 
 export function mergeUiEntities(

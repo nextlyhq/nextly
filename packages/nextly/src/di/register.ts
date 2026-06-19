@@ -62,10 +62,14 @@ import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
-import { applyPluginSchemaContributions } from "../plugins/schema/apply-contributions";
 import {
+  applyPluginSchemaContributionsDeferred,
+  finalizeDeferredExtendTargets,
+} from "../plugins/schema/apply-contributions";
+import {
+  collectUnresolvedRelationTargets,
+  finalizeRelationTargets,
   validateCrossPluginRelations,
-  validateMergedRelations,
 } from "../plugins/schema/validate-relations";
 import type {
   CollectionSource,
@@ -105,7 +109,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import { loadDynamicTables } from "./load-dynamic-tables";
+import { loadDynamicSlugs, loadDynamicTables } from "./load-dynamic-tables";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -308,16 +312,19 @@ export async function registerServices(
   // downstream registry/sync/migration machinery treats them like ordinary
   // code-first entities. Runs over ALL resolved plugins (incl. disabled — D49)
   // and fails fast on plugin-involved slug collisions (D13). The CLI applies the
-  // SAME fold (config-loader.ts) so both paths agree (D50).
-  const transformedConfig = applyPluginSchemaContributions(
-    setupConfig,
-    resolvedPlugins
-  );
+  // SAME fold (config-loader.ts) so both paths agree (D50). `extend`/relation
+  // targets that aren't code/plugin entities are DEFERRED here (candidate
+  // Builder-made collections) and finalized after the DB is reachable below —
+  // this is how extending/relating to a Builder collection works (P8/D3/R2).
+  const { config: transformedConfig, deferredExtends } =
+    applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
 
-  // Validate every relationTo (code + plugin) against the merged schema, and
-  // require dependsOn for cross-plugin relations (D15). The only place
-  // relationship validation runs at boot.
-  validateMergedRelations(transformedConfig);
+  // Collect every relationTo (code + plugin) that doesn't resolve to a merged
+  // collection (or core target); require dependsOn for cross-plugin relations
+  // (D15). Builder-target relations stay in `unresolvedRelations` and are
+  // finalized once Builder slugs are loaded from the DB (below).
+  const unresolvedRelations =
+    collectUnresolvedRelationTargets(transformedConfig);
   validateCrossPluginRelations(resolvedPlugins);
 
   // Fail fast on invalid plugin-declared custom permissions (D36). Validation
@@ -387,6 +394,20 @@ export async function registerServices(
         `[registerServices] Could not register config tables into resolver: ${err instanceof Error ? err.message : String(err)}`
       );
     }
+  }
+
+  // Finalize the deferred Builder-lane targets now the DB is reachable (P8/D3).
+  // Builder/UI entities live in the dynamic_* registry tables (loaded by
+  // `loadDynamicTables` above), not in `config`, so their slugs weren't knowable
+  // at fold time. A plugin extend/relation targeting a Builder collection
+  // resolves here; a target in NEITHER code/plugin NOR the Builder set still
+  // fails fast (D7/D12/D15). Extend columns were materialized into the Builder
+  // table's stored fields by `migrate`, so this is an existence check only — the
+  // DB row is authoritative (no re-append).
+  if (deferredExtends.length > 0 || unresolvedRelations.length > 0) {
+    const builderSlugs = await loadDynamicSlugs(adapter);
+    finalizeDeferredExtendTargets(deferredExtends, builderSlugs.all);
+    finalizeRelationTargets(unresolvedRelations, builderSlugs.collections);
   }
 
   // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration

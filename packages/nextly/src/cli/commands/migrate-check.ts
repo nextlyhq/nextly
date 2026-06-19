@@ -65,7 +65,10 @@ import type {
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
-import { mergeUiEntities } from "../../domains/schema/ui-schema/merge";
+import {
+  applyDeferredExtendsToManifest,
+  mergeUiEntities,
+} from "../../domains/schema/ui-schema/merge";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -148,6 +151,13 @@ export async function runMigrateCheck(
     );
     process.exit(1);
   }
+
+  // Materialize plugin extends that target Builder-made entities (P8) so the
+  // drift comparison below sees the same schema migrate:create would produce.
+  manifest = applyDeferredExtendsToManifest(
+    manifest,
+    configResult.deferredExtends ?? []
+  );
 
   // Cross-file checks (slug collision, relation targets).
   const crossIssues = validateCrossFile({

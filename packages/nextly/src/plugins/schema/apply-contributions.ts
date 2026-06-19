@@ -112,9 +112,11 @@ function tryExtend<T extends Fielded>(
 /**
  * Apply every plugin's `contributes.extend` (D12): append the declared fields to
  * the target entity (found by slug across the merged collections/singles/
- * components). `target` may be a slug or an array of slugs (applied to each).
- * An unknown target fails fast (D12) — this is also how extending a Builder-only
- * entity fails loud during the code-first gap (R2). Pure: clones touched arrays.
+ * components). `target` may be a slug or an array of slugs (applied to each). An
+ * unknown target fails fast (D12). This is the EAGER form used by
+ * `applyPluginSchemaContributions`; the Builder-aware boot paths instead use the
+ * deferring fold so a Builder-made target is resolved later, not thrown here
+ * (P8/R2). Pure: clones touched arrays.
  */
 function applyExtends(
   collections: NextlyServiceConfig["collections"],
@@ -142,6 +144,94 @@ function applyExtends(
   }
 
   return { collections: cols, singles: sin, components: comp };
+}
+
+/**
+ * A single, fully-resolved `extend` clause — one target slug (array targets are
+ * pre-expanded) plus the name of the plugin that declared it. Returned by the
+ * deferring fold for targets that aren't code/plugin entities (candidate Builder
+ * targets, P8/R2), then resolved against the Builder set by `resolveBuilderExtends`.
+ */
+export interface DeferredExtend {
+  target: string;
+  fields: FieldConfig[];
+  owner: string;
+}
+
+/** Minimal shape an entity must have to be an extend target (slug + fields). */
+export interface SchemaEntityLike {
+  slug: string;
+  fields?: FieldConfig[];
+}
+
+/** Builder/UI-schema entities that participate in extend resolution (P8). */
+export interface BuilderEntities {
+  collections?: SchemaEntityLike[];
+  singles?: SchemaEntityLike[];
+  components?: SchemaEntityLike[];
+}
+
+/** Result of the deferring fold: the code+plugin merged config + unresolved extends. */
+export interface FoldResult {
+  config: NextlyServiceConfig;
+  /** Extends whose target wasn't a code/plugin entity — resolved later (P8). */
+  deferredExtends: DeferredExtend[];
+}
+
+/** Flatten every plugin's `contributes.extend` into one clause per (target, plugin). */
+function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
+  const clauses: DeferredExtend[] = [];
+  for (const plugin of plugins) {
+    for (const clause of plugin.contributes?.extend ?? []) {
+      const targets = Array.isArray(clause.target)
+        ? clause.target
+        : [clause.target];
+      for (const target of targets) {
+        clauses.push({ target, fields: clause.fields, owner: plugin.name });
+      }
+    }
+  }
+  return clauses;
+}
+
+/**
+ * Apply a flat list of extend clauses to the three entity arrays (matched by slug
+ * across all three). Pure: clones touched arrays. A clause whose target is not
+ * found is either thrown (`onUnknown: "throw"`, D12) or collected into `deferred`
+ * (`onUnknown: "collect"`) — the latter holds a target that may be a Builder
+ * entity until Builder slugs are known (P8/R2).
+ */
+function applyExtendClauses<
+  C extends Fielded,
+  S extends Fielded,
+  P extends Fielded,
+>(
+  collections: C[] | undefined,
+  singles: S[] | undefined,
+  components: P[] | undefined,
+  clauses: DeferredExtend[],
+  onUnknown: "throw" | "collect"
+): {
+  collections: C[];
+  singles: S[];
+  components: P[];
+  deferred: DeferredExtend[];
+} {
+  const cols = [...(collections ?? [])];
+  const sin = [...(singles ?? [])];
+  const comp = [...(components ?? [])];
+  const deferred: DeferredExtend[] = [];
+  for (const { target, fields, owner } of clauses) {
+    const applied =
+      tryExtend(cols, target, fields, owner) ||
+      tryExtend(sin, target, fields, owner) ||
+      tryExtend(comp, target, fields, owner);
+    if (!applied) {
+      if (onUnknown === "throw") throw extendTargetUnknownError(target, owner);
+      deferred.push({ target, fields, owner });
+    }
+  }
+  return { collections: cols, singles: sin, components: comp, deferred };
 }
 
 /**
@@ -227,38 +317,59 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
 }
 
 /**
+ * Apply each plugin's `renameMap` (D54), then fold the resolved
+ * collections/singles/components into the config arrays (config-first, then
+ * topo order). Pure. Throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a plugin-involved
+ * collision (D13). Shared by the throwing and deferring folds below so both
+ * agree on the merged entity set before `extend` is applied.
+ */
+function mergeRenamed(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles" | "components"> {
+  const renamed = plugins.map(p => ({
+    owner: p.name,
+    contributes: renamePluginContributes(p),
+  }));
+  return {
+    collections: mergeKind(
+      "collection",
+      config.collections ?? [],
+      renamed.map(r => ({
+        owner: r.owner,
+        entities: r.contributes.collections,
+      }))
+    ),
+    singles: mergeKind(
+      "single",
+      config.singles ?? [],
+      renamed.map(r => ({ owner: r.owner, entities: r.contributes.singles }))
+    ),
+    components: mergeKind(
+      "component",
+      config.components ?? [],
+      renamed.map(r => ({ owner: r.owner, entities: r.contributes.components }))
+    ),
+  };
+}
+
+/**
  * @experimental Merge plugin `contributes` schema into the config. Pure — does
  * not mutate `config` or `plugins`. Applies each plugin's `renameMap` (D54)
  * before merging, then throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a plugin-
  * involved slug collision (D13) and `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for an
  * `extend` against an unknown target (D12).
+ *
+ * This eager form throws on ANY extend target absent from the code+plugin set.
+ * Builder-aware callers (P8) use {@link applyPluginSchemaContributionsDeferred}
+ * + {@link resolveBuilderExtends} instead, so a Builder target isn't mistaken
+ * for a typo before Builder slugs are known (R2).
  */
 export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
 ): NextlyServiceConfig {
-  // Apply renames once per plugin (declared slugs → resolved), then fold the
-  // resolved entities into the merged config.
-  const renamed = plugins.map(p => ({
-    owner: p.name,
-    contributes: renamePluginContributes(p),
-  }));
-
-  const collections = mergeKind(
-    "collection",
-    config.collections ?? [],
-    renamed.map(r => ({ owner: r.owner, entities: r.contributes.collections }))
-  );
-  const singles = mergeKind(
-    "single",
-    config.singles ?? [],
-    renamed.map(r => ({ owner: r.owner, entities: r.contributes.singles }))
-  );
-  const components = mergeKind(
-    "component",
-    config.components ?? [],
-    renamed.map(r => ({ owner: r.owner, entities: r.contributes.components }))
-  );
+  const { collections, singles, components } = mergeRenamed(config, plugins);
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
   // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
@@ -268,4 +379,81 @@ export function applyPluginSchemaContributions(
   const extended = applyExtends(collections, singles, components, plugins);
 
   return { ...config, ...extended };
+}
+
+/**
+ * @experimental Builder-aware fold (P8): same merge + `extend` as
+ * {@link applyPluginSchemaContributions}, but an `extend` target that isn't a
+ * code/plugin entity is NOT thrown — it's returned in `deferredExtends`. The
+ * caller resolves those against the Builder set (`resolveBuilderExtends`) once
+ * Builder slugs are known: the CLI after `loadUiSchema`, the runtime after
+ * `loadDynamicTables`. This is how extending a Builder-made collection works
+ * without prematurely failing as an unknown target (R2/D3).
+ */
+export function applyPluginSchemaContributionsDeferred(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): FoldResult {
+  const { collections, singles, components } = mergeRenamed(config, plugins);
+  const r = applyExtendClauses(
+    collections,
+    singles,
+    components,
+    flattenExtends(plugins),
+    "collect"
+  );
+  return {
+    config: {
+      ...config,
+      collections: r.collections,
+      singles: r.singles,
+      components: r.components,
+    },
+    deferredExtends: r.deferred,
+  };
+}
+
+/**
+ * @experimental Apply deferred `extend` clauses (from
+ * {@link applyPluginSchemaContributionsDeferred}) to the Builder/UI-schema
+ * entities, matched by slug across collections/singles/components (P8/D12).
+ * Pure: clones touched arrays. Throws `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for
+ * any target that is in NEITHER code/plugin NOR the Builder set — a real typo.
+ * On the CLI the returned (extended) entities drive the migration so the columns
+ * materialize; the runtime uses it only to validate (the DB row is authoritative).
+ */
+export function resolveBuilderExtends(
+  deferred: DeferredExtend[],
+  builder: BuilderEntities
+): BuilderEntities {
+  const r = applyExtendClauses(
+    builder.collections,
+    builder.singles,
+    builder.components,
+    deferred,
+    "throw"
+  );
+  return {
+    collections: r.collections,
+    singles: r.singles,
+    components: r.components,
+  };
+}
+
+/**
+ * @experimental Validate deferred extend targets at runtime (P8): each must be a
+ * known slug (a Builder/UI entity loaded from the DB, where the extend columns
+ * were already materialized by `migrate`). Existence-only — it does NOT re-append
+ * fields (the DB row is authoritative, so re-applying would duplicate columns,
+ * unlike the CLI's `resolveBuilderExtends` which materializes). Throws
+ * `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for a target absent from `knownSlugs`.
+ */
+export function finalizeDeferredExtendTargets(
+  deferred: DeferredExtend[],
+  knownSlugs: Iterable<string>
+): void {
+  const known = new Set(knownSlugs);
+  for (const d of deferred) {
+    if (!known.has(d.target)) throw extendTargetUnknownError(d.target, d.owner);
+  }
 }

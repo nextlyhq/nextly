@@ -9,7 +9,12 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { PluginContributions } from "../contributions";
 import type { PluginDefinition } from "../plugin-context";
 
-import { applyPluginSchemaContributions } from "./apply-contributions";
+import {
+  applyPluginSchemaContributions,
+  applyPluginSchemaContributionsDeferred,
+  finalizeDeferredExtendTargets,
+  resolveBuilderExtends,
+} from "./apply-contributions";
 
 // Minimal entity builders — the fold only reads `.slug`, so partial casts are fine.
 const coll = (slug: string): CollectionConfig =>
@@ -234,7 +239,7 @@ describe("applyPluginSchemaContributions — contributes.extend (D12)", () => {
     expect(fieldNames(posts)).toEqual(["title"]); // original untouched
   });
 
-  it("throws NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN for an unknown/builder-only target", () => {
+  it("(eager fold) throws NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN for a target absent from code/plugin (Builder targets use the deferring fold instead — P8)", () => {
     const err = extendError(() =>
       applyPluginSchemaContributions(
         cfg({ collections: [collWith("posts", "title")] }),
@@ -413,5 +418,146 @@ describe("applyPluginSchemaContributions — renames (D54)", () => {
     );
     expect(err.code).toBe("NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET");
     expect(err.logContext?.reason).toBe("rename-unknown-target");
+  });
+});
+
+describe("applyPluginSchemaContributionsDeferred — defers Builder targets (P8/D3/R2)", () => {
+  it("does not throw on an extend target absent from code+plugin; collects it as deferred", () => {
+    const { config, deferredExtends } = applyPluginSchemaContributionsDeferred(
+      cfg({ collections: [collWith("posts", "title")] }),
+      [
+        plugin("@t/seo", {
+          extend: [
+            { target: "posts", fields: [field("seoTitle")] }, // code target → applied in-place
+            { target: "pages", fields: [field("metaTitle")] }, // builder target → deferred
+          ],
+        }),
+      ]
+    );
+    expect(
+      fieldNames((config.collections ?? []).find(c => c.slug === "posts"))
+    ).toEqual(["title", "seoTitle"]);
+    expect(deferredExtends).toEqual([
+      { target: "pages", fields: [field("metaTitle")], owner: "@t/seo" },
+    ]);
+  });
+
+  it("returns no deferred extends when every target resolves to code/plugin", () => {
+    const { deferredExtends } = applyPluginSchemaContributionsDeferred(
+      cfg({ collections: [collWith("posts", "title")] }),
+      [
+        plugin("@t/seo", {
+          extend: [{ target: "posts", fields: [field("seoTitle")] }],
+        }),
+      ]
+    );
+    expect(deferredExtends).toEqual([]);
+  });
+
+  it("merges code + plugin collections exactly like the throwing fold", () => {
+    const config = cfg({ collections: [coll("code-posts")] });
+    const plugins = [plugin("@t/a", { collections: [coll("a-forms")] })];
+    const { config: deferred } = applyPluginSchemaContributionsDeferred(
+      config,
+      plugins
+    );
+    const eager = applyPluginSchemaContributions(config, plugins);
+    expect(slugs(deferred.collections)).toEqual(slugs(eager.collections));
+  });
+});
+
+describe("resolveBuilderExtends — applies deferred extends to Builder entities (P8/D12)", () => {
+  const builderColl = (slug: string, ...names: string[]) => ({
+    slug,
+    fields: names.map(field),
+  });
+  const caught = (fn: () => unknown): NextlyError => {
+    try {
+      fn();
+    } catch (err) {
+      return err as NextlyError;
+    }
+    throw new Error("expected resolveBuilderExtends to throw");
+  };
+
+  it("appends deferred extend fields to the matching Builder collection", () => {
+    const out = resolveBuilderExtends(
+      [{ target: "pages", fields: [field("metaTitle")], owner: "@t/seo" }],
+      {
+        collections: [builderColl("pages", "title")],
+        singles: [],
+        components: [],
+      }
+    );
+    expect(fieldNames(out.collections?.find(c => c.slug === "pages"))).toEqual([
+      "title",
+      "metaTitle",
+    ]);
+  });
+
+  it("throws NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN when neither code/plugin nor Builder has the target", () => {
+    const err = caught(() =>
+      resolveBuilderExtends(
+        [{ target: "ghost", fields: [field("x")], owner: "@t/seo" }],
+        {
+          collections: [builderColl("pages", "title")],
+          singles: [],
+          components: [],
+        }
+      )
+    );
+    expect(err.code).toBe("NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN");
+    expect(err.logContext?.target).toBe("ghost");
+  });
+
+  it("does not mutate the input Builder entity", () => {
+    const pages = builderColl("pages", "title");
+    resolveBuilderExtends(
+      [{ target: "pages", fields: [field("metaTitle")], owner: "@t/seo" }],
+      { collections: [pages], singles: [], components: [] }
+    );
+    expect(fieldNames(pages)).toEqual(["title"]);
+  });
+});
+
+describe("finalizeDeferredExtendTargets — runtime existence check (P8/D7)", () => {
+  const caught = (fn: () => unknown): NextlyError => {
+    try {
+      fn();
+    } catch (err) {
+      return err as NextlyError;
+    }
+    throw new Error("expected finalizeDeferredExtendTargets to throw");
+  };
+
+  it("passes when every deferred target is a known (Builder) slug", () => {
+    expect(() =>
+      finalizeDeferredExtendTargets(
+        [{ target: "pages", fields: [field("metaTitle")], owner: "@t/seo" }],
+        ["pages", "posts"]
+      )
+    ).not.toThrow();
+  });
+
+  it("throws NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN for a target absent from the known set", () => {
+    const err = caught(() =>
+      finalizeDeferredExtendTargets(
+        [{ target: "ghost", fields: [field("x")], owner: "@t/seo" }],
+        ["pages"]
+      )
+    );
+    expect(err.code).toBe("NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN");
+    expect(err.logContext?.target).toBe("ghost");
+  });
+
+  it("does NOT re-append fields (existence-only — the DB row is authoritative)", () => {
+    // No return value; it only validates. A target whose column already exists
+    // in the DB must NOT raise a duplicate-field error here.
+    expect(() =>
+      finalizeDeferredExtendTargets(
+        [{ target: "pages", fields: [field("metaTitle")], owner: "@t/seo" }],
+        ["pages"]
+      )
+    ).not.toThrow();
   });
 });
