@@ -218,7 +218,9 @@ export async function submitForm(
     const submission = await collections.createEntry(
       pluginConfig.formSubmissionOverrides.slug,
       submissionData,
-      {} // Empty context - submission creation is public
+      // Public form submission — create as system (D35). No ambient user; an
+      // empty context already resolves to system, but be explicit.
+      { as: "system" }
     );
 
     logger.info?.("Form submission created successfully", {
