@@ -448,9 +448,13 @@ export class CollectionService extends BaseService {
       page,
       limit,
       // D56: forward the rich-query options the facade previously dropped, so
-      // filtering/sorting through `ctx.services.collections` actually applies.
+      // filtering/sorting/relation-population through `ctx.services.collections`
+      // actually applies. `depth`/`select` stay undefined when omitted so the
+      // entry service keeps its default depth.
       where: options.where as WhereFilter | undefined,
       sort: serializeSort(options.sort),
+      depth: options.depth,
+      select: options.select,
     });
 
     if (!result.success || !result.data) {

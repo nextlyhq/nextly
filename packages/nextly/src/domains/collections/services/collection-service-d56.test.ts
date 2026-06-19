@@ -80,3 +80,25 @@ describe("CollectionService.listEntries forwards rich-query options (D56, T1)", 
     expect(arg.sort).toBeUndefined();
   });
 });
+
+describe("CollectionService.listEntries forwards relations/projection (D56, T2)", () => {
+  it("forwards `depth` and `select` to the entry service", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries(
+      "posts",
+      { depth: 2, select: { title: true } },
+      {}
+    );
+    expect(entry.listEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ depth: 2, select: { title: true } })
+    );
+  });
+
+  it("leaves `depth`/`select` undefined when omitted (default depth preserved)", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries("posts", {}, {});
+    const arg = entry.listEntries.mock.calls[0][0];
+    expect(arg.depth).toBeUndefined();
+    expect(arg.select).toBeUndefined();
+  });
+});

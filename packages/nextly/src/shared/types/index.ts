@@ -182,6 +182,16 @@ export interface QueryOptions {
   sort?: SortOptions;
   /** Filter conditions (key-value pairs) */
   where?: Record<string, unknown>;
+  /**
+   * Relation population depth (0–5). Omit to keep the service default depth.
+   * @experimental Plugin data-access option (D56).
+   */
+  depth?: number;
+  /**
+   * Field projection — return only the listed fields (`{ title: true }`).
+   * @experimental Plugin data-access option (D56).
+   */
+  select?: Record<string, boolean>;
 }
 
 /**
