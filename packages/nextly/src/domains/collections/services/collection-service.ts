@@ -474,6 +474,41 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * Count entries matching an optional filter (D56 aggregation-lite).
+   *
+   * Lets plugins answer "how many?" without loading rows or dropping to raw
+   * `ctx.db`. For richer aggregations (sum/avg/group-by) use the raw `ctx.db`
+   * escape hatch (D33) — relational aggregation pipelines are out of scope.
+   *
+   * @param collectionName - Name of the collection
+   * @param options - Optional `where` filter and full-text `search`
+   * @param context - Request context (carries `overrideAccess` for elevation)
+   * @returns Number of matching entries
+   * @throws NextlyError if counting fails
+   */
+  async count(
+    collectionName: string,
+    options: { where?: Record<string, unknown>; search?: string } = {},
+    context: RequestContext
+  ): Promise<number> {
+    this.logger.debug("Counting entries", { collectionName });
+
+    const result = await this.entryService.countEntries({
+      collectionName,
+      user: context.user,
+      overrideAccess: context.overrideAccess,
+      where: options.where as WhereFilter | undefined,
+      search: options.search,
+    });
+
+    if (!result.success || !result.data) {
+      throw this.mapLegacyErrorToNextlyError(result);
+    }
+
+    return result.data.totalDocs;
+  }
+
+  /**
    * Find an entry by ID
    *
    * @param collectionName - Name of the collection

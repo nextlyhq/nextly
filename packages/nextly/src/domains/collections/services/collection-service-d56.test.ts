@@ -102,3 +102,42 @@ describe("CollectionService.listEntries forwards relations/projection (D56, T2)"
     expect(arg.select).toBeUndefined();
   });
 });
+
+describe("CollectionService.count (D56, T3)", () => {
+  it("returns the scalar totalDocs and forwards where/search/overrideAccess", async () => {
+    const entry = {
+      countEntries: vi
+        .fn()
+        .mockResolvedValue({ success: true, data: { totalDocs: 7 } }),
+    };
+    const n = await make(entry).count(
+      "posts",
+      { where: { status: { equals: "published" } }, search: "hi" },
+      { overrideAccess: true }
+    );
+    expect(n).toBe(7);
+    expect(entry.countEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        where: { status: { equals: "published" } },
+        search: "hi",
+        overrideAccess: true,
+      })
+    );
+  });
+
+  it("maps a failed count result to a thrown NextlyError", async () => {
+    const entry = {
+      countEntries: vi
+        .fn()
+        .mockResolvedValue({
+          success: false,
+          statusCode: 500,
+          message: "boom",
+        }),
+    };
+    await expect(make(entry).count("posts", {}, {})).rejects.toBeInstanceOf(
+      Error
+    );
+  });
+});
