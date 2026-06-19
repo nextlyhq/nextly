@@ -128,16 +128,49 @@ describe("CollectionService.count (D56, T3)", () => {
 
   it("maps a failed count result to a thrown NextlyError", async () => {
     const entry = {
-      countEntries: vi
-        .fn()
-        .mockResolvedValue({
-          success: false,
-          statusCode: 500,
-          message: "boom",
-        }),
+      countEntries: vi.fn().mockResolvedValue({
+        success: false,
+        statusCode: 500,
+        message: "boom",
+      }),
     };
     await expect(make(entry).count("posts", {}, {})).rejects.toBeInstanceOf(
       Error
+    );
+  });
+});
+
+describe("CollectionService.createMany (D56, T4)", () => {
+  const batch = {
+    successful: 2,
+    failed: 1,
+    ids: ["a", "b"],
+    errors: [{ index: 2, error: "bad" }],
+  };
+
+  it("returns the BatchOperationResult and forwards user + overrideAccess", async () => {
+    const entry = { createEntries: vi.fn().mockResolvedValue(batch) };
+    const res = await make(entry).createMany(
+      "posts",
+      [{ t: 1 }, { t: 2 }, { t: 3 }],
+      { user: { id: "u1", email: "u@x.com", role: "", permissions: [] } }
+    );
+    expect(res).toEqual(batch);
+    expect(entry.createEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        user: expect.objectContaining({ id: "u1" }),
+      }),
+      [{ t: 1 }, { t: 2 }, { t: 3 }]
+    );
+  });
+
+  it("forwards overrideAccess for system elevation", async () => {
+    const entry = { createEntries: vi.fn().mockResolvedValue(batch) };
+    await make(entry).createMany("posts", [{ t: 1 }], { overrideAccess: true });
+    expect(entry.createEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ overrideAccess: true }),
+      [{ t: 1 }]
     );
   });
 });
