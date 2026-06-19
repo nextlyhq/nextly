@@ -3,13 +3,19 @@ import { describe, expect, it } from "vitest";
 import { mergeSetupResultIntoConfig } from "../../cli/utils/config-loader";
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
+import type { FieldConfig } from "../../collections/fields/types";
 import type { ComponentConfig } from "../../components/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { SingleConfig } from "../../singles/config/types";
 import type { PluginContributions } from "../contributions";
 import type { PluginDefinition } from "../plugin-context";
 
-import { applyPluginSchemaContributions } from "./apply-contributions";
+import {
+  applyPluginSchemaContributions,
+  applyPluginSchemaContributionsDeferred,
+  type BuilderEntities,
+  resolveBuilderExtends,
+} from "./apply-contributions";
 
 /**
  * D50 parity guard: the runtime boot (`applyPluginSchemaContributions`, called
@@ -77,5 +83,70 @@ describe("CLI↔runtime schema fold parity (D50)", () => {
     const cli = mergeSetupResultIntoConfig(config, config, [plugins[0]]); // drop @t/b
 
     expect(slugSet(cli.collections)).not.toEqual(slugSet(runtime.collections));
+  });
+});
+
+const fld = (name: string): FieldConfig =>
+  ({ name, type: "text" }) as unknown as FieldConfig;
+const fieldNames = (
+  e: { fields?: { name?: string }[] } | undefined
+): string[] => (e?.fields ?? []).map(f => f.name ?? "");
+
+/**
+ * D50/R2 — the Builder schema lane (P8). A plugin extends BOTH a code collection
+ * and a Builder-made collection. The CLI path (`mergeSetupResultIntoConfig` +
+ * `applyPluginSchemaContributionsDeferred`) and the runtime path
+ * (`applyPluginSchemaContributionsDeferred`) must (a) fold code/plugin + apply
+ * the code extend identically, (b) DEFER the Builder target identically, and
+ * (c) resolve that deferred extend against the same Builder set to the same
+ * extended Builder entity. This is the dual-lane parity that gates the lane.
+ */
+describe("CLI↔runtime Builder-lane parity (D50/P8/R2)", () => {
+  const seo = plugin("@t/seo", {
+    extend: [
+      { target: "code-posts", fields: [fld("seoTitle")] }, // code target
+      { target: "pages", fields: [fld("metaTitle")] }, // Builder target → deferred
+    ],
+  });
+  const builderSet = (): BuilderEntities => ({
+    collections: [
+      { slug: "pages", fields: [fld("title")] } as {
+        slug: string;
+        fields: FieldConfig[];
+      },
+    ],
+    singles: [],
+    components: [],
+  });
+
+  it("both paths fold code/plugin + apply the code extend identically and defer the Builder target", () => {
+    const config = baseConfig();
+    const runtime = applyPluginSchemaContributionsDeferred(config, [seo]);
+    const cli = mergeSetupResultIntoConfig(config, config, [seo]);
+
+    // Same merged collection set; the Builder target ("pages") is NOT folded into config.
+    expect(slugSet(cli.collections)).toEqual(
+      slugSet(runtime.config.collections)
+    );
+    expect(slugSet(runtime.config.collections)).toEqual(["code-posts"]);
+    // The code-collection extend was applied in-place on both paths.
+    expect(
+      fieldNames((cli.collections ?? []).find(c => c.slug === "code-posts"))
+    ).toEqual(["seoTitle"]);
+    // The Builder target was deferred (not thrown, not folded).
+    expect(runtime.deferredExtends.map(d => d.target)).toEqual(["pages"]);
+  });
+
+  it("resolving the deferred Builder extend against the same Builder set yields the same extended entity", () => {
+    const config = baseConfig();
+    const runtime = applyPluginSchemaContributionsDeferred(config, [seo]);
+    // Both the CLI and runtime resolve the SAME deferred clauses against the
+    // SAME Builder entities via the SAME shared function.
+    const resolved = resolveBuilderExtends(
+      runtime.deferredExtends,
+      builderSet()
+    );
+    const pages = resolved.collections?.find(c => c.slug === "pages");
+    expect(fieldNames(pages)).toEqual(["title", "metaTitle"]);
   });
 });

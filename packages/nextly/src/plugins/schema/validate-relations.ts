@@ -34,12 +34,23 @@ interface FieldedEntity {
   fields?: RelationField[];
 }
 
+/** A `relationTo` whose target isn't a code/plugin collection (nor a core target). */
+export interface UnresolvedRelation {
+  source: string;
+  field: string;
+  target: string;
+}
+
 /**
- * @experimental Validate every `relationTo` in the merged config against the
- * merged collection slug set (+ core targets). Throws
- * `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` on the first dangling target (D15).
+ * @experimental Collect every `relationTo` in the merged config that doesn't
+ * resolve to a code/plugin collection (nor a core target users/media), WITHOUT
+ * throwing. A target collected here may still be a Builder/UI-schema collection,
+ * which isn't knowable at fold time (P8/R2) — pass the result to
+ * {@link finalizeRelationTargets} once Builder slugs are known.
  */
-export function validateMergedRelations(config: NextlyServiceConfig): void {
+export function collectUnresolvedRelationTargets(
+  config: NextlyServiceConfig
+): UnresolvedRelation[] {
   const collectionSlugs = new Set<string>([
     ...(config.collections ?? []).map(c => c.slug),
     ...CORE_RELATION_TARGETS,
@@ -51,6 +62,7 @@ export function validateMergedRelations(config: NextlyServiceConfig): void {
     ...((config.components ?? []) as unknown as FieldedEntity[]),
   ];
 
+  const unresolved: UnresolvedRelation[] = [];
   for (const entity of entities) {
     for (const fieldEntry of entity.fields ?? []) {
       if (fieldEntry.type !== "relationship" || fieldEntry.relationTo == null) {
@@ -61,15 +73,44 @@ export function validateMergedRelations(config: NextlyServiceConfig): void {
         : [fieldEntry.relationTo];
       for (const target of targets) {
         if (typeof target === "string" && !collectionSlugs.has(target)) {
-          throw relationTargetMissingError(
-            entity.slug,
-            fieldEntry.name ?? "",
-            target
-          );
+          unresolved.push({
+            source: entity.slug,
+            field: fieldEntry.name ?? "",
+            target,
+          });
         }
       }
     }
   }
+  return unresolved;
+}
+
+/**
+ * @experimental Finalize deferred relation targets (P8): any target not present
+ * in `builderSlugs` is a real dangling reference and throws
+ * `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` (D15). Pass an empty set to require
+ * targets be code/plugin/core only (the pre-P8 behavior).
+ */
+export function finalizeRelationTargets(
+  unresolved: UnresolvedRelation[],
+  builderSlugs: Iterable<string>
+): void {
+  const builder = new Set(builderSlugs);
+  for (const u of unresolved) {
+    if (!builder.has(u.target)) {
+      throw relationTargetMissingError(u.source, u.field, u.target);
+    }
+  }
+}
+
+/**
+ * @experimental Validate every `relationTo` in the merged config against the
+ * merged collection slug set (+ core targets). Throws
+ * `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` on the first dangling target (D15).
+ * Eager form (no Builder lane) = collect + finalize against an empty Builder set.
+ */
+export function validateMergedRelations(config: NextlyServiceConfig): void {
+  finalizeRelationTargets(collectUnresolvedRelationTargets(config), []);
 }
 
 /** All entities a plugin contributes (collections + singles + components). */

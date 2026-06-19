@@ -7,6 +7,8 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../plugin-context";
 
 import {
+  collectUnresolvedRelationTargets,
+  finalizeRelationTargets,
   validateCrossPluginRelations,
   validateMergedRelations,
 } from "./validate-relations";
@@ -73,6 +75,41 @@ describe("validateMergedRelations (D15)", () => {
   });
 });
 
+describe("collectUnresolvedRelationTargets + finalizeRelationTargets (P8/D15)", () => {
+  it("collects relationTo targets absent from code+core without throwing", () => {
+    const unresolved = collectUnresolvedRelationTargets(
+      cfg([coll("posts"), coll("comments", [rel("page", "pages")])])
+    );
+    expect(unresolved).toEqual([
+      { source: "comments", field: "page", target: "pages" },
+    ]);
+  });
+
+  it("returns nothing when every target is code/core", () => {
+    expect(
+      collectUnresolvedRelationTargets(
+        cfg([coll("posts"), coll("c", [rel("p", "posts")])])
+      )
+    ).toEqual([]);
+  });
+
+  it("finalize: a deferred target present in the Builder set passes (relate-to-Builder)", () => {
+    const unresolved = collectUnresolvedRelationTargets(
+      cfg([coll("comments", [rel("page", "pages")])])
+    );
+    expect(() => finalizeRelationTargets(unresolved, ["pages"])).not.toThrow();
+  });
+
+  it("finalize: a deferred target absent from the Builder set throws RELATION_TARGET_MISSING", () => {
+    const unresolved = collectUnresolvedRelationTargets(
+      cfg([coll("comments", [rel("page", "ghost")])])
+    );
+    const err = caught(() => finalizeRelationTargets(unresolved, ["pages"]));
+    expect(err.code).toBe("NEXTLY_SCHEMA_RELATION_TARGET_MISSING");
+    expect(err.logContext?.target).toBe("ghost");
+  });
+});
+
 const plug = (
   name: string,
   opts: Partial<PluginDefinition>
@@ -119,6 +156,14 @@ describe("validateCrossPluginRelations (D15 — cross-plugin dependsOn)", () => 
       },
     });
     expect(() => validateCrossPluginRelations([d])).not.toThrow();
+  });
+
+  it("needs no dependsOn to relate to a Builder collection (not a plugin) (P8/OQ-P8-4)", () => {
+    // `pages` is a Builder slug — owned by no plugin — so no dependsOn is required.
+    const c = plug("@t/c", {
+      contributes: { collections: [coll("x", [rel("pg", "pages")])] },
+    });
+    expect(() => validateCrossPluginRelations([c])).not.toThrow();
   });
 
   it("requires dependsOn for a cross-plugin relation added via contributes.extend", () => {

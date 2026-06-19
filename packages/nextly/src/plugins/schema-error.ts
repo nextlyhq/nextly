@@ -22,9 +22,11 @@ export function slugCollisionError(
 
 /**
  * Fail-fast boot error when a plugin's `contributes.extend` targets a slug that
- * is not in the merged schema (D12). This is also how extending a Builder-only
- * entity fails loud during the code-first-only gap (R2): Builder entities are
- * not in the code-first merged config, so they read as unknown targets here.
+ * exists in NEITHER the code/plugin merged schema NOR the Builder/UI set (D12).
+ * Since P8 turned on the Builder lane (R2/D3), a Builder-made target is resolved
+ * — on the CLI against `ui-schema.json`, at runtime against the `dynamic_*`
+ * tables — and no longer errors here; only a genuine typo (unknown everywhere)
+ * does.
  */
 export function extendTargetUnknownError(
   target: string,

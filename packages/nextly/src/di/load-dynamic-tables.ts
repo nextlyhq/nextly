@@ -81,3 +81,47 @@ export async function loadDynamicTables(
     // Dynamic table may not exist yet (fresh database).
   }
 }
+
+/** Slug sets for the dynamic (Builder/UI + previously-synced) entities. */
+export interface DynamicSlugSets {
+  /** All dynamic entity slugs (collections + singles + components) — valid extend targets. */
+  all: Set<string>;
+  /** Dynamic collection slugs only — valid `relationTo` targets. */
+  collections: Set<string>;
+}
+
+/**
+ * Read the slugs of every dynamic collection/single/component from the DB
+ * registry tables. Used at boot (P8) to resolve plugin `extend`/relation targets
+ * that point at Builder-made entities — which the fold deferred because they
+ * aren't code/plugin entities and aren't knowable until the DB is reachable.
+ * Best-effort: a missing table (fresh DB) yields empty sets.
+ */
+export async function loadDynamicSlugs(
+  adapter: DrizzleAdapter
+): Promise<DynamicSlugSets> {
+  const all = new Set<string>();
+  const collections = new Set<string>();
+  const read = async (
+    table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+    into?: Set<string>
+  ): Promise<void> => {
+    try {
+      const rows = await adapter.executeQuery<{ slug: string }>(
+        `SELECT slug FROM ${table}`
+      );
+      for (const row of rows) {
+        if (typeof row.slug === "string") {
+          all.add(row.slug);
+          into?.add(row.slug);
+        }
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — leave the sets as-is.
+    }
+  };
+  await read("dynamic_collections", collections);
+  await read("dynamic_singles");
+  await read("dynamic_components");
+  return { all, collections };
+}

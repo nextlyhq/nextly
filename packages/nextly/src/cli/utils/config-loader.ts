@@ -30,18 +30,31 @@ import {
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { NextlyError } from "../../errors/index";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { resolvePlugins } from "../../plugins/resolve";
-import { applyPluginSchemaContributions } from "../../plugins/schema/apply-contributions";
 import {
+  applyPluginSchemaContributionsDeferred,
+  type BuilderEntities,
+  type DeferredExtend,
+  resolveBuilderExtends,
+} from "../../plugins/schema/apply-contributions";
+import {
+  collectUnresolvedRelationTargets,
+  finalizeRelationTargets,
   validateCrossPluginRelations,
-  validateMergedRelations,
 } from "../../plugins/schema/validate-relations";
 
 import { bundleAndRequire } from "./config-bundler";
+
+/** Builder collection slugs (the only valid relationTo targets among Builder entities). */
+function builderCollectionSlugs(builder: BuilderEntities): string[] {
+  return (builder.collections ?? []).map(c => c.slug);
+}
 
 /**
  * Validate (D6) and topologically order (D5) the configured plugins using the
@@ -56,23 +69,12 @@ export function orderConfigPlugins(
   return resolvePlugins(plugins, { coreVersion: getCoreVersion() });
 }
 
-/**
- * Merge a plugin-`setup()`-transformed config back onto the base config and fold
- * declarative plugin schema contributions (D3/D12) via the SAME shared function
- * the runtime boot uses (`applyPluginSchemaContributions` in `register.ts`), so
- * the CLI and runtime produce the same merged schema (D50). Threads
- * collections, singles, AND components — components were previously dropped by
- * the field-whitelist merge-back. Exported for unit/parity testing.
- */
-export function mergeSetupResultIntoConfig(
+/** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
+function applyFoldedToBase(
   base: SanitizedNextlyConfig,
-  transformed: SanitizedNextlyConfig,
-  plugins: PluginDefinition[]
+  folded: NextlyServiceConfig,
+  transformed: SanitizedNextlyConfig
 ): SanitizedNextlyConfig {
-  const folded = applyPluginSchemaContributions(
-    transformed as unknown as NextlyServiceConfig,
-    plugins
-  );
   return {
     ...base,
     collections: folded.collections ?? base.collections,
@@ -81,6 +83,28 @@ export function mergeSetupResultIntoConfig(
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
   };
+}
+
+/**
+ * Merge a plugin-`setup()`-transformed config back onto the base config and fold
+ * declarative plugin schema contributions (D3/D12) via the SAME shared function
+ * the runtime boot uses (`applyPluginSchemaContributionsDeferred` in
+ * `register.ts`), so the CLI and runtime produce the same merged schema (D50).
+ * Threads collections, singles, AND components. Extend targets that aren't
+ * code/plugin entities are deferred (candidate Builder targets, P8/R2) and
+ * resolved by the caller against the Builder set — not thrown here. Exported for
+ * unit/parity testing.
+ */
+export function mergeSetupResultIntoConfig(
+  base: SanitizedNextlyConfig,
+  transformed: SanitizedNextlyConfig,
+  plugins: PluginDefinition[]
+): SanitizedNextlyConfig {
+  const { config: folded } = applyPluginSchemaContributionsDeferred(
+    transformed as unknown as NextlyServiceConfig,
+    plugins
+  );
+  return applyFoldedToBase(base, folded, transformed);
 }
 
 /**
@@ -133,6 +157,14 @@ export interface LoadConfigResult {
    * Useful for watch mode to know what files to watch.
    */
   dependencies: string[];
+
+  /**
+   * Plugin `contributes.extend` clauses whose target wasn't a code/plugin entity
+   * (candidate Builder/UI-schema targets, P8). Already resolved + validated here
+   * against the Builder set; threaded out so `migrate-create`/`migrate-check` can
+   * materialize the extra columns onto the Builder tables without re-folding.
+   */
+  deferredExtends?: DeferredExtend[];
 }
 
 /**
@@ -294,6 +326,7 @@ async function loadConfigInternal(
     }
 
     let config = defineConfig(rawConfig);
+    let deferredExtends: DeferredExtend[] | undefined;
 
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
@@ -324,12 +357,40 @@ async function loadConfigInternal(
         }
       }
 
-      config = mergeSetupResultIntoConfig(config, transformedConfig, plugins);
+      // Fold plugin contributions. Extend targets that aren't code/plugin
+      // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
+      // thrown, so a plugin may extend/relate to a Builder-made collection
+      // (P8/D3/R2).
+      const folded = applyPluginSchemaContributionsDeferred(
+        transformedConfig,
+        plugins
+      );
+      config = applyFoldedToBase(config, folded.config, transformedConfig);
+      deferredExtends = folded.deferredExtends;
 
-      // Validate relationships against the merged schema + require dependsOn
-      // for cross-plugin relations (D15) — same checks the runtime boot runs,
-      // so CLI and runtime agree (D50).
-      validateMergedRelations(config as unknown as NextlyServiceConfig);
+      // Load the Builder set (ui-schema) and resolve the deferred extend +
+      // relation targets against it — the SAME shared functions the runtime boot
+      // runs (D50). Eager fail-fast is preserved: a target in NEITHER code/plugin
+      // NOR the Builder set still throws. ui-schema is optional (empty manifest
+      // when absent), so non-Builder apps behave exactly as before.
+      let builderEntities: BuilderEntities = {};
+      try {
+        const manifest = await loadUiSchema({
+          projectRoot: cwd,
+          uiSchemaFile: config.db?.uiSchemaFile,
+        });
+        builderEntities = manifestToBuilderEntities(manifest);
+      } catch {
+        // A malformed ui-schema is surfaced by migrate-create/-check (which
+        // re-load it); loading config for other commands shouldn't hard-fail here.
+      }
+      resolveBuilderExtends(folded.deferredExtends, builderEntities);
+      finalizeRelationTargets(
+        collectUnresolvedRelationTargets(
+          config as unknown as NextlyServiceConfig
+        ),
+        builderCollectionSlugs(builderEntities)
+      );
       validateCrossPluginRelations(plugins);
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
@@ -352,6 +413,7 @@ async function loadConfigInternal(
       config,
       configPath,
       dependencies,
+      deferredExtends,
     };
   } catch (error) {
     if (NextlyError.is(error)) {
