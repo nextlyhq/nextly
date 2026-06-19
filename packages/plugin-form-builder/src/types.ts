@@ -244,27 +244,6 @@ export interface FormBuilderPluginOptions {
   };
 
   /**
-   * @deprecated Use `formOverrides` and `formSubmissionOverrides` instead.
-   * This option is kept for backward compatibility.
-   */
-  collections?: {
-    forms?: Partial<CollectionConfig> & {
-      slug?: string;
-      labels?: {
-        singular?: string;
-        plural?: string;
-      };
-    };
-    submissions?: Partial<CollectionConfig> & {
-      slug?: string;
-      labels?: {
-        singular?: string;
-        plural?: string;
-      };
-    };
-  };
-
-  /**
    * Configure which field types are available in the form builder.
    *
    * Set to `false` to disable a field type, or provide partial configuration

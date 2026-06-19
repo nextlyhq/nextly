@@ -49,10 +49,8 @@ type NextlyWithFormBuilderConfig = NextlyInstance & {
 function resolveConfig(
   options: FormBuilderPluginOptions
 ): ResolvedFormBuilderConfig {
-  const formOverrides =
-    options.formOverrides || options.collections?.forms || {};
-  const submissionOverrides =
-    options.formSubmissionOverrides || options.collections?.submissions || {};
+  const formOverrides = options.formOverrides || {};
+  const submissionOverrides = options.formSubmissionOverrides || {};
 
   return {
     formOverrides: {
