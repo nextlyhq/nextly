@@ -497,40 +497,33 @@ export async function getFormSubmissionStats(
   }
 
   try {
-    // Fetch all submissions for this form
-    // Note: For large-scale use, implement pagination or direct DB queries
-    const result = await collections.listEntries(
-      pluginConfig.formSubmissionOverrides.slug,
-      {
-        pagination: { limit: 1000 }, // Reasonable limit for stats
-      },
-      {}
-    );
+    const submissionsSlug = pluginConfig.formSubmissionOverrides.slug;
+    const sys = { as: "system" } as const;
+    const base = { form: { equals: form.id } };
 
-    if (!result.data) {
-      return { total: 0, new: 0, read: 0, archived: 0 };
-    }
+    // D56: count per status server-side (P7a) instead of listing every
+    // submission and counting client-side. Stats run as system (plugin-owned
+    // aggregate over submissions for this form).
+    const [total, newCount, read, archived] = await Promise.all([
+      collections.count(submissionsSlug, { where: base }, sys),
+      collections.count(
+        submissionsSlug,
+        { where: { ...base, status: { equals: "new" } } },
+        sys
+      ),
+      collections.count(
+        submissionsSlug,
+        { where: { ...base, status: { equals: "read" } } },
+        sys
+      ),
+      collections.count(
+        submissionsSlug,
+        { where: { ...base, status: { equals: "archived" } } },
+        sys
+      ),
+    ]);
 
-    // Filter submissions for this form and count by status
-    const submissions = result.data.filter(
-      (entry: unknown) => (entry as { form: string }).form === form.id
-    );
-
-    const stats = {
-      total: submissions.length,
-      new: 0,
-      read: 0,
-      archived: 0,
-    };
-
-    for (const sub of submissions) {
-      const status = (sub as unknown as { status: string }).status;
-      if (status === "new") stats.new++;
-      else if (status === "read") stats.read++;
-      else if (status === "archived") stats.archived++;
-    }
-
-    return stats;
+    return { total, new: newCount, read, archived };
   } catch {
     return null;
   }
