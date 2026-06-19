@@ -21,6 +21,18 @@ export type {
   AuthUser,
 } from "nextly";
 
+// Managed data access (D56) — the `ctx.services.collections` surface: rich
+// queries (filters/sort/pagination/relations via QueryOptions), `count`, and
+// `createMany`. Aggregations beyond `count` use the raw `ctx.db` escape hatch
+// (D33). `ctx.services` is the highest-scrutiny surface (D55) and stays
+// experimental the longest.
+export type {
+  PluginCollectionService,
+  QueryOptions,
+  PaginatedResult,
+  BatchOperationResult,
+} from "nextly";
+
 // Plugin HTTP routes (P4, D25/D26/D27) — `contributes.routes` author surface.
 export type {
   PluginRoute,
