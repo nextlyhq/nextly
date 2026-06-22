@@ -56,6 +56,7 @@ import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-sta
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 import { getProductionNotifier } from "../runtime/notifications/index";
+import { ComponentSchemaService } from "../services/components/component-schema-service";
 
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 
@@ -828,11 +829,18 @@ export async function reloadNextlyConfig(opts?: {
         );
         singleFreshTables.set(s.tableName, table);
       }
+      // Components must use the component schema generator, NOT the collection/
+      // single generateRuntimeSchema. Components link to their parent document
+      // via _parent_id/_parent_table/_parent_field/_order; the collection
+      // generator instead injects id/title/slug base columns and omits
+      // _parent_id. Using it here clobbered the correct boot-time descriptor,
+      // breaking every component read (filter by _parent_id) and write (insert
+      // _parent_*) after an HMR config reload.
+      const componentSchemaService = new ComponentSchemaService(dialect);
       for (const comp of Object.values(desiredComponents)) {
-        const { table } = generateRuntimeSchema(
+        const table = componentSchemaService.generateRuntimeSchema(
           comp.tableName,
-          comp.fields as Parameters<typeof generateRuntimeSchema>[1],
-          dialect
+          comp.fields
         );
         componentFreshTables.set(comp.tableName, table);
       }

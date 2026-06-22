@@ -25,6 +25,12 @@
   <a href="https://github.com/nextlyhq/nextly/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/nextlyhq/nextly?style=flat-square&color=green" /></a>
 </p>
 
+<p align="left">
+  <a href="https://vercel.com/open-source-program">
+    <img alt="Vercel OSS Program" src="https://vercel.com/oss/program-badge-2026.svg" />
+  </a>
+</p>
+
 <br/>
 
 > [!IMPORTANT]

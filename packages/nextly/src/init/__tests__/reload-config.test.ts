@@ -9,6 +9,7 @@
 // the gate behavior against actual diff output. Pipeline is still mocked
 // so we don't hit drizzle-kit.
 
+import { getTableColumns } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -841,6 +842,51 @@ describe("reloadNextlyConfig", () => {
       };
       expect(Object.keys(call.desired.components)).toContain("hero");
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("refreshes the comp_* runtime schema with component link columns, not document title/slug", async () => {
+      // Regression: the HMR refresh rebuilt comp_* runtime descriptors with the
+      // collection/single generator (id/title/slug, no _parent_id), clobbering
+      // the correct boot-time registration. Component reads filter by _parent_id
+      // and writes insert the _parent_* columns, so a descriptor missing them
+      // makes every save of a document embedding the component fail with a 500.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          components: [
+            {
+              slug: "meta-data",
+              fields: [{ name: "metaTitle", type: "text" }],
+            },
+          ],
+        },
+      });
+      // metaTitle is absent from the live table, so the diff is an additive
+      // change: hasChanges flips true and the refresh block re-registers the
+      // runtime descriptor (the code path that used the wrong generator).
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([{ name: "comp_meta_data", columns: SQLITE_RESERVED }])
+      );
+
+      const resolver = buildResolver();
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver });
+
+      const registered = resolver.registerDynamicSchemaSpy.mock.calls.find(
+        call => call[0] === "comp_meta_data"
+      );
+      expect(
+        registered,
+        "comp_meta_data must be re-registered after an HMR refresh"
+      ).toBeTruthy();
+      const columns = Object.keys(getTableColumns(registered![1] as never));
+      // Component link columns the query/mutation services depend on.
+      expect(columns).toContain("_parent_id");
+      expect(columns).toContain("_parent_table");
+      expect(columns).toContain("_parent_field");
+      expect(columns).toContain("_order");
+      // Document base columns must never leak onto a component table.
+      expect(columns).not.toContain("title");
+      expect(columns).not.toContain("slug");
     });
 
     it("passes a standalone drop on a component table through to the pipeline", async () => {
