@@ -23,6 +23,10 @@ export interface EntryMetaStripProps {
   /** Whether the rail is currently collapsed. Pill only renders when true,
    *  since DocumentPanel takes over that role when the rail is expanded. */
   isRailCollapsed: boolean;
+  /** When true (Singles), the slug is fixed by the single's config: render it
+   *  as read-only text with no inline-edit affordance. Defaults to false so
+   *  collection entry forms keep the editable slug. */
+  lockSlug?: boolean;
 }
 
 export function EntryMetaStrip({
@@ -30,6 +34,7 @@ export function EntryMetaStrip({
   hasStatus,
   status,
   isRailCollapsed,
+  lockSlug = false,
 }: EntryMetaStripProps) {
   const showStatusPill = hasStatus && isRailCollapsed && !!status;
   const showSlug = !!slugField;
@@ -39,7 +44,9 @@ export function EntryMetaStrip({
   return (
     <div className="px-6 py-2 border-b border-primary/5 flex items-center gap-3 text-xs text-muted-foreground">
       {showStatusPill && <StatusPill status={status} />}
-      {showSlug && <SlugInlineEditor slugField={slugField} />}
+      {showSlug && (
+        <SlugInlineEditor slugField={slugField} readOnly={lockSlug} />
+      )}
     </div>
   );
 }
@@ -63,7 +70,13 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-function SlugInlineEditor({ slugField }: { slugField: FieldConfig }) {
+function SlugInlineEditor({
+  slugField,
+  readOnly = false,
+}: {
+  slugField: FieldConfig;
+  readOnly?: boolean;
+}) {
   const form = useFormContext();
   const slugName = "name" in slugField ? (slugField.name as string) : "slug";
   const liveValue = form?.watch(slugName) as string | undefined;
@@ -80,6 +93,19 @@ function SlugInlineEditor({ slugField }: { slugField: FieldConfig }) {
   }, [editing]);
 
   if (!form) return null;
+
+  // Singles: slug is fixed by the single's config. Render it as plain
+  // read-only text with no pencil-to-edit affordance.
+  if (readOnly) {
+    return (
+      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+        <span className="text-muted-foreground/70 shrink-0">slug:</span>
+        <code className="text-foreground/80 font-mono text-xs whitespace-nowrap truncate">
+          {liveValue || "(unset)"}
+        </code>
+      </div>
+    );
+  }
 
   const startEdit = () => {
     setDraft(liveValue ?? "");

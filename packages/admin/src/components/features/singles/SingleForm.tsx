@@ -44,6 +44,8 @@ import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
 
+import { relaxIdentityRequired } from "./identity-fields";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -297,20 +299,27 @@ export function SingleForm({
   onViewApi,
   className,
 }: SingleFormProps) {
-  // Generate Zod schema from field configurations
+  // Generate Zod schema from field configurations. Singles render title/slug
+  // read-only from config, so relax their required rule — submitting must not
+  // error when they aren't user-entered.
   const zodSchema = useMemo(() => {
     try {
-      return generateClientSchema(schema.fields);
+      return generateClientSchema(relaxIdentityRequired(schema.fields));
     } catch (error) {
       console.error("Failed to generate schema:", error);
       return z.record(z.string(), z.unknown());
     }
   }, [schema.fields]);
 
-  // Generate default values from document data
+  // Generate default values from document data, then pin the single's identity
+  // (title/slug) to its config so the read-only display and the submitted
+  // payload always reflect the definition rather than any stale stored value.
   const defaultValues = useMemo(() => {
-    return getDefaultValues(schema.fields, document);
-  }, [schema.fields, document]);
+    const values = getDefaultValues(schema.fields, document);
+    values.title = schema.label;
+    values.slug = schema.slug;
+    return values;
+  }, [schema.fields, schema.label, schema.slug, document]);
 
   // Initialize form
   //
@@ -419,11 +428,14 @@ export function SingleForm({
     titleField && "name" in titleField ? (titleField.name as string) : "title";
   const slugFieldName =
     slugField && "name" in slugField ? (slugField.name as string) : "slug";
+  // Singles never auto-generate the slug — it's fixed by the single's config
+  // and rendered read-only. Keep the hook mounted (stable hook order) but
+  // disabled so it never writes to the slug field.
   useAutoSlug({
     form,
     titleFieldName,
     slugFieldName,
-    enabled: !!titleField && !!slugField,
+    enabled: false,
   });
   const documentStatus =
     (document as { status?: string } | undefined)?.status ?? "draft";
@@ -488,6 +500,7 @@ export function SingleForm({
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
               scope="single"
+              lockIdentity
               isRailCollapsed={railCollapsed}
               onToggleRail={toggleRail}
             />
@@ -496,6 +509,7 @@ export function SingleForm({
               hasStatus={hasStatus}
               status={documentStatus}
               isRailCollapsed={railCollapsed}
+              lockSlug
             />
 
             {mainFields.length > 0 && (
