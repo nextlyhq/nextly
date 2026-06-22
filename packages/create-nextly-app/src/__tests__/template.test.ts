@@ -8,7 +8,12 @@ import fs from "fs-extra";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { DatabaseConfig } from "../types";
-import { copyTemplate, generatePackageJson } from "../utils/template";
+import {
+  copyTemplate,
+  generatePackageJson,
+  generatePnpmWorkspaceYaml,
+  NATIVE_BUILD_DEPENDENCIES,
+} from "../utils/template";
 
 // Mock fs-extra
 vi.mock("fs-extra", () => ({
@@ -20,6 +25,7 @@ vi.mock("fs-extra", () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     remove: vi.fn(),
+    ensureDir: vi.fn(),
   },
 }));
 
@@ -166,31 +172,50 @@ describe("generatePackageJson", () => {
     expect(result.scripts["types:generate"]).toBe("nextly generate:types");
   });
 
-  // Regression guard: pnpm 10+ blocks dependency install scripts unless the
-  // package is in `pnpm.onlyBuiltDependencies`. Without this list, a fresh
-  // `pnpm dev` crashes for sqlite users (better-sqlite3 has no compiled
-  // binding) and silently degrades for everyone else (sharp falls back to
-  // a slow JS path; esbuild and unrs-resolver warn).
-  it("should allowlist non-sqlite native deps in pnpm.onlyBuiltDependencies", async () => {
-    const result = JSON.parse(await generatePackageJson("test", pgDatabase));
-    expect(result.pnpm.onlyBuiltDependencies).toEqual(
-      expect.arrayContaining(["sharp", "esbuild", "unrs-resolver"])
-    );
-    expect(result.pnpm.onlyBuiltDependencies).not.toContain("better-sqlite3");
-  });
-
-  it("should also allowlist better-sqlite3 when sqlite adapter is selected", async () => {
-    const result = JSON.parse(
+  // Regression guard: pnpm 11 no longer reads the `pnpm` field from
+  // package.json (it warns and ignores it). The build-script allowlist now
+  // lives in pnpm-workspace.yaml, so the generated package.json must NOT
+  // carry a dead `pnpm` field that only produces a warning on a fresh install.
+  it("should not emit a pnpm field in package.json", async () => {
+    const pg = JSON.parse(await generatePackageJson("test", pgDatabase));
+    const sqlite = JSON.parse(
       await generatePackageJson("test", sqliteDatabase)
     );
-    expect(result.pnpm.onlyBuiltDependencies).toEqual(
-      expect.arrayContaining([
-        "better-sqlite3",
-        "sharp",
-        "esbuild",
-        "unrs-resolver",
-      ])
-    );
+    expect(pg.pnpm).toBeUndefined();
+    expect(sqlite.pnpm).toBeUndefined();
+  });
+});
+
+// ============================================================
+// generatePnpmWorkspaceYaml Tests
+// ============================================================
+
+describe("generatePnpmWorkspaceYaml", () => {
+  // pnpm 10+ blocks dependency build scripts by default. Without an
+  // allowlist, `pnpm install` aborts with ERR_PNPM_IGNORED_BUILDS on pnpm 11,
+  // better-sqlite3 never compiles (sqlite apps crash at boot), and
+  // sharp/esbuild/unrs-resolver silently degrade.
+  it("emits allowBuilds (pnpm 11) for every native build dependency", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    expect(yaml).toMatch(/^allowBuilds:/m);
+    for (const dep of NATIVE_BUILD_DEPENDENCIES) {
+      expect(yaml).toContain(`  ${dep}: true`);
+    }
+  });
+
+  it("emits onlyBuiltDependencies (pnpm 10.6+) for every native build dependency", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    expect(yaml).toMatch(/^onlyBuiltDependencies:/m);
+    for (const dep of NATIVE_BUILD_DEPENDENCIES) {
+      expect(yaml).toContain(`  - ${dep}`);
+    }
+  });
+
+  // better-sqlite3 must always be allow-listed: it's a direct dep only for
+  // sqlite scaffolds, but the --use-yalc dev flow installs every adapter, so
+  // a postgres/mysql yalc scaffold still pulls (and must build) better-sqlite3.
+  it("always includes better-sqlite3 in the allowlist", () => {
+    expect(NATIVE_BUILD_DEPENDENCIES).toContain("better-sqlite3");
   });
 });
 
@@ -365,6 +390,33 @@ describe("copyTemplate", () => {
     expect(content).not.toContain("mysql2");
     expect(content).not.toContain("@nextlyhq/adapter-sqlite");
     expect(content).not.toContain("better-sqlite3");
+  });
+
+  it("should generate pnpm-workspace.yaml with the build-script allowlist", async () => {
+    mockPathExists.mockImplementation((async (p: unknown) => {
+      const s = String(p);
+      if (s.includes("my-app") && !s.includes("templates")) return false;
+      if (s.includes(path.join("templates", "base"))) return true;
+      if (s.includes(path.join("templates", "blank"))) return true;
+      return false;
+    }) as never);
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: "/test/my-app",
+      database: sqliteDatabase,
+    });
+
+    const writeCall = mockWriteFile.mock.calls.find(
+      call =>
+        (call[0] as string) === path.join("/test/my-app", "pnpm-workspace.yaml")
+    );
+    expect(writeCall).toBeDefined();
+    const content = writeCall![1] as string;
+    expect(content).toContain("allowBuilds:");
+    expect(content).toContain("better-sqlite3: true");
+    expect(content).toContain("onlyBuiltDependencies:");
   });
 
   it("should generate package.json without @nextlyhq packages in yalc mode", async () => {
