@@ -1,5 +1,16 @@
 # @nextlyhq/admin
 
+## 0.0.2-alpha.25
+
+### Patch Changes
+
+- [#121](https://github.com/nextlyhq/nextly/pull/121) [`8cc3a1c`](https://github.com/nextlyhq/nextly/commit/8cc3a1cccfce7bd0064d16f683022420b99f3fe8) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Fresh projects scaffolded with `pnpm create nextly-app` no longer fail to install under pnpm 11. pnpm 11 stopped reading the `pnpm` field from `package.json`, so the `pnpm.onlyBuiltDependencies` allowlist the scaffolder emitted was ignored: `pnpm install` aborted with `ERR_PNPM_IGNORED_BUILDS`, and past that `better-sqlite3` never compiled its native binding (SQLite scaffolds crashed at boot) while `sharp`, `esbuild`, and `unrs-resolver` were silently blocked.
+
+  The scaffolder now writes the build-script allowlist to `pnpm-workspace.yaml` instead, emitting both `allowBuilds` (read by pnpm 11+) and `onlyBuiltDependencies` (read by pnpm 10.6+), and drops the now-dead `pnpm` field from the generated `package.json`. `better-sqlite3` is always allow-listed so the `--use-yalc` dev flow — which installs every adapter — builds it too. npm, yarn, and pnpm 9 run dependency build scripts by default and ignore the file, so it is harmless under those package managers.
+
+- Updated dependencies [[`8cc3a1c`](https://github.com/nextlyhq/nextly/commit/8cc3a1cccfce7bd0064d16f683022420b99f3fe8)]:
+  - @nextlyhq/ui@0.0.2-alpha.25
+
 ## 0.0.2-alpha.24
 
 ### Patch Changes
