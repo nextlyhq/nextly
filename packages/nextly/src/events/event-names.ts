@@ -1,8 +1,8 @@
 /**
- * @experimental Stable string constants for the D69 document/auth/media event
+ * @public Stable string constants for the D69 document/auth/media event
  * families. Use these instead of hand-typing event names when subscribing via
  * `ctx.events.on(...)`. (Collection events are dynamic `collection.<slug>.*` and
- * are not enumerated here.)
+ * are not enumerated here.) Event names + payloads are semver-protected (D40).
  */
 export const DocumentEvents = {
   Published: "document.published",

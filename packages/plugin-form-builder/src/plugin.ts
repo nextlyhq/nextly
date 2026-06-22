@@ -169,7 +169,7 @@ export function formBuilder(
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     // Keep in sync with package.json `version` (guarded by package-metadata.test).
-    version: "0.0.2-alpha.22",
+    version: "0.0.2-alpha.24",
     nextly: ">=0.0.2-alpha.21",
 
     // Declarative schema (P2/D12): the merged pipeline folds these into the

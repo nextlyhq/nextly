@@ -1,0 +1,101 @@
+---
+title: Data access (ctx.services)
+description: Read and write data from a plugin through the managed, secure-by-default service layer — queries, bulk operations, and system elevation.
+---
+
+`ctx.services` is the **managed** data path for plugins. Prefer it over the raw
+`ctx.db` escape hatch: it enforces validation, hooks, events, and RBAC, and it stays
+portable across database dialects. It is `@public` and semver-protected (D56).
+
+```ts
+init(ctx) {
+  const posts = await ctx.services.collections.listEntries(
+    ctx.self.collections.posts, // resolve your own slugs via ctx.self
+    { where: { status: "published" }, sort: { field: "createdAt", direction: "desc" } },
+    { as: "system" }
+  );
+}
+```
+
+## Secure by default (D35)
+
+Every access method takes a trailing `ServiceOpts` (`{ as, user }`) that decides whose
+permissions apply:
+
+| `opts` | Behaviour |
+|---|---|
+| `{ as: "user", user }` | Runs as that user — **RBAC enforced** by `user.id`. Use this in request handlers; pass the route's `ctx.user`. |
+| `{ as: "system" }` | Elevates — **bypasses the access check** for trusted, non-user work (jobs, derived data, lookups). Visible and greppable by design. |
+| `{}` / omitted | No user → defaults to **system** (jobs, CLI, migrations). |
+
+Validation, hooks, and events **always run**, even under `{ as: "system" }` — only the
+access check is skipped. So a `system` write still fires `afterCreate` hooks and emits
+events.
+
+> **v1 limitation:** under `{ as: "user" }`, code-defined `access` rules that read
+> `ctx.user.role` see it empty (RBAC is enforced by a DB lookup on `user.id`). Pass
+> `{ as: "system" }`, or rely on DB-level RBAC, when you need role-aware access.
+
+Pick the elevation deliberately. A public route that lists published content should use
+`{ as: "system" }` (the data is public-derived); a route that returns a user's own
+records should use `{ as: "user", user: ctx.user ?? undefined }`.
+
+## Collection methods
+
+`ctx.services.collections` exposes:
+
+| Method | Purpose |
+|---|---|
+| `createEntry(slug, data, opts?)` | Create one entry. |
+| `listEntries(slug, query?, opts?)` | List with filter/sort/pagination → `PaginatedResult`. |
+| `findEntryById(slug, id, opts?)` | Fetch one by id. |
+| `updateEntry(slug, id, data, opts?)` | Update one. |
+| `deleteEntry(slug, id, opts?)` | Delete one. |
+| `count(slug, where?, opts?)` | Count matching rows. |
+| `createMany(slug, rows, opts?)` | Bulk insert → `BatchOperationResult`. |
+
+`ctx.services` also exposes `users`, `media`, and `email` services.
+
+## Querying (D56)
+
+`listEntries` takes a `QueryOptions`:
+
+```ts
+const result = await ctx.services.collections.listEntries(
+  slug,
+  {
+    where: { status: "published", authorId: someId }, // filter (key/value)
+    sort: { field: "createdAt", direction: "desc" },  // single-field sort
+    pagination: { limit: 20, page: 1 },               // page through results
+    depth: 1,            // 0–5: how deep to populate relations (0 = ids only)
+    select: { title: true, slug: true }, // projection: return only these fields
+  },
+  { as: "system" }
+);
+
+result.data;       // the rows for this page
+result.pagination; // { total, limit, offset, hasMore }
+```
+
+Use `depth: 0` when you only need scalar fields (e.g. building a sitemap) — it avoids
+populating relations and is cheaper.
+
+## Bulk operations
+
+`createMany` returns a `BatchOperationResult` with index-keyed errors, so a partial
+failure tells you exactly which rows failed:
+
+```ts
+const res = await ctx.services.collections.createMany(slug, rows, { as: "system" });
+// { successful, failed, ids: string[], errors: [{ index, error }] }
+```
+
+## When to drop to `ctx.db`
+
+`ctx.db` (raw Drizzle) is the **`@experimental`** escape hatch — unmanaged: it bypasses
+validation, hooks, RBAC, and events, and you own dialect portability. Reach for it only
+for things the services layer doesn't cover yet (aggregations beyond `count`). If you
+find yourself needing it often, that's a signal worth raising — the goal (D56) is that
+most plugins never touch it.
+
+See also: [Permissions](/docs/plugins/permissions) · [HTTP routes](/docs/plugins/routes).

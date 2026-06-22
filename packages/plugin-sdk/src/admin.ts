@@ -4,7 +4,9 @@
  * (menu/pages/settings/views) here, in a module imported by the Nextly admin
  * shell (which provides `@nextlyhq/admin` + React).
  *
- * @experimental
+ * @public Graduated in P9 — `plugin-form-builder` exercises the menu/pages/views
+ *   registration. Dashboard widgets (`PluginAdminWidget`, D22) remain
+ *   `@experimental` until M8. See `STABILITY.md`.
  */
 export {
   registerComponent,

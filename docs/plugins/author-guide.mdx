@@ -3,11 +3,19 @@ title: Plugin Author Guide
 description: Build a Nextly plugin — the lifecycle, the plugin context, and the scaffold → dev → test → publish loop.
 ---
 
-> **Warning: Plugins are not ready for use.**
+> **Alpha (`0.x`) — pin your versions.**
 >
-> The plugin API is **experimental** (alpha) and changes without notice until the Nextly **beta** release. This guide is for the small group of internal authors building first-party plugins. Build the public surface from `@nextlyhq/plugin-sdk` — it is the stability boundary.
+> The plugin API surface is now **stable and semver-protected** (see [API stability](/docs/plugins/stability)); the packages themselves are still `0.x` alpha. Build against `@nextlyhq/plugin-sdk` — it is the stability boundary — and pin your `nextly` / `@nextlyhq/plugin-sdk` versions.
 
-A plugin extends Nextly with new collections, hooks, events, routes, permissions, and admin UI — without modifying core. This guide covers how to write one and the local loop for iterating on it.
+A plugin extends Nextly with new collections, hooks, events, routes, permissions, and admin UI — without modifying core. This guide is the overview; deeper topics each have their own page:
+
+- [Lifecycle, dependencies & order](/docs/plugins/lifecycle) — `setup`/`init`/`destroy`, load order, `dependsOn`, version compat, `enabled`
+- [Data access](/docs/plugins/services) — `ctx.services`, queries, bulk ops, `{ as: "system" }`
+- [Permissions](/docs/plugins/permissions) — declare-but-never-grant, route gating, `useCan`/`<Can>`
+- [HTTP routes](/docs/plugins/routes) — `contributes.routes`, secure-by-default, middleware
+- [Admin UI](/docs/plugins/admin-ui) — menu, pages, view overrides, placement
+- [Schema & data lifecycle](/docs/plugins/schema) — collections, `extend`, relations, provenance, uninstall
+- [Testing](/docs/plugins/testing) · [API stability](/docs/plugins/stability) · [Publishing & distribution](/docs/plugins/distribution)
 
 ## Scaffold a plugin
 
@@ -139,4 +147,4 @@ Build (`tsup`), publish to npm, and add the `nextly-plugin` keyword to `package.
 
 ## Stability
 
-Everything is `@experimental` until first-party plugins exercise it. `ctx.services` is the highest-scrutiny surface. The public surface becomes semver-protected at stabilization (breaking it = a Nextly major). Pin versions during alpha.
+The public surface (`definePlugin`/`contributes`/lifecycle, `ctx.services`, `contributes.routes`, `contributes.admin`, `ctx.events` + event names, `HookContext`, and `@nextlyhq/plugin-sdk/testing`) is now **`@public`** — semver-protected, so breaking it requires a Nextly major. Some surfaces are still `@experimental` (the raw `ctx.db`, `ctx.hooks` registration, filters/actions, `secret()`, `useCan`/`<Can>`, admin widgets) and may change. The full ledger is on the [API stability](/docs/plugins/stability) page. Pin versions while we are pre-`1.0`.

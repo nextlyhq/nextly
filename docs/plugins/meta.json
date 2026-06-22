@@ -3,8 +3,20 @@
   "pages": [
     "index",
     "author-guide",
+    "lifecycle",
+    "services",
+    "permissions",
+    "routes",
+    "admin-ui",
+    "schema",
+    "testing",
+    "stability",
+    "distribution",
+    "contributing",
     "api-reference",
     "error-reference",
-    "form-builder"
+    "form-builder",
+    "seo",
+    "redirects"
   ]
 }

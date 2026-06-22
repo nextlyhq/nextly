@@ -8,7 +8,7 @@ import type { PluginAdminContributions } from "./admin-contributions";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
- * @experimental A plugin-declared custom permission (D36). CRUD permissions are
+ * @public A plugin-declared custom permission (D36). CRUD permissions are
  * auto-seeded per collection/single slug separately — declare only NON-CRUD
  * custom permissions here (e.g. `{ action: 'export', resource: 'submissions' }`).
  */
@@ -21,7 +21,7 @@ export interface PluginPermission {
 }
 
 /**
- * @experimental A permission identifier — the `${action}-${resource}` slug
+ * @public A permission identifier — the `${action}-${resource}` slug
  * (e.g. `'export-submissions'`).
  *
  * When generated types exist (run `nextly generate:types`), this narrows to the
@@ -37,29 +37,29 @@ export type PermissionSlug = GeneratedTypes extends { permissions: infer P }
  * Declarative, introspectable plugin contributions (D1). The host can read these
  * WITHOUT running the plugin.
  *
- * @experimental Each key is *consumed* by a phase: collections/singles/components/
+ * @public Each key is *consumed* by a phase: collections/singles/components/
  * extend → P2 (merge pipeline); permissions → P3; events → P1; routes → P4;
  * admin → P5 (menu/pages/settings/views; widgets reserved for M8).
  */
 export interface PluginContributions {
-  /** @experimental New plugin-owned collections. Merged by the schema pipeline (P2, D3/D12). */
+  /** @public New plugin-owned collections. Merged by the schema pipeline (P2, D3/D12). */
   collections?: CollectionConfig[];
-  /** @experimental New plugin-owned singles (P2). */
+  /** @public New plugin-owned singles (P2). */
   singles?: SingleConfig[];
-  /** @experimental Plugin-owned components (P2). */
+  /** @public Plugin-owned components (P2). */
   components?: ComponentConfig[];
-  /** @experimental Add fields to existing entities by slug (P2, D12). */
+  /** @public Add fields to existing entities by slug (P2, D12). */
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
-  /** @experimental Custom permissions; CRUD is auto-seeded separately (P3, D36). */
+  /** @public Custom permissions; CRUD is auto-seeded separately (P3, D36). */
   permissions?: PluginPermission[];
-  /** @experimental Custom event names this plugin may emit (P1, D9). */
+  /** @experimental Custom event names this plugin may emit (P1, D9). No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
-  /** @experimental HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
+  /** @public HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
   routes?: PluginRoute[];
   /**
-   * @experimental Admin UI contributions (P5, D19–D23): menu (D20), pages +
+   * @public Admin UI contributions (P5, D19–D23): menu (D20), pages +
    * settings (D21), per-collection view overrides (D23). `widgets` (D22) is
-   * RESERVED — deferred to M8 (D58); not rendered in P5.
+   * RESERVED — deferred to M8 (D58); not rendered in P5 and stays `@experimental`.
    */
   admin?: PluginAdminContributions;
 }

@@ -1,7 +1,7 @@
 import type { PermissionSlug } from "./contributions";
 
 /**
- * @experimental A reference to a plugin-provided admin React component (D19),
+ * @public A reference to a plugin-provided admin React component (D19),
  * resolved client-side through the string-path component registry.
  *
  * Format: `"<package>/<path>#<ExportName>"`,
@@ -12,7 +12,7 @@ import type { PermissionSlug } from "./contributions";
 export type ComponentPath = string;
 
 /**
- * @experimental A sidebar navigation entry contributed by a plugin (D20).
+ * @public A sidebar navigation entry contributed by a plugin (D20).
  *
  * Declarative and introspectable — delivered to the client via `/api/admin-meta`.
  * Exactly **one** level of `children` is supported. Visibility is controlled by
@@ -35,7 +35,7 @@ export interface PluginMenuItem {
 }
 
 /**
- * @experimental A plugin-contributed admin page (D21), mounted under the
+ * @public A plugin-contributed admin page (D21), mounted under the
  * plugin's namespace (`/admin/plugins/<slug>/<path>`) and RBAC-gated.
  */
 export interface PluginAdminPage {
@@ -62,7 +62,7 @@ export interface PluginAdminWidget {
 }
 
 /**
- * @experimental Per-collection admin view overrides + injection points (D23),
+ * @public Per-collection admin view overrides + injection points (D23),
  * keyed by the (resolved) collection slug. Each maps to the collection-level
  * `admin.components` resolution the admin already performs.
  */
@@ -82,7 +82,7 @@ export interface PluginCollectionView {
 }
 
 /**
- * @experimental Declarative admin-UI contributions (D19–D23). Introspectable
+ * @public Declarative admin-UI contributions (D19–D23). Introspectable
  * by the host without running the plugin.
  *
  * Consumed in P5: `menu` (D20), `pages` + `settings` (D21), `views` (D23).
