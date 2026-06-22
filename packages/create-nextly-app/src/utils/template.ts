@@ -345,14 +345,11 @@ export async function generatePackageJson(
     pagefind: "^1.1.0",
   };
 
-  // pnpm 10+ blocks dependency install scripts by default; without this
-  // allowlist better-sqlite3's native binding never builds (sqlite apps
-  // crash at boot) and sharp/esbuild/unrs-resolver silently degrade.
-  const onlyBuiltDependencies = ["sharp", "esbuild", "unrs-resolver"];
-  if (database.type === "sqlite") {
-    onlyBuiltDependencies.push("better-sqlite3");
-  }
-
+  // NOTE: the build-script allowlist (better-sqlite3, sharp, esbuild,
+  // unrs-resolver) is NOT emitted here. pnpm 11 no longer reads the `pnpm`
+  // field from package.json — it warns and ignores it. The allowlist now
+  // lives in pnpm-workspace.yaml (see generatePnpmWorkspaceYaml), which
+  // copyTemplate writes alongside this file.
   const pkg = {
     name: projectName,
     version: "0.1.0",
@@ -385,12 +382,66 @@ export async function generatePackageJson(
     },
     dependencies,
     devDependencies,
-    pnpm: {
-      onlyBuiltDependencies,
-    },
   };
 
   return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+// ============================================================
+// pnpm-workspace.yaml Generation
+// ============================================================
+
+/**
+ * Native dependencies whose install/build scripts must be allow-listed so
+ * pnpm 10+ actually compiles them. npm and yarn run these by default.
+ *
+ * Without the allowlist, `pnpm install` aborts with ERR_PNPM_IGNORED_BUILDS
+ * on pnpm 11, better-sqlite3 never gets a compiled binding (sqlite apps crash
+ * at boot), and sharp/esbuild/unrs-resolver silently degrade to slow paths.
+ *
+ * better-sqlite3 is always included: it's a direct dependency only for sqlite
+ * scaffolds, but the --use-yalc dev flow installs every adapter (so a
+ * postgres/mysql yalc scaffold still pulls and must build better-sqlite3), and
+ * allow-listing a package that isn't installed is a harmless no-op.
+ */
+export const NATIVE_BUILD_DEPENDENCIES = [
+  "better-sqlite3",
+  "esbuild",
+  "sharp",
+  "unrs-resolver",
+] as const;
+
+/**
+ * Generate the `pnpm-workspace.yaml` for a scaffolded project.
+ *
+ * pnpm 10+ blocks dependency build scripts by default and the allowlist's
+ * home changed across versions:
+ *   - pnpm 11+ reads `allowBuilds` (a map of package -> boolean) and no longer
+ *     reads the `pnpm` field from package.json at all.
+ *   - pnpm 10.6+ reads `onlyBuiltDependencies` (an array; deprecated in 11).
+ *
+ * Both keys are emitted so native deps compile on any pnpm 10.6+/11. pnpm 9
+ * runs build scripts by default and ignores this file; npm/yarn ignore it too,
+ * so it is safe to ship in every scaffold regardless of package manager.
+ */
+export function generatePnpmWorkspaceYaml(): string {
+  const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
+    dep => `  ${dep}: true`
+  ).join("\n");
+  const onlyBuilt = NATIVE_BUILD_DEPENDENCIES.map(dep => `  - ${dep}`).join(
+    "\n"
+  );
+
+  return (
+    "# Allow native dependencies to run their build scripts. pnpm 10+ blocks\n" +
+    "# dependency build scripts by default; without this better-sqlite3 has no\n" +
+    "# compiled binding (sqlite apps crash at boot) and sharp/esbuild degrade.\n" +
+    "#\n" +
+    "# pnpm 11+ reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`.\n" +
+    "# npm, yarn, and pnpm 9 ignore this file (they run build scripts by default).\n" +
+    `allowBuilds:\n${allowBuilds}\n` +
+    `onlyBuiltDependencies:\n${onlyBuilt}\n`
+  );
 }
 
 // ============================================================
@@ -580,6 +631,16 @@ export async function copyTemplate(
   await fs.writeFile(
     path.join(targetDir, "package.json"),
     packageJsonContent,
+    "utf-8"
+  );
+
+  // Step 6b: Write pnpm-workspace.yaml carrying the native-dependency build
+  // allowlist. pnpm 10+ blocks dependency build scripts by default and pnpm 11
+  // ignores the package.json `pnpm` field, so this file is what lets
+  // better-sqlite3/sharp/esbuild compile. Harmless for npm/yarn/pnpm 9.
+  await fs.writeFile(
+    path.join(targetDir, "pnpm-workspace.yaml"),
+    generatePnpmWorkspaceYaml(),
     "utf-8"
   );
 
