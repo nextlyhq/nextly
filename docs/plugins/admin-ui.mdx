@@ -71,6 +71,31 @@ contributes: {
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
 
+## Dashboard widgets (reserved)
+
+`contributes.admin.widgets` (D22) is a **forward-looking contract**: the `PluginAdminWidget`
+shape is published so plugin authors can design against it, but **widget rendering and the
+dashboard grid are deferred to a later milestone (M8)** — declaring widgets has **no effect
+yet**. It stays [`@experimental`](/docs/plugins/stability) until the dashboard ships.
+
+```ts
+contributes: {
+  admin: {
+    widgets: [
+      {
+        id: "reports-summary",
+        component: "@acme/nextly-plugin-reports/admin#SummaryWidget",
+        size: "half",                        // "full" | "half"
+        requiredPermission: "read-reports",  // client-gated
+      },
+    ],
+  },
+}
+```
+
+Declaring widgets now is safe (it's validated but ignored); they'll light up when the
+dashboard lands. Everything else on this page is `@public` today.
+
 ## Placement & appearance
 
 The plugin's own `admin` field controls where its items live (D20):

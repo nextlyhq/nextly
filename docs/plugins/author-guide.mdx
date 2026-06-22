@@ -9,6 +9,7 @@ description: Build a Nextly plugin — the lifecycle, the plugin context, and th
 
 A plugin extends Nextly with new collections, hooks, events, routes, permissions, and admin UI — without modifying core. This guide is the overview; deeper topics each have their own page:
 
+- [Lifecycle, dependencies & order](/docs/plugins/lifecycle) — `setup`/`init`/`destroy`, load order, `dependsOn`, version compat, `enabled`
 - [Data access](/docs/plugins/services) — `ctx.services`, queries, bulk ops, `{ as: "system" }`
 - [Permissions](/docs/plugins/permissions) — declare-but-never-grant, route gating, `useCan`/`<Can>`
 - [HTTP routes](/docs/plugins/routes) — `contributes.routes`, secure-by-default, middleware

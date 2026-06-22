@@ -54,6 +54,27 @@ so they're cleaned up if your plugin is removed.
 > Extending an entity that doesn't exist in the merged schema is a **fail-fast boot
 > error** — see the [error reference](/docs/plugins/error-reference).
 
+## Migrations & databases
+
+A plugin doesn't write SQL or manage tables itself — it **declares** schema through
+`contributes`, and the host materializes it through the normal Nextly migration workflow:
+
+```bash
+nextly migrate        # generate + apply migrations for the merged schema (incl. plugins)
+```
+
+When a consuming app adds your plugin (or you change your contributed schema) and runs
+`nextly migrate`, the plugin's collections and `extend` fields are folded into the merged
+schema and turned into migrations alongside the app's own. The same plugin works across
+Nextly's supported databases (PostgreSQL, MySQL, SQLite) because it goes through the
+managed pipeline rather than dialect-specific SQL — **but** SQLite doesn't enforce some
+constraints that Postgres/MySQL do, so test against a real database too (see
+[Testing](/docs/plugins/testing)).
+
+> Schema changes are applied on `migrate`, not silently at boot — first boot only
+> **creates** missing tables; it never **alters** an existing one. Ship schema changes as
+> migrations so existing installs pick them up.
+
 ## Relate across the merged schema
 
 A plugin relationship (`relationship(...)`) may target **any** slug in the merged schema

@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "author-guide",
+    "lifecycle",
     "services",
     "permissions",
     "routes",
