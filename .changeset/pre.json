@@ -43,6 +43,7 @@
     "migrate-create-component-parent-index",
     "neon-schema-apply-perf",
     "pnpm10-only-built-deps",
+    "pnpm11-build-allowlist-workspace",
     "preserve-system-tables-in-scope-reduction",
     "schema-apply-silent-skip-fix",
     "schema-events-pg-default-and-superseded",
