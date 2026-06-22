@@ -50,6 +50,7 @@
     "scope-form-builder-to-blog",
     "single-document-cache-invalidation",
     "single-slug-kebab-and-cli-version-pins",
+    "singles-readonly-title-slug",
     "svg-upload-security-unification",
     "sync-private-package-versions",
     "unified-schema-pipeline-dual-write"
