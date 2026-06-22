@@ -329,12 +329,22 @@ export async function registerServices(
     storagePlugins,
     imageProcessor,
     logger,
-    hookRegistry,
+    hookRegistry: providedHookRegistry,
     basePath,
     schemasDir,
     migrationsDir,
     passwordHasher,
   } = transformedConfig;
+
+  // Default to the global hook registry when the boot path didn't supply one.
+  // Both production boot paths (init.ts instrumentation + auth-handler.ts
+  // request-path) omit `hookRegistry`; only the `createTestNextly` harness
+  // passed it. Without a real registry the collection services' hook execution
+  // resolves to a stub, so `ctx.services.collections` reads (used by plugin
+  // routes — e.g. the redirects lookup + SEO sitemap) throw
+  // "executeBeforeOperation is not a function" in production. Defaulting here
+  // also ensures sanitization + activity-log "*" hooks register on every boot.
+  const hookRegistry = providedHookRegistry ?? getHookRegistry();
 
   const resolvedLogger = logger ?? consoleLogger;
   const resolvedBasePath = basePath ?? process.cwd();
