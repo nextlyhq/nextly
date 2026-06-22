@@ -162,7 +162,7 @@ export const dynamicSinglesPg = pgTable(
      * - 'ui': Visual Single Builder
      * - 'built-in': System Singles from Nextly core
      */
-    source: varchar("source", { length: 20 })
+    source: varchar("source", { length: 255 })
       .$type<SingleSource>()
       .default("ui")
       .notNull(),
