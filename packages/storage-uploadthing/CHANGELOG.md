@@ -1,5 +1,13 @@
 # @nextlyhq/storage-uploadthing
 
+## 0.0.2-alpha.26
+
+### Patch Changes
+
+- [#123](https://github.com/nextlyhq/nextly/pull/123) [`6964718`](https://github.com/nextlyhq/nextly/commit/6964718c5d36dba4a337fbce1bf70a55c5554b1f) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Single edit forms no longer ask for a title and slug. A Single is a one-instance document whose identity is fixed by its config (`label` + `slug`), but the admin previously rendered title and slug as editable, required inputs — forcing redundant input for values already determined by the definition.
+
+  The single edit form now shows the title (from the single's `label`) and slug (from the configured `slug`) as read-only, non-editable fields, and submitting never errors on them. `EntrySystemHeader` and `EntryMetaStrip` gain opt-in `lockIdentity`/`lockSlug` flags (default off, so collection entry forms are unchanged); for singles the title/slug are seeded from config, the client validation for those two fields is relaxed, and slug auto-generation is disabled.
+
 ## 0.0.2-alpha.25
 
 ### Patch Changes
