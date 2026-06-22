@@ -1,0 +1,80 @@
+---
+title: Publishing & distribution
+description: How to publish a Nextly plugin, how plugins are discovered, and the trust model behind v1.
+---
+
+Nextly plugins are plain npm packages, registered in code (D0). There is **no
+marketplace, no UI-install, and no runtime sandbox in v1** — distribution and trust ride
+entirely on npm.
+
+## Publish
+
+1. **Build** with `tsup` to ESM `dist/` (first-party plugins are ESM-only — see the note
+   below).
+2. **Set package metadata:**
+   - `"type": "module"` and an `exports` map (include `./admin` if you ship admin
+     components, like the scaffold does).
+   - `"files": ["dist"]` so the embedded `dev/` playground never publishes.
+   - Add the **`nextly-plugin`** keyword (this is how plugins are discovered, D42).
+   - List `nextly` (and `@nextlyhq/admin`/`react` if you have admin UI) as
+     **peerDependencies**, and declare a `nextly` core-compatibility range in your
+     `definePlugin` (e.g. `"^1 || ^2"`, boot-checked, D6).
+3. `npm publish`.
+
+```jsonc
+// package.json (essentials)
+{
+  "type": "module",
+  "keywords": ["nextly-plugin"],
+  "files": ["dist"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.mjs" },
+    "./admin": { "types": "./dist/admin.d.ts", "import": "./dist/admin.mjs" }
+  },
+  "peerDependencies": { "nextly": "^1" }
+}
+```
+
+> **ESM-only:** first-party plugins ship ESM only. CommonJS tooling importing them gets
+> `ERR_PACKAGE_PATH_NOT_EXPORTED`. Either keep your consuming tooling ESM, or ship a
+> dual (ESM+CJS) build if you must support CJS consumers.
+
+## Configuration & secrets
+
+Plugin options are passed where the plugin is registered
+(`defineConfig({ plugins: [myPlugin({ ... })] })`). For sensitive values, read from the
+environment and wrap them with `secret()` (D37) so they auto-redact in logs, JSON, and
+inspection — the real value is only available via `.reveal()`:
+
+```ts
+import { secret } from "@nextlyhq/plugin-sdk";
+myPlugin({ apiKey: secret(process.env.ACME_API_KEY) });
+```
+
+`secret()` is currently [`@experimental`](/docs/plugins/stability). Never hard-code
+secrets in config or commit them.
+
+## Discovery (D42)
+
+In v1, plugins are found through:
+
+- **npm** — search the **`nextly-plugin`** keyword.
+- **The Nextly docs** — first-party and notable community plugins are listed on the
+  [plugins index](/docs/plugins). To get a community plugin listed, see
+  [Contributing a plugin](/docs/plugins/contributing).
+- **GitHub** — the `nextly-plugin` topic.
+
+There is intentionally no in-app gallery or one-click install yet.
+
+## Trust model (D34)
+
+v1 is **full-trust**: a plugin runs with the same access as your application code. There
+is **no sandbox and no verification gate** — installing a plugin is exactly as much a
+trust decision as adding any npm dependency. Vet plugins the way you vet dependencies:
+read the source, check the maintainer, pin versions.
+
+Sandboxing, verification, and a curated marketplace are **deferred to a post-v1
+milestone** — they're designed-for, not shipped. Until then, trust is npm trust, stated
+honestly.
+
+See also: [API stability](/docs/plugins/stability) · [Contributing a plugin](/docs/plugins/contributing).

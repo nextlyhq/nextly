@@ -1,0 +1,119 @@
+---
+title: Admin UI
+description: Contribute admin menu items, pages, settings, and collection-view overrides from a plugin — and control where they appear in the sidebar.
+---
+
+A plugin can extend the Nextly admin in two complementary ways:
+
+- **`contributes.admin`** — the *declarative* surface: menu entries, custom pages,
+  a settings panel, and per-collection view overrides (D19–D23).
+- **`admin`** (on the plugin definition) — *placement & appearance*: where the
+  plugin's items sit in the sidebar and how they look (D20).
+
+Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are reserved
+but not yet rendered — they remain [`@experimental`](/docs/plugins/stability) until M8.
+
+## Component paths
+
+Admin contributions reference React components by **string path**, not by import, so the
+declarative surface stays serializable and Node-safe:
+
+```
+"<package>/<subpath>#<ExportName>"
+// e.g. "@acme/nextly-plugin-reports/admin#ReportsView"
+```
+
+Register the components those paths resolve to from your plugin's `/admin` entry, which
+runs inside the admin shell:
+
+```ts
+// src/admin/index.ts
+import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
+import { ReportsView } from "./ReportsView";
+
+registerComponents({
+  "@acme/nextly-plugin-reports/admin#ReportsView": ReportsView,
+});
+```
+
+Running `nextly generate:types` emits a `plugin-admin-imports.generated.ts` import map so
+these load with no manual host wiring (D60).
+
+## Declarative contributions
+
+```ts
+contributes: {
+  admin: {
+    // Sidebar entries (D20). One level of children is supported.
+    menu: [
+      { label: "Reports", to: "/admin/plugins/reports", icon: "BarChart",
+        order: 10, requiredPermission: "read-reports" },
+    ],
+    // Custom pages, namespaced under /admin/plugins/<slug>/<path>, RBAC-gated (D21).
+    pages: [
+      { path: "summary", component: "@acme/nextly-plugin-reports/admin#ReportsView",
+        requiredPermission: "read-reports" },
+    ],
+    // A settings panel rendered at /admin/plugins/<slug> (D21).
+    settings: { component: "@acme/nextly-plugin-reports/admin#ReportsSettings" },
+    // Per-collection view overrides + injection points, keyed by slug (D23).
+    views: {
+      posts: {
+        beforeList: "@acme/nextly-plugin-reports/admin#PostsBanner",
+        edit: "@acme/nextly-plugin-reports/admin#PostsEditor",
+      },
+    },
+  },
+}
+```
+
+`menu`/`pages`/`widgets` honour `requiredPermission` for client-side gating (see
+[Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
+`beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
+
+## Placement & appearance
+
+The plugin's own `admin` field controls where its items live (D20):
+
+```ts
+import { AdminPlacement } from "nextly";
+
+definePlugin({
+  // ...
+  admin: {
+    placement: AdminPlacement.COLLECTIONS, // COLLECTIONS | SINGLES | USERS | SETTINGS | PLUGINS | STANDALONE
+    order: 10,                             // lower = higher; default 100
+    after: "collections",                  // anchor for STANDALONE icons
+  },
+});
+```
+
+Placement defaults to `PLUGINS`. `STANDALONE` gives the plugin its own top-level icon,
+anchored after the section named by `after`.
+
+## Host overrides (D49)
+
+An integrator can override a plugin's placement without forking it, via
+`defineConfig({ admin: { pluginOverrides } })` — keyed by plugin name:
+
+```ts
+// nextly.config.ts
+export default defineConfig({
+  plugins: [reports()],
+  admin: {
+    pluginOverrides: {
+      "@acme/nextly-plugin-reports": {
+        placement: AdminPlacement.SETTINGS, // move it
+        order: 5,
+        after: "users",
+        appearance: { label: "Analytics" }, // shallow-merged
+      },
+    },
+  },
+});
+```
+
+The override wins over the plugin's own `admin` config, so operators stay in control of
+their sidebar.
+
+See also: [Permissions](/docs/plugins/permissions) · [Author guide](/docs/plugins/author-guide).

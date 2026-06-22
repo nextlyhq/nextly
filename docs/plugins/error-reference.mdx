@@ -3,7 +3,7 @@ title: Plugin Error Reference
 description: The fail-fast boot errors a plugin can trigger — what each means and how to fix it.
 ---
 
-> **Warning: Plugins are not ready for use.** The plugin API is experimental (alpha).
+> **Alpha (`0.x`) — pin your versions.** The plugin API surface is now [stable](/docs/plugins/stability); the packages are still alpha.
 
 Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops startup with a specific error rather than failing later in unclear ways. Each error is a `NextlyError` with a stable `code`; the specific cause is in `logContext.reason`. (The user-facing `message` is generic — assert on `code` / `logContext.reason` in tests.)
 

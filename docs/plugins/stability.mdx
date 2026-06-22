@@ -1,0 +1,75 @@
+---
+title: API stability
+description: What's stable vs experimental in the plugin API, the semver guarantee that backs it, and the deprecation policy.
+---
+
+`@nextlyhq/plugin-sdk` **is** the stability boundary for the plugin platform (D40/D43).
+Every export carries a TSDoc release tag — `@public`, `@experimental`, or `@deprecated`
+— and the authoritative ledger lives in the SDK's
+[`STABILITY.md`](https://github.com/nextlyhq/nextly/blob/main/packages/plugin-sdk/STABILITY.md).
+This page summarizes it.
+
+## How a surface becomes stable
+
+Nextly uses a **stability ladder** (D55): nothing is declared stable on paper. A surface
+graduates from `@experimental` to `@public` only once **a first-party plugin has
+exercised it in production** (against a real database, not just the SQLite test harness).
+`ctx.services` is the highest-scrutiny surface and was held experimental the longest
+(D56). The public surface is kept deliberately small (D40).
+
+## The semver guarantee
+
+The `@public` surface is the **semver-protected contract**. Once Nextly reaches `1.0`,
+**breaking a `@public` export requires a major version bump** (D40). During the current
+`0.x` alpha it is *stable-in-intent*: changes follow the deprecation policy below rather
+than landing as silent breaks — but **pin your versions** while we're pre-`1.0`.
+`@experimental` exports carry **no** compatibility guarantee.
+
+## Stable (`@public`)
+
+- `definePlugin`, `PluginDefinition`, `PluginContributions`, `PluginContext`
+- Lifecycle: `setup` / `init` / `destroy`
+- Schema: `contributes.collections` / `extend` (+ singles/components)
+- Permissions: `PluginPermission`, `PermissionSlug`, `AuthUser`
+- Data access: `ctx.services` (incl. `{ as: "system" }`), `QueryOptions`,
+  `PaginatedResult`, `BatchOperationResult`, `ServiceOpts`
+- HTTP routes: `PluginRoute`, `PluginRouteContext`, `PluginRouteHandler`,
+  `Middleware`, `RouteMethod`
+- Events: `EventBus`, `EventEnvelope`, `EventHandler`, `EventName`,
+  `DocumentEvents` / `AuthEvents` / `MediaEvents`
+- Collection/field hook context: `HookContext`
+- Admin: `contributes.admin` menu/pages/views, `ComponentPath`, the
+  `@nextlyhq/plugin-sdk/admin` registration helpers
+- Testing: `@nextlyhq/plugin-sdk/testing` (`createTestNextly`)
+
+## Still `@experimental`
+
+These ship today but carry no guarantee yet — use them, but expect change:
+
+- The raw `ctx.db` escape hatch (D56 — prefer `ctx.services`)
+- `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
+- Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
+- Secrets (D37): `secret`, `Secret`, `isSecret`
+- Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
+- Admin dashboard widgets (`PluginAdminWidget`, D22 — reserved, not rendered until M8)
+- `contributes.events`, `dependsOn` / `optionalDependsOn`, `plugin.rename` (D54)
+
+Each graduates once a first-party plugin exercises it.
+
+## Deprecation policy (D41)
+
+When a `@public` export must change incompatibly:
+
+1. It's marked `@deprecated` with the replacement and removal version.
+2. A one-time runtime warning is emitted at first use where practical.
+3. It's kept for **≥ 1 major version** (the support window).
+4. A migration guide ships before removal.
+
+Promotion (`@experimental` → `@public`) is **not** a breaking change.
+
+## Out of scope for v1
+
+Per D0/D42/D34, v1 is **npm-trust**: no marketplace, no UI-install, no runtime sandbox or
+verification. Discovery is npm + these docs + the `nextly-plugin` keyword — see
+[Publishing & distribution](/docs/plugins/distribution). These are deferred, not
+cancelled.
