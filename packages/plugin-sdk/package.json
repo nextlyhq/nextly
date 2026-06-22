@@ -1,7 +1,7 @@
 {
   "name": "@nextlyhq/plugin-sdk",
   "version": "0.0.1",
-  "description": "Nextly Plugin SDK — the experimental, author-facing surface for building Nextly plugins.",
+  "description": "Nextly Plugin SDK — the author-facing surface for building Nextly plugins; the plugin API stability boundary (see STABILITY.md).",
   "license": "MIT",
   "repository": {
     "type": "git",

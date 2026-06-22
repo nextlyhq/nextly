@@ -1,7 +1,9 @@
 # @nextlyhq/plugin-redirects
 
-> ⚠️ **Alpha.** Part of the Nextly plugin platform. The public surface is
-> `@experimental` and may change between alpha releases — pin a version.
+> ⚠️ **Alpha (`0.x`).** Part of the Nextly plugin platform. The plugin API this
+> builds on is now stable + semver-protected (see the SDK
+> [`STABILITY.md`](../plugin-sdk/STABILITY.md)); this package itself is still alpha,
+> so pin a version.
 
 Admin-managed URL redirects for [Nextly](https://nextlyhq.com), modeled on
 Payload's `@payloadcms/plugin-redirects`. It:

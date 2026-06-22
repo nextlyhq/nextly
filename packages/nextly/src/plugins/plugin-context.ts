@@ -192,7 +192,8 @@ export interface PluginActionRegistry {
  */
 export interface PluginContext {
   /**
-   * Core services with full TypeScript autocomplete.
+   * @public Core services with full TypeScript autocomplete — the managed,
+   * secure-by-default data path (D35/D56). Prefer this over `ctx.db`.
    *
    * Provides access to the unified service layer for:
    * - Collections: CRUD operations on dynamic collections
@@ -223,7 +224,7 @@ export interface PluginContext {
   logger: Logger;
 
   /**
-   * @experimental Post-commit, observe-only, best-effort event bus (D8/D51).
+   * @public Post-commit, observe-only, best-effort event bus (D8/D51).
    * Use a hook to modify/abort; use an event to react/notify.
    */
   events: EventBus;
@@ -250,10 +251,9 @@ export interface PluginContext {
   config: Readonly<NextlyServiceConfig>;
 
   /**
-   * Hook registration for lifecycle events.
-   *
-   * Allows plugins to register hooks that run before/after
-   * database operations on collections.
+   * @experimental Hook registration for lifecycle events. Allows plugins to
+   * register hooks that run before/after database operations on collections.
+   * No first-party plugin registers via `ctx.hooks` yet (see STABILITY.md).
    */
   hooks: PluginHookRegistry;
 
@@ -432,7 +432,7 @@ export interface PluginDefinition {
   version: string;
 
   /**
-   * @experimental Core-compatibility range, boot-checked (D6). May span majors,
+   * @public Core-compatibility range, boot-checked (D6). May span majors,
    * e.g. `'^1 || ^2'`. Prereleases (alpha/beta) count as in-range.
    */
   nextly: string;
@@ -457,7 +457,7 @@ export interface PluginDefinition {
   enabled?: boolean;
 
   /**
-   * @experimental Declarative contributions (D1) — introspectable without running
+   * @public Declarative contributions (D1) — introspectable without running
    * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
    */
   contributes?: PluginContributions;
@@ -482,7 +482,7 @@ export interface PluginDefinition {
   admin?: PluginAdminConfig;
 
   /**
-   * @experimental Escape-hatch config transformer; all `setup`s run before any
+   * @public Escape-hatch config transformer; all `setup`s run before any
    * `init` (D4). Don't mutate the config — spread and return a new object.
    *
    * @param config - Current configuration
@@ -491,7 +491,7 @@ export interface PluginDefinition {
   setup?: (config: NextlyServiceConfig) => NextlyServiceConfig;
 
   /**
-   * Plugin initialization function.
+   * @public Plugin initialization function.
    *
    * Called after all services are registered.
    * Receives PluginContext for service access and hook registration.
@@ -501,7 +501,7 @@ export interface PluginDefinition {
   init?: (context: PluginContext) => Promise<void> | void;
 
   /**
-   * @experimental Teardown on shutdown / HMR / test teardown (D4).
+   * @public Teardown on shutdown / HMR / test teardown (D4).
    * Invocation is wired in P1.
    */
   destroy?: (context: PluginContext) => Promise<void> | void;
