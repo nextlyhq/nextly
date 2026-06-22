@@ -104,6 +104,13 @@ export interface EntrySystemHeaderProps {
    */
   scope?: "collection" | "single";
 
+  /**
+   * When true (Singles), the title is fixed by the single's config: render the
+   * title input read-only and drop its required validation. Defaults to false
+   * so collection entry forms keep the editable, optionally-required title.
+   */
+  lockIdentity?: boolean;
+
   /** Rail collapsed state. */
   isRailCollapsed?: boolean;
   /** Rail toggle handler. */
@@ -130,6 +137,7 @@ export function EntrySystemHeader({
   onViewApi,
   showJson = true,
   scope = "collection",
+  lockIdentity = false,
   isRailCollapsed = false,
   onToggleRail,
 }: EntrySystemHeaderProps) {
@@ -158,7 +166,7 @@ export function EntrySystemHeader({
     (titleField as { label?: string } | undefined)?.label ?? "Title";
 
   const { ref: rhfRef, ...rhfRegister } = form.register(titleName, {
-    required: titleRequired ? "Title is required" : false,
+    required: !lockIdentity && titleRequired ? "Title is required" : false,
   });
 
   const showEditMenuItems = mode === "edit" && entry?.id;
@@ -190,10 +198,12 @@ export function EntrySystemHeader({
           placeholder="Untitled"
           aria-label={titleLabel}
           disabled={isSubmitting}
+          readOnly={lockIdentity}
           className={cn(
             "w-full text-[19px] font-semibold tracking-tight text-foreground",
             "bg-transparent outline-none placeholder:text-muted-foreground/50",
-            isSubmitting && "opacity-60 cursor-not-allowed"
+            isSubmitting && "opacity-60 cursor-not-allowed",
+            lockIdentity && "cursor-default text-foreground/80"
           )}
         />
       </div>
