@@ -44,6 +44,10 @@ import {
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
 import type { MetaService } from "../domains/meta";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type {
@@ -347,6 +351,17 @@ export async function registerServices(
   // Fail fast on role-bundle collisions (D67). Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, resolvedPlugins);
+
+  // Register plugin custom field types (C7/D16) BEFORE schema sync, so the DDL
+  // classifier (classifyFieldKind) maps each custom type to its storage
+  // primitive. Declarative + schema-affecting, so registered for ALL plugins
+  // (incl. disabled, per D49). Clear-and-rebuild per boot; fail-fast on collision.
+  clearFieldTypes();
+  for (const fieldTypePlugin of resolvedPlugins) {
+    for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
+      registerFieldType(fieldType);
+    }
+  }
 
   const {
     adapter: providedAdapter,
