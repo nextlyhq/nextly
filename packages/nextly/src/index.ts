@@ -349,6 +349,7 @@ export {
   type PluginContributions,
   type PluginDefinition,
   type PluginPermission,
+  type PluginRole,
   type PermissionSlug,
   type PluginHookRegistry,
   type PluginFilterRegistry,

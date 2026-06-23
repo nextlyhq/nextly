@@ -26,6 +26,7 @@ export {
 export type {
   PluginContributions,
   PluginPermission,
+  PluginRole,
   PermissionSlug,
 } from "./contributions";
 

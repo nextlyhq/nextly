@@ -51,7 +51,7 @@ import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import type { PluginPermission } from "../plugins/contributions";
+import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import type {
@@ -60,6 +60,7 @@ import type {
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
+import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
@@ -174,6 +175,9 @@ export interface NextlyServiceConfig {
 
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
+
+  /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
+  roles?: PluginRole[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];
@@ -331,6 +335,10 @@ export async function registerServices(
   // Fail fast on invalid plugin-declared custom permissions (D36). Validation
   // only here; the list is re-derived + seeded in runPostInitTasks.
   collectCustomPermissions(transformedConfig, resolvedPlugins);
+
+  // Fail fast on role-bundle collisions (D67). Validation only here; roles are
+  // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
+  collectRoles(transformedConfig, resolvedPlugins);
 
   const {
     adapter: providedAdapter,

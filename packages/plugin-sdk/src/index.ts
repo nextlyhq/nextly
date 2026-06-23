@@ -21,7 +21,8 @@ export { definePlugin } from "nextly";
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
  * @experimental `PluginHookRegistry` — the `ctx.hooks` registration surface is
- *   not yet exercised by a first-party plugin (see STABILITY.md).
+ *   not yet exercised by a first-party plugin (see STABILITY.md). `PluginRole`
+ *   — `contributes.roles` bundles (D67), new in Phase 2, unexercised in prod.
  */
 export type {
   PluginDefinition,
@@ -29,6 +30,7 @@ export type {
   PluginContext,
   PluginHookRegistry,
   PluginPermission,
+  PluginRole,
   PermissionSlug,
   ServiceOpts,
   AuthUser,

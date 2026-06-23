@@ -22,6 +22,24 @@ export interface PluginPermission {
 }
 
 /**
+ * @experimental A plugin-declared role bundle (D67) — a named set of permissions
+ * an admin can grant as a unit. Seeded on boot (idempotent by slug), tagged
+ * `isSystem: false`, and **never auto-assigned** to users (D36 — define, don't
+ * grant). Reference permissions by their `${action}-${resource}` slug.
+ */
+export interface PluginRole {
+  /** Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` is reserved. */
+  slug: string;
+  /** Human-readable name (e.g. `'Content Reviewer'`). */
+  name: string;
+  description?: string;
+  /** Permission slugs this role bundles, e.g. `['read-posts', 'approve-posts']`. */
+  permissionSlugs: string[];
+  /** Authority level (higher = more senior); default 0. */
+  level?: number;
+}
+
+/**
  * @public A permission identifier — the `${action}-${resource}` slug
  * (e.g. `'export-submissions'`).
  *
@@ -53,6 +71,8 @@ export interface PluginContributions {
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   /** @public Custom permissions; CRUD is auto-seeded separately (P3, D36). */
   permissions?: PluginPermission[];
+  /** @experimental Role bundles — named sets of permissions, seeded on boot (D67). */
+  roles?: PluginRole[];
   /** @experimental Custom event names this plugin may emit (P1, D9). No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
   /** @public HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
