@@ -36,6 +36,7 @@ import type {
 import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
 
 import { FieldWrapper } from "./FieldWrapper";
@@ -254,6 +255,8 @@ export function FieldRenderer({
         readOnly?: boolean;
         disabled?: boolean;
         condition?: { field: string; equals: string };
+        /** D24 — plugin-supplied field-editor component path (overrides the type dispatch). */
+        component?: string;
       }
     | undefined;
   const isReadOnly = readOnly || adminOptions?.readOnly;
@@ -350,6 +353,18 @@ export function FieldRenderer({
    * Uses type narrowing to ensure type-safe prop passing.
    */
   function renderField() {
+    // D24 — a plugin/app can override the editor for a specific field via
+    // `admin.component` (a component path). Takes precedence over the built-in
+    // type dispatch; isolated by the plugin boundary inside PluginSlot (D53).
+    if (adminOptions?.component) {
+      return (
+        <PluginSlot
+          path={adminOptions.component}
+          props={{ ...commonProps, field }}
+        />
+      );
+    }
+
     // Cast to string to allow legacy "string" type which isn't in the FieldConfig union
     const fieldType = field.type as string;
     switch (fieldType) {
