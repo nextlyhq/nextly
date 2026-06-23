@@ -6,6 +6,7 @@ import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
 
+import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
 import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
@@ -104,6 +105,8 @@ export interface AuthRouterDeps {
   challengeTokenTTL: number;
   /** Max challenge-resolve attempts before failing (default 5). */
   maxChallengeAttempts: number;
+  /** Aggregated auth-page UI (D57), served pre-auth from GET /auth/ui. */
+  authUi: AuthUiMeta;
 
   // User lookups (widest return type to satisfy all handlers)
   findUserByEmail: (email: string) => Promise<{
@@ -221,6 +224,9 @@ async function dispatchAuthRequest(
         return handleSession(request, deps);
       case "csrf":
         return handleCsrf(request, deps);
+      case "ui":
+        // Public (pre-auth): the login screen fetches the auth-page UI config.
+        return handleAuthUi(request, deps);
       default:
         return null;
     }

@@ -24,6 +24,7 @@ import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import { createPasswordStrategy } from "../pipeline/password-strategy";
 
+import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
 
 /**
@@ -44,6 +45,7 @@ export function buildAuthRouterDeps(
     | "pluginCtx"
     | "challengeTokenTTL"
     | "maxChallengeAttempts"
+    | "authUi"
   > = {
     secret: env.NEXTLY_SECRET || "",
     isProduction: env.NODE_ENV === "production",
@@ -453,6 +455,7 @@ export function buildAuthRouterDeps(
     pluginCtx,
     challengeTokenTTL: 300,
     maxChallengeAttempts: 5,
+    authUi: aggregateAuthUi(config?.plugins ?? []),
   };
 }
 
