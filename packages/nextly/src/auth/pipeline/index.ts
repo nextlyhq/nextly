@@ -20,3 +20,11 @@ export {
 } from "./password-strategy";
 export { runStrategyChain } from "./strategy-chain";
 export { AuthHookRegistry } from "./hooks";
+export { ChallengeRegistry } from "./challenge";
+export {
+  mintPendingToken,
+  verifyPendingToken,
+  InvalidPendingTokenError,
+  PENDING_AUTH_TYP,
+  type PendingClaims,
+} from "./pending-token";
