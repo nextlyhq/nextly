@@ -373,6 +373,18 @@ export type {
 } from "./plugins/service-opts";
 export type { AuthUser } from "./types/auth";
 
+// Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
+// challenge protocol. @experimental until a first-party plugin exercises it (D55).
+export type {
+  AuthInput,
+  AuthOutcome,
+  AuthStrategy,
+  Challenge,
+  ChallengeDefinition,
+  AuthHooks,
+  AuthHookName,
+} from "./auth/pipeline/types";
+
 // Managed data access (D56) — bulk-create result for
 // `ctx.services.collections.createMany`. Rich-query options (`QueryOptions`
 // with where/sort/depth/select) + `PaginatedResult` are exported with the other
