@@ -2,10 +2,11 @@
  * D35 Unit C wiring — `ctx.services.collections` is ServiceOpts-wrapped.
  *
  * Proven via the `as:'user'`-with-no-user rejection, which the wrapper raises
- * BEFORE any create — so it doesn't depend on the harness create path (which has
- * an unrelated hook-wiring gap). If `ctx.services.collections` were the raw
- * facade, `{ as: 'user' }` would be treated as a RequestContext and would not
- * reject with INVALID_INPUT.
+ * BEFORE any create. If `ctx.services.collections` were the raw facade,
+ * `{ as: 'user' }` would be treated as a RequestContext and would not reject with
+ * INVALID_INPUT. The full secure-by-default WRITE chain (permission-less user
+ * denied → `{as:'system'}` succeeds → `beforeCreate` still fires) is proven
+ * end-to-end in `secure-by-default.integration.test.ts` (B3).
  */
 import { afterEach, describe, expect, it } from "vitest";
 
