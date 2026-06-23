@@ -41,6 +41,21 @@ export interface PluginRole {
 }
 
 /**
+ * @experimental A reserved scheduled-task declaration (D61). **Not executed yet**
+ * — see `contributes.schedules`. The shape is forward-designed so it stays stable
+ * once a durable-jobs backend (D51) lands.
+ */
+export interface ScheduledTask {
+  /** Unique, namespaced task name, e.g. `'seo.regenerate-sitemap'`. */
+  name: string;
+  /** Cron expression or interval in milliseconds (reserved; not yet honored). */
+  schedule: string | number;
+  /** Task handler (reserved — the runtime does not invoke it yet). */
+  handler?: (ctx: PluginContext) => Promise<void> | void;
+  description?: string;
+}
+
+/**
  * @public A permission identifier — the `${action}-${resource}` slug
  * (e.g. `'export-submissions'`).
  *
@@ -82,6 +97,16 @@ export interface PluginContributions {
    * their own `ctx.services.plugins.<name>.<key>`.
    */
   services?: Record<string, (ctx: PluginContext) => unknown>;
+  /**
+   * @experimental Scheduled tasks (D61) — **RESERVED, NOT EXECUTED** in this
+   * release. The shape is published so authors aren't surprised by its absence,
+   * but the runtime does not run these yet (a real scheduler needs durable jobs,
+   * D51, because the typical Next.js/serverless deploy has no long-lived
+   * process). Until then: trigger work via an external cron service hitting a
+   * route handler, or react to events (as `plugin-seo` does for cache
+   * invalidation). See `docs/plugins`.
+   */
+  schedules?: ScheduledTask[];
   /** @experimental Custom event names this plugin may emit (P1, D9). No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
   /** @public HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
