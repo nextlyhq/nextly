@@ -13,6 +13,7 @@ import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type React from "react";
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { PluginWidgetGrid } from "@admin/components/features/dashboard/PluginWidgetGrid";
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
@@ -77,6 +78,10 @@ const DashboardPage: React.FC = () => {
             <SinglesQuickLinks />
             <TeamSummary />
           </div>
+
+          {/* Plugin-contributed dashboard widgets (D22 / C9). Renders nothing
+              when no plugin contributes a widget the current user may see. */}
+          <PluginWidgetGrid />
         </div>
       </PageContainer>
     </ErrorBoundary>

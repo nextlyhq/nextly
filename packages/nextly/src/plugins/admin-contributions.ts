@@ -96,7 +96,8 @@ export interface PluginAdminContributions {
   /** Plugin settings UI rendered at `/admin/plugins/<slug>` (D21). */
   settings?: { component: ComponentPath };
   /**
-   * Dashboard widgets (D22). RESERVED — deferred to M8 (D58); not consumed in P5.
+   * @experimental Dashboard widgets (D22) — now rendered by `PluginWidgetGrid`
+   * on the admin dashboard, permission-gated (C9). Graduates per D55.
    */
   widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug (D23). */
