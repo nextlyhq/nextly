@@ -6,6 +6,7 @@ import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
 
+import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
@@ -30,6 +31,7 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   "register",
   "forgot-password",
   "reset-password",
+  "challenge/resolve",
 ]);
 
 /**
@@ -233,6 +235,8 @@ async function dispatchAuthRequest(
       switch (authPath) {
         case "login":
           return handleLogin(request, deps);
+        case "challenge/resolve":
+          return handleChallengeResolve(request, deps);
         case "logout":
           return handleLogout(request, deps);
         case "refresh":
