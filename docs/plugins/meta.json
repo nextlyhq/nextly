@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "author-guide",
+    "auth",
     "api-reference",
     "error-reference",
     "form-builder"
