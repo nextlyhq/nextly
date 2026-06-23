@@ -19,3 +19,4 @@ export {
   type PasswordStrategyDeps,
 } from "./password-strategy";
 export { runStrategyChain } from "./strategy-chain";
+export { AuthHookRegistry } from "./hooks";
