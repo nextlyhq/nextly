@@ -262,12 +262,9 @@ export function formBuilder(
         nextly.self.collections[declaredSubmissionsSlug] ??
         declaredSubmissionsSlug;
 
-      // Prevent duplicate hook registration in Next.js dev mode
-      const guardKey = `__formBuilder_afterCreate_${submissionSlug}`;
-      const g = globalThis as Record<string, unknown>;
-      if (g[guardKey]) return;
-      g[guardKey] = true;
-
+      // Hook/event subscriptions are idempotent across HMR — the platform
+      // clears a plugin's prior subscriptions before re-init (B2), so the old
+      // globalThis dedup guard is no longer needed.
       nextly.logger.info("Form Builder plugin initialized", {
         formsCollection: resolvedConfig.formOverrides.slug,
         submissionsCollection: submissionSlug,

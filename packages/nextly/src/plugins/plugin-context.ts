@@ -11,7 +11,7 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
-import type { EventBus } from "../events/event-bus";
+import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
 import type { Action, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
@@ -32,6 +32,7 @@ import {
   wrapCollectionsForPlugin,
   type PluginCollectionService,
 } from "./service-opts";
+import { recordPluginSubscription } from "./subscription-tracker";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -642,10 +643,19 @@ export function createPluginContext(
    */
   plugin?: PluginDefinition
 ): PluginContext {
+  // Subscriptions made through this context are tracked under the plugin's name
+  // so the runtime can clear them before the plugin re-initializes on HMR (B2).
+  const pluginName = plugin?.name;
+
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
     on: (hookType, collection, handler) => {
       hookRegistry.register(hookType, collection, handler as HookHandler);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          hookRegistry.unregister(hookType, collection, handler as HookHandler)
+        );
+      }
     },
     off: (hookType, collection, handler) => {
       hookRegistry.unregister(hookType, collection, handler as HookHandler);
@@ -662,8 +672,27 @@ export function createPluginContext(
   const config = getServiceFn("config");
 
   // Route isolated event-handler diagnostics through the resolved logger.
-  const events = getEventBus();
-  events.setLogger(logger);
+  const rawBus = getEventBus();
+  rawBus.setLogger(logger);
+  // Per-plugin event bus: `on()` also records an unsubscribe thunk so the
+  // runtime can clear this plugin's subscriptions before it re-initializes on
+  // HMR (B2). Every other method delegates to the shared bus unchanged.
+  const events: EventBus = pluginName
+    ? new Proxy(rawBus, {
+        get(target, prop) {
+          if (prop === "on") {
+            return (name: EventName, handler: EventHandler) => {
+              target.on(name, handler);
+              recordPluginSubscription(pluginName, () =>
+                target.off(name, handler)
+              );
+            };
+          }
+          const value = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      })
+    : rawBus;
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);

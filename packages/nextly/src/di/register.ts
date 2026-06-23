@@ -71,6 +71,7 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
+import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -1608,6 +1609,13 @@ async function initializePlugins(
       pluginHookRegistry.unregister(hookType, collection, handler);
     },
   };
+
+  // HMR/re-registration safety (B2): drop every plugin's prior event/hook
+  // subscriptions before plugins re-subscribe in init(), so the globalThis
+  // EventBus + HookRegistry never accumulate duplicates across module
+  // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
+  // (non-plugin) subscriptions are untracked and untouched.
+  clearPluginSubscriptions();
 
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];

@@ -12,7 +12,7 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { formBuilder } from "../plugin";
 
@@ -25,12 +25,6 @@ const ROUTE_PARAMS = [
 ];
 
 let current: TestNextly | undefined;
-
-beforeEach(() => {
-  delete (globalThis as Record<string, unknown>)[
-    "__formBuilder_afterCreate_form-submissions"
-  ];
-});
 
 afterEach(async () => {
   await current?.destroy();
