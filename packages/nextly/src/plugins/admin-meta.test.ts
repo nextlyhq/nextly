@@ -61,6 +61,57 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].settings?.component).toBe("@acme/p/admin#Settings");
   });
 
+  it("folds headerSlot + widgets for enabled plugins (C9/D22)", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#HeaderBadge",
+              widgets: [
+                {
+                  id: "stats",
+                  component: "@acme/p/admin#Stats",
+                  size: "half",
+                  requiredPermission: "read-stats",
+                },
+              ],
+            },
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].headerSlot).toBe("@acme/p/admin#HeaderBadge");
+    expect(meta[0].widgets?.[0]).toMatchObject({
+      id: "stats",
+      component: "@acme/p/admin#Stats",
+      size: "half",
+      requiredPermission: "read-stats",
+    });
+  });
+
+  it("omits headerSlot + widgets for enabled:false plugins (D49)", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          enabled: false,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#HeaderBadge",
+              widgets: [{ id: "stats", component: "@acme/p/admin#Stats" }],
+            },
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].headerSlot).toBeUndefined();
+    expect(meta[0].widgets).toBeUndefined();
+  });
+
   it("omits admin contributions for enabled:false plugins (D49)", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([

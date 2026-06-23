@@ -8,7 +8,11 @@
 
 import type { PluginOverride } from "../shared/types/config";
 
-import type { PluginAdminPage, PluginMenuItem } from "./admin-contributions";
+import type {
+  PluginAdminPage,
+  PluginAdminWidget,
+  PluginMenuItem,
+} from "./admin-contributions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type { PluginAdminAppearance, PluginDefinition } from "./plugin-context";
 
@@ -31,6 +35,10 @@ export interface PluginAdminMeta {
   pages?: PluginAdminPage[];
   /** Settings UI (D21) — present only for enabled plugins. */
   settings?: { component: string };
+  /** Admin header-slot component (C9) — present only for enabled plugins. */
+  headerSlot?: string;
+  /** Dashboard widgets (D22, C9) — present only for enabled plugins. */
+  widgets?: PluginAdminWidget[];
 }
 
 /**
@@ -84,6 +92,9 @@ export function buildPluginAdminMeta(
       if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
+      if (admin.headerSlot) meta.headerSlot = admin.headerSlot;
+      if (admin.widgets && admin.widgets.length > 0)
+        meta.widgets = admin.widgets;
     }
 
     return meta;

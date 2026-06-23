@@ -101,4 +101,9 @@ export interface PluginAdminContributions {
   widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug (D23). */
   views?: Record<string, PluginCollectionView>;
+  /**
+   * @experimental A component rendered in the admin top bar / header (C9). The
+   * component self-gates on permission. Rendered inside the plugin boundary.
+   */
+  headerSlot?: ComponentPath;
 }
