@@ -72,6 +72,10 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
+import {
+  clearPluginServices,
+  registerPluginService,
+} from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import type {
   CollectionSource,
@@ -1624,10 +1628,19 @@ async function initializePlugins(
   // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
   // (non-plugin) subscriptions are untracked and untouched.
   clearPluginSubscriptions();
+  // Re-register plugin services from scratch each boot (D64) — same
+  // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale
+  // service instances.
+  clearPluginServices();
 
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];
+  const contexts = new Map<string, PluginContext>();
 
+  // PASS 1 — build every enabled plugin's context, register its contributed
+  // services (D64) and declared event names. Services register BEFORE any init
+  // runs, so a plugin's `init` can resolve any other plugin's service lazily via
+  // `ctx.services.plugins.<name>.<svc>`, regardless of init order.
   for (const plugin of plugins) {
     // D49: `enabled: false` skips behavior (init/hooks/events/destroy). The
     // plugin's `setup` already ran in applyPluginConfigTransformers, so its
@@ -1643,6 +1656,14 @@ async function initializePlugins(
       plugin
     );
     teardown.push({ plugin, context: pluginContext });
+    contexts.set(plugin.name, pluginContext);
+
+    // Register contributed services, lazily bound to this plugin's context (D64).
+    for (const [svcName, factory] of Object.entries(
+      plugin.contributes?.services ?? {}
+    )) {
+      registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+    }
 
     // Register custom event names this plugin declares (D9) so its emits
     // don't trigger an "undeclared event" warning.
@@ -1650,6 +1671,13 @@ async function initializePlugins(
     if (declaredEvents.length > 0) {
       getEventBus().registerDeclaredEvents(declaredEvents);
     }
+  }
+
+  // PASS 2 — run `init` for each enabled plugin (services from any plugin are now
+  // resolvable). Topological order is preserved from `plugins`.
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    const pluginContext = contexts.get(plugin.name)!;
 
     if (plugin.init) {
       try {

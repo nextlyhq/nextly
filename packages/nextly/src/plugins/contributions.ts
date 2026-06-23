@@ -6,6 +6,7 @@ import type { SingleConfig } from "../singles/config/types";
 
 import type { PluginAdminContributions } from "./admin-contributions";
 import type { PluginAuthContributions } from "./auth-contributions";
+import type { PluginContext } from "./plugin-context";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
@@ -73,6 +74,14 @@ export interface PluginContributions {
   permissions?: PluginPermission[];
   /** @experimental Role bundles — named sets of permissions, seeded on boot (D67). */
   roles?: PluginRole[];
+  /**
+   * @experimental Custom services registered into DI (D64). Each entry is a
+   * factory `(ctx) => instance`; the service is exposed lazily (instantiated on
+   * first access) at `ctx.services.plugins.<thisPluginName>.<key>` and
+   * `nextly.plugins.<thisPluginName>.<key>` (D66). Other plugins consume it via
+   * their own `ctx.services.plugins.<name>.<key>`.
+   */
+  services?: Record<string, (ctx: PluginContext) => unknown>;
   /** @experimental Custom event names this plugin may emit (P1, D9). No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
   /** @public HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */

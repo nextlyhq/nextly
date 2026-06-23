@@ -58,6 +58,7 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { NextlyError } from "../errors/nextly-error";
+import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
 import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -272,6 +273,16 @@ export class Nextly implements NextlyContext {
     this.permissions = createPermissionsNamespace(this);
     this.access = createAccessNamespace(this);
     this.apiKeys = createApiKeysNamespace(this);
+  }
+
+  /**
+   * @experimental In-process access to plugin-contributed services (D66), keyed
+   * by plugin name then service name — the same registry exposed to plugins as
+   * `ctx.services.plugins`. Lazily resolved (instantiated on first access). Cast
+   * to your service's type, or import it from the providing plugin.
+   */
+  public get plugins(): Record<string, Record<string, unknown>> {
+    return buildPluginServicesNamespace();
   }
 
   /**

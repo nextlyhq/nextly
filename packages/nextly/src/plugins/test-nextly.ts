@@ -31,6 +31,7 @@ import { getImageProcessor } from "../storage/image-processor";
 
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
+import { clearPluginServices } from "./services/plugin-services-registry";
 import { clearPluginSubscriptions } from "./subscription-tracker";
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -92,6 +93,7 @@ export async function createTestNextly(
   resetHookRegistry();
   resetEventBus();
   clearPluginSubscriptions();
+  clearPluginServices();
   resetFilterRegistry();
   resetPluginRouteRegistry();
   resetNextlyInstance();
@@ -154,6 +156,7 @@ export async function createTestNextly(
       resetHookRegistry();
       resetEventBus();
       clearPluginSubscriptions();
+      clearPluginServices();
       resetFilterRegistry();
       resetPluginRouteRegistry();
       resetNextlyInstance();
