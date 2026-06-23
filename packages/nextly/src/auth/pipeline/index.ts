@@ -13,3 +13,9 @@ export type {
   AuthHooks,
   AuthHookName,
 } from "./types";
+
+export {
+  createPasswordStrategy,
+  type PasswordStrategyDeps,
+} from "./password-strategy";
+export { runStrategyChain } from "./strategy-chain";
