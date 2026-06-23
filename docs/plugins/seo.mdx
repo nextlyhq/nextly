@@ -1,0 +1,81 @@
+---
+title: SEO
+description: Add SEO meta fields to your collections and serve an auto-invalidating sitemap of your published content.
+---
+
+> **Alpha (`0.x`) — pin your versions.** The plugin API this builds on is
+> [stable](/docs/plugins/stability); the package itself is still alpha.
+
+The first-party SEO plugin (`@nextlyhq/plugin-seo`):
+
+- **Adds SEO meta fields** (`metaTitle`, `metaDescription`) to the collections you choose,
+  via `contributes.extend`.
+- Declares a **`manage-seo`** permission (define-but-never-grant — assign it to roles
+  yourself; see [Permissions](/docs/plugins/permissions)).
+- Serves a **sitemap** of your published entries, cached and automatically invalidated
+  whenever a target collection changes.
+
+## Installation
+
+```bash
+npm install @nextlyhq/plugin-seo
+```
+
+## Usage
+
+```ts
+// nextly.config.ts
+import { defineConfig } from "nextly/config";
+import { seo } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [
+    seo({
+      collections: ["pages", "posts"],
+      baseUrl: "https://example.com",
+    }).plugin,
+  ],
+});
+```
+
+Then run `nextly migrate` — the listed collections get the SEO meta fields added to their
+schema.
+
+## Options
+
+| Option        | Type                            | Description                                                                   |
+| ------------- | ------------------------------- | ----------------------------------------------------------------------------- |
+| `collections` | `string[]`                      | Collections to extend with SEO fields **and** include in the sitemap.         |
+| `baseUrl`     | `string`                        | Absolute base URL for sitemap `<loc>` (e.g. `https://example.com`).            |
+| `urlFor?`     | `(entry, collection) => string` | Build an entry's path. Defaults to `/<collection>/<entry.slug>`.               |
+| `fields?`     | `FieldConfig[]`                 | Override the contributed fields (e.g. add a `metaImage` upload or canonical).  |
+
+Target collections should have a `slug` field (for URLs) and a `status` field (only
+`status: "published"` entries appear in the sitemap).
+
+## Sitemap
+
+Plugin routes are namespaced, so the sitemap is served at:
+
+```
+/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
+```
+
+Expose it at the conventional root path with a Next.js rewrite:
+
+```ts
+// next.config.ts
+export default {
+  async rewrites() {
+    return [
+      {
+        source: "/sitemap.xml",
+        destination: "/api/plugins/@nextlyhq/plugin-seo/sitemap.xml",
+      },
+    ];
+  },
+};
+```
+
+The sitemap is generated on demand, cached in memory, and invalidated when any target
+collection emits a `created` / `updated` / `deleted` event.

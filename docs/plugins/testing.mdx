@@ -1,0 +1,66 @@
+---
+title: Testing your plugin
+description: Integration-test a plugin against a real Nextly instance with createTestNextly — and why you should add at least one real-database test.
+---
+
+`createTestNextly` (from `@nextlyhq/plugin-sdk/testing`) boots a **real** Nextly on
+in-memory SQLite and runs your plugin's full lifecycle — `contributes → setup → init` —
+so you can integration-test behaviour, not mocks (D46). It's `@public`.
+
+## Basic shape
+
+```ts
+import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";
+import { myPlugin } from "../src";
+
+const t = await createTestNextly({
+  plugins: [myPlugin()],
+  collections: myPlugin().contributes.collections, // register the plugin's schema
+});
+
+// drive the instance:
+await t.nextly /* CRUD facade */;
+t.hooks;   // assert hook registration/execution
+t.events;  // assert emissions (call settle() to flush best-effort events)
+t.adapter; // raw DB inspection
+
+await t.destroy(); // runs your plugin's destroy() + resets singletons
+```
+
+Always `await t.destroy()` in teardown — it exercises your `destroy()` (catching
+leaked subscriptions) and resets the global registries so tests don't bleed into each
+other.
+
+## What to assert
+
+- **Schema:** your contributed collections/fields exist; `extend` added the fields it
+  should; CRUD permissions were seeded.
+- **Behaviour:** hooks fire and can modify/abort; events emit after commit (use
+  `await t.events.settle()` before asserting, since events are best-effort).
+- **Routes & permissions:** a route requires the right permission; `{ as: "system" }`
+  vs `{ as: "user" }` calls behave as expected.
+- **Uninstall:** removing the plugin orphans its tables and `nextly prune` would drop
+  only `plugin:*` provenance (see [Schema & data lifecycle](/docs/plugins/schema)).
+
+## Add at least one real-database test
+
+The in-memory SQLite harness is fast and great for logic, but **SQLite does not enforce
+several dialect-specific constraints** that Postgres and MySQL do (column length,
+stricter typing, some FK behaviours). A bug can pass every SQLite test and still fail on
+a real database.
+
+> **Real-world example:** a `varchar(20)` column held provenance values like
+> `plugin:@acme/nextly-plugin-name` (well over 20 chars). SQLite silently accepted it;
+> Postgres rejected it with `22001 value too long`. It passed CI and broke on first
+> deploy.
+
+So: for anything that writes typed or system-metadata columns, add **at least one
+Postgres-backed integration test** in addition to the SQLite ones. Point
+`createTestNextly`'s adapter at a throwaway Postgres database (or run the test in CI
+against a Postgres service container) and exercise the write path on a **clean** schema —
+a polluted/drifted dev database can mask migration-diff bugs.
+
+Also use **realistic scoped plugin names** in fixtures (`@acme/nextly-plugin-thing`, not
+`@t/x`) so length/constraint problems surface.
+
+See also: [Author guide](/docs/plugins/author-guide) · [Schema & data lifecycle](/docs/plugins/schema).

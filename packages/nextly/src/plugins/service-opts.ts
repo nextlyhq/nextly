@@ -4,7 +4,7 @@ import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
 /**
- * @experimental Elevation options for the managed `ctx.services` path (D35).
+ * @public Elevation options for the managed `ctx.services` path (D35).
  * Default: `system` when no `user` is supplied (no-user → system). Validation/
  * hooks/events ALWAYS run, even under `system` — only the access check is bypassed.
  *
@@ -74,7 +74,7 @@ type ReplaceTrailingContext<F> = F extends (
   ? (...args: [...Head, ServiceOpts?]) => R
   : F;
 
-/** @experimental Plugin-facing collection service: access methods take `ServiceOpts` (D35). */
+/** @public Plugin-facing collection service: access methods take `ServiceOpts` (D35). */
 export type PluginCollectionService = Omit<CollectionService, AccessMethod> & {
   [K in AccessMethod]: ReplaceTrailingContext<CollectionService[K]>;
 };

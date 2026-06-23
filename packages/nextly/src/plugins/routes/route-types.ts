@@ -3,12 +3,12 @@ import type { PermissionSlug } from "../contributions";
 import type { PluginContext } from "../plugin-context";
 
 /**
- * @experimental HTTP methods a plugin route may declare.
+ * @public HTTP methods a plugin route may declare.
  */
 export type RouteMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 /**
- * @experimental Per-request context handed to a plugin route handler (D26).
+ * @public Per-request context handed to a plugin route handler (D26).
  *
  * It is the plugin's boot-built {@link PluginContext} (services/db/logger/events/
  * hooks/filters/actions/self/config) plus the per-request `user` and path `params`.
@@ -24,7 +24,7 @@ export interface PluginRouteContext extends PluginContext {
 }
 
 /**
- * @experimental A plugin route handler. Receives the raw web `Request` (body/
+ * @public A plugin route handler. Receives the raw web `Request` (body/
  * query/headers) plus the per-request {@link PluginRouteContext} (D26).
  */
 export type PluginRouteHandler = (
@@ -33,7 +33,7 @@ export type PluginRouteHandler = (
 ) => Response | Promise<Response>;
 
 /**
- * @experimental Typed, ordered route-level middleware (onion model, D27). Call
+ * @public Typed, ordered route-level middleware (onion model, D27). Call
  * `next()` to continue the chain, or return a `Response` to short-circuit.
  */
 export type Middleware = (
@@ -43,7 +43,7 @@ export type Middleware = (
 ) => Promise<Response>;
 
 /**
- * @experimental A single HTTP route contributed by a plugin (D25). Mounted at
+ * @public A single HTTP route contributed by a plugin (D25). Mounted at
  * `/api/plugins/<plugin-name><path>` under the existing catch-all and secure by
  * default (auth + RBAC) unless `public: true` (D28).
  */

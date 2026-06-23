@@ -2,13 +2,14 @@
 
 The author-facing SDK for building [Nextly](https://nextlyhq.com) plugins.
 
-> **⚠️ Experimental — alpha. Not ready for production.**
+> **⚠️ Alpha (`0.x`) — pin your versions.**
 >
-> Public plugin support — stable APIs, documentation guarantees, and the official
-> plugin gallery — lands at the Nextly **beta** release. This package is published
-> for the small group of internal alpha authors building first-party plugins.
-> **Surfaces, names, and behaviour will change without notice.** Do not rely on it
-> for production or serious development work yet.
+> The plugin API surface listed in [`STABILITY.md`](./STABILITY.md) is now **stable
+> (`@public`) and semver-protected** (D40): once Nextly reaches `1.0`, breaking it
+> requires a major version bump. Everything still marked `@experimental` carries **no**
+> compatibility guarantee and may change in any release. While we are pre-`1.0`, **pin
+> your `nextly` / `@nextlyhq/plugin-sdk` versions** and read the release notes before
+> upgrading.
 
 ## What this package is
 
@@ -105,14 +106,23 @@ export default defineConfig({
 
 ## Stability & versioning policy
 
-- **Everything is `@experimental`** until first-party plugins have exercised it (D55).
-  `ctx.services` is the highest-scrutiny surface and stays experimental the longest.
-- **The public surface** (`definePlugin`/`contributes`/lifecycle, `ctx.services`, hook
-  types, event names + payloads, and these SDK exports) is what becomes semver-protected
-  at stabilization — breaking it will require a Nextly **major** (D40).
-- **Deprecations** will warn, keep at least a one-major support window, and ship with a
-  migration guide (D41). During alpha, this guarantee does **not** yet apply — pin a
-  version and read the release notes before upgrading.
+The authoritative ledger of what is `@public` (stable) vs `@experimental` lives in
+[`STABILITY.md`](./STABILITY.md). In short:
+
+- **Stable (`@public`)** — `definePlugin`/`contributes`/lifecycle, `ctx.services`
+  (incl. `{ as: "system" }`), `contributes.routes`, `contributes.admin`
+  (menu/pages/views), `ctx.events` + the event-name constants, the collection
+  `HookContext`, and `@nextlyhq/plugin-sdk/testing`. Breaking a `@public` export
+  requires a Nextly **major** (D40).
+- **Still `@experimental`** — the raw `ctx.db` escape hatch, `ctx.hooks` plugin
+  registration, filters/actions (D63), `secret()`, `useCan`/`<Can>`, and admin
+  dashboard widgets (D22). No compatibility guarantee yet — each graduates once a
+  first-party plugin exercises it (D55).
+- **Deprecations** warn, keep at least a one-major support window, and ship with a
+  migration guide (D41). Promotion (`@experimental` → `@public`) is **not** a breaking
+  change.
+- **Pre-`1.0` caveat** — during the `0.x` alpha, pin your versions; the major-bump
+  guarantee formally applies from `1.0`.
 - **Declare a `nextly` range** in your `definePlugin` (e.g. `"^1 || ^2"`); it's checked
   at boot and may span majors. Use `ctx.nextlyVersion` for runtime feature detection.
 
