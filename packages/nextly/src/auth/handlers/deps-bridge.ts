@@ -432,10 +432,18 @@ export function buildAuthRouterDeps(
   // Base plugin context for strategies/hooks (system-level; ctx.self empty).
   // Auth hooks share this context in v1; per-plugin ctx.self resolution in auth
   // hooks is a documented future refinement (the AuthHooks contract is unchanged).
-  const pluginCtx = createPluginContext(
-    getService as Parameters<typeof createPluginContext>[0],
-    getHookRegistry()
-  );
+  //
+  // createPluginContext resolves "db" as the drizzle instance (not a raw DI
+  // service), so translate "db" → adapter.getDrizzle() the same way di/register
+  // does; everything else delegates to the container.
+  const ctxGetService = ((name: string) => {
+    if (name === "db") {
+      const adapter = getService("adapter") as { getDrizzle: () => unknown };
+      return adapter.getDrizzle();
+    }
+    return getService(name);
+  }) as Parameters<typeof createPluginContext>[0];
+  const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());
 
   return {
     ...base,
