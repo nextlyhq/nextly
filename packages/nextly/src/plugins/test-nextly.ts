@@ -16,6 +16,7 @@ import { createAdapter } from "../database/factory";
 import { getService, registerServices, shutdownServices } from "../di/register";
 import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
+import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
 import { resetFilterRegistry } from "../filters";
@@ -94,6 +95,7 @@ export async function createTestNextly(
   resetEventBus();
   clearPluginSubscriptions();
   clearPluginServices();
+  resetEmailProviderRegistry();
   resetFilterRegistry();
   resetPluginRouteRegistry();
   resetNextlyInstance();
@@ -157,6 +159,7 @@ export async function createTestNextly(
       resetEventBus();
       clearPluginSubscriptions();
       clearPluginServices();
+      resetEmailProviderRegistry();
       resetFilterRegistry();
       resetPluginRouteRegistry();
       resetNextlyInstance();

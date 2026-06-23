@@ -39,6 +39,10 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import {
+  getEmailProviderRegistry,
+  resetEmailProviderRegistry,
+} from "../domains/email/services/email-provider-registry";
 import type { MetaService } from "../domains/meta";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
@@ -1632,6 +1636,9 @@ async function initializePlugins(
   // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale
   // service instances.
   clearPluginServices();
+  // Reset the email provider registry to built-ins, then re-register plugin
+  // providers below (C2/D65) — clear-and-rebuild so HMR can't double-register.
+  resetEmailProviderRegistry();
 
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];
@@ -1663,6 +1670,14 @@ async function initializePlugins(
       plugin.contributes?.services ?? {}
     )) {
       registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+    }
+
+    // Register contributed email providers (C2/D65) — fail-fast on type collision.
+    for (const provider of plugin.contributes?.emailProviders ?? []) {
+      getEmailProviderRegistry().register(
+        provider.type,
+        provider.createAdapter
+      );
     }
 
     // Register custom event names this plugin declares (D9) so its emits
