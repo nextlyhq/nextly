@@ -10,6 +10,7 @@
  * @since 1.0.0
  */
 
+import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { ComponentConfig } from "../../components/config/types";
 import type { CorsConfig } from "../../middleware/cors";
@@ -527,6 +528,13 @@ export interface AuthConfig {
    * email enumeration (e.g. a closed admin tool with controlled signup).
    */
   revealRegistrationConflict?: boolean;
+
+  /**
+   * @experimental Opt-in auth strategies (D71). A plugin may *provide* a
+   * strategy, but it only authenticates anyone once listed here. Strategies run
+   * in order; the built-in `password` strategy always runs last.
+   */
+  strategies?: AuthStrategy[];
 }
 
 /**
@@ -535,6 +543,8 @@ export interface AuthConfig {
 export interface SanitizedAuthConfig {
   /** Whether to reveal duplicate-email registrations on the wire. Defaults to false. */
   revealRegistrationConflict: boolean;
+  /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
+  strategies?: AuthStrategy[];
 }
 
 /**
@@ -836,6 +846,8 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       revealRegistrationConflict:
         config.auth?.revealRegistrationConflict ??
         DEFAULT_AUTH_CONFIG.revealRegistrationConflict,
+      // Pass opt-in auth strategies through unchanged (D71).
+      strategies: config.auth?.strategies,
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],

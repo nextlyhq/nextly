@@ -1,6 +1,10 @@
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { rateLimiter } from "../middleware/rate-limiter";
+import type { ChallengeRegistry } from "../pipeline/challenge";
+import type { AuthHookRegistry } from "../pipeline/hooks";
+import type { AuthStrategy } from "../pipeline/types";
 
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
@@ -82,6 +86,22 @@ export interface AuthRouterDeps {
    * logs a warning and the request continues.
    */
   auditLog: AuditLogWriter;
+
+  // Auth extensibility pipeline (D71). Built in deps-bridge from config +
+  // plugin contributes.auth. With no strategies/hooks beyond the built-in
+  // password strategy, the login/challenge flow is identical to the legacy path.
+  /** Ordered auth strategies (config opt-in first, built-in `password` last). */
+  authStrategies: AuthStrategy[];
+  /** Auth-flow hook registry (beforeLogin/afterAuthenticate/customizeClaims/…). */
+  authHooks: AuthHookRegistry;
+  /** Challenge registry for multi-step auth (e.g. 2FA). */
+  challengeRegistry: ChallengeRegistry;
+  /** Base plugin context handed to strategies/hooks/challenges. */
+  pluginCtx: PluginContext;
+  /** Pending-auth token TTL in seconds (default 300). */
+  challengeTokenTTL: number;
+  /** Max challenge-resolve attempts before failing (default 5). */
+  maxChallengeAttempts: number;
 
   // User lookups (widest return type to satisfy all handlers)
   findUserByEmail: (email: string) => Promise<{

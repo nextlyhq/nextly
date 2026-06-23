@@ -1,38 +1,48 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { setAccessTokenCookie } from "../cookies/access-token-cookie";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
-import { verifyCredentials } from "../credentials/verify-credentials";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
-import { buildClaims } from "../jwt/claims";
-import { signAccessToken } from "../jwt/sign";
-import {
-  generateRefreshToken,
-  hashRefreshToken,
-  generateRefreshTokenId,
-} from "../session/refresh";
+import { mintPendingToken } from "../pipeline/pending-token";
+import { runStrategyChain } from "../pipeline/strategy-chain";
+import type { AuthStrategy } from "../pipeline/types";
 
 import {
   jsonResponse,
   stallResponse,
-  buildCookieHeaders,
   buildAuthErrorResponse,
 } from "./handler-utils";
+import {
+  issueSession,
+  challengeResponse,
+  type IssueSessionDeps,
+} from "./issue-session";
 
-export interface LoginHandlerDeps {
-  secret: string;
-  isProduction: boolean;
-  accessTokenTTL: number;
-  refreshTokenTTL: number;
+/**
+ * Login handler deps. Satisfies {@link IssueSessionDeps} (so it can mint the
+ * session) plus the auth pipeline (D71): the ordered strategy list (built-in
+ * `password` strategy last), the hook registry, the plugin context, and the
+ * challenge pending-token TTL.
+ *
+ * The legacy credential/lockout fields (findUserByEmail, increment/lock/reset,
+ * maxLoginAttempts, ...) remain because the built-in password strategy's
+ * `verify` closure (wired in DI) uses them; the handler no longer calls
+ * verifyCredentials directly.
+ */
+export interface LoginHandlerDeps extends IssueSessionDeps {
   maxLoginAttempts: number;
   lockoutDurationSeconds: number;
   loginStallTimeMs: number;
   requireEmailVerification: boolean;
   allowedOrigins: string[];
+  /** Challenge pending-auth token TTL (seconds). */
+  challengeTokenTTL: number;
+  /** Ordered auth strategies; the built-in `password` strategy is last. */
+  authStrategies: AuthStrategy[];
+  /** Writer for security-sensitive auth events. */
+  auditLog: AuditLogWriter;
+
   findUserByEmail: (email: string) => Promise<{
     id: string;
     email: string;
@@ -47,22 +57,6 @@ export interface LoginHandlerDeps {
   incrementFailedAttempts: (userId: string) => Promise<void>;
   lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
   resetFailedAttempts: (userId: string) => Promise<void>;
-  fetchRoleIds: (userId: string) => Promise<string[]>;
-  fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
-  storeRefreshToken: (record: {
-    id: string;
-    userId: string;
-    tokenHash: string;
-    userAgent: string | null;
-    ipAddress: string | null;
-    expiresAt: Date;
-  }) => Promise<void>;
-  /** Gate XFF parsing on this. Default false. */
-  trustProxy: boolean;
-  /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
-  trustedProxyIps: string[];
-  /** Writer for security-sensitive auth events. */
-  auditLog: AuditLogWriter;
 }
 
 export async function handleLogin(
@@ -73,7 +67,7 @@ export async function handleLogin(
   const requestId = readOrGenerateRequestId(request);
 
   try {
-    const body = await request.json();
+    const body = (await request.json()) as Record<string, unknown>;
 
     const csrfCookie = readCsrfCookie(request);
     const csrfToken = readCsrfFromRequest(body, request);
@@ -96,100 +90,74 @@ export async function handleLogin(
       );
     }
 
-    // verifyCredentials throws NextlyError on every failure path.
-    // Account-state checks (locked / unverified / inactive) collapse to
-    // AUTH_INVALID_CREDENTIALS per spec §13.1 (always 401, no
-    // separate 429 leg).
-    const verifiedUser = await verifyCredentials(
-      { email: body.email, password: body.password },
-      {
-        findUserByEmail: deps.findUserByEmail,
-        incrementFailedAttempts: deps.incrementFailedAttempts,
-        lockAccount: deps.lockAccount,
-        resetFailedAttempts: deps.resetFailedAttempts,
-        maxLoginAttempts: deps.maxLoginAttempts,
-        lockoutDurationSeconds: deps.lockoutDurationSeconds,
-        requireEmailVerification: deps.requireEmailVerification,
-      }
+    // beforeLogin hooks (D71) — may throw to abort; no-op when none registered.
+    await deps.authHooks.runBeforeLogin(
+      { request, body, strategyName: "" },
+      deps.pluginCtx
     );
 
-    const [roleIds, customFields] = await Promise.all([
-      deps.fetchRoleIds(verifiedUser.id),
-      deps.fetchCustomFields(verifiedUser.id),
-    ]);
-
-    const claims = buildClaims({
-      userId: verifiedUser.id,
-      email: verifiedUser.email,
-      name: verifiedUser.name,
-      image: verifiedUser.image,
-      roleIds,
-      customFields,
-    });
-    const accessToken = await signAccessToken(
-      claims,
-      deps.secret,
-      deps.accessTokenTTL
+    // Strategy chain (D71). The built-in `password` strategy (last) wraps
+    // verifyCredentials and throws NextlyError.invalidCredentials on every
+    // failure leg (locked / unverified / inactive / bad password) — caught
+    // below, identical to the legacy path. With no extra strategies + no hooks,
+    // this is byte-for-byte the previous behavior.
+    const outcome = await runStrategyChain(
+      deps.authStrategies,
+      { request, body },
+      deps.pluginCtx
     );
 
-    const rawRefreshToken = generateRefreshToken();
-    const refreshTokenHash = hashRefreshToken(rawRefreshToken);
-    await deps.storeRefreshToken({
-      id: generateRefreshTokenId(),
-      userId: verifiedUser.id,
-      tokenHash: refreshTokenHash,
-      userAgent: request.headers.get("user-agent"),
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
-    });
-
-    const cookies = [
-      setAccessTokenCookie(
-        accessToken,
-        deps.refreshTokenTTL,
-        deps.isProduction
-      ),
-      setRefreshTokenCookie(
-        rawRefreshToken,
-        deps.refreshTokenTTL,
-        deps.isProduction
-      ),
-    ];
-
-    await stallResponse(startTime, deps.loginStallTimeMs);
-
-    // Emit `{ message, user, accessToken, refreshToken, expiresAt }`
-    // directly per spec §7.6. Tokens are still issued as HttpOnly
-    // cookies for browser-based clients; surfacing them in the body too
-    // lets non-browser SDK consumers (mobile, CLI) drive Authorization
-    // headers without losing server-authored toast text.
-    return respondAction(
-      "Logged in.",
-      {
-        user: {
-          id: verifiedUser.id,
-          email: verifiedUser.email,
-          name: verifiedUser.name,
-          image: verifiedUser.image,
-          roleIds,
+    if (outcome.type === "pass" || outcome.type === "fail") {
+      // No strategy claimed the request → unified invalid-credentials 401
+      // (same wire shape + stall + audit as the legacy missing-credentials leg).
+      throw NextlyError.invalidCredentials({
+        logContext: {
+          reason:
+            outcome.type === "fail"
+              ? (outcome.reason ?? "strategy-fail")
+              : "no-strategy-matched",
         },
-        accessToken,
-        refreshToken: rawRefreshToken,
-        // `expiresAt` reflects the access-token JWT exp claim (the
-        // authoritative expiration server-side), not the cookie max-age.
-        // signAccessToken uses deps.accessTokenTTL for that.
-        expiresAt: new Date(
-          Date.now() + deps.accessTokenTTL * 1000
-        ).toISOString(),
-      },
-      {
-        status: 200,
-        headers: buildCookieHeaders(cookies, { "x-request-id": requestId }),
-      }
+      });
+    }
+
+    if (outcome.type === "challenge") {
+      const pendingToken = await mintPendingToken(
+        {
+          userId: outcome.challenge.userId,
+          challengeId: outcome.challenge.id,
+          attempts: 0,
+        },
+        deps.secret,
+        deps.challengeTokenTTL
+      );
+      await stallResponse(startTime, deps.loginStallTimeMs);
+      return challengeResponse(outcome.challenge, pendingToken, requestId);
+    }
+
+    // outcome.type === "authenticated"
+    const afterAuth = await deps.authHooks.runAfterAuthenticate(
+      outcome.user,
+      deps.pluginCtx
     );
+    if (
+      afterAuth &&
+      typeof afterAuth === "object" &&
+      "challenge" in afterAuth
+    ) {
+      const ch = afterAuth.challenge;
+      const pendingToken = await mintPendingToken(
+        { userId: ch.userId, challengeId: ch.id, attempts: 0 },
+        deps.secret,
+        deps.challengeTokenTTL
+      );
+      await stallResponse(startTime, deps.loginStallTimeMs);
+      return challengeResponse(ch, pendingToken, requestId);
+    }
+
+    const response = await issueSession(afterAuth, deps, request, requestId);
+    await deps.authHooks.runAfterLogin(afterAuth, deps.pluginCtx);
+    await stallResponse(startTime, deps.loginStallTimeMs);
+    return response;
   } catch (err) {
     // All login failures stall to the same minimum so timing cannot be
     // used to distinguish error legs. NextlyError serialises via
