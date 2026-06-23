@@ -5,6 +5,7 @@ import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { SingleConfig } from "../singles/config/types";
 
 import type { PluginAdminContributions } from "./admin-contributions";
+import type { PluginAuthContributions } from "./auth-contributions";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
@@ -62,4 +63,10 @@ export interface PluginContributions {
    * RESERVED — deferred to M8 (D58); not rendered in P5 and stays `@experimental`.
    */
   admin?: PluginAdminContributions;
+  /**
+   * @experimental Auth extensibility (D71/D57): auth-flow hooks, challenge
+   * definitions, and auth-page UI. Strategies are app-opt-in (defineConfig
+   * `auth.strategies`), not here.
+   */
+  auth?: PluginAuthContributions;
 }

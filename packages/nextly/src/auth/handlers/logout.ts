@@ -1,4 +1,5 @@
 import { respondAction } from "../../api/response-shapes";
+import type { PluginContext } from "../../plugins/plugin-context";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
   readRefreshTokenCookie,
@@ -10,6 +11,7 @@ import {
   readCsrfFromRequest,
 } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
+import type { AuthHookRegistry } from "../pipeline/hooks";
 import { hashRefreshToken } from "../session/refresh";
 
 import {
@@ -21,6 +23,10 @@ import {
 export interface LogoutHandlerDeps {
   allowedOrigins: string[];
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
+  /** Auth-flow hooks (D71). Optional; the DI path always supplies it. */
+  authHooks?: AuthHookRegistry;
+  /** Plugin context for {@link authHooks}. */
+  pluginCtx?: PluginContext;
 }
 
 export async function handleLogout(
@@ -43,10 +49,20 @@ export async function handleLogout(
     });
   }
 
+  // beforeLogout hook (D71). The logout endpoint doesn't resolve the user, so
+  // pass null; plugins that need the user can read it from the request/session.
+  if (deps.authHooks && deps.pluginCtx) {
+    await deps.authHooks.runBeforeLogout(null, deps.pluginCtx);
+  }
+
   const refreshToken = readRefreshTokenCookie(request);
   if (refreshToken) {
     const tokenHash = hashRefreshToken(refreshToken);
     await deps.deleteRefreshTokenByHash(tokenHash);
+  }
+
+  if (deps.authHooks && deps.pluginCtx) {
+    await deps.authHooks.runAfterLogout(deps.pluginCtx);
   }
 
   const clearCookies = [

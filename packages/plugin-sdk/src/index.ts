@@ -130,6 +130,23 @@ export {
 } from "nextly";
 
 /**
+ * Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
+ * challenge protocol + auth-page UI. Strategies are app-opt-in; hooks/challenges/
+ * UI are normal contributions.
+ * @experimental No first-party plugin exercises this yet; it stays experimental
+ *   until one does (D55). See STABILITY.md.
+ */
+export type {
+  AuthInput,
+  AuthOutcome,
+  AuthStrategy,
+  Challenge,
+  ChallengeDefinition,
+  AuthHooks,
+  AuthHookName,
+} from "nextly";
+
+/**
  * Secrets (D37) — redact secret config/env values at every leak vector.
  * @experimental No first-party plugin wraps a secret yet; the redaction contract
  *   is solid but unexercised (see STABILITY.md).
