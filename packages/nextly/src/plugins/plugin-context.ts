@@ -32,6 +32,7 @@ import {
   wrapCollectionsForPlugin,
   type PluginCollectionService,
 } from "./service-opts";
+import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
 
 // ============================================================
@@ -83,6 +84,17 @@ export interface PluginHookRegistry {
    * // Global hook (runs for all collections)
    * nextly.hooks.on('afterDelete', '*', async (context) => {
    *   console.log(`Deleted from ${context.collection}`);
+   * });
+   * ```
+   *
+   * @typeParam T - The document shape. Pass it to get a typed `context.data`
+   *   instead of casting (Q4) — prefer this over `as unknown as`:
+   * ```typescript
+   * interface Post { id: string; title: string; status: string }
+   * nextly.hooks.on<Post>('beforeCreate', 'posts', (context) => {
+   *   // context.data is typed Post — no cast needed
+   *   if (context.data?.status === 'published') { ... }
+   *   return context.data;
    * });
    * ```
    */
@@ -213,6 +225,13 @@ export interface PluginContext {
     media: MediaService;
     /** Email service for sending emails via templates and providers */
     email: EmailService;
+    /**
+     * @experimental Services contributed by plugins (D64), keyed by plugin name
+     * then service name. Lazily resolved (instantiated on first access). Runtime
+     * type is `unknown` — cast to your service's type, or export it from the
+     * providing plugin.
+     */
+    plugins: Record<string, Record<string, unknown>>;
   };
 
   /**
@@ -715,6 +734,7 @@ export function createPluginContext(
       users: userService,
       media: mediaService,
       email: emailService,
+      plugins: buildPluginServicesNamespace(),
     },
     db,
     logger,

@@ -13,6 +13,7 @@ import * as telemetry from "@nextlyhq/telemetry";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
+import { registerAddCommand } from "./commands/add";
 import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync";
@@ -196,6 +197,7 @@ function registerCommands(program: Command): void {
   registerDbSyncCommand(program);
   registerBuildCommand(program);
   registerInitCommand(program);
+  registerAddCommand(program);
 
   // Type generation commands
   registerGenerateTypesCommand(program);

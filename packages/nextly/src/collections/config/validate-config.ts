@@ -24,6 +24,7 @@
  * ```
  */
 
+import { hasFieldType } from "../../domains/schema/field-types/field-type-registry";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -43,6 +44,8 @@ import {
   RESERVED_SLUGS,
   SQL_RESERVED_KEYWORDS,
 } from "../../shared/sql-reserved";
+// C7/D16 — accept plugin-registered custom field types (must be registered
+// before the config is validated; see field-type-registry).
 
 import type { CollectionConfig } from "./define-collection";
 
@@ -327,7 +330,7 @@ function validateField(
   const f = field as Record<string, unknown>;
   const errsBase = errors as unknown as BaseValidationError[];
 
-  if (!validateFieldTypeShared(f.type, path, errsBase)) {
+  if (!validateFieldTypeShared(f.type, path, errsBase, hasFieldType)) {
     return;
   }
   const fieldType = f.type as string;

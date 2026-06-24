@@ -27,8 +27,19 @@
  */
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
+
+/** Author-facing storage primitive (PluginFieldType.storage) → logical ColumnKind. */
+const STORAGE_TO_COLUMN_KIND: Record<string, ColumnKind> = {
+  text: "text",
+  longText: "longText",
+  boolean: "boolean",
+  number: "integer",
+  timestamp: "timestamp",
+  json: "json",
+};
 
 /**
  * Database column descriptor — the intermediate representation used
@@ -185,10 +196,13 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
       // Stored as JSON { lat, lng }
       return "json";
 
-    default:
-      // Unknown field type — fall back to text. Both consumers'
-      // legacy default behavior, so no behavior change here.
+    default: {
+      // Plugin-contributed custom field type (C7) maps to its declared storage
+      // primitive; otherwise fall back to text (legacy default — no change).
+      const custom = getFieldType(field.type);
+      if (custom) return STORAGE_TO_COLUMN_KIND[custom.storage] ?? "text";
       return "text";
+    }
   }
 }
 

@@ -61,6 +61,80 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].settings?.component).toBe("@acme/p/admin#Settings");
   });
 
+  it("folds headerSlot + widgets for enabled plugins (C9/D22)", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#HeaderBadge",
+              widgets: [
+                {
+                  id: "stats",
+                  component: "@acme/p/admin#Stats",
+                  size: "half",
+                  requiredPermission: "read-stats",
+                },
+              ],
+            },
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].headerSlot).toBe("@acme/p/admin#HeaderBadge");
+    expect(meta[0].widgets?.[0]).toMatchObject({
+      id: "stats",
+      component: "@acme/p/admin#Stats",
+      size: "half",
+      requiredPermission: "read-stats",
+    });
+  });
+
+  it("omits headerSlot + widgets for enabled:false plugins (D49)", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          enabled: false,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#HeaderBadge",
+              widgets: [{ id: "stats", component: "@acme/p/admin#Stats" }],
+            },
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].headerSlot).toBeUndefined();
+    expect(meta[0].widgets).toBeUndefined();
+  });
+
+  it("serializes contributes.fieldTypes type→component, even when disabled (C7/D16)", () => {
+    const fieldTypes = [
+      { type: "rating", storage: "number", component: "@acme/p/admin#Rating" },
+    ];
+    const enabled = buildPluginAdminMeta(
+      asPlugins([{ ...base, contributes: { fieldTypes } }]),
+      undefined
+    );
+    expect(enabled[0].fieldTypes).toEqual([
+      { type: "rating", component: "@acme/p/admin#Rating" },
+    ]);
+
+    // Disabled plugins keep their collections + custom field types so the admin
+    // can still render fields of retained collections (D14/D49).
+    const disabled = buildPluginAdminMeta(
+      asPlugins([{ ...base, enabled: false, contributes: { fieldTypes } }]),
+      undefined
+    );
+    expect(disabled[0].fieldTypes).toEqual([
+      { type: "rating", component: "@acme/p/admin#Rating" },
+    ]);
+  });
+
   it("omits admin contributions for enabled:false plugins (D49)", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([

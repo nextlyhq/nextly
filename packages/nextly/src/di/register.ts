@@ -39,7 +39,15 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import {
+  getEmailProviderRegistry,
+  resetEmailProviderRegistry,
+} from "../domains/email/services/email-provider-registry";
 import type { MetaService } from "../domains/meta";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type {
@@ -51,7 +59,7 @@ import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import type { PluginPermission } from "../plugins/contributions";
+import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import type {
@@ -60,6 +68,7 @@ import type {
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
+import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
@@ -71,6 +80,10 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
+import {
+  clearPluginServices,
+  registerPluginService,
+} from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import type {
   CollectionSource,
@@ -174,6 +187,9 @@ export interface NextlyServiceConfig {
 
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
+
+  /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
+  roles?: PluginRole[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];
@@ -331,6 +347,21 @@ export async function registerServices(
   // Fail fast on invalid plugin-declared custom permissions (D36). Validation
   // only here; the list is re-derived + seeded in runPostInitTasks.
   collectCustomPermissions(transformedConfig, resolvedPlugins);
+
+  // Fail fast on role-bundle collisions (D67). Validation only here; roles are
+  // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
+  collectRoles(transformedConfig, resolvedPlugins);
+
+  // Register plugin custom field types (C7/D16) BEFORE schema sync, so the DDL
+  // classifier (classifyFieldKind) maps each custom type to its storage
+  // primitive. Declarative + schema-affecting, so registered for ALL plugins
+  // (incl. disabled, per D49). Clear-and-rebuild per boot; fail-fast on collision.
+  clearFieldTypes();
+  for (const fieldTypePlugin of resolvedPlugins) {
+    for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
+      registerFieldType(fieldType);
+    }
+  }
 
   const {
     adapter: providedAdapter,
@@ -1616,10 +1647,22 @@ async function initializePlugins(
   // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
   // (non-plugin) subscriptions are untracked and untouched.
   clearPluginSubscriptions();
+  // Re-register plugin services from scratch each boot (D64) — same
+  // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale
+  // service instances.
+  clearPluginServices();
+  // Reset the email provider registry to built-ins, then re-register plugin
+  // providers below (C2/D65) — clear-and-rebuild so HMR can't double-register.
+  resetEmailProviderRegistry();
 
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];
+  const contexts = new Map<string, PluginContext>();
 
+  // PASS 1 — build every enabled plugin's context, register its contributed
+  // services (D64) and declared event names. Services register BEFORE any init
+  // runs, so a plugin's `init` can resolve any other plugin's service lazily via
+  // `ctx.services.plugins.<name>.<svc>`, regardless of init order.
   for (const plugin of plugins) {
     // D49: `enabled: false` skips behavior (init/hooks/events/destroy). The
     // plugin's `setup` already ran in applyPluginConfigTransformers, so its
@@ -1635,6 +1678,22 @@ async function initializePlugins(
       plugin
     );
     teardown.push({ plugin, context: pluginContext });
+    contexts.set(plugin.name, pluginContext);
+
+    // Register contributed services, lazily bound to this plugin's context (D64).
+    for (const [svcName, factory] of Object.entries(
+      plugin.contributes?.services ?? {}
+    )) {
+      registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+    }
+
+    // Register contributed email providers (C2/D65) — fail-fast on type collision.
+    for (const provider of plugin.contributes?.emailProviders ?? []) {
+      getEmailProviderRegistry().register(
+        provider.type,
+        provider.createAdapter
+      );
+    }
 
     // Register custom event names this plugin declares (D9) so its emits
     // don't trigger an "undeclared event" warning.
@@ -1642,6 +1701,13 @@ async function initializePlugins(
     if (declaredEvents.length > 0) {
       getEventBus().registerDeclaredEvents(declaredEvents);
     }
+  }
+
+  // PASS 2 — run `init` for each enabled plugin (services from any plugin are now
+  // resolvable). Topological order is preserved from `plugins`.
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    const pluginContext = contexts.get(plugin.name)!;
 
     if (plugin.init) {
       try {

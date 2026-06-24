@@ -21,7 +21,10 @@ export { definePlugin } from "nextly";
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
  * @experimental `PluginHookRegistry` — the `ctx.hooks` registration surface is
- *   not yet exercised by a first-party plugin (see STABILITY.md).
+ *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
+ *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
+ *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
+ *   `@experimental`.
  */
 export type {
   PluginDefinition,
@@ -29,6 +32,11 @@ export type {
   PluginContext,
   PluginHookRegistry,
   PluginPermission,
+  PluginRole,
+  PluginEmailProvider,
+  PluginEmailTemplate,
+  PluginFieldType,
+  ScheduledTask,
   PermissionSlug,
   ServiceOpts,
   AuthUser,

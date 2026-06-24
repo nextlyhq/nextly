@@ -16,6 +16,8 @@ import { createAdapter } from "../database/factory";
 import { getService, registerServices, shutdownServices } from "../di/register";
 import { getNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
+import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
+import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
 import { resetFilterRegistry } from "../filters";
@@ -31,6 +33,7 @@ import { getImageProcessor } from "../storage/image-processor";
 
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
+import { clearPluginServices } from "./services/plugin-services-registry";
 import { clearPluginSubscriptions } from "./subscription-tracker";
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -92,6 +95,9 @@ export async function createTestNextly(
   resetHookRegistry();
   resetEventBus();
   clearPluginSubscriptions();
+  clearPluginServices();
+  resetEmailProviderRegistry();
+  clearFieldTypes();
   resetFilterRegistry();
   resetPluginRouteRegistry();
   resetNextlyInstance();
@@ -154,6 +160,9 @@ export async function createTestNextly(
       resetHookRegistry();
       resetEventBus();
       clearPluginSubscriptions();
+      clearPluginServices();
+      resetEmailProviderRegistry();
+      clearFieldTypes();
       resetFilterRegistry();
       resetPluginRouteRegistry();
       resetNextlyInstance();
