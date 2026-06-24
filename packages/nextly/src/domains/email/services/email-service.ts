@@ -39,6 +39,7 @@ import type {
   ResolveAttachmentsDeps,
 } from "./attachment-resolver";
 import { resolveAttachments } from "./attachment-resolver";
+import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
 import { createResendProvider } from "./providers/resend-provider";
@@ -569,30 +570,9 @@ export class EmailService extends BaseService {
   }): EmailProviderAdapter {
     const config = record.configuration;
 
-    switch (record.type) {
-      case "smtp":
-        return createSmtpProvider(
-          config as {
-            host: string;
-            port: number;
-            secure?: boolean;
-            auth: { user: string; pass: string };
-          }
-        );
-      case "resend":
-        return createResendProvider(config as { apiKey: string });
-      case "sendlayer":
-        return createSendLayerProvider(config as { apiKey: string });
-      default:
-        // Provider type from a stored row — keep the offending value in
-        // logContext, not in the public message.
-        throw new NextlyError({
-          code: "BUSINESS_RULE_VIOLATION",
-          publicMessage: "Unsupported email provider type.",
-          statusCode: 422,
-          logContext: { type: record.type },
-        });
-    }
+    // Built-ins + plugin-contributed provider types (C2/D65). Unknown type →
+    // BUSINESS_RULE_VIOLATION (raised by the registry).
+    return getEmailProviderRegistry().create(record.type, config);
   }
 
   /**

@@ -10,6 +10,8 @@
 
 import { getService } from "../di/register";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import { collectRoles } from "../plugins/roles/collect-roles";
+import { seedPluginRoles } from "../plugins/roles/seed-roles";
 
 /**
  * Run idempotent post-initialization tasks after services are registered.
@@ -23,10 +25,20 @@ import { collectCustomPermissions } from "../plugins/permissions/collect-permiss
  * Failures are caught and logged — they should never prevent Nextly from starting.
  */
 export async function runPostInitTasks(): Promise<void> {
-  // Seed built-in email templates
+  // Seed built-in + plugin-contributed email templates (C2/D65). Idempotent by
+  // slug; plugin templates never clobber a built-in or an admin's edits.
   try {
     const emailTemplateService = getService("emailTemplateService");
     await emailTemplateService.ensureBuiltInTemplates();
+
+    const config = getService("config");
+    for (const plugin of config.plugins ?? []) {
+      if (plugin.enabled === false) continue;
+      const templates = plugin.contributes?.emailTemplates;
+      if (templates && templates.length > 0) {
+        await emailTemplateService.ensurePluginTemplates(templates);
+      }
+    }
   } catch {
     // Silently skip — email services may not be registered,
     // or the email_templates table may not exist yet (migrations not run)
@@ -92,5 +104,22 @@ export async function runPostInitTasks(): Promise<void> {
   } catch {
     // Silently skip — permissions table may not exist yet (migrations not run),
     // or permissionSeedService may not be registered
+  }
+
+  // Seed plugin/app-declared role bundles (D67) AFTER permissions exist, so each
+  // role's permission slugs resolve to ids. Idempotent by slug; roles are
+  // never auto-assigned to users (define, don't grant — D36). Collision
+  // validation already ran at boot (registerServices).
+  try {
+    const config = getService("config");
+    const adapter = getService("adapter");
+    const logger = getService("logger");
+    await seedPluginRoles(
+      adapter,
+      collectRoles(config, config.plugins ?? []),
+      logger
+    );
+  } catch {
+    // Silently skip — roles/permissions tables may not exist yet.
   }
 }

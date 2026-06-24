@@ -26,6 +26,10 @@ export {
 export type {
   PluginContributions,
   PluginPermission,
+  PluginRole,
+  PluginEmailProvider,
+  PluginEmailTemplate,
+  ScheduledTask,
   PermissionSlug,
 } from "./contributions";
 
