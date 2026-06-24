@@ -24,8 +24,6 @@ import { DynamicCollectionValidationService } from "./dynamic-collection-validat
 export interface CollectionArtifacts {
   migrationSQL: string;
   migrationFileName: string;
-  schemaCode: string;
-  schemaFileName: string;
   tableName: string;
   metadata: {
     id: string;
@@ -149,12 +147,6 @@ export class DynamicCollectionService extends BaseService {
       userDefinedFields,
       { hasStatus: data.status === true }
     );
-    const schemaCode = this.schemaService.generateSchemaCode(
-      tableName,
-      normalizedName,
-      userDefinedFields,
-      { hasStatus: data.status === true }
-    );
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
 
@@ -192,8 +184,6 @@ export class DynamicCollectionService extends BaseService {
     return {
       migrationSQL,
       migrationFileName: `${Date.now()}_create_${normalizedName}.sql`,
-      schemaCode,
-      schemaFileName: `${normalizedName}.ts`,
       tableName,
       metadata,
     };
@@ -213,8 +203,6 @@ export class DynamicCollectionService extends BaseService {
   ): Promise<{
     migrationSQL: string | null;
     migrationFileName: string | null;
-    schemaCode: string | null;
-    schemaFileName: string | null;
     metadataUpdates: Record<string, unknown>;
   }> {
     const collection = (await this.registryService.getCollection(
@@ -267,8 +255,6 @@ export class DynamicCollectionService extends BaseService {
 
     let migrationSQL: string | null = null;
     let migrationFileName: string | null = null;
-    let schemaCode: string | null = null;
-    let schemaFileName: string | null = null;
 
     // Why: the alter-table block runs when fields change, but a status-only
     // flip also needs a migration (ADD/DROP status column) so the data
@@ -322,14 +308,6 @@ export class DynamicCollectionService extends BaseService {
       );
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 
-      schemaCode = this.schemaService.generateSchemaCode(
-        collection.tableName,
-        collectionName,
-        userDefinedFields,
-        { hasStatus }
-      );
-      schemaFileName = `${collectionName}.ts`;
-
       metadataUpdates.fields = userDefinedFields;
       metadataUpdates.schemaHash = this.generateSchemaHash(userDefinedFields);
     } else if (statusFlipped) {
@@ -362,8 +340,6 @@ export class DynamicCollectionService extends BaseService {
     return {
       migrationSQL,
       migrationFileName,
-      schemaCode,
-      schemaFileName,
       metadataUpdates,
     };
   }
