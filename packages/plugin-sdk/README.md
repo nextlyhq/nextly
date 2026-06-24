@@ -126,6 +126,26 @@ The authoritative ledger of what is `@public` (stable) vs `@experimental` lives 
 - **Declare a `nextly` range** in your `definePlugin` (e.g. `"^1 || ^2"`); it's checked
   at boot and may span majors. Use `ctx.nextlyVersion` for runtime feature detection.
 
+## Building from source (contributors)
+
+`@nextlyhq/plugin-sdk` declares `nextly` and `@nextlyhq/admin` as **peer
+dependencies** and marks them `external` at build time — its generated `.d.ts`
+files resolve those types against the **built `dist/`** of `nextly` /
+`@nextlyhq/admin`. So build the core packages first:
+
+```bash
+# from the monorepo root — builds nextly + admin before the SDK
+pnpm turbo build --filter=@nextlyhq/plugin-sdk...
+# or just build everything
+pnpm turbo build
+```
+
+Running `pnpm build` **inside** `packages/plugin-sdk` in isolation against a stale
+or missing core `dist/` produces confusing `TS2305: Module 'nextly' has no exported
+member …` errors — those are the stale-`dist` symptom, not a real API mismatch.
+The Turborepo pipeline (`"build": { "dependsOn": ["^build"] }`) orders this
+correctly; prefer it over building the package alone.
+
 ## Author guide
 
 See the full plugin author guide, API reference, and error-code reference in the

@@ -3,20 +3,12 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { getFilterRegistry, resetFilterRegistry } from "nextly";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { formBuilder } from "../plugin";
 import type { FormEmailNotification } from "../types";
 
 let current: TestNextly | undefined;
-
-beforeEach(() => {
-  // form-builder's init guards against duplicate hook registration in dev mode
-  // via a globalThis flag; clear it so each boot re-registers the hook + filter.
-  delete (globalThis as Record<string, unknown>)[
-    "__formBuilder_afterCreate_form-submissions"
-  ];
-});
 
 afterEach(async () => {
   await current?.destroy();

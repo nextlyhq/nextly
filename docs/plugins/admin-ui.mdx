@@ -39,6 +39,34 @@ registerComponents({
 Running `nextly generate:types` emits a `plugin-admin-imports.generated.ts` import map so
 these load with no manual host wiring (D60).
 
+## UI building blocks (`@nextlyhq/ui`)
+
+Build your admin components out of the shared **plugin UI kit**, `@nextlyhq/ui` — the
+semver-protected surface of React primitives the admin itself is built from (D68/D53).
+The host provides it (and React) as a **peer dependency**, so you and the admin share one
+version and one theme:
+
+```tsx
+// src/admin/ReportsView.tsx
+import {
+  Button,
+  Input,
+  Checkbox,
+  Select,
+  Card,
+  Table,
+  FormLabelWithTooltip,
+} from "@nextlyhq/ui";
+```
+
+Register components and reference admin contribution types through
+`@nextlyhq/plugin-sdk/admin`; import UI primitives from `@nextlyhq/ui`.
+
+> **Never import from `@nextlyhq/admin`.** It is an application, not a published API —
+> reaching into it (e.g. `@nextlyhq/admin/lib/*`) is unsupported and will break. If a
+> primitive you need isn't yet exported from `@nextlyhq/ui`, open an issue so it can be
+> promoted to the kit rather than copied.
+
 ## Declarative contributions
 
 ```ts

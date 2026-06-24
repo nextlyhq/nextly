@@ -9,17 +9,12 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { seo } from "../plugin";
 
 let current: TestNextly | undefined;
 
-beforeEach(() => {
-  // init subscribes to events once per (collections) via a globalThis guard;
-  // clear it so each boot re-subscribes.
-  delete (globalThis as Record<string, unknown>)["__seo_events_pages"];
-});
 afterEach(async () => {
   await current?.destroy();
   current = undefined;

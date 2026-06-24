@@ -2,18 +2,11 @@ import {
   createTestNextly,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { formBuilder } from "../plugin";
 
 let current: TestNextly | undefined;
-
-beforeEach(() => {
-  // Clear form-builder's dev-mode duplicate-hook guard for both slugs.
-  const g = globalThis as Record<string, unknown>;
-  delete g["__formBuilder_afterCreate_leads"];
-  delete g["__formBuilder_afterCreate_form-submissions"];
-});
 
 afterEach(async () => {
   await current?.destroy();

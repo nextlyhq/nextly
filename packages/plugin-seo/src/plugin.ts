@@ -101,10 +101,8 @@ export function seo(opts: SeoPluginOptions): SeoPluginResult {
     },
     // D8/D51: invalidate the cached sitemap when any target collection changes.
     init(ctx) {
-      const guardKey = `__seo_events_${opts.collections.join(",")}`;
-      const g = globalThis as Record<string, unknown>;
-      if (g[guardKey]) return; // dev-mode HMR: subscribe once
-      g[guardKey] = true;
+      // Subscriptions are idempotent across HMR — the platform clears a
+      // plugin's prior subscriptions before re-init (B2), so no guard is needed.
       for (const slug of opts.collections) {
         for (const action of ["created", "updated", "deleted"] as const) {
           ctx.events.on(`collection.${slug}.${action}`, () =>

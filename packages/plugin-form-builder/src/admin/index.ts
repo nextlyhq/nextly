@@ -28,7 +28,7 @@ import {
   registerComponents,
   registerKnownPlugin,
   type ComponentPath,
-} from "@nextlyhq/admin/lib/component-registry";
+} from "@nextlyhq/plugin-sdk/admin";
 
 import { SubmissionsFilter } from "./components/SubmissionsFilter";
 import { FormBuilderView } from "./FormBuilderView";
