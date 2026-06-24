@@ -297,7 +297,14 @@ export function validateFieldNameShared(
 export function validateFieldTypeShared(
   fieldType: unknown,
   path: string,
-  errors: BaseValidationError[]
+  errors: BaseValidationError[],
+  /**
+   * Accept a non-built-in type when this predicate returns true — used to allow
+   * plugin-registered custom field types (C7/D16). Callers pass the field-type
+   * registry's `hasFieldType`; for the registry to know a type, the plugin must
+   * be registered (boot) before the config is validated.
+   */
+  isCustomType?: (type: string) => boolean
 ): fieldType is (typeof VALID_FIELD_TYPES)[number] {
   if (!fieldType) {
     errors.push({
@@ -308,7 +315,12 @@ export function validateFieldTypeShared(
     return false;
   }
 
-  if (typeof fieldType !== "string" || !VALID_FIELD_TYPES_SET.has(fieldType)) {
+  const isKnown =
+    typeof fieldType === "string" &&
+    (VALID_FIELD_TYPES_SET.has(fieldType) ||
+      (isCustomType?.(fieldType) ?? false));
+
+  if (!isKnown) {
     errors.push({
       path: `${path}.type`,
       // eslint-disable-next-line @typescript-eslint/no-base-to-string
