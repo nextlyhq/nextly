@@ -66,10 +66,10 @@ import type {
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
+import { executeBulkDelete } from "./media-bulk";
 import { readJsonBody } from "./read-json-body";
 import {
   respondAction,
-  respondBulk,
   respondData,
   respondDoc,
   respondList,
@@ -412,30 +412,7 @@ async function handleMoveMedia(
 
 async function handleBulkDeleteMedia(request: Request): Promise<Response> {
   const mediaService = await getMediaService();
-  const body = await readJsonBody<Record<string, unknown>>(request);
-  const mediaIds = body.mediaIds;
-
-  if (!Array.isArray(mediaIds) || mediaIds.length === 0) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "mediaIds",
-          code: "required_array",
-          message: "mediaIds must be a non-empty array.",
-        },
-      ],
-    });
-  }
-
-  const context = createRequestContext();
-  const result = await mediaService.bulkDelete(mediaIds as string[], context);
-
-  const message =
-    result.failures.length === 0
-      ? `Deleted ${result.successCount} ${result.successCount === 1 ? "file" : "files"}.`
-      : `Deleted ${result.successCount} of ${result.total} files.`;
-
-  return respondBulk(message, result.successes, result.failures);
+  return executeBulkDelete(request, mediaService, createRequestContext());
 }
 
 // ============================================================
