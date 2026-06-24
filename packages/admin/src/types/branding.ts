@@ -63,6 +63,8 @@ export interface PluginMetadata {
   headerSlot?: string;
   /** Dashboard widgets contributed via `contributes.admin.widgets` (D22, C9). */
   widgets?: PluginWidgetMeta[];
+  /** Custom field types (C7/D16) — `type` → admin editor component path. */
+  fieldTypes?: Array<{ type: string; component: string }>;
 }
 
 export interface AdminBranding {

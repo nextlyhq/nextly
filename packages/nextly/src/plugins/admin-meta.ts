@@ -39,6 +39,12 @@ export interface PluginAdminMeta {
   headerSlot?: string;
   /** Dashboard widgets (D22, C9) — present only for enabled plugins. */
   widgets?: PluginAdminWidget[];
+  /**
+   * Custom field types (C7/D16) — `type` → admin editor component path, so the
+   * admin renders fields of these types. Serialized regardless of enabled state
+   * (a disabled plugin's collections + their fields are retained, D14/D49).
+   */
+  fieldTypes?: Array<{ type: string; component: string }>;
 }
 
 /**
@@ -95,6 +101,16 @@ export function buildPluginAdminMeta(
       if (admin.headerSlot) meta.headerSlot = admin.headerSlot;
       if (admin.widgets && admin.widgets.length > 0)
         meta.widgets = admin.widgets;
+    }
+
+    // Custom field types (C7) — serialized regardless of enabled state so the
+    // admin can render fields of these types in retained collections (D14/D49).
+    const fieldTypes = plugin.contributes?.fieldTypes;
+    if (fieldTypes && fieldTypes.length > 0) {
+      meta.fieldTypes = fieldTypes.map(ft => ({
+        type: ft.type,
+        component: ft.component,
+      }));
     }
 
     return meta;

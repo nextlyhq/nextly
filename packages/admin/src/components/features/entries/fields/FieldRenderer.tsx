@@ -37,6 +37,7 @@ import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
 
 import { FieldWrapper } from "./FieldWrapper";
@@ -247,6 +248,9 @@ export function FieldRenderer({
     formState: { errors },
     control,
   } = useFormContext();
+
+  // C7/D16 — plugin-registered custom field types, delivered via /admin-meta.
+  const branding = useBranding();
 
   // Determine if field should be read-only or disabled
   // Cast to any to handle fields that don't have readOnly/disabled in their admin options
@@ -531,7 +535,20 @@ export function FieldRenderer({
       // =========================================
       // Unknown Type
       // =========================================
-      default:
+      default: {
+        // C7/D16 — a plugin-registered custom field type renders via its
+        // contributed editor component (PluginSlot isolates it, D53).
+        const customComponent = (branding?.plugins ?? [])
+          .flatMap(p => p.fieldTypes ?? [])
+          .find(ft => ft.type === fieldType)?.component;
+        if (customComponent) {
+          return (
+            <PluginSlot
+              path={customComponent}
+              props={{ ...commonProps, field }}
+            />
+          );
+        }
         return (
           <div className="rounded-none  border border-primary/5 border-destructive/50 bg-destructive/10 p-4 text-center">
             <p className="text-sm text-destructive">
@@ -539,6 +556,7 @@ export function FieldRenderer({
             </p>
           </div>
         );
+      }
     }
   }
 }
