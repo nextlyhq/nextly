@@ -352,6 +352,7 @@ export {
   type PluginRole,
   type PluginEmailProvider,
   type PluginEmailTemplate,
+  type PluginFieldType,
   type ScheduledTask,
   type PermissionSlug,
   type PluginHookRegistry,

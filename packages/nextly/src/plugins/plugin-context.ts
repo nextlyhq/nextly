@@ -86,6 +86,17 @@ export interface PluginHookRegistry {
    *   console.log(`Deleted from ${context.collection}`);
    * });
    * ```
+   *
+   * @typeParam T - The document shape. Pass it to get a typed `context.data`
+   *   instead of casting (Q4) — prefer this over `as unknown as`:
+   * ```typescript
+   * interface Post { id: string; title: string; status: string }
+   * nextly.hooks.on<Post>('beforeCreate', 'posts', (context) => {
+   *   // context.data is typed Post — no cast needed
+   *   if (context.data?.status === 'published') { ... }
+   *   return context.data;
+   * });
+   * ```
    */
   on<T = unknown>(
     hookType: HookType,

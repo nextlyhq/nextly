@@ -25,6 +25,14 @@ export interface PluginPageMeta {
   requiredPermission?: string;
 }
 
+/** A plugin dashboard widget (D22, C9), delivered via `/admin-meta`. */
+export interface PluginWidgetMeta {
+  id: string;
+  component: string;
+  size?: "full" | "half";
+  requiredPermission?: string;
+}
+
 /** Plugin metadata returned by the `/admin-meta` API. */
 export interface PluginMetadata {
   name: string;
@@ -51,6 +59,12 @@ export interface PluginMetadata {
   pages?: PluginPageMeta[];
   /** Plugin settings UI contributed via `contributes.admin.settings` (D21). */
   settings?: { component: string };
+  /** Admin header-slot component contributed via `contributes.admin.headerSlot` (C9). */
+  headerSlot?: string;
+  /** Dashboard widgets contributed via `contributes.admin.widgets` (D22, C9). */
+  widgets?: PluginWidgetMeta[];
+  /** Custom field types (C7/D16) — `type` → admin editor component path. */
+  fieldTypes?: Array<{ type: string; component: string }>;
 }
 
 export interface AdminBranding {

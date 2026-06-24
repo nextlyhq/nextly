@@ -1,5 +1,7 @@
 import { NotificationBell } from "@admin/components/features/notifications";
 import { Discord, Github, HelpCircle } from "@admin/components/icons";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
 import { cn } from "@admin/lib/utils";
@@ -13,6 +15,9 @@ interface DashboardHeaderProps {
 export function DashboardHeader({ className }: DashboardHeaderProps) {
   const { user } = useDashboardUser();
   const logout = useLogout();
+  const branding = useBranding();
+  // Plugin-contributed header-slot components (C9); each self-gates on permission.
+  const headerSlots = (branding?.plugins ?? []).filter(p => p.headerSlot);
 
   return (
     <header
@@ -56,6 +61,11 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
         >
           <HelpCircle className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
         </a>
+
+        {/* Plugin header-slot components (C9), rendered before the bell. */}
+        {headerSlots.map(p => (
+          <PluginSlot key={p.name} path={p.headerSlot} />
+        ))}
 
         {/* F10 PR 5: bell renders only for super-admins (component
             self-gates via useCurrentUserPermissions). */}

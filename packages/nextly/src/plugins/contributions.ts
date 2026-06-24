@@ -5,7 +5,10 @@ import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { EmailProviderAdapter } from "../domains/email/types";
 import type { SingleConfig } from "../singles/config/types";
 
-import type { PluginAdminContributions } from "./admin-contributions";
+import type {
+  PluginAdminContributions,
+  ComponentPath,
+} from "./admin-contributions";
 import type { PluginAuthContributions } from "./auth-contributions";
 import type { PluginContext } from "./plugin-context";
 import type { PluginRoute } from "./routes/route-types";
@@ -87,6 +90,21 @@ export interface PluginEmailTemplate {
 }
 
 /**
+ * @experimental A plugin-contributed custom field type (C7/D16, M9a minimal
+ * seam). The type persists as an existing `storage` primitive and renders via
+ * the given admin `component`. Validation rides on the primitive + the field's
+ * standard `validate` option. (Typed builders + Visual-Builder UI are full-M9.)
+ */
+export interface PluginFieldType {
+  /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
+  type: string;
+  /** The existing storage primitive this type persists as. */
+  storage: "text" | "longText" | "boolean" | "number" | "timestamp" | "json";
+  /** Admin field-editor component path, resolved via the component registry. */
+  component: ComponentPath;
+}
+
+/**
  * @public A permission identifier — the `${action}-${resource}` slug
  * (e.g. `'export-submissions'`).
  *
@@ -142,6 +160,8 @@ export interface PluginContributions {
   emailProviders?: PluginEmailProvider[];
   /** @experimental Email templates, seeded idempotently into the DB on boot (C2/D65). */
   emailTemplates?: PluginEmailTemplate[];
+  /** @experimental Custom field types — registry seam mapping to a storage primitive + admin component (C7/D16, M9a). */
+  fieldTypes?: PluginFieldType[];
   /** @experimental Custom event names this plugin may emit (P1, D9). No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
   /** @public HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
