@@ -112,7 +112,9 @@ export interface DbSyncCommandOptions {
   types?: boolean;
 
   /**
-   * Generate Drizzle schema files to src/db/schemas/dynamic/
+   * Generate Zod validation schema files to src/db/schemas/zod/.
+   * Drizzle `.ts` schema generation was removed (orphan output, unused by the
+   * runtime), so this flag no longer writes Drizzle schemas.
    * @default false (schemas are not generated unless explicitly requested)
    */
   schemas?: boolean;
@@ -356,7 +358,7 @@ export function registerDbSyncCommand(program: Command): void {
     .option("--types", "Generate TypeScript types (payload-types.ts)", false)
     .option(
       "--schemas",
-      "Generate Drizzle schema files to src/db/schemas/dynamic/",
+      "Generate Zod validation schema files to src/db/schemas/zod/",
       false
     )
     .option(

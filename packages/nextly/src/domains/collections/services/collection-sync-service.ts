@@ -48,7 +48,6 @@ import {
   toPluralLabel,
 } from "../../../shared/lib/pluralization";
 import {
-  SchemaGenerator,
   ZodGenerator,
   TypeGenerator,
   type SupportedDialect,
@@ -64,12 +63,6 @@ import {
  * Options for the sync operation.
  */
 export interface SyncOptions {
-  /**
-   * Generate Drizzle schema files to src/db/schemas/dynamic/.
-   * @default false (opt-in: only generate when explicitly requested)
-   */
-  generateSchemas?: boolean;
-
   /**
    * Generate Zod validation schemas.
    * @default false (opt-in: only generate when explicitly requested)
@@ -268,7 +261,6 @@ export class CollectionSyncService extends BaseService {
    * ```typescript
    * const result = await syncService.sync(config, {
    *   dialect: 'postgresql',
-   *   generateSchemas: true,
    *   generateZodSchemas: true,
    *   generateTypes: true,
    * });
@@ -287,7 +279,6 @@ export class CollectionSyncService extends BaseService {
     const startTime = Date.now();
 
     const opts = {
-      generateSchemas: options.generateSchemas ?? false,
       generateZodSchemas: options.generateZodSchemas ?? false,
       generateTypes: options.generateTypes ?? false,
       onRemoved: options.onRemoved ?? "warn",
@@ -342,28 +333,11 @@ export class CollectionSyncService extends BaseService {
         ...result.sync.updated,
       ]);
 
-      // Code-first schemas are generated to the dynamic folder (sibling to schemasDir)
-      const baseSchemasDir = resolve(opts.cwd, config.db.schemasDir, "..");
-      const dynamicDir = join(baseSchemasDir, "dynamic");
-      const missingSchemaCollections = config.collections.filter(c => {
-        const schemaPath = join(dynamicDir, `${c.slug}.ts`);
-        return !existsSync(schemaPath);
-      });
-
-      const collectionsForSchemaGen = [
-        ...config.collections.filter(c => changedSlugs.has(c.slug)),
-        ...missingSchemaCollections.filter(c => !changedSlugs.has(c.slug)),
-      ];
-
-      if (opts.generateSchemas && collectionsForSchemaGen.length > 0) {
-        const schemas = await this.generateDrizzleSchemas(
-          collectionsForSchemaGen,
-          config.db.schemasDir,
-          opts
-        );
-        result.generatedSchemas = schemas;
-      }
-
+      // Drizzle `.ts` schema generation was removed: nothing imports the
+      // generated files (the runtime builds its Drizzle table from
+      // dynamic_collections metadata via generateRuntimeSchema), so they
+      // were orphan output. `result.generatedSchemas` stays an empty array
+      // for backward compatibility with consumers that read it.
       const zodDir = resolve(opts.cwd, config.db.schemasDir, "zod");
       const missingZodCollections = config.collections.filter(c => {
         const zodPath = join(zodDir, `${c.slug}.zod.ts`);
@@ -772,103 +746,6 @@ export class CollectionSyncService extends BaseService {
   private detectDialect(): SupportedDialect {
     const capabilities = this.adapter.getCapabilities();
     return capabilities.dialect;
-  }
-
-  /**
-   * Generate Drizzle schema files for collections.
-   *
-   * Code-first collection schemas are generated to the `dynamic` folder
-   * (sibling to the configured schemasDir) to be consistent with UI-created
-   * collections. This ensures they can be registered in the schema registry.
-   */
-  private async generateDrizzleSchemas(
-    collections: CollectionConfig[],
-    schemasDir: string,
-    opts: { dialect: SupportedDialect; cwd: string; dryRun: boolean }
-  ): Promise<string[]> {
-    if (collections.length === 0) {
-      return [];
-    }
-
-    const generator = new SchemaGenerator({ dialect: opts.dialect });
-    const generatedFiles: string[] = [];
-
-    const records = this.convertToRecords(collections);
-
-    const schemas = generator.generateAllSchemas(records);
-
-    // Output to dynamic folder (sibling to schemasDir) to match UI-created collections
-    const baseSchemasDir = resolve(opts.cwd, schemasDir, "..");
-    const dynamicDir = join(baseSchemasDir, "dynamic");
-
-    if (!opts.dryRun) {
-      if (!existsSync(dynamicDir)) {
-        mkdirSync(dynamicDir, { recursive: true });
-      }
-
-      for (const schema of schemas) {
-        const filename = `${schema.collectionSlug}.ts`;
-        const filePath = join(dynamicDir, filename);
-        writeFileSync(filePath, schema.code, "utf-8");
-        generatedFiles.push(filePath);
-        this.logger.debug(`Generated schema: ${filePath}`);
-      }
-
-      await this.updateDynamicIndexFile(dynamicDir, collections);
-    } else {
-      for (const schema of schemas) {
-        const filename = `${schema.collectionSlug}.ts`;
-        generatedFiles.push(join(dynamicDir, filename));
-      }
-    }
-
-    return generatedFiles;
-  }
-
-  /**
-   * Update the dynamic/index.ts file to include exports for code-first collections.
-   *
-   * This method reads the existing index file, checks which exports are already
-   * present, and adds any missing exports for code-first collections.
-   */
-  private async updateDynamicIndexFile(
-    dynamicDir: string,
-    collections: CollectionConfig[]
-  ): Promise<void> {
-    const indexPath = join(dynamicDir, "index.ts");
-
-    let content: string;
-    if (existsSync(indexPath)) {
-      const { readFileSync } = await import("node:fs");
-      content = readFileSync(indexPath, "utf-8");
-    } else {
-      content = `// This file exports all dynamic collection schemas
-// Schema exports are auto-generated when you create collections via the UI
-// Example: export { dc_products } from './products';
-
-// Empty export to make this a valid TypeScript module
-export {};
-`;
-    }
-
-    let modified = false;
-    for (const collection of collections) {
-      const exportName = `dc_${collection.slug.replace(/-/g, "_")}`;
-      const exportStatement = `export { ${exportName} } from './${collection.slug}';`;
-
-      if (!content.includes(exportStatement)) {
-        content = content.trimEnd() + "\n" + exportStatement + "\n";
-        modified = true;
-        this.logger.debug(`Added export for ${exportName} to dynamic/index.ts`);
-      }
-    }
-
-    if (modified) {
-      writeFileSync(indexPath, content, "utf-8");
-      this.logger.debug(
-        `Updated dynamic/index.ts with code-first collection exports`
-      );
-    }
   }
 
   /**

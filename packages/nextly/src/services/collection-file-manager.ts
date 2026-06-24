@@ -1,11 +1,9 @@
 import { promises as fs } from "node:fs";
-import { createRequire } from "node:module";
 import * as path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
-import type { CollectionArtifacts } from "../domains/dynamic-collections";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -35,7 +33,6 @@ export type CollectionMetadataFetcher = (collectionName: string) => Promise<{
 } | null>;
 
 export class CollectionFileManager {
-  private schemasDir: string;
   private migrationsDir: string;
   private db: DatabaseInstance;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,12 +40,8 @@ export class CollectionFileManager {
   private adapter?: DrizzleAdapter;
   private metadataFetcher?: CollectionMetadataFetcher;
 
-  // Node require loader (safe in Next.js)
-  private requireModule = createRequire(import.meta.url);
-
   constructor(db: DatabaseInstance, config: FileManagerConfig) {
     this.db = db;
-    this.schemasDir = config.schemasDir;
     this.migrationsDir = config.migrationsDir;
   }
 
@@ -112,47 +105,19 @@ export class CollectionFileManager {
     this.schemaRegistry.delete(schemaKey);
   }
 
-  async saveArtifacts(artifacts: CollectionArtifacts): Promise<void> {
-    await fs.mkdir(this.schemasDir, { recursive: true });
-    await fs.mkdir(this.migrationsDir, { recursive: true });
-
-    const migrationPath = path.join(
-      this.migrationsDir,
-      artifacts.migrationFileName
-    );
-    await fs.writeFile(migrationPath, artifacts.migrationSQL);
-
-    const schemaPath = path.join(this.schemasDir, artifacts.schemaFileName);
-    await fs.writeFile(schemaPath, artifacts.schemaCode);
-
-    await this.updateSchemaIndex(artifacts.schemaFileName, artifacts.tableName);
-  }
-
-  async saveUpdateArtifacts(
+  // Persist only the SQL migration for a created/updated collection. The
+  // Drizzle `.ts` schema is no longer generated: nothing at runtime imports
+  // it (the runtime builds its Drizzle table from `dynamic_collections`
+  // metadata via generateRuntimeSchema), so writing it produced orphan files
+  // that drift from the database. This matches how singles and components
+  // already work — they persist no schema file at all, only run their DDL.
+  async saveMigration(
     migrationSQL: string,
-    migrationFileName: string,
-    schemaCode: string,
-    schemaFileName: string
+    migrationFileName: string
   ): Promise<void> {
+    await fs.mkdir(this.migrationsDir, { recursive: true });
     const migrationPath = path.join(this.migrationsDir, migrationFileName);
     await fs.writeFile(migrationPath, migrationSQL);
-
-    const schemaPath = path.join(this.schemasDir, schemaFileName);
-    await fs.writeFile(schemaPath, schemaCode);
-  }
-
-  async deleteSchemaFile(
-    schemaFileName: string,
-    tableName: string
-  ): Promise<void> {
-    const schemaPath = path.join(this.schemasDir, schemaFileName);
-
-    try {
-      await fs.unlink(schemaPath);
-      await this.removeFromSchemaIndex(schemaFileName, tableName);
-    } catch (_error) {
-      console.warn(`Could not delete schema file: ${schemaPath}`);
-    }
   }
 
   async saveDropMigration(
@@ -206,45 +171,6 @@ export class CollectionFileManager {
       throw new Error(
         `Migration failed: ${error instanceof Error ? error.message : String(error)}`
       );
-    }
-  }
-
-  private async updateSchemaIndex(
-    fileName: string,
-    tableName: string
-  ): Promise<void> {
-    const indexPath = path.join(this.schemasDir, "index.ts");
-    const exportLine = `export { ${tableName} } from './${fileName.replace(".ts", "")}';\n`;
-
-    try {
-      const content = await fs.readFile(indexPath, "utf-8");
-      if (content.includes(exportLine.trim())) {
-        return;
-      }
-      await fs.appendFile(indexPath, exportLine);
-    } catch (_error) {
-      // Create index file if it doesn't exist
-      await fs.writeFile(indexPath, exportLine);
-    }
-  }
-
-  private async removeFromSchemaIndex(
-    fileName: string,
-    tableName: string
-  ): Promise<void> {
-    const indexPath = path.join(this.schemasDir, "index.ts");
-    const exportLine = `export { ${tableName} } from './${fileName.replace(".ts", "")}';`;
-
-    try {
-      const content = await fs.readFile(indexPath, "utf-8");
-      const filtered = content
-        .split("\n")
-        .filter(line => !line.includes(exportLine))
-        .join("\n");
-
-      await fs.writeFile(indexPath, filtered);
-    } catch {
-      console.warn(`Could not update index file: ${indexPath}`);
     }
   }
 
@@ -332,60 +258,5 @@ export class CollectionFileManager {
     throw new Error(
       `Schema for collection "${collectionName}" not found in registry. ${guidance}`
     );
-  }
-
-  /**
-   * Hot-reload a schema from disk (development only)
-   * Useful after schema updates to avoid app restart
-   */
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async reloadSchema(collectionName: string): Promise<void> {
-    const schemaFileName = `${collectionName}.ts`;
-    const schemaPath = path.resolve(path.join(this.schemasDir, schemaFileName));
-    const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
-
-    try {
-      try {
-        const resolved = this.requireModule.resolve(schemaPath);
-        delete this.requireModule.cache[resolved];
-      } catch (innerError: unknown) {
-        console.warn(
-          `Failed to clear require cache for schema "${collectionName}"`,
-          {
-            schemaPath,
-            error:
-              innerError instanceof Error
-                ? innerError.message
-                : String(innerError),
-            stack: innerError instanceof Error ? innerError.stack : undefined,
-          }
-        );
-      }
-
-      const schemaModule = this.requireModule(schemaPath);
-      const schema = schemaModule[schemaKey];
-
-      if (!schema) {
-        throw new Error(
-          `Schema export "${schemaKey}" not found in ${schemaFileName}`
-        );
-      }
-
-      this.schemaRegistry.set(schemaKey, schema);
-
-      console.log(`Hot-reloaded schema for collection: ${collectionName}`);
-    } catch (error: unknown) {
-      console.error(`Failed to reload schema for ${collectionName}`, {
-        schemaName: collectionName,
-        filePath: schemaPath,
-        expectedExport: schemaKey,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-
-      throw new Error(
-        `Failed to reload schema: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
   }
 }
