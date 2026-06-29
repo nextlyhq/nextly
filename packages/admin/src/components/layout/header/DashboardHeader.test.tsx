@@ -21,7 +21,7 @@ vi.mock("@admin/hooks/useLogout", () => ({
   useLogout: () => () => {},
 }));
 vi.mock("@admin/components/features/notifications", () => ({
-  NotificationBell: () => null,
+  NotificationBell: () => <div data-testid="bell" />,
 }));
 vi.mock("../sidebar/UserProfileDropdown", () => ({
   UserProfileDropdown: () => null,
@@ -52,5 +52,61 @@ describe("DashboardHeader plugin header slot (C9-A)", () => {
 
     render(<DashboardHeader />);
     expect(screen.getByText("plugin header badge")).toBeInTheDocument();
+  });
+});
+
+describe("DashboardHeader default-button visibility (C-toolbar)", () => {
+  it("renders all built-ins when no plugin hides them", () => {
+    mockBranding = { plugins: [] } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.getByTitle("GitHub Repository")).toBeInTheDocument();
+    expect(screen.getByTitle("Discord Community")).toBeInTheDocument();
+    expect(screen.getByTitle("Documentation")).toBeInTheDocument();
+    expect(screen.getByTestId("bell")).toBeInTheDocument();
+  });
+
+  it("hides the buttons a plugin's header.hide lists", () => {
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: [],
+          header: { hide: ["github", "notifications"] },
+        },
+      ],
+    } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.queryByTitle("GitHub Repository")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Discord Community")).toBeInTheDocument();
+    expect(screen.getByTitle("Documentation")).toBeInTheDocument();
+  });
+
+  it("hideDefaults hides all four built-ins", () => {
+    mockBranding = {
+      plugins: [
+        { name: "@acme/p", collections: [], header: { hideDefaults: true } },
+      ],
+    } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.queryByTitle("GitHub Repository")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Discord Community")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Documentation")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+  });
+
+  it("renders a header.slot component (supersedes headerSlot)", () => {
+    registerComponent("@acme/p/admin#Publish", () => <div>publish btn</div>);
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: [],
+          header: { slot: "@acme/p/admin#Publish" },
+        },
+      ],
+    } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(screen.getByText("publish btn")).toBeInTheDocument();
   });
 });
