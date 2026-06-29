@@ -55,7 +55,7 @@ describe("DashboardHeader plugin header slot (C9-A)", () => {
   });
 });
 
-describe("DashboardHeader default-button visibility (C-toolbar)", () => {
+describe("DashboardHeader default-button visibility", () => {
   it("renders all built-ins when no plugin hides them", () => {
     mockBranding = { plugins: [] } as AdminBranding;
     render(<DashboardHeader />);
