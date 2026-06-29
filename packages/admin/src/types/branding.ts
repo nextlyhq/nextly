@@ -61,7 +61,7 @@ export interface PluginMetadata {
   settings?: { component: string };
   /** Admin header-slot component contributed via `contributes.admin.headerSlot` (C9). */
   headerSlot?: string;
-  /** Header customization contributed via `contributes.admin.header` (C-toolbar). */
+  /** Header customization contributed via `contributes.admin.header`. */
   header?: {
     slot?: string;
     hideDefaults?: boolean;

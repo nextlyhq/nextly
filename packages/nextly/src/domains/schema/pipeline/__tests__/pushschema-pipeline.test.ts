@@ -101,7 +101,7 @@ function makePipeline(
         dialect: SupportedDialect
       ) => Promise<number>
     >;
-    // Task 6: inject pre-built resolvedOps to bypass diff+resolution.
+    // Inject pre-built resolvedOps to bypass diff+resolution.
     resolvedOpsOverride?: Operation[];
   } = {}
 ) {

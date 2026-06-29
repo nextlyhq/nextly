@@ -68,7 +68,7 @@ describe("usePluginPageRegistration", () => {
     expect(matchPluginPage("/admin/plugins/acme-p/x")).toBeUndefined();
   });
 
-  it("feeds header.slot paths into auto-registration (C-toolbar)", () => {
+  it("feeds header.slot paths into auto-registration", () => {
     renderHook(() =>
       usePluginPageRegistration([
         {

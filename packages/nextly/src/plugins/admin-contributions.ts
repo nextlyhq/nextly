@@ -12,14 +12,14 @@ import type { PermissionSlug } from "./contributions";
 export type ComponentPath = string;
 
 /**
- * @public Built-in admin header buttons that a plugin may hide (C-toolbar).
+ * @public Built-in admin header buttons that a plugin may hide.
  * The user/account dropdown is intentionally NOT controllable (logout must
  * stay reachable).
  */
 export type HeaderButtonId = "github" | "discord" | "docs" | "notifications";
 
 /**
- * @public Header customization contributed by a plugin (C-toolbar).
+ * @public Header customization contributed by a plugin.
  *
  * `slot` adds a component to the header (supersedes the deprecated top-level
  * `headerSlot`). `hideDefaults` / `hide` remove built-in buttons; hiding is
@@ -133,7 +133,7 @@ export interface PluginAdminContributions {
    */
   headerSlot?: ComponentPath;
   /**
-   * @experimental Header customization (C-toolbar): add a component (`slot`)
+   * @experimental Header customization: add a component (`slot`)
    * and/or hide built-in buttons (`hideDefaults`/`hide`). The slot self-gates
    * on permission and renders inside the plugin boundary.
    */

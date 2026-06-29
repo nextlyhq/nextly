@@ -38,7 +38,7 @@ export interface PluginAdminMeta {
   settings?: { component: string };
   /** Admin header-slot component (C9) — present only for enabled plugins. */
   headerSlot?: string;
-  /** Header customization (C-toolbar) — present only for enabled plugins. */
+  /** Header customization — present only for enabled plugins. */
   header?: {
     slot?: string;
     hideDefaults?: boolean;
@@ -105,7 +105,7 @@ export function buildPluginAdminMeta(
       if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
-      // Header customization (C-toolbar). `header.slot` supersedes the
+      // Header customization. `header.slot` supersedes the
       // deprecated top-level `headerSlot`; keep `meta.headerSlot` mirrored for
       // back-compat.
       const slot = admin.header?.slot ?? admin.headerSlot;
