@@ -12,6 +12,30 @@ import type { PermissionSlug } from "./contributions";
 export type ComponentPath = string;
 
 /**
+ * @public Built-in admin header buttons that a plugin may hide (C-toolbar).
+ * The user/account dropdown is intentionally NOT controllable (logout must
+ * stay reachable).
+ */
+export type HeaderButtonId = "github" | "discord" | "docs" | "notifications";
+
+/**
+ * @public Header customization contributed by a plugin (C-toolbar).
+ *
+ * `slot` adds a component to the header (supersedes the deprecated top-level
+ * `headerSlot`). `hideDefaults` / `hide` remove built-in buttons; hiding is
+ * subtractive and **union-merged** across enabled plugins (a button is hidden
+ * if ANY enabled plugin hides it).
+ */
+export interface PluginHeaderContributions {
+  /** Component rendered in the header, before the notifications bell. */
+  slot?: ComponentPath;
+  /** Hide all built-in header buttons (github, discord, docs, notifications). */
+  hideDefaults?: boolean;
+  /** Hide specific built-in header buttons. */
+  hide?: HeaderButtonId[];
+}
+
+/**
  * @public A sidebar navigation entry contributed by a plugin (D20).
  *
  * Declarative and introspectable — delivered to the client via `/api/admin-meta`.
@@ -103,8 +127,15 @@ export interface PluginAdminContributions {
   /** Per-collection view overrides + injection points, keyed by slug (D23). */
   views?: Record<string, PluginCollectionView>;
   /**
-   * @experimental A component rendered in the admin top bar / header (C9). The
-   * component self-gates on permission. Rendered inside the plugin boundary.
+   * @deprecated Use `header.slot`. A component rendered in the admin top bar /
+   * header (C9). The component self-gates on permission. Rendered inside the
+   * plugin boundary. Still honored (folded into `header.slot`) for back-compat.
    */
   headerSlot?: ComponentPath;
+  /**
+   * @experimental Header customization (C-toolbar): add a component (`slot`)
+   * and/or hide built-in buttons (`hideDefaults`/`hide`). The slot self-gates
+   * on permission and renders inside the plugin boundary.
+   */
+  header?: PluginHeaderContributions;
 }

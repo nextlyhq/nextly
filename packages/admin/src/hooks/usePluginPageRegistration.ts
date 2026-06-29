@@ -48,6 +48,10 @@ export function usePluginPageRegistration(
       if (plugin.settings?.component) {
         componentPaths.push(plugin.settings.component);
       }
+      // Header-slot module must be imported so its components register, even
+      // for plugins with no collections/pages/settings (C-toolbar).
+      const slotPath = plugin.header?.slot ?? plugin.headerSlot;
+      if (slotPath) componentPaths.push(slotPath);
     }
 
     if (componentPaths.length > 0) {
