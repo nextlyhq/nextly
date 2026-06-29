@@ -79,13 +79,7 @@ describe("packFieldsIntoRows", () => {
 
   it("Tabs / Row / Collapsible / Blocks / Component all force a row break", () => {
     const a = text("a", "50%");
-    const types = [
-      "tabs",
-      "row",
-      "collapsible",
-      "blocks",
-      "component",
-    ];
+    const types = ["tabs", "row", "collapsible", "blocks", "component"];
     for (const t of types) {
       const blockField = block(t);
       const b = text("b", "50%");

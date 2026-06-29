@@ -5,10 +5,7 @@
  * Contains UI display info and categorization for field types.
  */
 
-import {
-  FieldType,
-  type FieldTypeDefinition,
-} from "@admin/types/field-types";
+import { FieldType, type FieldTypeDefinition } from "@admin/types/field-types";
 
 /**
  * Field categories for UI organization
