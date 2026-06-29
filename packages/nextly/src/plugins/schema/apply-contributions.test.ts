@@ -495,6 +495,31 @@ describe("resolveBuilderExtends — applies deferred extends to Builder entities
     ]);
   });
 
+  it("tags merged Builder fields as source:plugin/owner/locked (migrate parity)", () => {
+    const out = resolveBuilderExtends(
+      [
+        {
+          target: "articles",
+          fields: [field("metaTitle")],
+          owner: "@acme/seo",
+        },
+      ],
+      {
+        collections: [builderColl("articles", "title")],
+        singles: [],
+        components: [],
+      }
+    );
+    const meta = out.collections
+      ?.find(c => c.slug === "articles")
+      ?.fields?.find(f => (f as { name?: string }).name === "metaTitle");
+    expect(meta).toMatchObject({
+      source: "plugin",
+      owner: "@acme/seo",
+      locked: true,
+    });
+  });
+
   it("throws NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN when neither code/plugin nor Builder has the target", () => {
     const err = caught(() =>
       resolveBuilderExtends(
