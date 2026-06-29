@@ -83,7 +83,7 @@ export * from "./json";
  * ];
  * ```
  */
-export type FieldConfig =
+export type DataFieldConfig =
   | TextFieldConfig
   | TextareaFieldConfig
   | RichTextFieldConfig
@@ -109,7 +109,7 @@ export type FieldConfig =
  * @deprecated Use `FieldConfig` directly. `DataFieldConfig` is kept
  * for backwards compatibility.
  */
-export type DataFieldConfig = FieldConfig;
+export type FieldConfig = DataFieldConfig;
 
 // ============================================================
 // Field Type Constants
