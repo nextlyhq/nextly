@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { createAdapter } from "../../database/factory";
 import { clearServices } from "../../di/register";
 import { ensureFirstRunSetup } from "../../init/first-run";
@@ -38,6 +39,24 @@ const seoPlugin = (targets: string[]): PluginDefinition => ({
       target,
       fields: [textField("meta_title")],
     })),
+  },
+});
+
+/** A plugin contributing a collection that relationTo's the given target slug. */
+const relPlugin = (target: string): PluginDefinition => ({
+  name: "@t/rel",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    collections: [
+      {
+        slug: "quotes",
+        fields: [
+          { name: "body", type: "text" },
+          { name: "author", type: "relationship", relationTo: target },
+        ],
+      } as unknown as CollectionConfig,
+    ],
   },
 });
 
@@ -171,5 +190,51 @@ describe("plugin extend → unresolvable target (P8 graceful/strict)", () => {
     await expect(
       createTestNextly({ adapter, plugins: [seoPlugin(["ghost"])] })
     ).rejects.toMatchObject({ code: "NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN" });
+  });
+});
+
+describe("plugin relation → UI-Builder collection (P8)", () => {
+  // NOTE: these tests assert the relation *resolution* (existence check +
+  // graceful/strict) — the thing this slice owns. A "Schema apply FAILED —
+  // global" line on stderr is expected harness noise: the in-memory push
+  // pipeline can't non-interactively create the plugin collection's FK column
+  // to a Builder (cross-lane) table. That's orthogonal to resolution and the
+  // boot still completes (spec §2: relations are an existence check, FK on the
+  // plugin side, no UI-entity materialization).
+  const STRICT_ENV = "NEXTLY_STRICT_PLUGIN_TARGETS";
+  afterEach(() => {
+    delete process.env[STRICT_ENV];
+  });
+
+  it("a plugin collection relating to a UI-Builder collection boots cleanly", async () => {
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "authors",
+      fields: [{ name: "name", type: "text", source: "ui" }],
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      plugins: [relPlugin("authors")],
+    });
+    expect(handle).toBeDefined();
+  });
+
+  it("relation to a missing target → warn + skip (graceful default)", async () => {
+    const warn = vi.fn();
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "authors",
+      fields: [{ name: "name", type: "text", source: "ui" }],
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      logger: { debug() {}, info() {}, warn, error() {} },
+      plugins: [relPlugin("ghost")],
+    });
+
+    expect(handle).toBeDefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("ghost"));
   });
 });

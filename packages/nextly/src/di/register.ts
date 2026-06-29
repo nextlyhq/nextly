@@ -528,7 +528,10 @@ export async function registerServices(
       }
     }
 
-    finalizeRelationTargets(unresolvedRelations, builderSlugs.collections);
+    finalizeRelationTargets(unresolvedRelations, builderSlugs.collections, {
+      strict: isStrictPluginTargets(transformedConfig),
+      logger: resolvedLogger,
+    });
   }
 
   // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
