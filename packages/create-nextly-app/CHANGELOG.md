@@ -1,5 +1,7 @@
 # create-nextly-app
 
+## 0.0.2-alpha.28
+
 ## 0.0.2-alpha.27
 
 ### Patch Changes
