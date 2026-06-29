@@ -2,7 +2,7 @@ import type { FieldConfig } from "nextly/config";
 
 /**
  * Field types that always render as their own row, regardless of admin.width.
- * They contain nested sub-content (group, array, etc.) or are layout primitives
+ * They contain nested sub-content (group, repeater, etc.) or are layout primitives
  * (tabs, row, collapsible) that introduce their own visual structure. RichText
  * is included because it's a tall content surface that doesn't compose well
  * side-by-side with other fields.
@@ -11,7 +11,6 @@ const BLOCK_FIELD_TYPES = new Set([
   "tabs",
   "row",
   "collapsible",
-  "array",
   "blocks",
   "component",
   "richText",

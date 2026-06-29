@@ -9,9 +9,9 @@
  * - Selection: checkbox, date, select, radio
  * - Media: upload
  * - Relational: relationship
- * - Structured: array, group, json
+ * - Structured: repeater, group, json, component
  *
- * Legacy types (for backwards compatibility):
+ * Read-data aliases (backwards compatibility — rendered, not stored):
  * - string (alias for text)
  * - decimal (alias for number with float format)
  * - boolean (alias for checkbox)
@@ -34,7 +34,6 @@ export type FieldPrimitiveType =
   // Selection types
   | "checkbox"
   | "boolean" // Alias for checkbox
-  | "toggle" // Boolean rendered as a switch (legacy palette had this)
   | "date"
   | "select"
   | "radio"
@@ -48,7 +47,6 @@ export type FieldPrimitiveType =
   | "repeater"
   | "group"
   | "component"
-  | "blocks"
   | "json";
 
 /**

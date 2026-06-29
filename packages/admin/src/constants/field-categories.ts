@@ -139,34 +139,6 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
     },
   },
 
-  // Content
-  [FieldType.EDITOR]: {
-    type: FieldType.EDITOR,
-    label: "Editor",
-    description: "Rich text editor with formatting options",
-    icon: "edit",
-    category: FIELD_CATEGORIES.CONTENT,
-    defaultConfig: {
-      validation: {
-        required: false,
-      },
-    },
-  },
-  [FieldType.MEDIA]: {
-    type: FieldType.MEDIA,
-    label: "Media",
-    description: "Upload and manage media files",
-    icon: "media",
-    category: FIELD_CATEGORIES.CONTENT,
-    defaultConfig: {
-      allowed_types: ["*"],
-      max_size: 10000000,
-      validation: {
-        required: false,
-      },
-    },
-  },
-
   // Choice
   [FieldType.SELECT]: {
     type: FieldType.SELECT,
@@ -248,24 +220,6 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       },
     },
   },
-  [FieldType.USER]: {
-    type: FieldType.USER,
-    label: "User",
-    description: "Reference to a user",
-    icon: "user",
-    category: FIELD_CATEGORIES.RELATIONAL,
-    defaultConfig: {
-      multiple_content_types_selection: false,
-      searchable: true,
-      multiselect: false,
-      display_field: "username",
-      validation: {
-        required: false,
-        min_items: 0,
-        max_items: 1,
-      },
-    },
-  },
 
   // Advanced
   [FieldType.DATE_PICKER]: {
@@ -278,23 +232,6 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       date_format: "yyyy-MM-dd",
       validation: {
         required: false,
-      },
-    },
-  },
-  [FieldType.TIME_PICKER]: {
-    type: FieldType.TIME_PICKER,
-    label: "Time Picker",
-    description: "Time picker for selecting time values",
-    icon: "clock",
-    category: FIELD_CATEGORIES.ADVANCED,
-    defaultConfig: {
-      time_format: "24h",
-      step: 15,
-      validation: {
-        required: false,
-      },
-      ui: {
-        show_seconds: false,
       },
     },
   },

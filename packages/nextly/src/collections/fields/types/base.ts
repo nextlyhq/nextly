@@ -27,8 +27,7 @@ import type { HookHandler } from "@nextly/hooks/types";
  * - **Selection types:** checkbox, date, select, radio
  * - **Media types:** upload
  * - **Relational types:** relationship
- * - **Structured types:** array, group, json
- * - **Virtual types:** join (computed at read time, no data storage)
+ * - **Structured types:** repeater, group, json, component, chips
  */
 export type FieldType =
   // Text types
@@ -56,9 +55,7 @@ export type FieldType =
   // Component types
   | "component"
   // Array-like types
-  | "chips"
-  // Virtual types (computed at read time, no data storage)
-  | "join";
+  | "chips";
 
 // ============================================================
 // Request Context

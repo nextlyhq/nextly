@@ -46,7 +46,6 @@ export * from "./field-types/RelationFieldEditor";
 export * from "./field-types/SelectFieldEditor";
 export * from "./field-types/TextAreaFieldEditor";
 export * from "./field-types/TextFieldEditor";
-export * from "./field-types/UserFieldEditor";
 
 // Re-export field-types subdirectory
 export * from "./field-types/shared/ValidationPatternField";
