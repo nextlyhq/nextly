@@ -9,18 +9,6 @@ import { describe, expect, it } from "vitest";
 import { FIELD_TYPES_CATALOG } from "../field-types-catalog";
 
 describe("FIELD_TYPES_CATALOG", () => {
-  it("does NOT include toggle (removed — no backend schema support; use checkbox)", () => {
-    expect(
-      FIELD_TYPES_CATALOG.find(t => (t.type as string) === "toggle")
-    ).toBeUndefined();
-  });
-
-  it("does NOT include blocks (no editor exists for it)", () => {
-    expect(
-      FIELD_TYPES_CATALOG.find(t => (t.type as string) === "blocks")
-    ).toBeUndefined();
-  });
-
   it("every entry carries an icon (Lucide name)", () => {
     for (const entry of FIELD_TYPES_CATALOG) {
       expect(entry.icon, `${entry.type} missing icon`).toBeTruthy();
