@@ -193,6 +193,42 @@ describe("plugin extend → unresolvable target (P8 graceful/strict)", () => {
   });
 });
 
+describe("plugin removal → orphan column (P8 §7, data-safe)", () => {
+  it("drops the field from the registry but keeps the column + data when the plugin is removed", async () => {
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+    });
+
+    // Boot WITH the plugin → materialise meta_title, then write a value.
+    handle = await createTestNextly({
+      adapter,
+      plugins: [seoPlugin(["articles"])],
+    });
+    await adapter.executeQuery(
+      `INSERT INTO dc_articles (id, title, slug, body, meta_title) VALUES ('1', 'T', 'article-1', 'hello', 'my meta')`
+    );
+
+    // Re-boot WITHOUT the plugin (same in-memory DB; do not disconnect).
+    clearServices();
+    handle = await createTestNextly({ adapter, plugins: [] });
+
+    // (a) the registry row no longer lists the plugin field
+    const fields = await registryFields(adapter, "articles");
+    expect(fields.some(f => f.name === "meta_title")).toBe(false);
+
+    // (b) the physical column is kept (orphaned, never dropped)
+    expect(await columnsOf(adapter, "dc_articles")).toContain("meta_title");
+
+    // (c) the previously-written value is intact
+    const rows = await adapter.executeQuery<{ meta_title: string }>(
+      `SELECT meta_title FROM dc_articles WHERE id='1'`
+    );
+    expect(rows[0].meta_title).toBe("my meta");
+  });
+});
+
 describe("plugin relation → UI-Builder collection (P8)", () => {
   // NOTE: these tests assert the relation *resolution* (existence check +
   // graceful/strict) — the thing this slice owns. A "Schema apply FAILED —

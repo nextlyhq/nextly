@@ -123,11 +123,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import {
-  loadBuilderEntities,
-  loadDynamicSlugs,
-  loadDynamicTables,
-} from "./load-dynamic-tables";
+import { loadBuilderEntities, loadDynamicTables } from "./load-dynamic-tables";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -462,8 +458,12 @@ export async function registerServices(
   // stale plugin fields (owning plugin removed) are stripped from the registry
   // row, leaving the physical column orphaned (data-safe). A target in NEITHER
   // code/plugin NOR the Builder set is unresolved (handled per strict/graceful).
-  if (deferredExtends.length > 0 || unresolvedRelations.length > 0) {
-    const builderSlugs = await loadDynamicSlugs(adapter);
+  {
+    // Always reconcile (no outer guard) so a REMOVED plugin's stale fields are
+    // stripped on the next boot (P8 §7) even when this boot has no deferred
+    // extends. The reconcile is a pure read+transform; the `changed` filter
+    // below keeps a plugin-free or unchanged boot write-free (no registry
+    // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
     const builderEntities = await loadBuilderEntities(adapter);
     const { entities, unresolved } = reconcileBuilderContributions(
       deferredExtends,
@@ -474,61 +474,74 @@ export async function registerServices(
       handleUnresolvedExtends(unresolved, transformedConfig, resolvedLogger);
     }
 
-    const { DynamicCollectionRegistryService } = await import(
-      "../domains/dynamic-collections/services/dynamic-collection-registry-service"
-    );
-    const { addMissingColumnsForFields } = await import(
-      "../domains/schema/utils/missing-columns"
-    );
-    const dialect = adapter.getCapabilities().dialect;
-    const registryService = new DynamicCollectionRegistryService(
-      adapter,
-      resolvedLogger
-    );
-
-    // Persist + materialize only the Builder collections whose field set
-    // actually changed (idempotent re-boot: dequal skips no-op rows).
-    for (const col of entities.collections) {
+    // Only touch the DB when a collection's merged field set actually differs
+    // from what's persisted — keeps an unchanged/plugin-free boot write-free and
+    // skips the apply-helper imports entirely.
+    const fieldsChanged = (col: { slug: string; fields?: FieldConfig[] }) => {
       const before = builderEntities.collections.find(c => c.slug === col.slug);
-      if (!before || dequal(before.fields, col.fields ?? [])) continue;
-      try {
-        // Materialize FIRST; only persist the registry row if the DDL lands so
-        // a failure self-heals on the next boot (the diff reappears). Add-only:
-        // never drops, so a removed plugin's column orphans (data-safe).
-        await addMissingColumnsForFields(
-          adapter,
-          resolvedLogger,
-          before.tableName,
-          col.fields ?? [],
-          { timestamps: true }
+      return before !== undefined && !dequal(before.fields, col.fields ?? []);
+    };
+
+    if (entities.collections.some(fieldsChanged)) {
+      const { DynamicCollectionRegistryService } = await import(
+        "../domains/dynamic-collections/services/dynamic-collection-registry-service"
+      );
+      const { addMissingColumnsForFields } = await import(
+        "../domains/schema/utils/missing-columns"
+      );
+      const dialect = adapter.getCapabilities().dialect;
+      const registryService = new DynamicCollectionRegistryService(
+        adapter,
+        resolvedLogger
+      );
+
+      for (const col of entities.collections) {
+        const before = builderEntities.collections.find(
+          c => c.slug === col.slug
         );
-        await registryService.updateCollectionMetadata(col.slug, {
-          fields: col.fields as unknown as FieldDefinition[],
-        });
-        // Re-register the runtime Drizzle table with the merged fields so reads
-        // in THIS boot see the new column (loadDynamicTables ran pre-reconcile).
-        if (schemaRegistry) {
-          const { generateRuntimeSchema } = await import(
-            "../domains/schema/services/runtime-schema-generator"
-          );
-          const { table } = generateRuntimeSchema(
+        if (!before || !fieldsChanged(col)) continue;
+        try {
+          // Materialize FIRST; only persist the registry row if the DDL lands so
+          // a failure self-heals on the next boot (the diff reappears). Add-only:
+          // never drops, so a removed plugin's column orphans (data-safe).
+          await addMissingColumnsForFields(
+            adapter,
+            resolvedLogger,
             before.tableName,
-            col.fields as unknown as FieldDefinition[],
-            dialect,
-            { status: before.status === true }
+            col.fields ?? [],
+            { timestamps: true }
           );
-          schemaRegistry.registerDynamicSchema(before.tableName, table);
+          await registryService.updateCollectionMetadata(col.slug, {
+            fields: col.fields as unknown as FieldDefinition[],
+          });
+          // Re-register the runtime Drizzle table with the merged fields so reads
+          // in THIS boot see the new column (loadDynamicTables ran pre-reconcile).
+          if (schemaRegistry) {
+            const { generateRuntimeSchema } = await import(
+              "../domains/schema/services/runtime-schema-generator"
+            );
+            const { table } = generateRuntimeSchema(
+              before.tableName,
+              col.fields as unknown as FieldDefinition[],
+              dialect,
+              { status: before.status === true }
+            );
+            schemaRegistry.registerDynamicSchema(before.tableName, table);
+          }
+        } catch (err) {
+          resolvedLogger.warn?.(
+            `[plugins] Failed to materialize plugin fields onto Builder collection "${col.slug}": ${
+              err instanceof Error ? err.message : String(err)
+            }. Skipping; will retry next boot.`
+          );
         }
-      } catch (err) {
-        resolvedLogger.warn?.(
-          `[plugins] Failed to materialize plugin fields onto Builder collection "${col.slug}": ${
-            err instanceof Error ? err.message : String(err)
-          }. Skipping; will retry next boot.`
-        );
       }
     }
 
-    finalizeRelationTargets(unresolvedRelations, builderSlugs.collections, {
+    const builderCollectionSlugs = new Set(
+      builderEntities.collections.map(c => c.slug)
+    );
+    finalizeRelationTargets(unresolvedRelations, builderCollectionSlugs, {
       strict: isStrictPluginTargets(transformedConfig),
       logger: resolvedLogger,
     });
