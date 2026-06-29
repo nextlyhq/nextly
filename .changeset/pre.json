@@ -31,6 +31,7 @@
     "collection-dbname-and-component-schema-refresh",
     "consolidate-auth-services-shim",
     "date-field-coercion-singles-components",
+    "drop-collection-drizzle-schema-files",
     "email-cc-bcc-forwarding",
     "first-run-ledger-bootstrap-guard",
     "fix-cli-prompt-for-folder-when-missing",
@@ -53,6 +54,7 @@
     "singles-readonly-title-slug",
     "svg-upload-security-unification",
     "sync-private-package-versions",
-    "unified-schema-pipeline-dual-write"
+    "unified-schema-pipeline-dual-write",
+    "young-papers-leave"
   ]
 }
