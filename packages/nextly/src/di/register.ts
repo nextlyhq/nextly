@@ -189,6 +189,15 @@ export interface NextlyServiceConfig {
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
 
+  /**
+   * @experimental Fail fast (throw) when a plugin `extend`/relation targets an
+   * entity that is NEITHER a code/plugin entity NOR a Builder collection/single/
+   * component. Default `false`: such a target is warned-and-skipped so a typo or
+   * a removed Builder entity can't take the whole app down (P8). Also enabled by
+   * `NEXTLY_STRICT_PLUGIN_TARGETS=1` (recommended for CI/production).
+   */
+  strictPluginTargets?: boolean;
+
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
 
@@ -462,7 +471,7 @@ export async function registerServices(
     );
 
     if (unresolved.length > 0) {
-      handleUnresolvedExtends(unresolved);
+      handleUnresolvedExtends(unresolved, transformedConfig, resolvedLogger);
     }
 
     const { DynamicCollectionRegistryService } = await import(
@@ -1889,16 +1898,33 @@ export function clearServices(): void {
   globalForReg.__nextly_isRegistered = false;
 }
 
+/** Strict plugin-target resolution — config flag OR env (CI/prod). */
+function isStrictPluginTargets(config: NextlyServiceConfig): boolean {
+  return (
+    config.strictPluginTargets === true ||
+    process.env.NEXTLY_STRICT_PLUGIN_TARGETS === "1"
+  );
+}
+
 /**
  * Handle plugin `extend` targets that resolve to NEITHER a code/plugin entity
- * NOR a Builder entity (a real typo / removed target). Fails fast — preserving
- * the pre-reconcile boot behaviour (D7/D12). Task 6 makes this graceful by
- * default with an opt-in strict mode.
+ * NOR a Builder entity (a typo, or a removed/renamed Builder target). Graceful
+ * by default — warn + skip that one contribution so the rest of the app still
+ * boots (P8); strict mode (config flag or `NEXTLY_STRICT_PLUGIN_TARGETS=1`)
+ * restores the fail-fast throw for CI/production (D7/D12).
  */
 function handleUnresolvedExtends(
-  unresolved: { target: string; owner: string }[]
+  unresolved: { target: string; owner: string }[],
+  config: NextlyServiceConfig,
+  logger: Logger
 ): void {
+  const strict = isStrictPluginTargets(config);
   for (const u of unresolved) {
-    throw extendTargetUnknownError(u.target, u.owner);
+    if (strict) throw extendTargetUnknownError(u.target, u.owner);
+    logger.warn?.(
+      `[plugins] "${u.owner}" extends unknown entity "${u.target}" — skipping. ` +
+        `It is neither a code/plugin entity nor a Builder collection/single/component. ` +
+        `Fix the slug or remove the extend (set NEXTLY_STRICT_PLUGIN_TARGETS=1 to fail fast).`
+    );
   }
 }

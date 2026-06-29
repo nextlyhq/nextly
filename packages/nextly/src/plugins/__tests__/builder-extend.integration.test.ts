@@ -8,7 +8,7 @@
  * after `ensureFirstRunSetup` creates the system tables), then boots Nextly over
  * that adapter with the plugin — no `migrate` is ever run.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAdapter } from "../../database/factory";
 import { clearServices } from "../../di/register";
@@ -133,5 +133,43 @@ describe("plugin extend → UI-Builder collection (dev-push, P8)", () => {
     expect(cols.filter(c => c === "meta_title")).toHaveLength(1);
     const fields = await registryFields(adapter, "articles");
     expect(fields.filter(f => f.name === "meta_title")).toHaveLength(1);
+  });
+});
+
+describe("plugin extend → unresolvable target (P8 graceful/strict)", () => {
+  const STRICT_ENV = "NEXTLY_STRICT_PLUGIN_TARGETS";
+  afterEach(() => {
+    delete process.env[STRICT_ENV];
+  });
+
+  it("graceful by default: unknown extend target → warn + skip, boot succeeds", async () => {
+    const warn = vi.fn();
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      logger: { debug() {}, info() {}, warn, error() {} },
+      plugins: [seoPlugin(["ghost"])],
+    });
+
+    expect(handle).toBeDefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("ghost"));
+  });
+
+  it("strict mode (NEXTLY_STRICT_PLUGIN_TARGETS=1) → boot throws", async () => {
+    process.env[STRICT_ENV] = "1";
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+    });
+
+    await expect(
+      createTestNextly({ adapter, plugins: [seoPlugin(["ghost"])] })
+    ).rejects.toMatchObject({ code: "NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN" });
   });
 });
