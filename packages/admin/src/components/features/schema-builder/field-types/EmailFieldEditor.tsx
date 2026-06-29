@@ -180,7 +180,7 @@ export function EmailFieldEditor({
                 <FormItem>
                   <FormLabel>Placeholder</FormLabel>
                   <FormControl>
-                    <Input {...field} placeholder="user@example.com" />
+                    <Input {...field} placeholder="user@nextly.local" />
                   </FormControl>
                   <FormDescription>
                     Placeholder text shown in the input field

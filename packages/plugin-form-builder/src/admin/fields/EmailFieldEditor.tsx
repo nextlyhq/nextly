@@ -119,7 +119,7 @@ export function EmailFieldEditor({
             type="text"
             value={field.placeholder || ""}
             onChange={e => onUpdate({ placeholder: e.target.value })}
-            placeholder="email@example.com"
+            placeholder="email@nextly.local"
           />
         </div>
 
@@ -176,7 +176,7 @@ export function EmailFieldEditor({
             onChange={e =>
               updateValidation("pattern", e.target.value || undefined)
             }
-            placeholder=".*@company\.com$"
+            placeholder=".*@nextly\.local$"
             className="email-field-editor__input--mono"
           />
           <p className="email-field-editor__hint">

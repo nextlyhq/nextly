@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "@nextly/errors";
 import { ServiceContainer } from "@nextly/services/index";
 
 import type { SeederResult } from "./permissions";
@@ -12,30 +13,50 @@ type AdapterWithDrizzle = {
   dialect: string;
 };
 
-// Default super admin credentials
-const DEFAULT_SUPER_ADMIN = {
-  email: "admin@example.com",
-  password: "Admin@123456",
-  name: "Super Admin",
-} as const;
-
-// Seed a super admin user with a role that has all permissions
-
+// Seed a super admin user with a role that has all permissions.
+// No fallback credentials are shipped: the caller MUST supply an email and
+// password. Every real caller already does (the /admin/setup wizard via
+// deps-bridge, and the playground dev seed). These two parameters used to
+// fall back to hardcoded values; requiring them instead means weak,
+// well-known credentials can never be used by accident.
 export async function seedSuperAdmin(
   adapter: DrizzleAdapter | AdapterWithDrizzle,
+  // `options` is optional so that omitting it (the old JS `seedSuperAdmin(adapter)`
+  // form) is handled at runtime with a proper VALIDATION_ERROR rather than a raw
+  // TypeError. `email`/`password` stay required inside the object, so any caller
+  // that does pass options is still compile-time forced to supply both.
   options?: {
-    email?: string;
-    password?: string;
+    email: string;
+    password: string;
     name?: string;
     silent?: boolean;
   }
 ): Promise<SeederResult> {
+  // `name` keeps a harmless display default; credentials never do.
+  // `options || {}` guards the runtime case where a JS caller omits the
+  // argument entirely (the old `seedSuperAdmin(adapter)` form): it routes
+  // through the validation guard below so the caller gets the documented
+  // VALIDATION_ERROR, not a raw "destructure undefined" TypeError.
   const {
-    email = DEFAULT_SUPER_ADMIN.email,
-    password = DEFAULT_SUPER_ADMIN.password,
-    name = DEFAULT_SUPER_ADMIN.name,
+    email,
+    password,
+    name = "Super Admin",
     silent = false,
   } = options || {};
+
+  // Fail closed: require real credentials rather than falling back to a
+  // hardcoded default that would be a security hole if it ever shipped.
+  if (!email || !password) {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      statusCode: 400,
+      publicMessage: "Cannot create the super admin account.",
+      logMessage:
+        "seedSuperAdmin() requires both `email` and `password`. There are " +
+        "no default credentials. Pass them explicitly, or create the first " +
+        "admin through the /admin/setup wizard.",
+    });
+  }
 
   const log = silent ? () => {} : console.log;
   const errorLog = silent ? () => {} : console.error;

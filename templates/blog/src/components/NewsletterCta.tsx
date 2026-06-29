@@ -190,7 +190,7 @@ export function NewsletterCta({
                     name="email"
                     type="email"
                     required
-                    placeholder="you@example.com"
+                    placeholder="you@nextly.local"
                     disabled={pending || state.status === "success"}
                     className="w-full rounded-none border px-5 py-3.5 text-sm transition-all focus:border-[color:var(--color-fg)] focus:outline-none disabled:opacity-60"
                     style={{

@@ -85,9 +85,13 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                 <p className="text-sm font-semibold text-foreground leading-tight truncate">
                   {user?.name || "Super Admin"}
                 </p>
-                <p className="text-xs text-muted-foreground leading-tight truncate mt-0.5">
-                  {user?.email || "admin@example.com"}
-                </p>
+                {/* Only render the email line when the user actually has one;
+                    no hardcoded placeholder address as a fallback. */}
+                {user?.email && (
+                  <p className="text-xs text-muted-foreground leading-tight truncate mt-0.5">
+                    {user.email}
+                  </p>
+                )}
               </div>
               <DropdownMenuItem
                 onClick={() => {

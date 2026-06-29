@@ -101,7 +101,7 @@ export interface EmailInputProps<
  *     name: 'contactEmail',
  *     admin: {
  *       autoComplete: 'email',
- *       placeholder: 'you@example.com',
+ *       placeholder: 'you@nextly.local',
  *     },
  *   }}
  *   control={control}

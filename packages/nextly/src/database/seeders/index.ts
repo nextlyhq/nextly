@@ -31,9 +31,9 @@ export async function seedAll(
   adapter: DrizzleAdapter | AdapterWithDrizzle,
   options?: {
     silent?: boolean;
-    /** Super admin email (default: admin@example.com) */
+    /** Super admin email (required unless skipSuperAdmin is true; no default) */
     superAdminEmail?: string;
-    /** Super admin password (default: Admin@123456) */
+    /** Super admin password (required unless skipSuperAdmin is true; no default) */
     superAdminPassword?: string;
     /** Super admin name (default: Super Admin) */
     superAdminName?: string;
@@ -72,7 +72,17 @@ export async function seedAll(
   // wizard creates the first admin via /admin/api/auth/setup; this
   // path is reserved for `migrate:fresh` and other resets.
   if (!skipSuperAdmin) {
-    if (permissionsResult.success) {
+    // No default credentials are shipped. When a caller opts into super-admin
+    // seeding it must provide both an email and a password; otherwise we fail
+    if (!superAdminEmail || !superAdminPassword) {
+      const msg =
+        "seedAll: superAdminEmail and superAdminPassword are required when " +
+        "skipSuperAdmin is false. Pass both, set skipSuperAdmin: true, or " +
+        "create the first admin via the /admin/setup wizard.";
+      errorLog(`\n${msg}\n`);
+      allErrorMessages.push(msg);
+      totalErrors++;
+    } else if (permissionsResult.success) {
       const superAdminResult = await seedSuperAdmin(adapter, {
         email: superAdminEmail,
         password: superAdminPassword,
