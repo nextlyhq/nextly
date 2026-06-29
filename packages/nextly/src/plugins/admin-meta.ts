@@ -9,6 +9,7 @@
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
+  HeaderButtonId,
   PluginAdminPage,
   PluginAdminWidget,
   PluginMenuItem,
@@ -37,6 +38,12 @@ export interface PluginAdminMeta {
   settings?: { component: string };
   /** Admin header-slot component (C9) — present only for enabled plugins. */
   headerSlot?: string;
+  /** Header customization (C-toolbar) — present only for enabled plugins. */
+  header?: {
+    slot?: string;
+    hideDefaults?: boolean;
+    hide?: HeaderButtonId[];
+  };
   /** Dashboard widgets (D22, C9) — present only for enabled plugins. */
   widgets?: PluginAdminWidget[];
   /**
@@ -98,7 +105,20 @@ export function buildPluginAdminMeta(
       if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
-      if (admin.headerSlot) meta.headerSlot = admin.headerSlot;
+      // Header customization (C-toolbar). `header.slot` supersedes the
+      // deprecated top-level `headerSlot`; keep `meta.headerSlot` mirrored for
+      // back-compat.
+      const slot = admin.header?.slot ?? admin.headerSlot;
+      const hideDefaults = admin.header?.hideDefaults;
+      const hide = admin.header?.hide;
+      if (slot || hideDefaults || (hide && hide.length > 0)) {
+        meta.header = {
+          ...(slot ? { slot } : {}),
+          ...(hideDefaults ? { hideDefaults } : {}),
+          ...(hide && hide.length > 0 ? { hide } : {}),
+        };
+      }
+      if (slot) meta.headerSlot = slot;
       if (admin.widgets && admin.widgets.length > 0)
         meta.widgets = admin.widgets;
     }

@@ -92,6 +92,66 @@ describe("buildPluginAdminMeta", () => {
     });
   });
 
+  it("folds contributes.admin.header (slot + hideDefaults + hide) for enabled plugins", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              header: {
+                slot: "@acme/p/admin#Publish",
+                hideDefaults: true,
+                hide: ["github", "notifications"],
+              },
+            },
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].header).toEqual({
+      slot: "@acme/p/admin#Publish",
+      hideDefaults: true,
+      hide: ["github", "notifications"],
+    });
+    // Back-compat: legacy headerSlot mirrors header.slot.
+    expect(meta[0].headerSlot).toBe("@acme/p/admin#Publish");
+  });
+
+  it("maps a deprecated top-level headerSlot into header.slot", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: { admin: { headerSlot: "@acme/p/admin#Badge" } },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].header?.slot).toBe("@acme/p/admin#Badge");
+    expect(meta[0].headerSlot).toBe("@acme/p/admin#Badge");
+  });
+
+  it("omits header for enabled:false plugins (D49)", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          enabled: false,
+          contributes: {
+            admin: {
+              header: { slot: "@acme/p/admin#Publish", hideDefaults: true },
+            },
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].header).toBeUndefined();
+    expect(meta[0].headerSlot).toBeUndefined();
+  });
+
   it("omits headerSlot + widgets for enabled:false plugins (D49)", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
