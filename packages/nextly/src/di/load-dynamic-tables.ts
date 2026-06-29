@@ -15,6 +15,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { FieldConfig } from "../collections/fields/types";
+
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
  * dynamic_<*>` queries this helper runs. `status` is optional because
@@ -124,4 +126,73 @@ export async function loadDynamicSlugs(
   await read("dynamic_singles");
   await read("dynamic_components");
   return { all, collections };
+}
+
+/** A Builder entity loaded with everything the boot reconciler needs. */
+export interface LoadedBuilderEntity {
+  slug: string;
+  tableName: string;
+  /** Parsed `fields` JSON (user fields + any previously-persisted plugin fields). */
+  fields: FieldConfig[];
+  /** Draft/Published flag (collections/singles; always false for components). */
+  status: boolean;
+}
+
+export interface LoadedBuilderEntities {
+  collections: LoadedBuilderEntity[];
+  singles: LoadedBuilderEntity[];
+  components: LoadedBuilderEntity[];
+}
+
+/**
+ * Load full Builder entities (slug + physical table name + parsed fields +
+ * status) from the three `dynamic_*` registry tables. Used by the boot
+ * reconciler (P8) to merge + materialize plugin contributions onto UI-Builder
+ * entities. Best-effort: a missing table (fresh DB) yields an empty array, and
+ * a row whose `fields` JSON is unparseable is skipped — same resilience as
+ * {@link loadDynamicTables}.
+ */
+export async function loadBuilderEntities(
+  adapter: DrizzleAdapter
+): Promise<LoadedBuilderEntities> {
+  const read = async (
+    table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+    hasStatusColumn: boolean
+  ): Promise<LoadedBuilderEntity[]> => {
+    const selectSql = hasStatusColumn
+      ? `SELECT slug, table_name, fields, status FROM ${table}`
+      : `SELECT slug, table_name, fields FROM ${table}`;
+    try {
+      const rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+      const out: LoadedBuilderEntity[] = [];
+      for (const row of rows) {
+        try {
+          const fields =
+            typeof row.fields === "string"
+              ? JSON.parse(row.fields)
+              : row.fields;
+          if (!Array.isArray(fields)) continue;
+          out.push({
+            slug: row.slug,
+            tableName: row.table_name,
+            fields,
+            // Same dialect-boolean coercion as loadDynamicTables.
+            status: row.status === 1 || row.status === true,
+          });
+        } catch {
+          // Skip a row whose fields JSON is malformed.
+        }
+      }
+      return out;
+    } catch {
+      // Table may not exist yet (fresh database).
+      return [];
+    }
+  };
+
+  return {
+    collections: await read("dynamic_collections", true),
+    singles: await read("dynamic_singles", true),
+    components: await read("dynamic_components", false),
+  };
 }

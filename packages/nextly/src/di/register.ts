@@ -25,6 +25,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { dequal } from "dequal";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -71,15 +72,14 @@ import { resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
-import {
-  applyPluginSchemaContributionsDeferred,
-  finalizeDeferredExtendTargets,
-} from "../plugins/schema/apply-contributions";
+import { applyPluginSchemaContributionsDeferred } from "../plugins/schema/apply-contributions";
+import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
   collectUnresolvedRelationTargets,
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
+import { extendTargetUnknownError } from "../plugins/schema-error";
 import {
   clearPluginServices,
   registerPluginService,
@@ -123,7 +123,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import { loadDynamicSlugs, loadDynamicTables } from "./load-dynamic-tables";
+import {
+  loadBuilderEntities,
+  loadDynamicSlugs,
+  loadDynamicTables,
+} from "./load-dynamic-tables";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -442,13 +446,79 @@ export async function registerServices(
   // Builder/UI entities live in the dynamic_* registry tables (loaded by
   // `loadDynamicTables` above), not in `config`, so their slugs weren't knowable
   // at fold time. A plugin extend/relation targeting a Builder collection
-  // resolves here; a target in NEITHER code/plugin NOR the Builder set still
-  // fails fast (D7/D12/D15). Extend columns were materialized into the Builder
-  // table's stored fields by `migrate`, so this is an existence check only — the
-  // DB row is authoritative (no re-append).
+  // resolves here. The runtime now RECONCILES (not just existence-checks) so the
+  // dev-push path converges with `migrate`: each active plugin's fields are
+  // merged onto its Builder target (tagged source:"plugin"/locked) and the
+  // columns materialized via the same add-only apply dev-push already uses;
+  // stale plugin fields (owning plugin removed) are stripped from the registry
+  // row, leaving the physical column orphaned (data-safe). A target in NEITHER
+  // code/plugin NOR the Builder set is unresolved (handled per strict/graceful).
   if (deferredExtends.length > 0 || unresolvedRelations.length > 0) {
     const builderSlugs = await loadDynamicSlugs(adapter);
-    finalizeDeferredExtendTargets(deferredExtends, builderSlugs.all);
+    const builderEntities = await loadBuilderEntities(adapter);
+    const { entities, unresolved } = reconcileBuilderContributions(
+      deferredExtends,
+      builderEntities
+    );
+
+    if (unresolved.length > 0) {
+      handleUnresolvedExtends(unresolved);
+    }
+
+    const { DynamicCollectionRegistryService } = await import(
+      "../domains/dynamic-collections/services/dynamic-collection-registry-service"
+    );
+    const { addMissingColumnsForFields } = await import(
+      "../domains/schema/utils/missing-columns"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const registryService = new DynamicCollectionRegistryService(
+      adapter,
+      resolvedLogger
+    );
+
+    // Persist + materialize only the Builder collections whose field set
+    // actually changed (idempotent re-boot: dequal skips no-op rows).
+    for (const col of entities.collections) {
+      const before = builderEntities.collections.find(c => c.slug === col.slug);
+      if (!before || dequal(before.fields, col.fields ?? [])) continue;
+      try {
+        // Materialize FIRST; only persist the registry row if the DDL lands so
+        // a failure self-heals on the next boot (the diff reappears). Add-only:
+        // never drops, so a removed plugin's column orphans (data-safe).
+        await addMissingColumnsForFields(
+          adapter,
+          resolvedLogger,
+          before.tableName,
+          col.fields ?? [],
+          { timestamps: true }
+        );
+        await registryService.updateCollectionMetadata(col.slug, {
+          fields: col.fields as unknown as FieldDefinition[],
+        });
+        // Re-register the runtime Drizzle table with the merged fields so reads
+        // in THIS boot see the new column (loadDynamicTables ran pre-reconcile).
+        if (schemaRegistry) {
+          const { generateRuntimeSchema } = await import(
+            "../domains/schema/services/runtime-schema-generator"
+          );
+          const { table } = generateRuntimeSchema(
+            before.tableName,
+            col.fields as unknown as FieldDefinition[],
+            dialect,
+            { status: before.status === true }
+          );
+          schemaRegistry.registerDynamicSchema(before.tableName, table);
+        }
+      } catch (err) {
+        resolvedLogger.warn?.(
+          `[plugins] Failed to materialize plugin fields onto Builder collection "${col.slug}": ${
+            err instanceof Error ? err.message : String(err)
+          }. Skipping; will retry next boot.`
+        );
+      }
+    }
+
     finalizeRelationTargets(unresolvedRelations, builderSlugs.collections);
   }
 
@@ -1817,4 +1887,18 @@ export async function shutdownServices(): Promise<void> {
 export function clearServices(): void {
   container.clear();
   globalForReg.__nextly_isRegistered = false;
+}
+
+/**
+ * Handle plugin `extend` targets that resolve to NEITHER a code/plugin entity
+ * NOR a Builder entity (a real typo / removed target). Fails fast — preserving
+ * the pre-reconcile boot behaviour (D7/D12). Task 6 makes this graceful by
+ * default with an opt-in strict mode.
+ */
+function handleUnresolvedExtends(
+  unresolved: { target: string; owner: string }[]
+): void {
+  for (const u of unresolved) {
+    throw extendTargetUnknownError(u.target, u.owner);
+  }
 }
