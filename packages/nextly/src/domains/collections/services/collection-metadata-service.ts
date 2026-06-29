@@ -246,15 +246,6 @@ export class CollectionMetadataService extends BaseService {
   }
 
   /**
-   * Check if schema file generation should be skipped.
-   * Set NEXTLY_SKIP_SCHEMA_FILES=true to skip generating schema/migration files.
-   * Useful for testing runtime schema generation without file artifacts.
-   */
-  private shouldSkipSchemaFiles(): boolean {
-    return process.env.NEXTLY_SKIP_SCHEMA_FILES === "true";
-  }
-
-  /**
    * Register dynamic schemas with the file manager.
    *
    * @param schemas - Map of schema names to schema objects
@@ -294,10 +285,13 @@ export class CollectionMetadataService extends BaseService {
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 
-      // Save files (skip if NEXTLY_SKIP_SCHEMA_FILES=true)
-      if (!this.shouldSkipSchemaFiles()) {
-        await this.fileManager.saveArtifacts(artifacts);
-      }
+      // Persist the SQL migration. The Drizzle `.ts` schema is no longer
+      // written — the runtime builds it from dynamic_collections metadata,
+      // matching singles/components (see CollectionFileManager.saveMigration).
+      await this.fileManager.saveMigration(
+        artifacts.migrationSQL,
+        artifacts.migrationFileName
+      );
 
       if (this.isDevelopment()) {
         try {
@@ -630,16 +624,14 @@ export class CollectionMetadataService extends BaseService {
           body
         );
 
-      // If schema changed, save migration and schema files (skip if NEXTLY_SKIP_SCHEMA_FILES=true)
-      if (updateArtifacts.migrationSQL && updateArtifacts.schemaCode) {
-        if (!this.shouldSkipSchemaFiles()) {
-          await this.fileManager.saveUpdateArtifacts(
-            updateArtifacts.migrationSQL,
-            updateArtifacts.migrationFileName!,
-            updateArtifacts.schemaCode,
-            updateArtifacts.schemaFileName!
-          );
-        }
+      // If the data table changed, persist the SQL migration. No Drizzle
+      // `.ts` schema is written — the runtime regenerates it from the
+      // dynamic_collections metadata, matching singles/components.
+      if (updateArtifacts.migrationSQL) {
+        await this.fileManager.saveMigration(
+          updateArtifacts.migrationSQL,
+          updateArtifacts.migrationFileName!
+        );
 
         if (this.isDevelopment()) {
           try {
@@ -680,20 +672,8 @@ export class CollectionMetadataService extends BaseService {
             );
           }
 
-          // Only hot-reload if migration succeeded (skip if files disabled)
-          if (
-            updateArtifacts.metadataUpdates.migrationStatus === "applied" &&
-            !this.shouldSkipSchemaFiles()
-          ) {
-            try {
-              await this.fileManager.reloadSchema(params.collectionName);
-            } catch (reloadError) {
-              console.warn(
-                `Schema hot-reload failed, restart may be needed:`,
-                reloadError
-              );
-            }
-          }
+          // No on-disk hot-reload needed: registerRuntimeSchema above already
+          // refreshed the in-memory Drizzle table from the new field list.
         }
       }
 
@@ -766,25 +746,16 @@ export class CollectionMetadataService extends BaseService {
         collection.tableName
       );
 
-      // Save drop migration (skip if NEXTLY_SKIP_SCHEMA_FILES=true)
-      if (!this.shouldSkipSchemaFiles()) {
-        await this.fileManager.saveDropMigration(
-          dropArtifacts.migrationSQL,
-          dropArtifacts.migrationFileName
-        );
-      }
+      // Persist the drop migration. It is the durable DDL record applied by
+      // `nextly migrate` in non-dev/deploy flows.
+      await this.fileManager.saveDropMigration(
+        dropArtifacts.migrationSQL,
+        dropArtifacts.migrationFileName
+      );
 
       // Run drop migration in development
       if (this.isDevelopment()) {
         await this.fileManager.runMigration(dropArtifacts.migrationSQL);
-      }
-
-      // Delete schema file (skip if NEXTLY_SKIP_SCHEMA_FILES=true)
-      if (!this.shouldSkipSchemaFiles()) {
-        await this.fileManager.deleteSchemaFile(
-          `${params.collectionName}.ts`,
-          collection.tableName
-        );
       }
 
       // Unregister from metadata
