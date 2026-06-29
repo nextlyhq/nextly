@@ -159,7 +159,7 @@ export const FIELD_TYPES: FieldTypeConfig[] = [
     defaultConfig: {
       type: "email",
       label: "Email",
-      placeholder: "email@example.com",
+      placeholder: "email@nextly.local",
       required: false,
     },
   },

@@ -295,7 +295,7 @@ function IntegrationModal({
               type="email"
               value={form.senderEmail ?? ""}
               onChange={e => update("senderEmail", e.target.value || undefined)}
-              placeholder="noreply@example.com"
+              placeholder="noreply@nextly.local"
             />
             <p className="text-xs text-muted-foreground">
               Leave blank to use the provider&apos;s default configured address.
@@ -348,7 +348,7 @@ function IntegrationModal({
                     type="email"
                     value={form.to}
                     onChange={e => update("to", e.target.value)}
-                    placeholder="admin@example.com"
+                    placeholder="admin@nextly.local"
                   />
                 )}
               </div>
@@ -401,7 +401,7 @@ function IntegrationModal({
                       addCc();
                     }
                   }}
-                  placeholder="cc@example.com"
+                  placeholder="cc@nextly.local"
                 />
                 <Button
                   type="button"
@@ -461,7 +461,7 @@ function IntegrationModal({
                       addBcc();
                     }
                   }}
-                  placeholder="bcc@example.com"
+                  placeholder="bcc@nextly.local"
                 />
                 <Button
                   type="button"

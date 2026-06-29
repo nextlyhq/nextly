@@ -91,7 +91,7 @@ export interface EmailFieldAdminOptions extends FieldAdminOptions {
  *   label: 'Contact Email',
  *   admin: {
  *     description: 'This email will be used for notifications',
- *     placeholder: 'you@example.com',
+ *     placeholder: 'you@nextly.local',
  *   },
  * };
  * ```

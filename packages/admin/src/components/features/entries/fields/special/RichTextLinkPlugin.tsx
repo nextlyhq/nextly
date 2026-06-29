@@ -316,7 +316,7 @@ export function RichTextLinkPlugin({
             <Input
               id="link-url"
               type="text"
-              placeholder="https://example.com or email@example.com"
+              placeholder="https://example.com or email@nextly.local"
               value={linkData.url}
               onChange={e => {
                 setLinkData(prev => ({ ...prev, url: e.target.value }));

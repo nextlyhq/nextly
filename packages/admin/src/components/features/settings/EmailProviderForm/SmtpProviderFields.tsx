@@ -96,7 +96,7 @@ export function SmtpConfigFields({
               description="Account used to authenticate against the SMTP server."
             >
               <FormControl>
-                <Input placeholder="user@example.com" {...field} />
+                <Input placeholder="user@nextly.local" {...field} />
               </FormControl>
               <FormMessage className="mt-1.5" />
             </SettingsRow>

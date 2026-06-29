@@ -171,7 +171,7 @@ export function UserFormFields({
           <Input
             id="email"
             type="email"
-            placeholder="john.doe@example.com"
+            placeholder="john.doe@nextly.local"
             aria-invalid={!!errors.email}
             aria-required="true"
             {...register("email")}

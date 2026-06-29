@@ -232,7 +232,7 @@ function ProviderTestDialog({
             <Input
               id="test-email"
               type="email"
-              placeholder="you@example.com"
+              placeholder="you@nextly.local"
               value={email}
               onChange={e => setEmail(e.target.value)}
               autoFocus

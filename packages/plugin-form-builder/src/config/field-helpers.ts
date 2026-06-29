@@ -157,7 +157,7 @@ export const text = (config: Omit<TextFormField, "type">): TextFormField => ({
  *   name: 'workEmail',
  *   label: 'Work Email',
  *   required: true,
- *   placeholder: 'you@company.com',
+ *   placeholder: 'you@nextly.local',
  * })
  * ```
  */
