@@ -75,7 +75,7 @@ export type SingleValidationErrorCode =
   | "RADIO_OPTIONS_EMPTY"
   | "RELATIONSHIP_TARGET_REQUIRED"
   | "RELATIONSHIP_TARGET_INVALID"
-  | "ARRAY_FIELDS_REQUIRED"
+  | "REPEATER_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
@@ -183,15 +183,15 @@ function validateField(
       break;
 
     case "repeater": {
-      const arrayFields = f.fields;
-      if (!arrayFields) {
+      const repeaterFields = f.fields;
+      if (!repeaterFields) {
         errors.push({
           path: `${path}.fields`,
-          message: "Array field must have a 'fields' array",
-          code: "ARRAY_FIELDS_REQUIRED",
+          message: "Repeater field must have a 'fields' array",
+          code: "REPEATER_FIELDS_REQUIRED",
         });
-      } else if (Array.isArray(arrayFields)) {
-        validateFieldsArray(arrayFields, `${path}.fields`, errors);
+      } else if (Array.isArray(repeaterFields)) {
+        validateFieldsArray(repeaterFields, `${path}.fields`, errors);
       }
       break;
     }

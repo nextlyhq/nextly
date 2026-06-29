@@ -100,7 +100,7 @@ const LAYOUT_FIELD_TYPES = new Set(["tabs", "collapsible", "row"]);
  * object, and runs them through `sanitizeFieldValue()`. Handles nested fields
  * recursively:
  * - `group` fields: recurses into the group's sub-fields
- * - `array` fields: iterates each array item and recurses into the field's sub-fields
+ * - `repeater` fields: iterates each row and recurses into the field's sub-fields
  * - `component` fields: recurses into the component's field definitions (if available)
  * - Layout types (`tabs`, `collapsible`, `row`): traverses into nested fields
  *

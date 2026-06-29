@@ -1,7 +1,7 @@
 /**
- * Array Row Label Component
+ * Repeater Row Label Component
  *
- * Renders the label for each row in an array field.
+ * Renders the label for each row in a repeater field.
  * Supports custom label components and smart label extraction from row data.
  *
  * @module components/entries/fields/structured/RepeaterRowLabel
@@ -21,7 +21,7 @@ export interface RepeaterRowLabelComponentProps {
   index: number;
 
   /**
-   * The array field configuration.
+   * The repeater field configuration.
    */
   field: RepeaterFieldConfig;
 

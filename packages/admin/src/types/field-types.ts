@@ -13,11 +13,7 @@ export enum FieldType {
   NUMBER = "number",
   EMAIL = "email",
   PASSWORD = "password",
-  RICH_TEXT = "rich_text",
-
-  // Content
-  EDITOR = "editor",
-  MEDIA = "media",
+  RICH_TEXT = "richText",
 
   // Choice
   SELECT = "select",
@@ -27,11 +23,9 @@ export enum FieldType {
 
   // Relational
   RELATION = "relation",
-  USER = "user",
 
   // Advanced
-  DATE_PICKER = "date_picker",
-  TIME_PICKER = "time_picker",
+  DATE_PICKER = "date",
 
   // Layout
   REPEATER = "repeater",
@@ -107,17 +101,6 @@ export interface NumberFieldConfig extends BaseFieldConfig {
     required?: boolean;
     min?: number;
     max?: number;
-  };
-}
-
-/**
- * Editor Field Configuration
- */
-export interface EditorFieldConfig extends BaseFieldConfig {
-  type: FieldType.EDITOR;
-  validation?: {
-    required?: boolean;
-    pattern?: string;
   };
 }
 
@@ -204,22 +187,6 @@ export interface RelationFieldConfig extends BaseFieldConfig {
 }
 
 /**
- * User Field Configuration
- */
-export interface UserFieldConfig extends BaseFieldConfig {
-  type: FieldType.USER;
-  validation?: {
-    required?: boolean;
-    min_items?: number;
-    max_items?: number;
-  };
-  display_field?: string;
-  searchable?: boolean;
-  multiselect?: boolean;
-  user_role?: string;
-  user?: string;
-}
-/**
  * Date Picker Field Configuration
  */
 export interface DatePickerFieldConfig extends BaseFieldConfig {
@@ -231,25 +198,6 @@ export interface DatePickerFieldConfig extends BaseFieldConfig {
     max_date?: string;
   };
   date_format?: "dd/MM/yyyy" | "MM/dd/yyyy" | "yyyy-MM-dd";
-}
-
-/**
- * Time Picker Field Configuration
- */
-export interface TimePickerFieldConfig extends BaseFieldConfig {
-  type: FieldType.TIME_PICKER;
-  validation?: {
-    required?: boolean;
-    min_time?: string;
-    max_time?: string;
-  };
-  time_format?: "12h" | "24h";
-  step?: number; // Minutes step (e.g., 15 for 15-minute intervals)
-  ui?: {
-    description?: string;
-    placeholder?: string;
-    show_seconds?: boolean;
-  };
 }
 
 /**
@@ -318,22 +266,6 @@ export interface EmailFieldConfig extends BaseFieldConfig {
 }
 
 /**
- * Media Field Configuration
- */
-export interface MediaFieldConfig extends BaseFieldConfig {
-  type: FieldType.MEDIA;
-  allowed_types: string[];
-  max_size: number;
-  validation?: {
-    required?: boolean;
-  };
-  ui?: {
-    description?: string;
-    placeholder?: string;
-  };
-}
-
-/**
  * Password Field Configuration
  */
 export interface PasswordFieldConfig extends BaseFieldConfig {
@@ -362,18 +294,14 @@ export type FieldConfig =
   | PasswordFieldConfig
   | TextAreaFieldConfig
   | NumberFieldConfig
-  | EditorFieldConfig
   | SelectFieldConfig
   | BooleanFieldConfig
   | RadioFieldConfig
   | ChipsFieldConfig
   | RelationFieldConfig
-  | UserFieldConfig
   | DatePickerFieldConfig
-  | TimePickerFieldConfig
   | RepeaterFieldConfig
   | GroupFieldConfig
-  | MediaFieldConfig
   | RichTextFieldConfig;
 
 /**

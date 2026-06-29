@@ -476,17 +476,17 @@ export const relationship = (
 // ============================================================
 
 /**
- * Creates an array field configuration.
+ * Creates a repeater field configuration.
  *
- * Array fields store repeatable sets of fields. Each row in the
- * array has the same structure defined by the `fields` property.
+ * This is an alias for `repeater()` kept for backwards compatibility.
+ * Prefer `repeater()` for new code — both produce `type: "repeater"`.
  *
  * @param config - Field configuration without the `type` property
- * @returns Complete array field configuration
+ * @returns Complete repeater field configuration
  *
  * @example
  * ```typescript
- * // Simple array of links
+ * // Simple list of links
  * array({
  *   name: 'links',
  *   fields: [
@@ -495,7 +495,7 @@ export const relationship = (
  *   ],
  * })
  *
- * // Array with constraints
+ * // With constraints
  * array({
  *   name: 'features',
  *   minRows: 1,
@@ -503,7 +503,6 @@ export const relationship = (
  *   fields: [
  *     text({ name: 'title', required: true }),
  *     textarea({ name: 'description' }),
- *     upload({ name: 'icon', relationTo: 'media' }),
  *   ],
  * })
  * ```
@@ -518,8 +517,8 @@ export const array = (
 /**
  * Creates a repeater field configuration.
  *
- * Repeater fields are functionally identical to array fields. Each row in a
- * repeater has the same structure defined by the `fields` property.
+ * Repeater fields store an ordered list of structured rows, each sharing
+ * the same field schema defined by the `fields` property.
  *
  * @param config - Field configuration without the `type` property
  * @returns Complete repeater field configuration

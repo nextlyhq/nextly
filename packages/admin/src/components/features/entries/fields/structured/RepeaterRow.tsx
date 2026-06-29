@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Array Row Component
+ * Repeater Row Component
  *
- * A sortable, collapsible row within an array field.
+ * A sortable, collapsible row within a repeater field.
  * Supports drag-and-drop reordering via @dnd-kit.
  *
  * @module components/entries/fields/structured/RepeaterRow
@@ -73,7 +73,7 @@ export interface RepeaterRowProps<
   index: number;
 
   /**
-   * The array field configuration containing sub-fields.
+   * The repeater field configuration containing sub-fields.
    */
   field: RepeaterFieldConfig;
 
@@ -124,7 +124,7 @@ export interface RepeaterRowProps<
 // ============================================================
 
 /**
- * RepeaterRow renders a single row within an array field.
+ * RepeaterRow renders a single row within a repeater field.
  *
  * Features:
  * - Drag handle for reordering via @dnd-kit
