@@ -506,17 +506,6 @@ export function convertToBuilderField(
     );
   }
 
-  // // Blocks (legacy field type — no longer in FieldPrimitiveType but may exist in stored data)
-  // if ((field.type as string) === "blocks" && field.blocks && field.blocks.length > 0) {
-  //   builderField.blocks = field.blocks.map(block => ({
-  //     slug: block.slug,
-  //     label: block.labels?.singular,
-  //     fields: block.fields
-  //       ? block.fields.map((f, i) => convertToBuilderField(f, i))
-  //       : [],
-  //   }));
-  // }
-
   // Admin options
   if (field.admin) {
     builderField.admin = {
