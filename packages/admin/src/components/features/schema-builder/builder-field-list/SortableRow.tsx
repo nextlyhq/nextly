@@ -24,6 +24,17 @@ import { parseWidth } from "@admin/lib/builder/reflow";
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField } from "../types";
 
+import { FieldSourceBadge } from "./FieldSourceBadge";
+
+/**
+ * A field is locked in the Builder when the whole collection is read-only
+ * (code-first / locked) OR the field itself is plugin-contributed / locked.
+ * Plugin fields are code-owned, so they're inspectable but never editable here.
+ */
+function isFieldLocked(field: BuilderField, readOnly: boolean): boolean {
+  return readOnly || field.source === "plugin" || field.locked === true;
+}
+
 // Why: lookup map from field type -> Lucide icon name. Catalog is the
 // source of truth (PR C centralized icons there).
 const fieldTypeIconName: Record<string, string> = Object.fromEntries(
@@ -83,9 +94,12 @@ export function SortableRow({
           readOnly={readOnly}
           // Why: only the first card in each row mounts the drag handle.
           // The handle drives the whole row's reorder (rows are the
-          // sortable unit, not individual cards).
+          // sortable unit, not individual cards). Suppress it when the first
+          // field is locked (plugin-contributed) so its row can't be dragged.
           dragHandleProps={
-            i === 0 && !readOnly ? { attributes, listeners } : undefined
+            i === 0 && !isFieldLocked(f, readOnly)
+              ? { attributes, listeners }
+              : undefined
           }
           onEdit={() => onEditField(f.id)}
           onDelete={() => onDeleteField(f.id)}
@@ -121,21 +135,40 @@ function FieldCard({
   // every value, so set it inline based on the parsed width.
   const flexBasis = `calc(${widthPct}% - 0.5rem)`;
 
+  const isPluginField = field.source === "plugin";
+  // A locked field (plugin-contributed, or a code-first/locked collection)
+  // can be inspected but not edited/duplicated/deleted/dragged in the Builder.
+  const fieldReadOnly = isFieldLocked(field, readOnly);
+
+  // Click-to-edit is only wired when the field is editable; a locked field is
+  // inert (no role=button / onClick / keyboard handler / pointer cursor).
+  const interactiveProps = fieldReadOnly
+    ? {}
+    : {
+        role: "button" as const,
+        tabIndex: 0,
+        onClick: onEdit,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onEdit();
+          }
+        },
+      };
+
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onEdit}
-      onKeyDown={e => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onEdit();
-        }
-      }}
+      {...interactiveProps}
+      data-testid={`field-row-${field.name}`}
       style={{ flex: `0 0 ${flexBasis}` }}
-      className="border border-border rounded-md p-3 bg-background hover:border-primary/30 cursor-pointer flex items-center gap-2 group"
+      className={
+        "border border-border rounded-md p-3 bg-background flex items-center gap-2 group " +
+        (fieldReadOnly
+          ? "opacity-90"
+          : "hover:border-primary/30 cursor-pointer")
+      }
     >
-      {!readOnly && dragHandleProps && (
+      {!fieldReadOnly && dragHandleProps && (
         <button
           type="button"
           aria-label="Reorder field"
@@ -177,7 +210,19 @@ function FieldCard({
           Required
         </span>
       )}
-      {!readOnly && (
+      {/* Plugin-contributed fields: a "Plugin · <owner>" badge + a lock icon so
+          it's clear the field is code-owned and read-only here. */}
+      {isPluginField && (
+        <>
+          <FieldSourceBadge owner={field.owner} />
+          <Icons.Lock
+            data-testid="field-readonly-indicator"
+            aria-label="Read-only"
+            className="h-3.5 w-3.5 text-muted-foreground shrink-0"
+          />
+        </>
+      )}
+      {!fieldReadOnly && (
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
           <IconActionButton
             ariaLabel={`Edit ${field.name}`}
