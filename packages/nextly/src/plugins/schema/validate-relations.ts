@@ -87,19 +87,30 @@ export function collectUnresolvedRelationTargets(
 
 /**
  * @experimental Finalize deferred relation targets (P8): any target not present
- * in `builderSlugs` is a real dangling reference and throws
- * `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` (D15). Pass an empty set to require
- * targets be code/plugin/core only (the pre-P8 behavior).
+ * in `builderSlugs` is a dangling reference. By default (and for the eager
+ * validation / CLI path) this throws `NEXTLY_SCHEMA_RELATION_TARGET_MISSING`
+ * (D15). The runtime boot opts into graceful resolution (`strict: false`): a
+ * missing target is warned + skipped so a typo or removed Builder entity can't
+ * crash boot — mirroring the extend path. Pass an empty set to require targets
+ * be code/plugin/core only (the pre-P8 behavior).
  */
 export function finalizeRelationTargets(
   unresolved: UnresolvedRelation[],
-  builderSlugs: Iterable<string>
+  builderSlugs: Iterable<string>,
+  opts?: { strict?: boolean; logger?: { warn?(message: string): void } }
 ): void {
+  // Default strict so validateMergedRelations / the CLI keep failing fast.
+  const strict = opts?.strict ?? true;
   const builder = new Set(builderSlugs);
   for (const u of unresolved) {
-    if (!builder.has(u.target)) {
+    if (builder.has(u.target)) continue;
+    if (strict) {
       throw relationTargetMissingError(u.source, u.field, u.target);
     }
+    opts?.logger?.warn?.(
+      `[plugins] "${u.source}.${u.field}" relates to unknown target "${u.target}" — skipping. ` +
+        `(set NEXTLY_STRICT_PLUGIN_TARGETS=1 to fail fast)`
+    );
   }
 }
 

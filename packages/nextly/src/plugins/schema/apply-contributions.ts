@@ -30,6 +30,8 @@ import {
   slugCollisionError,
 } from "../schema-error";
 
+import { tagPluginFields } from "./reconcile-builder-contributions";
+
 type EntityKind = "collection" | "single" | "component";
 
 type RenamedContributes = Pick<
@@ -201,7 +203,7 @@ function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
  * (`onUnknown: "collect"`) — the latter holds a target that may be a Builder
  * entity until Builder slugs are known (P8/R2).
  */
-function applyExtendClauses<
+export function applyExtendClauses<
   C extends Fielded,
   S extends Fielded,
   P extends Fielded,
@@ -426,11 +428,18 @@ export function resolveBuilderExtends(
   deferred: DeferredExtend[],
   builder: BuilderEntities
 ): BuilderEntities {
+  // Tag merged fields with plugin provenance so the materialized Builder rows
+  // (migrate output) carry source/owner/locked — the same tags the runtime
+  // reconciler applies, so dev-push and migrate converge (P8).
+  const tagged = deferred.map(d => ({
+    ...d,
+    fields: tagPluginFields(d.fields, d.owner),
+  }));
   const r = applyExtendClauses(
     builder.collections,
     builder.singles,
     builder.components,
-    deferred,
+    tagged,
     "throw"
   );
   return {

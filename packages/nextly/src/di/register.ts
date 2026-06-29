@@ -25,6 +25,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { dequal } from "dequal";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -71,15 +72,14 @@ import { resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
-import {
-  applyPluginSchemaContributionsDeferred,
-  finalizeDeferredExtendTargets,
-} from "../plugins/schema/apply-contributions";
+import { applyPluginSchemaContributionsDeferred } from "../plugins/schema/apply-contributions";
+import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
   collectUnresolvedRelationTargets,
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
+import { extendTargetUnknownError } from "../plugins/schema-error";
 import {
   clearPluginServices,
   registerPluginService,
@@ -123,7 +123,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import { loadDynamicSlugs, loadDynamicTables } from "./load-dynamic-tables";
+import {
+  type LoadedBuilderEntity,
+  loadBuilderEntities,
+  loadDynamicTables,
+} from "./load-dynamic-tables";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -184,6 +188,15 @@ export interface NextlyServiceConfig {
 
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
+
+  /**
+   * @experimental Fail fast (throw) when a plugin `extend`/relation targets an
+   * entity that is NEITHER a code/plugin entity NOR a Builder collection/single/
+   * component. Default `false`: such a target is warned-and-skipped so a typo or
+   * a removed Builder entity can't take the whole app down (P8). Also enabled by
+   * `NEXTLY_STRICT_PLUGIN_TARGETS=1` (recommended for CI/production).
+   */
+  strictPluginTargets?: boolean;
 
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
@@ -442,14 +455,178 @@ export async function registerServices(
   // Builder/UI entities live in the dynamic_* registry tables (loaded by
   // `loadDynamicTables` above), not in `config`, so their slugs weren't knowable
   // at fold time. A plugin extend/relation targeting a Builder collection
-  // resolves here; a target in NEITHER code/plugin NOR the Builder set still
-  // fails fast (D7/D12/D15). Extend columns were materialized into the Builder
-  // table's stored fields by `migrate`, so this is an existence check only — the
-  // DB row is authoritative (no re-append).
-  if (deferredExtends.length > 0 || unresolvedRelations.length > 0) {
-    const builderSlugs = await loadDynamicSlugs(adapter);
-    finalizeDeferredExtendTargets(deferredExtends, builderSlugs.all);
-    finalizeRelationTargets(unresolvedRelations, builderSlugs.collections);
+  // resolves here. The runtime now RECONCILES (not just existence-checks) so the
+  // dev-push path converges with `migrate`: each active plugin's fields are
+  // merged onto its Builder target (tagged source:"plugin"/locked) and the
+  // columns materialized via the same add-only apply dev-push already uses;
+  // stale plugin fields (owning plugin removed) are stripped from the registry
+  // row, leaving the physical column orphaned (data-safe). A target in NEITHER
+  // code/plugin NOR the Builder set is unresolved (handled per strict/graceful).
+  {
+    // Always reconcile (no outer guard) so a REMOVED plugin's stale fields are
+    // stripped on the next boot (P8 §7) even when this boot has no deferred
+    // extends. The reconcile is a pure read+transform; the `changed` filter
+    // below keeps a plugin-free or unchanged boot write-free (no registry
+    // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
+    const builderEntities = await loadBuilderEntities(adapter);
+    const { entities, unresolved } = reconcileBuilderContributions(
+      deferredExtends,
+      builderEntities
+    );
+
+    if (unresolved.length > 0) {
+      handleUnresolvedExtends(unresolved, transformedConfig, resolvedLogger);
+    }
+
+    // Only touch the DB for entities whose merged field set actually differs
+    // from what's persisted — keeps an unchanged/plugin-free boot write-free and
+    // skips the apply-helper imports entirely.
+    const dialect = adapter.getCapabilities().dialect;
+    const changedOf = (
+      reconciled: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
+      loaded: LoadedBuilderEntity[]
+    ) =>
+      reconciled.filter(e => {
+        const before = loaded.find(c => c.slug === e.slug);
+        return before !== undefined && !dequal(before.fields, e.fields ?? []);
+      });
+
+    const collChanged = changedOf(
+      entities.collections,
+      builderEntities.collections
+    );
+    const singleChanged = changedOf(entities.singles, builderEntities.singles);
+    const compChanged = changedOf(
+      entities.components,
+      builderEntities.components
+    );
+
+    if (collChanged.length + singleChanged.length + compChanged.length > 0) {
+      const { addMissingColumnsForFields } = await import(
+        "../domains/schema/utils/missing-columns"
+      );
+      const { generateRuntimeSchema } = await import(
+        "../domains/schema/services/runtime-schema-generator"
+      );
+
+      // Materialize FIRST (add-only, never drops → removed-plugin columns
+      // orphan, data-safe), then persist the reconciled fields on the registry
+      // row, then re-register the runtime table so reads in THIS boot see the
+      // new column. A per-entity failure is logged + skipped (retried next boot).
+      const materializeKind = async (
+        kind: string,
+        changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
+        loaded: LoadedBuilderEntity[],
+        persist: (slug: string, fields: FieldConfig[]) => Promise<unknown>,
+        makeRuntime: (
+          tableName: string,
+          fields: FieldConfig[],
+          status: boolean
+        ) => unknown
+      ): Promise<void> => {
+        for (const ent of changed) {
+          const before = loaded.find(c => c.slug === ent.slug);
+          if (!before) continue;
+          const fields = ent.fields ?? [];
+          try {
+            await addMissingColumnsForFields(
+              adapter,
+              resolvedLogger,
+              before.tableName,
+              fields,
+              { timestamps: true }
+            );
+            await persist(ent.slug, fields);
+            if (schemaRegistry) {
+              schemaRegistry.registerDynamicSchema(
+                before.tableName,
+                makeRuntime(before.tableName, fields, before.status)
+              );
+            }
+          } catch (err) {
+            resolvedLogger.warn?.(
+              `[plugins] Failed to materialize plugin fields onto Builder ${kind} "${ent.slug}": ${
+                err instanceof Error ? err.message : String(err)
+              }. Skipping; will retry next boot.`
+            );
+          }
+        }
+      };
+
+      // Collections + singles share the standard runtime-schema generator.
+      const runtimeTable = (
+        tableName: string,
+        fields: FieldConfig[],
+        status: boolean
+      ) =>
+        generateRuntimeSchema(
+          tableName,
+          fields as unknown as FieldDefinition[],
+          dialect,
+          { status }
+        ).table;
+
+      if (collChanged.length > 0) {
+        const { DynamicCollectionRegistryService } = await import(
+          "../domains/dynamic-collections/services/dynamic-collection-registry-service"
+        );
+        const reg = new DynamicCollectionRegistryService(
+          adapter,
+          resolvedLogger
+        );
+        await materializeKind(
+          "collection",
+          collChanged,
+          builderEntities.collections,
+          (slug, fields) =>
+            reg.updateCollectionMetadata(slug, {
+              fields: fields as unknown as FieldDefinition[],
+            }),
+          runtimeTable
+        );
+      }
+
+      if (singleChanged.length > 0) {
+        const { SingleRegistryService } = await import(
+          "../domains/singles/services/single-registry-service"
+        );
+        const reg = new SingleRegistryService(adapter, resolvedLogger);
+        await materializeKind(
+          "single",
+          singleChanged,
+          builderEntities.singles,
+          (slug, fields) => reg.updateSingle(slug, { fields: fields }),
+          runtimeTable
+        );
+      }
+
+      if (compChanged.length > 0) {
+        const { ComponentRegistryService } = await import(
+          "../domains/components/services/component-registry-service"
+        );
+        const { ComponentSchemaService } = await import(
+          "../domains/components/services/component-schema-service"
+        );
+        const reg = new ComponentRegistryService(adapter, resolvedLogger);
+        const compSchema = new ComponentSchemaService(dialect);
+        await materializeKind(
+          "component",
+          compChanged,
+          builderEntities.components,
+          (slug, fields) => reg.updateComponent(slug, { fields: fields }),
+          (tableName, fields) =>
+            compSchema.generateRuntimeSchema(tableName, fields)
+        );
+      }
+    }
+
+    const builderCollectionSlugs = new Set(
+      builderEntities.collections.map(c => c.slug)
+    );
+    finalizeRelationTargets(unresolvedRelations, builderCollectionSlugs, {
+      strict: isStrictPluginTargets(transformedConfig),
+      logger: resolvedLogger,
+    });
   }
 
   // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
@@ -1817,4 +1994,35 @@ export async function shutdownServices(): Promise<void> {
 export function clearServices(): void {
   container.clear();
   globalForReg.__nextly_isRegistered = false;
+}
+
+/** Strict plugin-target resolution — config flag OR env (CI/prod). */
+function isStrictPluginTargets(config: NextlyServiceConfig): boolean {
+  return (
+    config.strictPluginTargets === true ||
+    process.env.NEXTLY_STRICT_PLUGIN_TARGETS === "1"
+  );
+}
+
+/**
+ * Handle plugin `extend` targets that resolve to NEITHER a code/plugin entity
+ * NOR a Builder entity (a typo, or a removed/renamed Builder target). Graceful
+ * by default — warn + skip that one contribution so the rest of the app still
+ * boots (P8); strict mode (config flag or `NEXTLY_STRICT_PLUGIN_TARGETS=1`)
+ * restores the fail-fast throw for CI/production (D7/D12).
+ */
+function handleUnresolvedExtends(
+  unresolved: { target: string; owner: string }[],
+  config: NextlyServiceConfig,
+  logger: Logger
+): void {
+  const strict = isStrictPluginTargets(config);
+  for (const u of unresolved) {
+    if (strict) throw extendTargetUnknownError(u.target, u.owner);
+    logger.warn?.(
+      `[plugins] "${u.owner}" extends unknown entity "${u.target}" — skipping. ` +
+        `It is neither a code/plugin entity nor a Builder collection/single/component. ` +
+        `Fix the slug or remove the extend (set NEXTLY_STRICT_PLUGIN_TARGETS=1 to fail fast).`
+    );
+  }
 }

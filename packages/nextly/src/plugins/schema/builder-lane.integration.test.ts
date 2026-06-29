@@ -1,20 +1,15 @@
 /**
- * P8 — runtime Builder-lane boot wiring (register.ts defer → finalize).
+ * P8 — runtime Builder-lane boot wiring (register.ts defer → reconcile).
  *
  * A plugin `contributes.extend` whose target isn't a code/plugin entity is
  * DEFERRED past Layer 0c (no longer thrown there, so a Builder-made target can
- * resolve), then finalized against the Builder slugs loaded from the DB. When
- * the target exists in NEITHER code/plugin NOR the (DB) Builder set, the boot
- * still fails fast (D7/D12) — this guards that the deferral didn't turn a real
- * typo into a silent pass.
+ * resolve), then reconciled against the Builder entities loaded from the DB.
  *
- * The success path (target IS a migrated Builder collection) is covered by
- * composition: `loadDynamicSlugs` (load-dynamic-slugs.integration.test) returns
- * the Builder slugs, and `finalizeDeferredExtendTargets`/`finalizeRelationTargets`
- * (apply-contributions/validate-relations unit tests) pass when the slug is
- * present. A full cross-process e2e (migrate materializes the column → fresh
- * boot CRUDs it) needs a pre-populated DB and is out of the in-memory harness's
- * scope — see the P8 completion note.
+ * When the target exists in NEITHER code/plugin NOR the (DB) Builder set it is
+ * now GRACEFUL by default (warn + skip — covered in builder-extend.integration)
+ * so a typo can't take the whole app down. STRICT mode
+ * (`NEXTLY_STRICT_PLUGIN_TARGETS=1`) restores the fail-fast throw — this test
+ * guards that path, so a typo is still catchable where you want it (CI/prod).
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -28,9 +23,11 @@ describe("Builder schema lane — runtime boot (P8/D3/R2)", () => {
   afterEach(async () => {
     await handle?.destroy();
     handle = undefined;
+    delete process.env.NEXTLY_STRICT_PLUGIN_TARGETS;
   });
 
-  it("defers an extend target past Layer 0c, then fails fast at the DB-aware finalize when it is neither code/plugin nor Builder", async () => {
+  it("strict mode: defers an extend target past Layer 0c, then fails fast at the DB-aware reconcile when it is neither code/plugin nor Builder", async () => {
+    process.env.NEXTLY_STRICT_PLUGIN_TARGETS = "1";
     const seo: PluginDefinition = {
       name: "@t/seo",
       version: "1.0.0",

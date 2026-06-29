@@ -106,6 +106,16 @@ export interface FieldDefinition {
   required?: boolean;
   unique?: boolean;
   index?: boolean;
+  /**
+   * Field provenance, serialized by the API from the registry. "plugin" =
+   * contributed by a plugin (locked + badged in the Builder, managed in the
+   * plugin's code); "ui" / "code" otherwise.
+   */
+  source?: "ui" | "code" | "plugin";
+  /** Owning plugin name when source === "plugin". */
+  owner?: string;
+  /** When true, the Builder shows this field read-only (inspect only). */
+  locked?: boolean;
   /** Default value for the field */
   defaultValue?: unknown;
   /** Nested fields for container types (array, group, etc.) */
