@@ -36,9 +36,7 @@ const fieldTypeMapping: Record<string, FieldType> = {
   boolean: FieldType.BOOLEAN,
   radio: FieldType.RADIO,
   relation: FieldType.RELATION,
-  user: FieldType.USER,
   date: FieldType.DATE_PICKER,
-  timepicker: FieldType.TIME_PICKER,
 };
 
 interface AddFieldProps {

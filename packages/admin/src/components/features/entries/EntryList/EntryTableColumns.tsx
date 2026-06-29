@@ -175,7 +175,6 @@ function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
     "group",
     "relationship",
     "repeater",
-    "array",
     "blocks",
     "component",
   ];

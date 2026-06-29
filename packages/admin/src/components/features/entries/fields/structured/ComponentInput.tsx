@@ -8,7 +8,7 @@
  *
  * Supports four modes:
  * - **Single component, non-repeatable:** Renders component fields inline (like GroupInput)
- * - **Single component, repeatable:** Array of same component type (like RepeaterInput)
+ * - **Single component, repeatable:** List of same component type (like RepeaterInput)
  * - **Multi-component, non-repeatable:** Single instance with type selector
  * - **Multi-component, repeatable:** Dynamic zone - array of mixed component types
  *
@@ -350,7 +350,7 @@ function SingleComponentNonRepeatable({
         field.admin?.className
       )}
     >
-      {/* Card header — same style as array repeater rows */}
+      {/* Card header — same style as repeater rows */}
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}

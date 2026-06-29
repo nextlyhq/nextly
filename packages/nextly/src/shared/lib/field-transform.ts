@@ -188,7 +188,7 @@ function processNestedValue(
     const fieldMap = buildFieldMap(nestedFields);
 
     if (Array.isArray(value)) {
-      // Array of objects (array field rows or blocks)
+      // Array of objects (repeater rows or blocks)
       return value.map(item => {
         if (typeof item === "object" && item !== null) {
           return processObjectWithFields(
@@ -264,10 +264,10 @@ function transformValueForStorage(value: unknown, field: FieldConfig): unknown {
     }
 
     case "repeater": {
-      // Process nested fields within array rows
-      const arrayField = field as { fields?: FieldConfig[] };
-      if (Array.isArray(value) && arrayField.fields) {
-        return processNestedValue(value, arrayField.fields);
+      // Process nested fields within repeater rows
+      const repeaterField = field as { fields?: FieldConfig[] };
+      if (Array.isArray(value) && repeaterField.fields) {
+        return processNestedValue(value, repeaterField.fields);
       }
       return value;
     }
@@ -397,7 +397,7 @@ export function transformForStorage(
  * Transform entry data after reading from database.
  *
  * Performs the following transformations:
- * - Parses JSON strings back to objects for array/group/blocks/json fields
+ * - Parses JSON strings back to objects for repeater/group/blocks/json fields
  * - Handles already-parsed data gracefully
  *
  * Note: Relationship expansion is handled by CollectionRelationshipService,

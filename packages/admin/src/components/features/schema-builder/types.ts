@@ -188,9 +188,9 @@ export interface BuilderFieldValidation {
   min?: number;
   /** Maximum value (number fields) */
   max?: number;
-  /** Minimum rows/items (array/hasMany fields) */
+  /** Minimum rows/items (repeater/hasMany fields) */
   minRows?: number;
-  /** Maximum rows/items (array/hasMany fields) */
+  /** Maximum rows/items (repeater/hasMany fields) */
   maxRows?: number;
   /** Minimum chips (chips fields) */
   minChips?: number;

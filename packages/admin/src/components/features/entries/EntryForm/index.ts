@@ -73,7 +73,7 @@ export {
 // Show JSON dialog
 export { ShowJSONDialog, type ShowJSONDialogProps } from "./ShowJSONDialog";
 
-// Entry context (for virtual fields like JoinField)
+// Entry context (provides entryId and collectionSlug to nested field components)
 export {
   EntryFormContextProvider,
   useEntryFormContext,

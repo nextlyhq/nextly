@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Array Input Component
+ * Repeater Input Component
  *
- * A repeater field component for managing arrays of structured data.
+ * A repeater field component for managing lists of structured data.
  * Supports add, remove, and drag-and-drop reordering of items.
  *
  * @module components/entries/fields/structured/RepeaterInput
@@ -57,12 +57,12 @@ export interface RepeaterInputProps<
 > {
   /**
    * Field path for React Hook Form registration.
-   * Must be a valid array field path.
+   * Must be a valid repeater field path.
    */
   name: FieldArrayPath<TFieldValues>;
 
   /**
-   * Array field configuration from collection schema.
+   * Repeater field configuration from collection schema.
    */
   field: RepeaterFieldConfig;
 
@@ -114,7 +114,7 @@ export interface RepeaterInputProps<
 // ============================================================
 
 /**
- * Creates default values for a new array row based on field definitions.
+ * Creates default values for a new repeater row based on field definitions.
  *
  * @param fields - Sub-field configurations
  * @returns Object with default values for each field
@@ -177,7 +177,7 @@ function createDefaultRowValues(
 // ============================================================
 
 /**
- * RepeaterInput provides a repeater field for managing arrays of structured data.
+ * RepeaterInput provides a repeater field for managing lists of structured data.
  *
  * Features:
  * - Add/remove rows with min/max constraints

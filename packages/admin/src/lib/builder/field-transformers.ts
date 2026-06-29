@@ -58,7 +58,7 @@ export function findFieldById(
 }
 
 /**
- * Find which nested container (array or group) a given field lives in.
+ * Find which nested container (repeater or group) a given field lives in.
  * Returns { containerId, containerType } if found, null otherwise.
  */
 export function findParentContainerId(
@@ -121,7 +121,7 @@ export function addFieldToBlockType(
 }
 
 /**
- * Add a field to an Array (repeater) field's nested fields.
+ * Add a field to a Repeater field's nested fields.
  */
 export function addFieldToArray(
   fields: BuilderField[],
@@ -506,16 +506,16 @@ export function convertToBuilderField(
     );
   }
 
-  // Blocks
-  if (field.type === "blocks" && field.blocks && field.blocks.length > 0) {
-    builderField.blocks = field.blocks.map(block => ({
-      slug: block.slug,
-      label: block.labels?.singular,
-      fields: block.fields
-        ? block.fields.map((f, i) => convertToBuilderField(f, i))
-        : [],
-    }));
-  }
+  // // Blocks (legacy field type — no longer in FieldPrimitiveType but may exist in stored data)
+  // if ((field.type as string) === "blocks" && field.blocks && field.blocks.length > 0) {
+  //   builderField.blocks = field.blocks.map(block => ({
+  //     slug: block.slug,
+  //     label: block.labels?.singular,
+  //     fields: block.fields
+  //       ? block.fields.map((f, i) => convertToBuilderField(f, i))
+  //       : [],
+  //   }));
+  // }
 
   // Admin options
   if (field.admin) {
@@ -526,15 +526,8 @@ export function convertToBuilderField(
       hidden: field.admin.hidden,
       description: field.admin.description,
       placeholder: field.admin.placeholder,
-      // Cast: FieldDefinitionAdmin.condition's operator is typed as
-      // string (broad) for storage flexibility; FieldCondition narrows
-      // operator to the ConditionOperator union. The runtime evaluator
-      // handles unknown operators (fail-open) so the cast is safe.
       condition: field.admin.condition as FieldCondition | undefined,
       hideGutter: field.admin.hideGutter,
-      // PR H feedback 2.2: upload field's allowCreate moved to
-      // admin.allowCreate (matches framework's UploadFieldAdminOptions
-      // and the runtime UploadInput's read path).
       allowCreate: field.admin.allowCreate,
     };
   }

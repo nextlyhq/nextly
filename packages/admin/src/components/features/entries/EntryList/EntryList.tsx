@@ -144,7 +144,6 @@ function toCollectionForColumns(
     "group",
     "relationship",
     "repeater",
-    "array",
     "blocks",
     "component",
   ];

@@ -13,10 +13,7 @@ export enum FieldType {
   BOOLEAN = "BOOLEAN",
   RADIO = "RADIO",
   RELATION = "RELATION",
-  USER = "USER",
   DATE_PICKER = "DATE_PICKER",
-  TIME_PICKER = "TIME_PICKER",
-  ARRAY = "ARRAY",
   REPEATER = "REPEATER",
 }
 
