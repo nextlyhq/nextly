@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "@nextly/errors";
 import { ServiceContainer } from "@nextly/services/index";
 
 import type { SeederResult } from "./permissions";
@@ -12,30 +13,37 @@ type AdapterWithDrizzle = {
   dialect: string;
 };
 
-// Default super admin credentials
-const DEFAULT_SUPER_ADMIN = {
-  email: "admin@example.com",
-  password: "Admin@123456",
-  name: "Super Admin",
-} as const;
-
-// Seed a super admin user with a role that has all permissions
-
+// Seed a super admin user with a role that has all permissions.
+// No fallback credentials are shipped: the caller MUST supply an email and
+// password. Every real caller already does (the /admin/setup wizard via
+// deps-bridge, and the playground dev seed). These two parameters used to
+// fall back to hardcoded values; requiring them instead means weak,
+// well-known credentials can never be used by accident.
 export async function seedSuperAdmin(
   adapter: DrizzleAdapter | AdapterWithDrizzle,
-  options?: {
-    email?: string;
-    password?: string;
+  options: {
+    email: string;
+    password: string;
     name?: string;
     silent?: boolean;
   }
 ): Promise<SeederResult> {
-  const {
-    email = DEFAULT_SUPER_ADMIN.email,
-    password = DEFAULT_SUPER_ADMIN.password,
-    name = DEFAULT_SUPER_ADMIN.name,
-    silent = false,
-  } = options || {};
+  // `name` keeps a harmless display default; credentials never do.
+  const { email, password, name = "Super Admin", silent = false } = options;
+
+  // Fail closed: require real credentials rather than falling back to a
+  // hardcoded default that would be a security hole if it ever shipped.
+  if (!email || !password) {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      statusCode: 400,
+      publicMessage: "Cannot create the super admin account.",
+      logMessage:
+        "seedSuperAdmin() requires both `email` and `password`. There are " +
+        "no default credentials. Pass them explicitly, or create the first " +
+        "admin through the /admin/setup wizard.",
+    });
+  }
 
   const log = silent ? () => {} : console.log;
   const errorLog = silent ? () => {} : console.error;

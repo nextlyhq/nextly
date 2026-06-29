@@ -81,7 +81,7 @@ A few things to note:
 - Setup is a one-shot. Once any user exists, `POST /api/auth/setup` returns `403 SETUP_COMPLETE`.
 - Passwords are validated for strength (length, character classes) before hashing -- see `validatePasswordStrength` for the exact rules.
 - `Super Admin` is a system role that bypasses every permission check. Hand it out sparingly.
-- For programmatic / test seeding, `seedSuperAdmin()` exists with overridable defaults, but the recommended path is the setup wizard. Defaults like `admin@example.com` / `Admin@123456` exist in `seedSuperAdmin()` for tests; never use them in production.
+- For programmatic / test seeding, `seedSuperAdmin(adapter, { email, password, name? })` exists, but the recommended path is the setup wizard. It ships **no** default credentials -- `email` and `password` are required, and it throws a `VALIDATION_ERROR` if either is missing, so a known-weak default admin can never be created by accident. Pass throwaway values in tests and real, secret values anywhere else.
 
 ## Roles
 
