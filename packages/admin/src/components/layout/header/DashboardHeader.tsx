@@ -8,6 +8,8 @@ import { cn } from "@admin/lib/utils";
 
 import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
 
+import { computeHiddenHeaderButtons } from "./header-visibility";
+
 interface DashboardHeaderProps {
   className?: string;
 }
@@ -16,8 +18,13 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
   const { user } = useDashboardUser();
   const logout = useLogout();
   const branding = useBranding();
-  // Plugin-contributed header-slot components (C9); each self-gates on permission.
-  const headerSlots = (branding?.plugins ?? []).filter(p => p.headerSlot);
+  const hidden = computeHiddenHeaderButtons(branding?.plugins);
+  // Plugin-contributed header-slot components (C9); each self-gates on
+  // permission. Read `header.slot` (current) with `headerSlot` (deprecated)
+  // fallback.
+  const headerSlots = (branding?.plugins ?? [])
+    .map(p => ({ name: p.name, slot: p.header?.slot ?? p.headerSlot }))
+    .filter((p): p is { name: string; slot: string } => Boolean(p.slot));
 
   return (
     <header
@@ -32,44 +39,50 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
       </div>
 
       <div className="flex items-center gap-1">
-        <a
-          href="https://github.com/nextlyhq/nextly"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
-          title="GitHub Repository"
-        >
-          <Github className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
-          <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
-        </a>
-        <a
-          href="https://discord.gg/hJUg9AZMn"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
-          title="Discord Community"
-        >
-          <Discord className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
-        </a>
+        {!hidden.has("github") && (
+          <a
+            href="https://github.com/nextlyhq/nextly"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="relative flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+            title="GitHub Repository"
+          >
+            <Github className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+            <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
+          </a>
+        )}
+        {!hidden.has("discord") && (
+          <a
+            href="https://discord.gg/hJUg9AZMn"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+            title="Discord Community"
+          >
+            <Discord className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+          </a>
+        )}
 
-        <a
-          href="https://nextlyhq.com/docs"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
-          title="Documentation"
-        >
-          <HelpCircle className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
-        </a>
+        {!hidden.has("docs") && (
+          <a
+            href="https://nextlyhq.com/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 hover-subtle-row group"
+            title="Documentation"
+          >
+            <HelpCircle className="h-5 w-5 text-primary/50 group-hover:text-primary transition-colors" />
+          </a>
+        )}
 
         {/* Plugin header-slot components (C9), rendered before the bell. */}
         {headerSlots.map(p => (
-          <PluginSlot key={p.name} path={p.headerSlot} />
+          <PluginSlot key={p.name} path={p.slot} />
         ))}
 
         {/* F10 PR 5: bell renders only for super-admins (component
             self-gates via useCurrentUserPermissions). */}
-        <NotificationBell />
+        {!hidden.has("notifications") && <NotificationBell />}
         <div className="ml-2">
           <UserProfileDropdown
             user={user}

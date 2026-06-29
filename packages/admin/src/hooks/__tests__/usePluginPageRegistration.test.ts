@@ -67,4 +67,34 @@ describe("usePluginPageRegistration", () => {
     rerender({ plugins: [] });
     expect(matchPluginPage("/admin/plugins/acme-p/x")).toBeUndefined();
   });
+
+  it("feeds header.slot paths into auto-registration (C-toolbar)", () => {
+    renderHook(() =>
+      usePluginPageRegistration([
+        {
+          name: "@nextlyhq/plugin-publish",
+          collections: [],
+          header: { slot: "@nextlyhq/plugin-publish/admin#PublishButton" },
+        },
+      ] satisfies PluginMetadata[])
+    );
+    expect(autoRegister).toHaveBeenCalledWith(
+      expect.arrayContaining(["@nextlyhq/plugin-publish/admin#PublishButton"])
+    );
+  });
+
+  it("falls back to the deprecated headerSlot path", () => {
+    renderHook(() =>
+      usePluginPageRegistration([
+        {
+          name: "@acme/p",
+          collections: [],
+          headerSlot: "@acme/p/admin#Badge",
+        },
+      ] satisfies PluginMetadata[])
+    );
+    expect(autoRegister).toHaveBeenCalledWith(
+      expect.arrayContaining(["@acme/p/admin#Badge"])
+    );
+  });
 });

@@ -61,6 +61,12 @@ export interface PluginMetadata {
   settings?: { component: string };
   /** Admin header-slot component contributed via `contributes.admin.headerSlot` (C9). */
   headerSlot?: string;
+  /** Header customization contributed via `contributes.admin.header` (C-toolbar). */
+  header?: {
+    slot?: string;
+    hideDefaults?: boolean;
+    hide?: Array<"github" | "discord" | "docs" | "notifications">;
+  };
   /** Dashboard widgets contributed via `contributes.admin.widgets` (D22, C9). */
   widgets?: PluginWidgetMeta[];
   /** Custom field types (C7/D16) — `type` → admin editor component path. */
