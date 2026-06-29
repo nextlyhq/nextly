@@ -19,11 +19,15 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { ComponentRegistryService } from "../../domains/components/services/component-registry-service";
+import { ComponentSchemaService } from "../../domains/components/services/component-schema-service";
 import {
   type CollectionMetadata,
   DynamicCollectionRegistryService,
 } from "../../domains/dynamic-collections/services/dynamic-collection-registry-service";
+import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
+import type { FieldConfig } from "../../collections/fields/types";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { Logger } from "../../services/shared";
 
@@ -93,6 +97,82 @@ export async function seedBuilderCollection(
 
   const registry = new DynamicCollectionRegistryService(adapter, silentLogger);
   await registry.registerCollection(metadata);
+
+  return { slug, tableName };
+}
+
+/**
+ * Create the `single_<slug>` table + `dynamic_singles` row for a UI single.
+ */
+export async function seedBuilderSingle(
+  adapter: DrizzleAdapter,
+  opts: SeedBuilderCollectionOptions
+): Promise<{ slug: string; tableName: string }> {
+  const slug = opts.slug.toLowerCase();
+  const tableName = `single_${slug}`;
+
+  const userFields = opts.fields
+    .map(f => ({ ...f, name: f.name.toLowerCase() }))
+    .filter(f => !RESERVED.has(f.name))
+    .map(f => ({ source: "ui", ...f })) as unknown as FieldDefinition[];
+
+  const schemaService = new DynamicCollectionSchemaService();
+  const migrationSQL = schemaService.generateMigrationSQL(
+    tableName,
+    userFields,
+    {
+      isSingle: true,
+      hasStatus: opts.status === true,
+    }
+  );
+  await executeStatements(adapter, migrationSQL);
+
+  const registry = new SingleRegistryService(adapter, silentLogger);
+  await registry.registerSingle({
+    slug,
+    label: slug,
+    tableName,
+    fields: userFields as unknown as FieldConfig[],
+    source: "ui",
+    status: opts.status === true,
+    schemaHash: `seed_${slug}`,
+  });
+
+  return { slug, tableName };
+}
+
+/**
+ * Create the `comp_<slug>` table + `dynamic_components` row for a UI component.
+ */
+export async function seedBuilderComponent(
+  adapter: DrizzleAdapter,
+  opts: SeedBuilderCollectionOptions
+): Promise<{ slug: string; tableName: string }> {
+  const slug = opts.slug.toLowerCase();
+  const tableName = `comp_${slug}`;
+  const dialect = adapter.getCapabilities().dialect;
+
+  const userFields = opts.fields
+    .map(f => ({ ...f, name: f.name.toLowerCase() }))
+    .filter(f => !RESERVED.has(f.name))
+    .map(f => ({ source: "ui", ...f })) as unknown as FieldConfig[];
+
+  const schemaService = new ComponentSchemaService(dialect);
+  const migrationSQL = schemaService.generateMigrationSQL(
+    tableName,
+    userFields
+  );
+  await executeStatements(adapter, migrationSQL);
+
+  const registry = new ComponentRegistryService(adapter, silentLogger);
+  await registry.registerComponent({
+    slug,
+    label: slug,
+    tableName,
+    fields: userFields,
+    source: "ui",
+    schemaHash: `seed_${slug}`,
+  });
 
   return { slug, tableName };
 }

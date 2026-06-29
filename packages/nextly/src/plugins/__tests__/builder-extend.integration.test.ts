@@ -18,7 +18,11 @@ import type { Logger } from "../../services/shared";
 import type { PluginDefinition } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
-import { seedBuilderCollection } from "./seed-builder-entity";
+import {
+  seedBuilderCollection,
+  seedBuilderComponent,
+  seedBuilderSingle,
+} from "./seed-builder-entity";
 
 const silentLogger: Logger = {
   debug() {},
@@ -60,15 +64,28 @@ const relPlugin = (target: string): PluginDefinition => ({
   },
 });
 
-/** Fresh in-memory SQLite adapter with the system tables already created. */
-async function seededAdapter(): Promise<
+/** Bare in-memory SQLite adapter (no system tables yet). */
+async function freshAdapter(): Promise<
   Awaited<ReturnType<typeof createAdapter>>
 > {
   process.env.DB_DIALECT = "sqlite";
-  const adapter = await createAdapter({
+  return createAdapter({
     type: "sqlite",
     memory: true,
   } as Parameters<typeof createAdapter>[0]);
+}
+
+/**
+ * Fresh in-memory SQLite adapter with the system tables already created via
+ * `ensureFirstRunSetup`. Lets a single-boot test seed a UI **collection**
+ * before boot (the collection registry inserts via direct Drizzle refs, so it
+ * needs no table resolver). Singles/components seed two-phase instead — their
+ * registry services insert through the resolver, which only a boot sets up.
+ */
+async function seededAdapter(): Promise<
+  Awaited<ReturnType<typeof createAdapter>>
+> {
+  const adapter = await freshAdapter();
   await ensureFirstRunSetup({ adapter, logger: silentLogger });
   return adapter;
 }
@@ -84,17 +101,31 @@ async function columnsOf(
   return rows.map(r => r.name);
 }
 
+type StoredField = {
+  name: string;
+  source?: string;
+  owner?: string;
+  locked?: boolean;
+};
+
+/** Parsed `fields` JSON for a row in one of the dynamic_* registry tables. */
+async function registryFieldsIn(
+  adapter: Awaited<ReturnType<typeof createAdapter>>,
+  table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+  slug: string
+): Promise<StoredField[]> {
+  const rows = await adapter.executeQuery<{ fields: string }>(
+    `SELECT fields FROM ${table} WHERE slug='${slug}'`
+  );
+  return JSON.parse(rows[0].fields);
+}
+
 /** Parsed `fields` JSON for a Builder collection row. */
 async function registryFields(
   adapter: Awaited<ReturnType<typeof createAdapter>>,
   slug: string
-): Promise<
-  Array<{ name: string; source?: string; owner?: string; locked?: boolean }>
-> {
-  const rows = await adapter.executeQuery<{ fields: string }>(
-    `SELECT fields FROM dynamic_collections WHERE slug='${slug}'`
-  );
-  return JSON.parse(rows[0].fields);
+): Promise<StoredField[]> {
+  return registryFieldsIn(adapter, "dynamic_collections", slug);
 }
 
 let handle: TestNextly | undefined;
@@ -152,6 +183,63 @@ describe("plugin extend → UI-Builder collection (dev-push, P8)", () => {
     expect(cols.filter(c => c === "meta_title")).toHaveLength(1);
     const fields = await registryFields(adapter, "articles");
     expect(fields.filter(f => f.name === "meta_title")).toHaveLength(1);
+  });
+});
+
+describe("plugin extend → UI-Builder single + component parity (P8)", () => {
+  // Two-phase: boot once (no plugins) so the table resolver is set, seed the
+  // UI single/component through its registry service, reset DI without dropping
+  // the in-memory DB, then boot with the plugin so reconcile materialises.
+  it("materialises the plugin field onto a UI-Builder single", async () => {
+    const adapter = await freshAdapter();
+    handle = await createTestNextly({ adapter });
+    await seedBuilderSingle(adapter, {
+      slug: "settings",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+    });
+    clearServices();
+
+    handle = await createTestNextly({
+      adapter,
+      plugins: [seoPlugin(["settings"])],
+    });
+
+    expect(await columnsOf(adapter, "single_settings")).toContain("meta_title");
+    const fields = await registryFieldsIn(
+      adapter,
+      "dynamic_singles",
+      "settings"
+    );
+    expect(fields.find(f => f.name === "meta_title")).toMatchObject({
+      source: "plugin",
+      locked: true,
+    });
+  });
+
+  it("materialises the plugin field onto a UI-Builder component", async () => {
+    const adapter = await freshAdapter();
+    handle = await createTestNextly({ adapter });
+    await seedBuilderComponent(adapter, {
+      slug: "hero",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+    });
+    clearServices();
+
+    handle = await createTestNextly({
+      adapter,
+      plugins: [seoPlugin(["hero"])],
+    });
+
+    expect(await columnsOf(adapter, "comp_hero")).toContain("meta_title");
+    const fields = await registryFieldsIn(
+      adapter,
+      "dynamic_components",
+      "hero"
+    );
+    expect(fields.find(f => f.name === "meta_title")).toMatchObject({
+      source: "plugin",
+      locked: true,
+    });
   });
 });
 

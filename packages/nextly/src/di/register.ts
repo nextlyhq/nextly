@@ -123,7 +123,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import { loadBuilderEntities, loadDynamicTables } from "./load-dynamic-tables";
+import {
+  type LoadedBuilderEntity,
+  loadBuilderEntities,
+  loadDynamicTables,
+} from "./load-dynamic-tables";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -474,67 +478,145 @@ export async function registerServices(
       handleUnresolvedExtends(unresolved, transformedConfig, resolvedLogger);
     }
 
-    // Only touch the DB when a collection's merged field set actually differs
+    // Only touch the DB for entities whose merged field set actually differs
     // from what's persisted — keeps an unchanged/plugin-free boot write-free and
     // skips the apply-helper imports entirely.
-    const fieldsChanged = (col: { slug: string; fields?: FieldConfig[] }) => {
-      const before = builderEntities.collections.find(c => c.slug === col.slug);
-      return before !== undefined && !dequal(before.fields, col.fields ?? []);
-    };
+    const dialect = adapter.getCapabilities().dialect;
+    const changedOf = (
+      reconciled: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
+      loaded: LoadedBuilderEntity[]
+    ) =>
+      reconciled.filter(e => {
+        const before = loaded.find(c => c.slug === e.slug);
+        return before !== undefined && !dequal(before.fields, e.fields ?? []);
+      });
 
-    if (entities.collections.some(fieldsChanged)) {
-      const { DynamicCollectionRegistryService } = await import(
-        "../domains/dynamic-collections/services/dynamic-collection-registry-service"
-      );
+    const collChanged = changedOf(
+      entities.collections,
+      builderEntities.collections
+    );
+    const singleChanged = changedOf(entities.singles, builderEntities.singles);
+    const compChanged = changedOf(
+      entities.components,
+      builderEntities.components
+    );
+
+    if (collChanged.length + singleChanged.length + compChanged.length > 0) {
       const { addMissingColumnsForFields } = await import(
         "../domains/schema/utils/missing-columns"
       );
-      const dialect = adapter.getCapabilities().dialect;
-      const registryService = new DynamicCollectionRegistryService(
-        adapter,
-        resolvedLogger
+      const { generateRuntimeSchema } = await import(
+        "../domains/schema/services/runtime-schema-generator"
       );
 
-      for (const col of entities.collections) {
-        const before = builderEntities.collections.find(
-          c => c.slug === col.slug
-        );
-        if (!before || !fieldsChanged(col)) continue;
-        try {
-          // Materialize FIRST; only persist the registry row if the DDL lands so
-          // a failure self-heals on the next boot (the diff reappears). Add-only:
-          // never drops, so a removed plugin's column orphans (data-safe).
-          await addMissingColumnsForFields(
-            adapter,
-            resolvedLogger,
-            before.tableName,
-            col.fields ?? [],
-            { timestamps: true }
-          );
-          await registryService.updateCollectionMetadata(col.slug, {
-            fields: col.fields as unknown as FieldDefinition[],
-          });
-          // Re-register the runtime Drizzle table with the merged fields so reads
-          // in THIS boot see the new column (loadDynamicTables ran pre-reconcile).
-          if (schemaRegistry) {
-            const { generateRuntimeSchema } = await import(
-              "../domains/schema/services/runtime-schema-generator"
-            );
-            const { table } = generateRuntimeSchema(
+      // Materialize FIRST (add-only, never drops → removed-plugin columns
+      // orphan, data-safe), then persist the reconciled fields on the registry
+      // row, then re-register the runtime table so reads in THIS boot see the
+      // new column. A per-entity failure is logged + skipped (retried next boot).
+      const materializeKind = async (
+        kind: string,
+        changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
+        loaded: LoadedBuilderEntity[],
+        persist: (slug: string, fields: FieldConfig[]) => Promise<unknown>,
+        makeRuntime: (
+          tableName: string,
+          fields: FieldConfig[],
+          status: boolean
+        ) => unknown
+      ): Promise<void> => {
+        for (const ent of changed) {
+          const before = loaded.find(c => c.slug === ent.slug);
+          if (!before) continue;
+          const fields = ent.fields ?? [];
+          try {
+            await addMissingColumnsForFields(
+              adapter,
+              resolvedLogger,
               before.tableName,
-              col.fields as unknown as FieldDefinition[],
-              dialect,
-              { status: before.status === true }
+              fields,
+              { timestamps: true }
             );
-            schemaRegistry.registerDynamicSchema(before.tableName, table);
+            await persist(ent.slug, fields);
+            if (schemaRegistry) {
+              schemaRegistry.registerDynamicSchema(
+                before.tableName,
+                makeRuntime(before.tableName, fields, before.status)
+              );
+            }
+          } catch (err) {
+            resolvedLogger.warn?.(
+              `[plugins] Failed to materialize plugin fields onto Builder ${kind} "${ent.slug}": ${
+                err instanceof Error ? err.message : String(err)
+              }. Skipping; will retry next boot.`
+            );
           }
-        } catch (err) {
-          resolvedLogger.warn?.(
-            `[plugins] Failed to materialize plugin fields onto Builder collection "${col.slug}": ${
-              err instanceof Error ? err.message : String(err)
-            }. Skipping; will retry next boot.`
-          );
         }
+      };
+
+      // Collections + singles share the standard runtime-schema generator.
+      const runtimeTable = (
+        tableName: string,
+        fields: FieldConfig[],
+        status: boolean
+      ) =>
+        generateRuntimeSchema(
+          tableName,
+          fields as unknown as FieldDefinition[],
+          dialect,
+          { status }
+        ).table;
+
+      if (collChanged.length > 0) {
+        const { DynamicCollectionRegistryService } = await import(
+          "../domains/dynamic-collections/services/dynamic-collection-registry-service"
+        );
+        const reg = new DynamicCollectionRegistryService(
+          adapter,
+          resolvedLogger
+        );
+        await materializeKind(
+          "collection",
+          collChanged,
+          builderEntities.collections,
+          (slug, fields) =>
+            reg.updateCollectionMetadata(slug, {
+              fields: fields as unknown as FieldDefinition[],
+            }),
+          runtimeTable
+        );
+      }
+
+      if (singleChanged.length > 0) {
+        const { SingleRegistryService } = await import(
+          "../domains/singles/services/single-registry-service"
+        );
+        const reg = new SingleRegistryService(adapter, resolvedLogger);
+        await materializeKind(
+          "single",
+          singleChanged,
+          builderEntities.singles,
+          (slug, fields) => reg.updateSingle(slug, { fields: fields }),
+          runtimeTable
+        );
+      }
+
+      if (compChanged.length > 0) {
+        const { ComponentRegistryService } = await import(
+          "../domains/components/services/component-registry-service"
+        );
+        const { ComponentSchemaService } = await import(
+          "../domains/components/services/component-schema-service"
+        );
+        const reg = new ComponentRegistryService(adapter, resolvedLogger);
+        const compSchema = new ComponentSchemaService(dialect);
+        await materializeKind(
+          "component",
+          compChanged,
+          builderEntities.components,
+          (slug, fields) => reg.updateComponent(slug, { fields: fields }),
+          (tableName, fields) =>
+            compSchema.generateRuntimeSchema(tableName, fields)
+        );
       }
     }
 
