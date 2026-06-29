@@ -57,11 +57,7 @@ import { z } from "zod";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
-import {
-  getCachedNextly,
-  getNextly,
-  type GetNextlyOptions,
-} from "../init";
+import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
 import type {
   MediaService,
@@ -70,6 +66,7 @@ import type {
 import type { RequestContext } from "../services/shared";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
+import { executeBulkDelete } from "./media-bulk";
 import { readJsonBody } from "./read-json-body";
 import {
   respondAction,
@@ -151,6 +148,7 @@ interface ParsedMediaRoute {
     | "update-media"
     | "delete-media"
     | "move-media"
+    | "bulk-delete-media"
     | "list-folders"
     | "create-folder"
     | "get-folder"
@@ -172,6 +170,13 @@ function parseMediaRoute(
   if (segments.length === 0) {
     if (method === "GET") return { type: "list-media" };
     if (method === "POST") return { type: "upload-media" };
+    return { type: "not-found" };
+  }
+
+  // "bulk" must be matched before the generic segments.length === 1 block
+  // so it is never mistaken for a media ID.
+  if (segments[0] === "bulk" && segments.length === 1) {
+    if (method === "DELETE") return { type: "bulk-delete-media" };
     return { type: "not-found" };
   }
 
@@ -253,9 +258,7 @@ async function handleListMedia(request: Request): Promise<Response> {
   const folderIdParam = searchParams.get("folderId");
   const options: ListMediaOptions = {
     page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-    limit: searchParams.get("limit")
-      ? Number(searchParams.get("limit"))
-      : 24,
+    limit: searchParams.get("limit") ? Number(searchParams.get("limit")) : 24,
     search: searchParams.get("search") || undefined,
     type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
     folderId: folderIdParam === "root" ? "root" : folderIdParam || undefined,
@@ -401,7 +404,15 @@ async function handleMoveMedia(
 
   // Service returns void; echo the target ids so the admin can update the
   // moved record locally without re-fetching the affected folders.
-  return respondAction("Media moved.", { id: mediaId, folderId: folderId ?? null });
+  return respondAction("Media moved.", {
+    id: mediaId,
+    folderId: folderId ?? null,
+  });
+}
+
+async function handleBulkDeleteMedia(request: Request): Promise<Response> {
+  const mediaService = await getMediaService();
+  return executeBulkDelete(request, mediaService, createRequestContext());
 }
 
 // ============================================================
@@ -631,6 +642,9 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "delete-folder":
             response = await handleDeleteFolder(request, route.folderId!);
+            break;
+          case "bulk-delete-media":
+            response = await handleBulkDeleteMedia(request);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "DELETE");
