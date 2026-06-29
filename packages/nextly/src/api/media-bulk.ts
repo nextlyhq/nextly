@@ -45,10 +45,6 @@ import { withErrorHandler } from "./with-error-handler";
 
 function getMediaService(): MediaService {
   if (!isServicesRegistered()) {
-    // Surface initialization failures via the canonical 503 factory so the
-    // public response sticks to the spec §13.8-canonical sentence emitted by
-    // `serviceUnavailable()`. The setup hint goes to `logContext` so operators
-    // see it without leaking into the wire.
     throw NextlyError.serviceUnavailable({
       logMessage: "Media bulk handler called before registerServices()",
       logContext: {
@@ -74,6 +70,50 @@ function createAuthenticatedContext(userId: string | null): RequestContext {
       permissions: [],
     },
   };
+}
+
+/**
+ * Shared bulk-delete execution logic.
+ *
+ * Validates the `mediaIds` payload, delegates to `mediaService.bulkDelete`,
+ * and returns the canonical `respondBulk` envelope. Extracted here so both
+ * the standalone `DELETE` export (sync `getMediaService`) and the catch-all
+ * `handleBulkDeleteMedia` in `media-handlers.ts` (async `getMediaService`
+ * that bootstraps storage plugins) share one implementation — preventing
+ * silent drift between validation rules, message format, and error shape.
+ *
+ * @param request - The incoming HTTP request containing `{ mediaIds: string[] }`
+ * @param mediaService - Already-resolved MediaService instance
+ * @param context - RequestContext for the operation
+ */
+export async function executeBulkDelete(
+  request: Request,
+  mediaService: MediaService,
+  context: RequestContext
+): Promise<Response> {
+  const body = await readJsonBody<Record<string, unknown>>(request);
+  const mediaIds = body.mediaIds;
+
+  if (!Array.isArray(mediaIds) || mediaIds.length === 0) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "mediaIds",
+          code: "required_array",
+          message: "mediaIds must be a non-empty array.",
+        },
+      ],
+    });
+  }
+
+  const result = await mediaService.bulkDelete(mediaIds as string[], context);
+
+  const message =
+    result.failures.length === 0
+      ? `Deleted ${result.successCount} ${result.successCount === 1 ? "file" : "files"}.`
+      : `Deleted ${result.successCount} of ${result.total} files.`;
+
+  return respondBulk(message, result.successes, result.failures);
 }
 
 /**
@@ -210,7 +250,9 @@ export const POST = withErrorHandler(
     // doesn't need it, but we use it below to remap service failures
     // (which are 0-indexed in validatedFiles) back to the caller's
     // original payload indices.
-    const serviceInputs = validatedFiles.map(({ originalIndex: _, ...rest }) => rest);
+    const serviceInputs = validatedFiles.map(
+      ({ originalIndex: _, ...rest }) => rest
+    );
     const result = await mediaService.bulkUpload(serviceInputs, context);
 
     // Remap service-side failure indices back to the caller's original
@@ -230,9 +272,7 @@ export const POST = withErrorHandler(
     const successCount = result.successCount;
     const message =
       failures.length === 0
-        ? `Uploaded ${successCount} ${
-            successCount === 1 ? "file" : "files"
-          }.`
+        ? `Uploaded ${successCount} ${successCount === 1 ? "file" : "files"}.`
         : `Uploaded ${successCount} of ${totalRequested} files.`;
 
     return respondBulkUpload(message, result.successes, failures);
@@ -255,31 +295,6 @@ export const POST = withErrorHandler(
 export const DELETE = withErrorHandler(
   async (request: Request): Promise<Response> => {
     const mediaService = getMediaService();
-    const body = await readJsonBody<Record<string, unknown>>(request);
-    const mediaIds = body.mediaIds;
-
-    if (!Array.isArray(mediaIds) || mediaIds.length === 0) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "mediaIds",
-            code: "required_array",
-            message: "mediaIds must be a non-empty array.",
-          },
-        ],
-      });
-    }
-
-    const context: RequestContext = {};
-    const result = await mediaService.bulkDelete(mediaIds as string[], context);
-
-    const message =
-      result.failures.length === 0
-        ? `Deleted ${result.successCount} ${
-            result.successCount === 1 ? "file" : "files"
-          }.`
-        : `Deleted ${result.successCount} of ${result.total} files.`;
-
-    return respondBulk(message, result.successes, result.failures);
+    return executeBulkDelete(request, mediaService, {});
   }
 );
