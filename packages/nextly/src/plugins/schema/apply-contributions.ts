@@ -203,7 +203,7 @@ function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
  * (`onUnknown: "collect"`) — the latter holds a target that may be a Builder
  * entity until Builder slugs are known (P8/R2).
  */
-function applyExtendClauses<
+export function applyExtendClauses<
   C extends Fielded,
   S extends Fielded,
   P extends Fielded,
