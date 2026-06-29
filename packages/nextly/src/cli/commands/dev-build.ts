@@ -88,15 +88,16 @@ export async function syncCollections(
     serviceLogger
   );
 
-  // Determine what to generate (opt-in: only generate when explicitly requested)
+  // Determine what to generate (opt-in: only generate when explicitly
+  // requested). Drizzle `.ts` schema generation was removed (orphan output);
+  // the `--schemas` flag now only drives Zod validation schema generation.
   const generateTypes = options.types === true;
-  const generateSchemas = options.schemas === true;
+  const generateZodSchemas = options.schemas === true;
 
   let result: CollectionSyncResultWithValidation;
   try {
     result = await syncService.syncWithValidation(config, {
-      generateSchemas,
-      generateZodSchemas: generateSchemas,
+      generateZodSchemas,
       generateTypes,
       dialect: adapter.getCapabilities().dialect,
       cwd: options.cwd ?? process.cwd(),
@@ -599,9 +600,7 @@ export async function performPermissionSeeding(
       errorMsg.includes("relation") ||
       errorMsg.includes("doesn't exist")
     ) {
-      logger.debug(
-        "Skipping permission seeding (tables may not exist yet)"
-      );
+      logger.debug("Skipping permission seeding (tables may not exist yet)");
     } else {
       logger.warn(`Permission seeding failed: ${errorMsg}`);
     }

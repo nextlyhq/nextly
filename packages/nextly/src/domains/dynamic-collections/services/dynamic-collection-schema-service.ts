@@ -1,11 +1,15 @@
 /**
  * DynamicCollectionSchemaService
  *
- * Handles all code and SQL generation for dynamic collections:
+ * Handles SQL generation for dynamic collections:
  * - SQL migration generation (CREATE TABLE, ALTER TABLE, DROP TABLE)
- * - TypeScript/Drizzle schema code generation
  * - Junction table generation for many-to-many relationships
- * - Type mapping between field types and SQL/Drizzle types
+ * - Type mapping between field types and SQL types
+ *
+ * Drizzle `.ts` schema-code generation was removed: nothing imports the
+ * generated files (the runtime builds its Drizzle table from
+ * dynamic_collections metadata via generateRuntimeSchema), so they were
+ * orphan output. Singles and components never generated them.
  *
  * Supports multiple database dialects: postgresql, mysql, sqlite
  *
@@ -13,7 +17,6 @@
  * ```typescript
  * const schemaService = new DynamicCollectionSchemaService(validationService, 'sqlite');
  * const sql = schemaService.generateMigrationSQL('dc_posts', fields);
- * const code = schemaService.generateSchemaCode('dc_posts', 'posts', fields);
  * ```
  */
 
@@ -757,258 +760,6 @@ ${allColumnDefs.join(",\n")}
   }
 
   /**
-   * Generate TypeScript/Drizzle schema code for a collection. Pass
-   * `hasStatus: true` for Draft/Published collections so the generated
-   * file includes the `status` column — without it, `drizzle-kit
-   * pushSchema` later sees the live `status` column as extra and drops it.
-   */
-  generateSchemaCode(
-    tableName: string,
-    collectionName: string,
-    fields: FieldDefinition[],
-    options?: { hasStatus?: boolean }
-  ): string {
-    // Determine dialect-specific imports and table function
-    const dialectConfig = this.getDialectConfig();
-    // Check for any field type that uses jsonb in PostgreSQL
-    const jsonbFieldTypes = [
-      "json",
-      "repeater",
-      "group",
-      "blocks",
-      "point",
-      "group",
-      "blocks",
-      "point",
-      "chips",
-    ];
-    const hasJsonField = fields.some(f => jsonbFieldTypes.includes(f.type));
-    const hasRelation = fields.some(f => f.type === "relationship");
-
-    // Build base imports based on dialect
-    const baseImports = ["text", "index", "uniqueIndex"];
-    if (this.dialect !== "sqlite") {
-      baseImports.push("varchar", "decimal", "boolean", "timestamp", "integer");
-    } else {
-      // SQLite uses integer for boolean and timestamp
-      baseImports.push("integer", "real");
-    }
-    if (hasJsonField) {
-      if (this.dialect === "postgresql") {
-        baseImports.push("jsonb");
-      }
-      // SQLite and MySQL use text/json which is already covered
-    }
-
-    let imports = `import { ${dialectConfig.tableFunction}, ${baseImports.join(", ")} } from '${dialectConfig.importPath}';`;
-
-    if (hasRelation) {
-      imports += `\nimport { relations } from 'drizzle-orm';`;
-    }
-
-    const columns = fields
-      .filter(
-        f =>
-          !(
-            f.type === "relationship" &&
-            f.options?.relationType === "manyToMany"
-          )
-      )
-      .map(f => {
-        const drizzleType = this.mapFieldTypeToDrizzleDialectAware(f);
-        const modifiers = [];
-        if (f.required) modifiers.push(".notNull()");
-
-        // Auto-add unique for one-to-one relationships
-        if (
-          f.unique ||
-          (f.type === "relationship" && f.options?.relationType === "oneToOne")
-        ) {
-          modifiers.push(".unique()");
-        }
-
-        const defaultValue = f.default;
-        if (defaultValue !== undefined && defaultValue !== null) {
-          if (f.type === "json") {
-            modifiers.push(`.default(${JSON.stringify(defaultValue)})`);
-          } else if (typeof defaultValue === "string") {
-            modifiers.push(`.default('${defaultValue}')`);
-          } else {
-            // eslint-disable-next-line @typescript-eslint/no-base-to-string
-            modifiers.push(`.default(${String(defaultValue)})`);
-          }
-        }
-
-        // Add references for foreign keys
-        if (
-          f.type === "relationship" &&
-          f.options?.target &&
-          f.options?.relationType !== "manyToMany"
-        ) {
-          const targetTable = `dc_${f.options.target}`;
-          const onDelete = f.options.onDelete || "set null";
-          const onUpdate = f.options.onUpdate || "no action";
-          modifiers.push(
-            `.references(() => ${targetTable}.id, { onDelete: "${onDelete}", onUpdate: "${onUpdate}" })`
-          );
-        }
-
-        return `  ${f.name}: ${drizzleType}${modifiers.join("")},`;
-      })
-      .join("\n");
-
-    // Generate relation definitions for Drizzle ORM
-    const relationDefs = this.generateRelationDefinitions(tableName, fields);
-
-    // Generate index definitions (including manual indexes and relations)
-    const fieldIndexes = fields
-      .filter(
-        f =>
-          f.index ||
-          (f.type === "relationship" &&
-            f.options?.relationType !== "manyToMany")
-      )
-      .map(
-        f =>
-          `  ${f.name}Idx: index('idx_${tableName}_${f.name}').on(table.${f.name}),`
-      )
-      .join("\n");
-
-    const allIndexes = fieldIndexes
-      ? `  createdAtIdx: index('idx_${tableName}_created_at').on(table.createdAt),\n${fieldIndexes}`
-      : `  createdAtIdx: index('idx_${tableName}_created_at').on(table.createdAt),`;
-
-    // Generate dialect-specific timestamp columns
-    const timestampColumns = this.generateTimestampColumnsForDialect();
-
-    // Placed between user columns and timestamps to match the CREATE TABLE
-    // SQL column order, so drizzle-kit diffs don't see a fake reorder.
-    const statusColumn = options?.hasStatus
-      ? this.dialect === "sqlite"
-        ? `  status: text('status').notNull().default('draft'),\n`
-        : `  status: varchar('status', { length: 20 }).notNull().default('draft'),\n`
-      : "";
-
-    return `${imports}
-
-/**
- * Dynamic collection: ${collectionName}
- * Generated by nextly
- */
-export const ${tableName} = ${dialectConfig.tableFunction}('${tableName}', {
-  id: text('id').primaryKey().notNull(),
-  title: text('title').notNull(),
-  slug: text('slug').notNull(),
-${columns}
-${statusColumn}${timestampColumns}
-}, (table) => ({
-  slugIdx: uniqueIndex('idx_${tableName}_slug').on(table.slug),
-${allIndexes}
-}));
-${relationDefs}
-export type ${this.toPascalCase(collectionName)} = typeof ${tableName}.$inferSelect;
-export type New${this.toPascalCase(collectionName)} = typeof ${tableName}.$inferInsert;
-`;
-  }
-
-  /**
-   * Get dialect-specific configuration for schema generation
-   */
-  private getDialectConfig(): { tableFunction: string; importPath: string } {
-    switch (this.dialect) {
-      case "mysql":
-        return {
-          tableFunction: "mysqlTable",
-          importPath: "drizzle-orm/mysql-core",
-        };
-      case "sqlite":
-        return {
-          tableFunction: "sqliteTable",
-          importPath: "drizzle-orm/sqlite-core",
-        };
-      case "postgresql":
-      default:
-        return {
-          tableFunction: "pgTable",
-          importPath: "drizzle-orm/pg-core",
-        };
-    }
-  }
-
-  /**
-   * Generate dialect-specific timestamp column definitions
-   */
-  private generateTimestampColumnsForDialect(): string {
-    if (this.dialect === "sqlite") {
-      return `  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()).$onUpdate(() => new Date()),`;
-    }
-
-    // PostgreSQL and MySQL
-    return `  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),`;
-  }
-
-  /**
-   * Map field type to Drizzle ORM column definition (dialect-aware)
-   */
-  private mapFieldTypeToDrizzleDialectAware(field: FieldDefinition): string {
-    if (this.dialect === "sqlite") {
-      // SQLite-specific mapping
-      const sqliteTypeMap: Record<string, (f: FieldDefinition) => string> = {
-        string: f => `text('${f.name}')`,
-        text: f => `text('${f.name}')`,
-        number: f =>
-          f.options?.format === "float"
-            ? `real('${f.name}')`
-            : `integer('${f.name}')`,
-        decimal: f => `real('${f.name}')`,
-        boolean: f => `integer('${f.name}', { mode: 'boolean' })`,
-        date: f => `integer('${f.name}', { mode: 'timestamp' })`,
-        email: f => `text('${f.name}')`,
-        password: f => `text('${f.name}')`,
-        richtext: f => `text('${f.name}')`,
-        json: f => `text('${f.name}', { mode: 'json' })`,
-        chips: f => `text('${f.name}', { mode: 'json' })`,
-        relation: f => `text('${f.name}')`,
-      };
-      const mapper = sqliteTypeMap[field.type];
-      return mapper ? mapper(field) : `text('${field.name}')`;
-    }
-
-    if (this.dialect === "mysql") {
-      // MySQL-specific mapping
-      const mysqlTypeMap: Record<string, (f: FieldDefinition) => string> = {
-        string: f => `varchar('${f.name}', { length: ${f.length || 255} })`,
-        text: f =>
-          f.options?.variant === "short"
-            ? `varchar('${f.name}', { length: ${f.validation?.maxLength || 255} })`
-            : `text('${f.name}')`,
-        number: f =>
-          f.options?.format === "float"
-            ? `decimal('${f.name}', { precision: 10, scale: 2 })`
-            : `int('${f.name}')`,
-        decimal: f => `decimal('${f.name}', { precision: 10, scale: 2 })`,
-        boolean: f => `boolean('${f.name}')`,
-        date: f => `timestamp('${f.name}')`,
-        email: f =>
-          `varchar('${f.name}', { length: ${f.validation?.maxLength || 255} })`,
-        password: f =>
-          `varchar('${f.name}', { length: ${f.validation?.maxLength || 255} })`,
-        richtext: f => `text('${f.name}')`,
-        json: f => `json('${f.name}')`,
-        chips: f => `json('${f.name}')`,
-        relation: f => `varchar('${f.name}', { length: 36 })`,
-      };
-      const mapper = mysqlTypeMap[field.type];
-      return mapper ? mapper(field) : `text('${field.name}')`;
-    }
-
-    // PostgreSQL (default) - use existing mapping
-    return this.mapFieldTypeToDrizzle(field);
-  }
-
-  /**
    * Generate DROP TABLE migration SQL
    */
   generateDropTableMigration(
@@ -1105,63 +856,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     return `${tables[0]}_${tables[1]}_${fieldName}`;
   }
 
-  /**
-   * Generate Drizzle ORM relation definitions
-   */
-  generateRelationDefinitions(
-    tableName: string,
-    fields: FieldDefinition[]
-  ): string {
-    const relationFields = fields.filter(f => f.type === "relationship");
-    if (relationFields.length === 0) {
-      return "";
-    }
-
-    const relationDefs = relationFields
-      .map(f => {
-        const targetTable = `dc_${f.options!.target!}`;
-        const relationType = f.options!.relationType!;
-
-        switch (relationType) {
-          case "oneToOne":
-            return `    ${f.name}: one(${targetTable}, {
-      fields: [${tableName}.${f.name}],
-      references: [${targetTable}.id],
-    }),`;
-
-          case "manyToOne":
-            return `    ${f.name}: one(${targetTable}, {
-      fields: [${tableName}.${f.name}],
-      references: [${targetTable}.id],
-    }),`;
-
-          case "oneToMany":
-            // oneToMany is typically defined on the "one" side, referencing the "many" side
-            // This assumes the target collection has a foreign key back to this collection
-            return `    ${f.name}: many(${targetTable}),`;
-
-          case "manyToMany": {
-            const junctionTableName =
-              f.options?.junctionTable ||
-              this.generateJunctionTableName(tableName, targetTable, f.name);
-            return `    ${f.name}: many(${targetTable}), // Through ${junctionTableName}`;
-          }
-
-          default:
-            return "";
-        }
-      })
-      .filter(Boolean)
-      .join("\n");
-
-    return `
-// Drizzle ORM Relations
-export const ${tableName}Relations = relations(${tableName}, ({ one, many }) => ({
-${relationDefs}
-}));
-`;
-  }
-
   // ==================== TYPE MAPPING METHODS ====================
 
   /**
@@ -1233,36 +927,6 @@ ${relationDefs}
       relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
-  }
-
-  /**
-   * Map field type to Drizzle ORM column definition
-   */
-  mapFieldTypeToDrizzle(field: FieldDefinition): string {
-    const typeMap: Record<string, (f: FieldDefinition) => string> = {
-      string: f => `varchar('${f.name}', { length: ${f.length || 255} })`,
-      text: f =>
-        f.options?.variant === "short"
-          ? `varchar('${f.name}', { length: ${f.validation?.maxLength || 255} })`
-          : `text('${f.name}')`,
-      number: f =>
-        f.options?.format === "float"
-          ? `decimal('${f.name}', { precision: 10, scale: 2 })`
-          : `integer('${f.name}')`,
-      decimal: f => `decimal('${f.name}', { precision: 10, scale: 2 })`,
-      boolean: f => `boolean('${f.name}')`,
-      date: f => `timestamp('${f.name}')`,
-      email: f =>
-        `varchar('${f.name}', { length: ${f.validation?.maxLength || 255} })`,
-      password: f =>
-        `varchar('${f.name}', { length: ${f.validation?.maxLength || 255} })`,
-      richtext: f => `text('${f.name}')`,
-      json: f => `jsonb('${f.name}')`,
-      chips: f => `jsonb('${f.name}')`,
-      relation: f => `text('${f.name}')`, // Foreign key
-    };
-    const mapper = typeMap[field.type];
-    return mapper ? mapper(field) : `text('${field.name}')`;
   }
 
   /**
@@ -1365,16 +1029,6 @@ ${relationDefs}
   }
 
   // ==================== UTILITY METHODS ====================
-
-  /**
-   * Convert snake_case to PascalCase
-   */
-  toPascalCase(str: string): string {
-    return str
-      .charAt(0)
-      .toUpperCase()
-      .concat(str.slice(1).replace(/_([a-z])/g, (_, c) => c.toUpperCase()));
-  }
 
   /**
    * Convert snake_case to camelCase
