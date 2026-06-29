@@ -1,5 +1,12 @@
 # @nextlyhq/adapter-sqlite
 
+## 0.0.2-alpha.28
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.28
+
 ## 0.0.2-alpha.27
 
 ### Patch Changes
