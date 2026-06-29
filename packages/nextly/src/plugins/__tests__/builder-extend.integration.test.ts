@@ -159,6 +159,29 @@ describe("plugin extend → UI-Builder collection (dev-push, P8)", () => {
     expect(fields.find(f => f.name === "body")?.source).toBe("ui");
   });
 
+  it("reads/writes the materialised plugin field via the runtime services (round-trip)", async () => {
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      plugins: [seoPlugin(["articles"])],
+    });
+
+    // The runtime Drizzle table was re-registered with the merged fields, so a
+    // write/read through the direct API round-trips the plugin column.
+    const created = await handle.nextly.create({
+      collection: "articles",
+      data: { title: "T", body: "hello", meta_title: "My Meta" },
+    });
+    const id = (created.item as { id: string }).id;
+    const got = await handle.nextly.findByID({ collection: "articles", id });
+    expect((got as { meta_title?: string } | null)?.meta_title).toBe("My Meta");
+  });
+
   it("is idempotent — a second boot adds no duplicate column or field", async () => {
     const adapter = await seededAdapter();
     await seedBuilderCollection(adapter, {
