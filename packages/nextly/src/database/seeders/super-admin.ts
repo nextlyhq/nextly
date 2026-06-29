@@ -21,7 +21,11 @@ type AdapterWithDrizzle = {
 // well-known credentials can never be used by accident.
 export async function seedSuperAdmin(
   adapter: DrizzleAdapter | AdapterWithDrizzle,
-  options: {
+  // `options` is optional so that omitting it (the old JS `seedSuperAdmin(adapter)`
+  // form) is handled at runtime with a proper VALIDATION_ERROR rather than a raw
+  // TypeError. `email`/`password` stay required inside the object, so any caller
+  // that does pass options is still compile-time forced to supply both.
+  options?: {
     email: string;
     password: string;
     name?: string;
@@ -29,7 +33,16 @@ export async function seedSuperAdmin(
   }
 ): Promise<SeederResult> {
   // `name` keeps a harmless display default; credentials never do.
-  const { email, password, name = "Super Admin", silent = false } = options;
+  // `options || {}` guards the runtime case where a JS caller omits the
+  // argument entirely (the old `seedSuperAdmin(adapter)` form): it routes
+  // through the validation guard below so the caller gets the documented
+  // VALIDATION_ERROR, not a raw "destructure undefined" TypeError.
+  const {
+    email,
+    password,
+    name = "Super Admin",
+    silent = false,
+  } = options || {};
 
   // Fail closed: require real credentials rather than falling back to a
   // hardcoded default that would be a security hole if it ever shipped.
