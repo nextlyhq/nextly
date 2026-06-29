@@ -70,7 +70,10 @@ export async function seedBuilderCollection(
     // Tag as a user field so the reconciler can tell user vs plugin provenance.
     .map(f => ({ source: "ui", ...f })) as unknown as FieldDefinition[];
 
-  const schemaService = new DynamicCollectionSchemaService();
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.getCapabilities().dialect
+  );
   const migrationSQL = schemaService.generateMigrationSQL(
     tableName,
     userFields,
@@ -116,7 +119,10 @@ export async function seedBuilderSingle(
     .filter(f => !RESERVED.has(f.name))
     .map(f => ({ source: "ui", ...f })) as unknown as FieldDefinition[];
 
-  const schemaService = new DynamicCollectionSchemaService();
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.getCapabilities().dialect
+  );
   const migrationSQL = schemaService.generateMigrationSQL(
     tableName,
     userFields,

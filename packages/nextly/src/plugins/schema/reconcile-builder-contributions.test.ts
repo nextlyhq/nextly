@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeferredExtend } from "./apply-contributions";
+import {
+  type DeferredExtend,
+  resolveBuilderExtends,
+} from "./apply-contributions";
 import {
   reconcileBuilderContributions,
   tagPluginFields,
@@ -90,5 +93,51 @@ describe("reconcileBuilderContributions", () => {
       builder()
     );
     expect(r.unresolved).toEqual([{ target: "ghost", owner: "@acme/seo" }]);
+  });
+});
+
+describe("migrate ⇄ dev-push parity (P8)", () => {
+  // The CLI/migrate path (resolveBuilderExtends) and the runtime/dev-push path
+  // (reconcileBuilderContributions) must materialise the SAME tagged field, so a
+  // dev-push DB converges with a migrated DB.
+  const cleanBuilder = () => ({
+    collections: [
+      {
+        slug: "articles",
+        fields: [{ name: "title", type: "text", source: "ui" }],
+      },
+    ],
+    singles: [],
+    components: [],
+  });
+
+  it("tags the merged Builder field identically on both paths", () => {
+    const deferred: DeferredExtend[] = [
+      {
+        target: "articles",
+        fields: [{ name: "meta_title", type: "text" }] as never,
+        owner: "@acme/seo",
+      },
+    ];
+
+    const cliMeta = resolveBuilderExtends(
+      deferred,
+      cleanBuilder()
+    ).collections?.[0].fields?.find(
+      (f: { name?: string }) => f.name === "meta_title"
+    );
+    const rtMeta = reconcileBuilderContributions(
+      deferred,
+      cleanBuilder()
+    ).entities.collections[0].fields?.find(
+      (f: { name?: string }) => f.name === "meta_title"
+    );
+
+    expect(cliMeta).toMatchObject({
+      source: "plugin",
+      owner: "@acme/seo",
+      locked: true,
+    });
+    expect(rtMeta).toEqual(cliMeta); // byte-identical tagging → converged DBs
   });
 });
