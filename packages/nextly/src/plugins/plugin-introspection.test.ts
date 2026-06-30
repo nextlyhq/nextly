@@ -58,7 +58,7 @@ function fbPlugin(overrides: Record<string, unknown> = {}): PluginDefinition {
   } as unknown as PluginDefinition;
 }
 
-describe("collectPluginInfo (D48)", () => {
+describe("collectPluginInfo", () => {
   it("summarizes a plugin's contributions without running it", () => {
     const infos = collectPluginInfo(cfg(), [basePlugin(), fbPlugin()], {
       coreVersion: "1.0.0",
@@ -81,7 +81,7 @@ describe("collectPluginInfo (D48)", () => {
     expect(fb.hasSettings).toBe(true);
   });
 
-  it("reports a disabled plugin: schema listed, behavior counts zeroed (D49)", () => {
+  it("reports a disabled plugin: schema listed, behavior counts zeroed", () => {
     const infos = collectPluginInfo(
       cfg(),
       [basePlugin(), fbPlugin({ enabled: false })],

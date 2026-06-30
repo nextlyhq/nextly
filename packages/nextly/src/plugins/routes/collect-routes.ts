@@ -16,8 +16,8 @@ export interface CollectedRoute {
 
 /**
  * Pure fold of every ENABLED plugin's `contributes.routes` into namespaced,
- * collision-checked routes (D25). Disabled plugins (`enabled: false`) skip
- * behavior — including routes — while their schema is still applied (D49).
+ * collision-checked routes. Disabled plugins (`enabled: false`) skip
+ * behavior — including routes — while their schema is still applied.
  *
  * Throws {@link routeInvalidPathError} for a path without a leading slash and
  * {@link routeCollisionError} when two routes share a `(method, full path)`.

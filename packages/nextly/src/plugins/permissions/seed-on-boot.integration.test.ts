@@ -1,5 +1,5 @@
 /**
- * Custom permissions are seeded at boot via runPostInitTasks (D36).
+ * Custom permissions are seeded at boot via runPostInitTasks.
  *
  * The harness boots a real Nextly on in-memory SQLite but does not auto-create
  * the core RBAC tables; we bootstrap them with `generateSqliteCoreTableStatements`

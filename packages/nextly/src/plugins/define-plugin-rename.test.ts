@@ -10,7 +10,7 @@ const base = () =>
     contributes: { collections: [] },
   });
 
-describe("definePlugin .rename (D54)", () => {
+describe("definePlugin .rename", () => {
   it("returns a new definition carrying the renameMap, original unchanged", () => {
     const p = base();
     const renamed = p.rename!({ forms: "contact-forms" });

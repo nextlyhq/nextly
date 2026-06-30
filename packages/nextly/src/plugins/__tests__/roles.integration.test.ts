@@ -38,7 +38,7 @@ const rolePlugin = () =>
     },
   });
 
-describe("plugin role bundles (D67)", () => {
+describe("plugin role bundles", () => {
   it("seeds a contributed role with its resolved permission", async () => {
     current = await createTestNextly({ plugins: [rolePlugin()] });
     await runPostInitTasks();

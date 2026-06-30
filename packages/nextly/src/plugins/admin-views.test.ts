@@ -87,7 +87,7 @@ describe("applyPluginAdminViews", () => {
     expect(forms.admin?.components?.views?.Edit?.Component).toBe("host#Edit");
   });
 
-  it("skips disabled plugins (D49)", () => {
+  it("skips disabled plugins", () => {
     const collections: CollectionWithAdmin[] = [{ slug: "forms" }];
     const [forms] = applyPluginAdminViews(
       collections,

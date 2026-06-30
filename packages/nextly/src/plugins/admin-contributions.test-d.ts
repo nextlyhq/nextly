@@ -13,10 +13,10 @@ expectTypeOf<PluginContributions["admin"]>().toEqualTypeOf<
   PluginAdminContributions | undefined
 >();
 
-// ComponentPath is the string-path registry key (D19).
+// ComponentPath is the string-path registry key.
 expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
 
-// Menu item shape (D20) — no `visible(ctx)` in v1 (OQ-1); one level of children.
+// Menu item shape — no `visible(ctx)` in v1; one level of children.
 expectTypeOf<PluginMenuItem>().toMatchTypeOf<{
   label: string;
   to: string;
@@ -26,7 +26,7 @@ expectTypeOf<PluginMenuItem>().toMatchTypeOf<{
   children?: PluginMenuItem[];
 }>();
 
-// Pages (D21).
+// Pages.
 expectTypeOf<
   NonNullable<PluginAdminContributions["pages"]>[number]
 >().toMatchTypeOf<{
@@ -35,12 +35,12 @@ expectTypeOf<
   requiredPermission?: string;
 }>();
 
-// Settings (D21).
+// Settings.
 expectTypeOf<
   NonNullable<PluginAdminContributions["settings"]>
 >().toMatchTypeOf<{ component: ComponentPath }>();
 
-// Views (D23) — keyed by collection slug; six injection points.
+// Views — keyed by collection slug; six injection points.
 expectTypeOf<
   NonNullable<PluginAdminContributions["views"]>[string]
 >().toMatchTypeOf<{
@@ -52,7 +52,7 @@ expectTypeOf<
   afterEdit?: ComponentPath;
 }>();
 
-// Widgets (D22) — RESERVED/type-only in P5 (rendering deferred to M8/D58).
+// Widgets — RESERVED/type-only (rendering deferred).
 expectTypeOf<
   NonNullable<PluginAdminContributions["widgets"]>[number]
 >().toMatchTypeOf<{

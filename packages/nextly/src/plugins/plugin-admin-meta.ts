@@ -9,7 +9,7 @@ import type { PluginDefinition } from "./plugin-context";
 /**
  * Resolve the collection slugs a plugin owns, for the admin-meta sidebar.
  *
- * Dual-reads the declarative `contributes.collections` (P2) and the deprecated
+ * Dual-reads the declarative `contributes.collections` and the deprecated
  * top-level `collections`, deduped by slug, so plugins migrated to
  * `contributes.collections` AND legacy plugins both still render in the admin
  * sidebar. (G3: the longer-term source of truth is merged-schema provenance.)

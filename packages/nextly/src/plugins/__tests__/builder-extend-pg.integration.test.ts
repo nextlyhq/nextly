@@ -1,5 +1,5 @@
 /**
- * Postgres dialect gate for plugin-access materialization (P8).
+ * Postgres dialect gate for plugin-access materialization.
  *
  * Dialect bugs (varchar sizing, RETURNING, type mapping) hide on SQLite, so the
  * boot-safe column apply that materializes a plugin field onto a UI-Builder

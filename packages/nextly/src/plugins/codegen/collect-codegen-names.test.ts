@@ -8,7 +8,7 @@ function cfg(partial: Record<string, unknown>): NextlyServiceConfig {
   return partial as unknown as NextlyServiceConfig;
 }
 
-describe("collectCodegenNames (D47)", () => {
+describe("collectCodegenNames", () => {
   it("includes CRUD permission slugs per collection and read/update per single", () => {
     const { permissionSlugs } = collectCodegenNames(
       cfg({

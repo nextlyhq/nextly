@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { resolveServiceOpts } from "./service-opts";
 
-describe("resolveServiceOpts (D35)", () => {
+describe("resolveServiceOpts", () => {
   it("defaults to system when no as and no user", () => {
     expect(resolveServiceOpts({})).toEqual({ overrideAccess: true });
   });

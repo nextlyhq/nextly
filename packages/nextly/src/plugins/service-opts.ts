@@ -4,7 +4,7 @@ import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
 /**
- * @public Elevation options for the managed `ctx.services` path (D35).
+ * @public Elevation options for the managed `ctx.services` path.
  * Default: `system` when no `user` is supplied (no-user → system). Validation/
  * hooks/events ALWAYS run, even under `system` — only the access check is bypassed.
  *
@@ -17,7 +17,7 @@ export interface ServiceOpts {
   user?: AuthUser;
 }
 
-/** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }` (D35). */
+/** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
 export function resolveServiceOpts(opts: ServiceOpts): {
   user?: RequestContext["user"];
   overrideAccess: boolean;
@@ -45,7 +45,7 @@ export function resolveServiceOpts(opts: ServiceOpts): {
 /**
  * The collection-facade access methods, mapped to the position of their trailing
  * `RequestContext` argument. The wrapper translates a `ServiceOpts` passed at this
- * position into a `RequestContext` (D35).
+ * position into a `RequestContext`.
  */
 type AccessMethod =
   | "createEntry"
@@ -74,7 +74,7 @@ type ReplaceTrailingContext<F> = F extends (
   ? (...args: [...Head, ServiceOpts?]) => R
   : F;
 
-/** @public Plugin-facing collection service: access methods take `ServiceOpts` (D35). */
+/** @public Plugin-facing collection service: access methods take `ServiceOpts`. */
 export type PluginCollectionService = Omit<CollectionService, AccessMethod> & {
   [K in AccessMethod]: ReplaceTrailingContext<CollectionService[K]>;
 };
@@ -84,7 +84,7 @@ export type PluginCollectionService = Omit<CollectionService, AccessMethod> & {
  * (translated to a `RequestContext` via {@link resolveServiceOpts}). Non-access
  * members pass through. The wrapped methods are async, so a `ServiceOpts` misuse
  * (e.g. `as:'user'` with no user) surfaces as a rejection. Plugins never touch
- * `overrideAccess` directly (D35).
+ * `overrideAccess` directly.
  */
 export function wrapCollectionsForPlugin(
   collections: CollectionService

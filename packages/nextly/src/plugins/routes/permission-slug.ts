@@ -1,5 +1,5 @@
 /**
- * Split a permission slug into its `action` and `resource` (D28/D36).
+ * Split a permission slug into its `action` and `resource`.
  *
  * Permission slugs are canonically `${action}-${resource}` (e.g.
  * `"export-submissions"`). Actions are single tokens with no hyphen, so we split

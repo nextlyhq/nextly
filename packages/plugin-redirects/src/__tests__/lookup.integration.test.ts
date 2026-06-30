@@ -1,6 +1,6 @@
 /**
  * P7d/D56 — the lookup route resolves a source path to its redirect target by
- * querying the redirects collection with a `where` filter (P7a) as system.
+ * querying the redirects collection with a `where` filter as system.
  * End-to-end against a live boot, reading the PLUGIN-CONTRIBUTED `redirects`
  * collection (works post-P7b2 harness fix).
  */
@@ -19,7 +19,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("redirects lookup route (P7d)", () => {
+describe("redirects lookup route", () => {
   it("resolves a source path to {to,type}, and null when unknown", async () => {
     const result = redirects();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

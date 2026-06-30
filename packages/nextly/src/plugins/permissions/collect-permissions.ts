@@ -4,7 +4,7 @@ import type { PluginPermission } from "../contributions";
 import { permissionCollisionError } from "../permission-error";
 import type { PluginDefinition } from "../plugin-context";
 
-/** A custom permission resolved to its concrete, seedable shape (D36). */
+/** A custom permission resolved to its concrete, seedable shape. */
 export interface CollectedPermission {
   action: string;
   resource: string;
@@ -28,7 +28,7 @@ const titleCase = (s: string): string =>
 
 /**
  * Fold every plugin's `contributes.permissions` into a deduped, collision-
- * validated list of seedable custom permissions (D36). Pure. Runs over ALL
+ * validated list of seedable custom permissions. Pure. Runs over ALL
  * plugins incl. disabled ones so declarative permissions stay deterministic
  * across environments (D49 — same policy as the schema fold). Throws
  * `NEXTLY_PERMISSION_COLLISION` on:
@@ -92,7 +92,7 @@ export function collectCustomPermissions(
     });
   };
 
-  // App-declared permissions first (owner "app"), then each plugin's (D36).
+  // App-declared permissions first (owner "app"), then each plugin's.
   for (const perm of config.permissions ?? []) consider(perm, "app");
   for (const plugin of plugins) {
     for (const perm of plugin.contributes?.permissions ?? []) {

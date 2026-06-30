@@ -10,7 +10,7 @@
 
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
-// Author against the SDK — the stable, experimental plugin boundary (D43).
+// Author against the SDK — the stable, experimental plugin boundary.
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
@@ -172,11 +172,11 @@ export function formBuilder(
     version: "0.0.2-alpha.24",
     nextly: ">=0.0.2-alpha.21",
 
-    // Declarative schema (P2/D12): the merged pipeline folds these into the
+    // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
-      // Custom permission (D36) — gates submission export beyond CRUD. The
+      // Custom permission — gates submission export beyond CRUD. The
       // canonical example third-party plugin authors copy.
       permissions: [
         {
@@ -187,11 +187,11 @@ export function formBuilder(
           group: "Form Builder",
         },
       ],
-      // HTTP route (P4/D25) — exported at
+      // HTTP route — exported at
       // /api/plugins/@nextlyhq/plugin-form-builder/submissions/export. Secure by
-      // default (D28): gated by the custom `export-submissions` permission. Reads
-      // via the secure-by-default service path as the authed user (D35) and
-      // resolves its OWN slug through `ctx.self` (D54). The canonical
+      // default: gated by the custom `export-submissions` permission. Reads
+      // via the secure-by-default service path as the authed user and
+      // resolves its OWN slug through `ctx.self`. The canonical
       // contributes.routes example for third-party authors.
       routes: [
         {
@@ -210,12 +210,12 @@ export function formBuilder(
           },
         },
       ],
-      // Admin UI (P5/D19–D23) — the canonical contributes.admin example. Paths
+      // Admin UI — the canonical contributes.admin example. Paths
       // are the components form-builder's `/admin` module self-registers (kept
-      // as literals so this node entry stays React-free). menu (D20) links to
-      // the forms collection; settings (D21) renders the builder UI at
-      // /admin/plugins/<slug>; a custom page (D21) is gated by export-submissions;
-      // a submissions beforeList view (D23) injects the filter above the list.
+      // as literals so this node entry stays React-free). menu links to
+      // the forms collection; settings renders the builder UI at
+      // /admin/plugins/<slug>; a custom page is gated by export-submissions;
+      // a submissions beforeList view injects the filter above the list.
       admin: {
         menu: [
           {
@@ -252,7 +252,7 @@ export function formBuilder(
     // -- Init ----------------------------------------------------------------
     // Registers an afterCreate hook on submissions to send email notifications.
     init(nextly: NextlyInstance) {
-      // Resolve our OWN submissions slug through ctx.self (D54), so the hook
+      // Resolve our OWN submissions slug through ctx.self, so the hook
       // follows a framework `.rename()` as well as our formSubmissionOverrides
       // option. The declared slug is the key; ctx.self maps it to the resolved
       // (possibly renamed) slug. Identity when not renamed.

@@ -23,7 +23,7 @@ function mockLookup(body: unknown) {
   );
 }
 
-describe("createRedirectsMiddleware (P7d)", () => {
+describe("createRedirectsMiddleware", () => {
   it("redirects to the matched target with the matched status (302)", async () => {
     mockLookup({ to: "/new", type: "302" });
     const res = await createRedirectsMiddleware()(request("/old"));

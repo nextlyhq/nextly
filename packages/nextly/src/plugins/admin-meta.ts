@@ -1,6 +1,6 @@
 /**
  * Pure serializer for plugin admin metadata delivered to the client via
- * `/api/admin-meta` (D19–D21). Kept pure + standalone so it is unit-testable
+ * `/api/admin-meta`. Kept pure + standalone so it is unit-testable
  * and so the route handler stays thin.
  *
  * @module plugins/admin-meta
@@ -30,13 +30,13 @@ export interface PluginAdminMeta {
   after?: PluginOverride["after"];
   appearance?: PluginAdminAppearance;
   collections: string[];
-  /** Sidebar menu items (D20) — present only for enabled plugins. */
+  /** Sidebar menu items — present only for enabled plugins. */
   menu?: PluginMenuItem[];
-  /** Custom admin pages (D21) — present only for enabled plugins. */
+  /** Custom admin pages — present only for enabled plugins. */
   pages?: PluginAdminPage[];
-  /** Settings UI (D21) — present only for enabled plugins. */
+  /** Settings UI — present only for enabled plugins. */
   settings?: { component: string };
-  /** Admin header-slot component (C9) — present only for enabled plugins. */
+  /** Admin header-slot component — present only for enabled plugins. */
   headerSlot?: string;
   /** Header customization — present only for enabled plugins. */
   header?: {
@@ -44,10 +44,10 @@ export interface PluginAdminMeta {
     hideDefaults?: boolean;
     hide?: HeaderButtonId[];
   };
-  /** Dashboard widgets (D22, C9) — present only for enabled plugins. */
+  /** Dashboard widgets — present only for enabled plugins. */
   widgets?: PluginAdminWidget[];
   /**
-   * Custom field types (C7/D16) — `type` → admin editor component path, so the
+   * Custom field types — `type` → admin editor component path, so the
    * admin renders fields of these types. Serialized regardless of enabled state
    * (a disabled plugin's collections + their fields are retained, D14/D49).
    */
@@ -68,10 +68,10 @@ export function pluginAdminSlug(name: string): string {
 /**
  * Build the `plugins[]` admin-meta array from the registered plugins, applying
  * host `pluginOverrides` (placement/order/after/appearance) and folding each
- * enabled plugin's `contributes.admin` menu/pages/settings (D20/D21).
+ * enabled plugin's `contributes.admin` menu/pages/settings.
  *
  * Disabled plugins (`enabled: false`) keep their entry (their schema still
- * applies) but contribute NO behavioral admin UI (D49) — no menu/pages/settings.
+ * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
@@ -98,7 +98,7 @@ export function buildPluginAdminMeta(
       collections: pluginCollectionSlugs(plugin),
     };
 
-    // Behavioral admin UI (D20/D21) only for enabled plugins (D49).
+    // Behavioral admin UI only for enabled plugins.
     const isEnabled = plugin.enabled !== false;
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
@@ -123,8 +123,8 @@ export function buildPluginAdminMeta(
         meta.widgets = admin.widgets;
     }
 
-    // Custom field types (C7) — serialized regardless of enabled state so the
-    // admin can render fields of these types in retained collections (D14/D49).
+    // Custom field types — serialized regardless of enabled state so the
+    // admin can render fields of these types in retained collections.
     const fieldTypes = plugin.contributes?.fieldTypes;
     if (fieldTypes && fieldTypes.length > 0) {
       meta.fieldTypes = fieldTypes.map(ft => ({

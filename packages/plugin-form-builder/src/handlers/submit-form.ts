@@ -218,7 +218,7 @@ export async function submitForm(
     const submission = await collections.createEntry(
       pluginConfig.formSubmissionOverrides.slug,
       submissionData,
-      // Public form submission — create as system (D35). No ambient user; an
+      // Public form submission — create as system. No ambient user; an
       // empty context already resolves to system, but be explicit.
       { as: "system" }
     );
@@ -257,7 +257,7 @@ export async function submitForm(
 // ============================================================
 
 /**
- * Fetch a form by its slug via a service-level `where` query (D56).
+ * Fetch a form by its slug via a service-level `where` query.
  *
  * @param slug - Form slug
  * @param pluginConfig - Plugin configuration
@@ -272,7 +272,7 @@ export async function fetchFormBySlug(
   try {
     const { collections } = pluginContext.services;
 
-    // D56: resolve the form by slug via a service-level `where` query (P7a)
+    // D56: resolve the form by slug via a service-level `where` query
     // instead of fetching every form and filtering client-side. Forms are
     // public config the plugin owns, so the read runs as system.
     const result = await collections.listEntries(
@@ -503,7 +503,7 @@ export async function getFormSubmissionStats(
     const sys = { as: "system" } as const;
     const base = { form: { equals: form.id } };
 
-    // D56: count per status server-side (P7a) instead of listing every
+    // D56: count per status server-side instead of listing every
     // submission and counting client-side. Stats run as system (plugin-owned
     // aggregate over submissions for this form).
     const [total, newCount, read, archived] = await Promise.all([

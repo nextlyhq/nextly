@@ -1,5 +1,5 @@
 /**
- * C1 + C5 (D64/D66) — custom plugin services, end-to-end.
+ * C1 + C5 — custom plugin services, end-to-end.
  *
  * A plugin contributes a service factory; another plugin consumes it via
  * `ctx.services.plugins.<name>.<svc>`, and app code reaches the same instance via
@@ -18,7 +18,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("plugin custom services (C1/C5, D64/D66)", () => {
+describe("plugin custom services", () => {
   it("one plugin consumes another's service; app reaches the same via nextly.plugins", async () => {
     const observed: { fromB?: string } = {};
 

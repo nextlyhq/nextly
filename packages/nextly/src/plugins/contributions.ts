@@ -14,7 +14,7 @@ import type { PluginContext } from "./plugin-context";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
- * @public A plugin-declared custom permission (D36). CRUD permissions are
+ * @public A plugin-declared custom permission. CRUD permissions are
  * auto-seeded per collection/single slug separately — declare only NON-CRUD
  * custom permissions here (e.g. `{ action: 'export', resource: 'submissions' }`).
  */
@@ -27,7 +27,7 @@ export interface PluginPermission {
 }
 
 /**
- * @experimental A plugin-declared role bundle (D67) — a named set of permissions
+ * @experimental A plugin-declared role bundle — a named set of permissions
  * an admin can grant as a unit. Seeded on boot (idempotent by slug), tagged
  * `isSystem: false`, and **never auto-assigned** to users (D36 — define, don't
  * grant). Reference permissions by their `${action}-${resource}` slug.
@@ -45,9 +45,9 @@ export interface PluginRole {
 }
 
 /**
- * @experimental A reserved scheduled-task declaration (D61). **Not executed yet**
+ * @experimental A reserved scheduled-task declaration. **Not executed yet**
  * — see `contributes.schedules`. The shape is forward-designed so it stays stable
- * once a durable-jobs backend (D51) lands.
+ * once a durable-jobs backend lands.
  */
 export interface ScheduledTask {
   /** Unique, namespaced task name, e.g. `'seo.regenerate-sitemap'`. */
@@ -60,7 +60,7 @@ export interface ScheduledTask {
 }
 
 /**
- * @experimental A plugin-contributed email provider (C2/D65). Registers a new
+ * @experimental A plugin-contributed email provider. Registers a new
  * provider `type` whose adapter is built from the (decrypted) provider config an
  * admin stores. Replaces the need to fork core's hardcoded provider switch.
  */
@@ -72,7 +72,7 @@ export interface PluginEmailProvider {
 }
 
 /**
- * @experimental A plugin-contributed email template (C2/D65), seeded into the
+ * @experimental A plugin-contributed email template, seeded into the
  * `email_templates` table on boot (idempotent by slug; never clobbers admin
  * edits). Resolvable by slug via `sendWithTemplate` and the direct API.
  */
@@ -118,7 +118,7 @@ export type PermissionSlug = GeneratedTypes extends { permissions: infer P }
   : string;
 
 /**
- * Declarative, introspectable plugin contributions (D1). The host can read these
+ * Declarative, introspectable plugin contributions. The host can read these
  * WITHOUT running the plugin.
  *
  * @public Each key is *consumed* by a phase: collections/singles/components/
@@ -126,28 +126,28 @@ export type PermissionSlug = GeneratedTypes extends { permissions: infer P }
  * admin → P5 (menu/pages/settings/views; widgets reserved for M8).
  */
 export interface PluginContributions {
-  /** @public New plugin-owned collections. Merged by the schema pipeline (P2, D3/D12). */
+  /** @public New plugin-owned collections. Merged by the schema pipeline. */
   collections?: CollectionConfig[];
-  /** @public New plugin-owned singles (P2). */
+  /** @public New plugin-owned singles. */
   singles?: SingleConfig[];
-  /** @public Plugin-owned components (P2). */
+  /** @public Plugin-owned components. */
   components?: ComponentConfig[];
-  /** @public Add fields to existing entities by slug (P2, D12). */
+  /** @public Add fields to existing entities by slug. */
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
-  /** @public Custom permissions; CRUD is auto-seeded separately (P3, D36). */
+  /** @public Custom permissions; CRUD is auto-seeded separately. */
   permissions?: PluginPermission[];
-  /** @experimental Role bundles — named sets of permissions, seeded on boot (D67). */
+  /** @experimental Role bundles — named sets of permissions, seeded on boot. */
   roles?: PluginRole[];
   /**
-   * @experimental Custom services registered into DI (D64). Each entry is a
+   * @experimental Custom services registered into DI. Each entry is a
    * factory `(ctx) => instance`; the service is exposed lazily (instantiated on
    * first access) at `ctx.services.plugins.<thisPluginName>.<key>` and
-   * `nextly.plugins.<thisPluginName>.<key>` (D66). Other plugins consume it via
+   * `nextly.plugins.<thisPluginName>.<key>`. Other plugins consume it via
    * their own `ctx.services.plugins.<name>.<key>`.
    */
   services?: Record<string, (ctx: PluginContext) => unknown>;
   /**
-   * @experimental Scheduled tasks (D61) — **RESERVED, NOT EXECUTED** in this
+   * @experimental Scheduled tasks — **RESERVED, NOT EXECUTED** in this
    * release. The shape is published so authors aren't surprised by its absence,
    * but the runtime does not run these yet (a real scheduler needs durable jobs,
    * D51, because the typical Next.js/serverless deploy has no long-lived
@@ -156,24 +156,24 @@ export interface PluginContributions {
    * invalidation). See `docs/plugins`.
    */
   schedules?: ScheduledTask[];
-  /** @experimental Custom email providers, registered into the provider registry (C2/D65). */
+  /** @experimental Custom email providers, registered into the provider registry. */
   emailProviders?: PluginEmailProvider[];
-  /** @experimental Email templates, seeded idempotently into the DB on boot (C2/D65). */
+  /** @experimental Email templates, seeded idempotently into the DB on boot. */
   emailTemplates?: PluginEmailTemplate[];
-  /** @experimental Custom field types — registry seam mapping to a storage primitive + admin component (C7/D16, M9a). */
+  /** @experimental Custom field types — registry seam mapping to a storage primitive + admin component. */
   fieldTypes?: PluginFieldType[];
-  /** @experimental Custom event names this plugin may emit (P1, D9). No first-party plugin declares custom events yet. */
+  /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
-  /** @public HTTP routes, namespaced under /api/plugins/<name> (P4, D25). */
+  /** @public HTTP routes, namespaced under /api/plugins/<name>. */
   routes?: PluginRoute[];
   /**
-   * @public Admin UI contributions (P5, D19–D23): menu (D20), pages +
-   * settings (D21), per-collection view overrides (D23). `widgets` (D22) is
-   * RESERVED — deferred to M8 (D58); not rendered in P5 and stays `@experimental`.
+   * @public Admin UI contributions: menu, pages +
+   * settings, per-collection view overrides. `widgets` is
+   * RESERVED — deferred; not rendered and stays `@experimental`.
    */
   admin?: PluginAdminContributions;
   /**
-   * @experimental Auth extensibility (D71/D57): auth-flow hooks, challenge
+   * @experimental Auth extensibility: auth-flow hooks, challenge
    * definitions, and auth-page UI. Strategies are app-opt-in (defineConfig
    * `auth.strategies`), not here.
    */

@@ -8,7 +8,7 @@ const pkg = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8")
 ) as { version: string; keywords: string[] };
 
-describe("seo() plugin (P7c)", () => {
+describe("seo() plugin", () => {
   it("defines the plugin with extend + manage-seo permission", () => {
     const { plugin } = seo({
       collections: ["pages", "posts"],

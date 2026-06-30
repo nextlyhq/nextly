@@ -2,8 +2,8 @@
  * @nextlyhq/plugin-redirects — admin-managed redirects for Nextly.
  *
  * Mirrors Payload's `@payloadcms/plugin-redirects`: it owns a `redirects`
- * collection (D12) + a `manage-redirects` permission (D36) and exposes a public
- * lookup route (D25/D28) that resolves a path via the D56 `where` query. The
+ * collection + a `manage-redirects` permission and exposes a public
+ * lookup route that resolves a path via the D56 `where` query. The
  * actual interception is done by the app via the shipped Next.js middleware
  * helper (`@nextlyhq/plugin-redirects/middleware`) — plugin routes are
  * namespaced, so transparent root-path redirects live in the app, not the
@@ -56,7 +56,7 @@ export function redirects(
           group: "Redirects",
         },
       ],
-      // Public lookup route (D25/D28): the middleware helper calls it with the
+      // Public lookup route: the middleware helper calls it with the
       // incoming path; reads the redirects collection via the D56 `where`
       // query as system. Redirects are public routing data, not secrets.
       routes: [

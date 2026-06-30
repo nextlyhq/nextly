@@ -96,7 +96,7 @@ describe("reconcileBuilderContributions", () => {
   });
 });
 
-describe("migrate ⇄ dev-push parity (P8)", () => {
+describe("migrate ⇄ dev-push parity", () => {
   // The CLI/migrate path (resolveBuilderExtends) and the runtime/dev-push path
   // (reconcileBuilderContributions) must materialise the SAME tagged field, so a
   // dev-push DB converges with a migrated DB.

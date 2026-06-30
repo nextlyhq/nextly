@@ -6,7 +6,7 @@ import type { Logger } from "../../services/shared";
 import type { CollectedRole } from "./collect-roles";
 
 /**
- * Seed plugin/app-declared role bundles (D67). Idempotent — a role whose slug
+ * Seed plugin/app-declared role bundles. Idempotent — a role whose slug
  * already exists is skipped (never clobbers an admin's edits). Resolves each
  * role's permission slugs to ids; an unresolvable slug is logged and skipped
  * (the role is still created with its resolvable permissions) so one bad

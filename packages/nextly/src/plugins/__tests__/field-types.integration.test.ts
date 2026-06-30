@@ -1,5 +1,5 @@
 /**
- * C7 / D16 (M9a) — custom field-type registry, end-to-end.
+ * C7 / D16 — custom field-type registry, end-to-end.
  *
  * A plugin-registered field type (a) maps to its storage primitive in the DDL
  * classifier, (b) is accepted by collection-config validation once registered,
@@ -35,7 +35,7 @@ const ratingType = {
   component: "@test/ft/admin#Rating",
 } as const;
 
-describe("custom field types (C7/D16, M9a)", () => {
+describe("custom field types", () => {
   it("maps a registered custom type to its storage primitive (DDL classifier)", () => {
     registerFieldType({ ...ratingType });
     expect(

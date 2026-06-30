@@ -54,7 +54,7 @@ describe("form-builder.beforeEmail D63 filter seam (A8)", () => {
 
     // The plugin contributes its collections; the P2 fold + runtime auto-sync
     // create their SQLite tables. No `collections:` arg is needed — passing them
-    // too would now be a slug collision with the contributed ones (D13).
+    // too would now be a slug collision with the contributed ones.
     current = await createTestNextly({ plugins: [plugin] });
 
     const email = current.getService("emailService");

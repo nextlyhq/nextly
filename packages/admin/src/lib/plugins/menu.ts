@@ -6,7 +6,7 @@ const DEFAULT_ORDER = 100;
  * Filter a menu tree by RBAC and sort siblings by `order`. An item with a
  * `requiredPermission` the user lacks is removed along with its subtree; an
  * item without a permission stays even if some children are filtered (it is
- * itself a link). Recurses one level into `children` (D20).
+ * itself a link). Recurses one level into `children`.
  */
 function filterAndSort(
   items: PluginMenuItemMeta[],
@@ -23,7 +23,7 @@ function filterAndSort(
 }
 
 /**
- * Collect every enabled plugin's `contributes.admin.menu` (D20) from the
+ * Collect every enabled plugin's `contributes.admin.menu` from the
  * admin-meta plugin list, RBAC-gated by `can` (typically
  * `useCurrentUserPermissions().hasPermission`, which is super-admin-aware and
  * stays closed until permissions load) and ordered by `order`.

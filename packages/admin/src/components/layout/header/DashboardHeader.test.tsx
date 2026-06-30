@@ -35,7 +35,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("DashboardHeader plugin header slot (C9-A)", () => {
+describe("DashboardHeader plugin header slot", () => {
   it("renders a plugin's contributed headerSlot component", () => {
     registerComponent("@acme/p/admin#HeaderBadge", () => (
       <div>plugin header badge</div>

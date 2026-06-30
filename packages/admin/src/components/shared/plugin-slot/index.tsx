@@ -9,7 +9,7 @@ import {
 import { PluginComponentBoundary } from "../plugin-component-boundary";
 
 interface PluginSlotProps {
-  /** Component path to resolve via the registry (D19). */
+  /** Component path to resolve via the registry. */
   path: ComponentPath | undefined;
   /** Props forwarded to the resolved component. */
   props?: Record<string, unknown>;

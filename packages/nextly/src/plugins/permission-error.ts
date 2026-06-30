@@ -1,13 +1,13 @@
 import { NextlyError } from "../errors/nextly-error";
 
-/** Why a custom-permission declaration was rejected at boot (D36). */
+/** Why a custom-permission declaration was rejected at boot. */
 export type PermissionCollisionReason =
   | "duplicate-permission" // same (action, resource) declared by two sources
   | "system-resource-reserved" // resource is a built-in system resource
   | "crud-permission-reserved"; // duplicates an auto-seeded collection CRUD / single read-update
 
 /**
- * Fail-fast boot error for an invalid plugin-declared custom permission (D36).
+ * Fail-fast boot error for an invalid plugin-declared custom permission.
  * Mirrors {@link ./schema-error}: the specific failure mode lives in
  * `logContext.reason`; the public message stays generic while the detail
  * (action/resource/owners) lives in `logContext` for operators.

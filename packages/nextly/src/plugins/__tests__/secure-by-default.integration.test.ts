@@ -1,5 +1,5 @@
 /**
- * B3 / T1 — secure-by-default (D35) proven end-to-end on the WRITE path through
+ * B3 / T1 — secure-by-default proven end-to-end on the WRITE path through
  * `ctx.services.collections` (the plugin-facing, ServiceOpts-wrapped facade).
  *
  * `service-d56.integration.test.ts` already proves RBAC denial on the READ/count
@@ -42,7 +42,7 @@ describe("secure-by-default write path (B3/T1, D35)", () => {
       version: "1.0.0",
       nextly: ">=0.0.0",
       contributes: {
-        // Declared custom permission — exercises the declare→seed path (D36).
+        // Declared custom permission — exercises the declare→seed path.
         permissions: [{ action: "publish", resource: "posts" }],
       },
       init: ctx => {

@@ -60,11 +60,11 @@ describe("createPluginContext (P1 reshape)", () => {
 
   it("no longer exposes the deprecated infra alias", () => {
     const { ctx } = makeCtx();
-    // @ts-expect-error infra was removed in P1/T13 — db/logger are top-level.
+    // @ts-expect-error infra was removed — db/logger are top-level.
     expect(ctx.infra).toBeUndefined();
   });
 
-  it("keeps the services shape; collections is ServiceOpts-wrapped (D35)", () => {
+  it("keeps the services shape; collections is ServiceOpts-wrapped", () => {
     const { ctx, collections, email } = makeCtx();
     // D35: collections is wrapped for ServiceOpts elevation — a distinct Proxy
     // that delegates to the raw service, no longer the raw instance itself.

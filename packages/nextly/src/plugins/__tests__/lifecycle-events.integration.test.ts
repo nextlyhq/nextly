@@ -10,7 +10,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("plugin.initialized lifecycle event (D8)", () => {
+describe("plugin.initialized lifecycle event", () => {
   it("emits plugin.initialized after each plugin's init, observable by other plugins", async () => {
     const received: string[] = [];
 

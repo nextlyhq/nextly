@@ -1,7 +1,7 @@
 import { NextlyError } from "../errors/nextly-error";
 
 /**
- * Fail-fast boot error for plugin resolution (D7). The specific failure mode is
+ * Fail-fast boot error for plugin resolution. The specific failure mode is
  * carried in `logContext.reason` (e.g. "missing-dependency", "dependency-cycle",
  * "core-incompatible", "version-incompatible").
  */

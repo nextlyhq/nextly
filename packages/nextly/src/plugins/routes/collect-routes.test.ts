@@ -32,7 +32,7 @@ function plugin(
 }
 
 describe("collectPluginRoutes", () => {
-  it("collects enabled plugins' routes, namespaced; skips disabled (D49)", () => {
+  it("collects enabled plugins' routes, namespaced; skips disabled", () => {
     const collected = collectPluginRoutes([
       plugin("@a/x", [{ method: "GET", path: "/p" }]),
       plugin("@a/y", [{ method: "GET", path: "/q" }], false),

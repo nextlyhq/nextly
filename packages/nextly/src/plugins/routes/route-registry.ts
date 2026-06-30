@@ -31,7 +31,7 @@ function splitPath(path: string): string[] {
 }
 
 /**
- * Registry of plugin-contributed HTTP routes (D25). globalThis-backed singleton
+ * Registry of plugin-contributed HTTP routes. globalThis-backed singleton
  * mirroring the hook/event/filter registries so registration survives Next.js/
  * Turbopack ESM re-evaluation.
  */

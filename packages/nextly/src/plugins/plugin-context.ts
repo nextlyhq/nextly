@@ -88,7 +88,7 @@ export interface PluginHookRegistry {
    * ```
    *
    * @typeParam T - The document shape. Pass it to get a typed `context.data`
-   *   instead of casting (Q4) — prefer this over `as unknown as`:
+   *   instead of casting — prefer this over `as unknown as`:
    * ```typescript
    * interface Post { id: string; title: string; status: string }
    * nextly.hooks.on<Post>('beforeCreate', 'posts', (context) => {
@@ -130,7 +130,7 @@ export interface PluginHookRegistry {
 }
 
 /**
- * @experimental Typed filter registry exposed to plugins (D63).
+ * @experimental Typed filter registry exposed to plugins.
  * Register transforms on named seams, or define + apply your own seams.
  */
 export interface PluginFilterRegistry {
@@ -144,7 +144,7 @@ export interface PluginFilterRegistry {
 }
 
 /**
- * @experimental Typed action registry exposed to plugins (D63).
+ * @experimental Typed action registry exposed to plugins.
  * Register ordered, error-isolated side-effects on named seams, or run your own.
  */
 export interface PluginActionRegistry {
@@ -206,7 +206,7 @@ export interface PluginActionRegistry {
 export interface PluginContext {
   /**
    * @public Core services with full TypeScript autocomplete — the managed,
-   * secure-by-default data path (D35/D56). Prefer this over `ctx.db`.
+   * secure-by-default data path. Prefer this over `ctx.db`.
    *
    * Provides access to the unified service layer for:
    * - Collections: CRUD operations on dynamic collections
@@ -216,7 +216,7 @@ export interface PluginContext {
   services: {
     /**
      * Collection service for CRUD on dynamic collections. Access methods accept
-     * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system (D35).
+     * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system.
      */
     collections: PluginCollectionService;
     /** User service for user management */
@@ -226,7 +226,7 @@ export interface PluginContext {
     /** Email service for sending emails via templates and providers */
     email: EmailService;
     /**
-     * @experimental Services contributed by plugins (D64), keyed by plugin name
+     * @experimental Services contributed by plugins, keyed by plugin name
      * then service name. Lazily resolved (instantiated on first access). Runtime
      * type is `unknown` — cast to your service's type, or export it from the
      * providing plugin.
@@ -235,7 +235,7 @@ export interface PluginContext {
   };
 
   /**
-   * @experimental Raw Drizzle database instance — the full escape hatch (D33).
+   * @experimental Raw Drizzle database instance — the full escape hatch.
    * Unmanaged: bypasses validation/hooks/RBAC/events. Prefer `services`.
    */
   db: DatabaseInstance;
@@ -244,21 +244,21 @@ export interface PluginContext {
   logger: Logger;
 
   /**
-   * @public Post-commit, observe-only, best-effort event bus (D8/D51).
+   * @public Post-commit, observe-only, best-effort event bus.
    * Use a hook to modify/abort; use an event to react/notify.
    */
   events: EventBus;
 
   /**
-   * @experimental Running Nextly core version, for feature-detection (D6).
+   * @experimental Running Nextly core version, for feature-detection.
    * e.g. "0.0.2-alpha.21".
    */
   nextlyVersion: string;
 
   /**
-   * @experimental Resolved names for this plugin's own entities (D54). Read
+   * @experimental Resolved names for this plugin's own entities. Read
    * `ctx.self.collections[...]` instead of hardcoding slugs so the P2 remap can
-   * rename them transparently. Identity-resolved in P1.
+   * rename them transparently. Identity-resolved.
    */
   self: PluginSelf;
 
@@ -277,10 +277,10 @@ export interface PluginContext {
    */
   hooks: PluginHookRegistry;
 
-  /** @experimental Typed filter registry (D63). Transform values at named seams. */
+  /** @experimental Typed filter registry. Transform values at named seams. */
   filters: PluginFilterRegistry;
 
-  /** @experimental Typed action registry (D63). Ordered side-effects at named seams. */
+  /** @experimental Typed action registry. Ordered side-effects at named seams. */
   actions: PluginActionRegistry;
 }
 
@@ -447,37 +447,37 @@ export interface PluginDefinition {
 
   /**
    * Plugin semver version.
-   * Required so that other plugins' `dependsOn` ranges can be checked (D5/D39).
+   * Required so that other plugins' `dependsOn` ranges can be checked.
    */
   version: string;
 
   /**
-   * @public Core-compatibility range, boot-checked (D6). May span majors,
+   * @public Core-compatibility range, boot-checked. May span majors,
    * e.g. `'^1 || ^2'`. Prereleases (alpha/beta) count as in-range.
    */
   nextly: string;
 
   /**
-   * @experimental Required plugin dependencies → version range (D5).
+   * @experimental Required plugin dependencies → version range.
    * Plugins are topologically sorted so dependencies initialize first.
    */
   dependsOn?: Record<string, string>;
 
   /**
-   * @experimental Enhance-if-present dependencies → version range (D5).
+   * @experimental Enhance-if-present dependencies → version range.
    * Absent optional deps are fine; present-but-incompatible fails fast.
    */
   optionalDependsOn?: Record<string, string>;
 
   /**
    * @experimental Default `true`. `false` skips behavior (init/hooks/events/
-   * routes/admin) but STILL applies declarative schema (D49). Behavior-skip is
-   * wired in P1.
+   * routes/admin) but STILL applies declarative schema. Behavior-skip is
+   * wired.
    */
   enabled?: boolean;
 
   /**
-   * @public Declarative contributions (D1) — introspectable without running
+   * @public Declarative contributions — introspectable without running
    * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
    */
   contributes?: PluginContributions;
@@ -496,14 +496,14 @@ export interface PluginDefinition {
    *
    * Controls where the plugin's items appear in the sidebar (placement/order)
    * and its appearance + settings-page blurb. This is **complementary** to
-   * `contributes.admin` (P5): `admin` = placement & appearance; `contributes.admin`
+   * `contributes.admin`: `admin` = placement & appearance; `contributes.admin`
    * = the declarative menu/pages/settings/views surface. Both are retained.
    */
   admin?: PluginAdminConfig;
 
   /**
    * @public Escape-hatch config transformer; all `setup`s run before any
-   * `init` (D4). Don't mutate the config — spread and return a new object.
+   * `init`. Don't mutate the config — spread and return a new object.
    *
    * @param config - Current configuration
    * @returns Modified configuration
@@ -521,13 +521,13 @@ export interface PluginDefinition {
   init?: (context: PluginContext) => Promise<void> | void;
 
   /**
-   * @public Teardown on shutdown / HMR / test teardown (D4).
-   * Invocation is wired in P1.
+   * @public Teardown on shutdown / HMR / test teardown.
+   * Invocation is wired.
    */
   destroy?: (context: PluginContext) => Promise<void> | void;
 
   /**
-   * @experimental Framework-owned entity remap (D54). Rename this plugin's
+   * @experimental Framework-owned entity remap. Rename this plugin's
    * contributed entity slugs at registration — declared slug → new slug — to
    * avoid collisions or match house naming. Returns a NEW definition; the
    * plugin keeps working because it references its own entities via `ctx.self`.
@@ -579,7 +579,7 @@ export interface PluginDefinition {
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
   const withRename: PluginDefinition = {
     ...definition,
-    // Framework remap (D54): returns a NEW definition with the rename map
+    // Framework remap: returns a NEW definition with the rename map
     // merged. The original is left untouched (pure); chainable.
     rename(map: Record<string, string>): PluginDefinition {
       return definePlugin({
@@ -657,7 +657,7 @@ export function createPluginContext(
     ) => void;
   },
   /**
-   * The plugin this context is built for — used to resolve `ctx.self` (D54).
+   * The plugin this context is built for — used to resolve `ctx.self`.
    * Optional so the factory stays usable without a plugin (empty `self`).
    */
   plugin?: PluginDefinition

@@ -48,7 +48,7 @@ const emailPlugin = () =>
     },
   });
 
-describe("plugin email providers + templates (C2/D65)", () => {
+describe("plugin email providers + templates", () => {
   it("registers a contributed provider type that builds + sends", async () => {
     sent.length = 0;
     current = await createTestNextly({ plugins: [emailPlugin()] });

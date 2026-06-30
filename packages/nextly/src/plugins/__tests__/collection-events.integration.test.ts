@@ -14,7 +14,7 @@ afterEach(async () => {
 const widgets = () =>
   defineCollection({ slug: "widgets", fields: [text({ name: "title" })] });
 
-describe("collection.<slug>.* post-commit events (D8/D51)", () => {
+describe("collection.<slug>.* post-commit events", () => {
   it("emits collection.<slug>.created with the row id after commit", async () => {
     const seen: Array<{ name: string; id: unknown }> = [];
     const watcher = definePlugin({

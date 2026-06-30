@@ -1,5 +1,5 @@
 /**
- * form-builder custom permissions (R4, D36).
+ * form-builder custom permissions.
  *
  * Proves the flagship plugin DECLARES a custom permission and that the
  * declaration passes the new boot-time permission validation (the canonical
@@ -23,7 +23,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("form-builder custom permissions (R4, D36)", () => {
+describe("form-builder custom permissions", () => {
   it("declares the export-submissions custom permission", () => {
     const { plugin } = formBuilder();
     expect(plugin.contributes?.permissions).toContainEqual(

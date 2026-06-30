@@ -6,7 +6,7 @@ export interface ResolvedBrandingColors {
 }
 
 /**
- * A plugin sidebar menu item (D20), delivered via `/admin-meta`. Mirrors the
+ * A plugin sidebar menu item, delivered via `/admin-meta`. Mirrors the
  * server `PluginMenuItem` contract; one level of `children`.
  */
 export interface PluginMenuItemMeta {
@@ -18,14 +18,14 @@ export interface PluginMenuItemMeta {
   children?: PluginMenuItemMeta[];
 }
 
-/** A plugin custom admin page (D21), delivered via `/admin-meta`. */
+/** A plugin custom admin page, delivered via `/admin-meta`. */
 export interface PluginPageMeta {
   path: string;
   component: string;
   requiredPermission?: string;
 }
 
-/** A plugin dashboard widget (D22, C9), delivered via `/admin-meta`. */
+/** A plugin dashboard widget, delivered via `/admin-meta`. */
 export interface PluginWidgetMeta {
   id: string;
   component: string;
@@ -53,13 +53,13 @@ export interface PluginMetadata {
     badge?: string;
     badgeVariant?: "default" | "secondary" | "destructive" | "outline";
   };
-  /** Declarative sidebar menu items contributed via `contributes.admin.menu` (D20). */
+  /** Declarative sidebar menu items contributed via `contributes.admin.menu`. */
   menu?: PluginMenuItemMeta[];
-  /** Custom admin pages contributed via `contributes.admin.pages` (D21). */
+  /** Custom admin pages contributed via `contributes.admin.pages`. */
   pages?: PluginPageMeta[];
-  /** Plugin settings UI contributed via `contributes.admin.settings` (D21). */
+  /** Plugin settings UI contributed via `contributes.admin.settings`. */
   settings?: { component: string };
-  /** Admin header-slot component contributed via `contributes.admin.headerSlot` (C9). */
+  /** Admin header-slot component contributed via `contributes.admin.headerSlot`. */
   headerSlot?: string;
   /** Header customization contributed via `contributes.admin.header`. */
   header?: {
@@ -67,9 +67,9 @@ export interface PluginMetadata {
     hideDefaults?: boolean;
     hide?: Array<"github" | "discord" | "docs" | "notifications">;
   };
-  /** Dashboard widgets contributed via `contributes.admin.widgets` (D22, C9). */
+  /** Dashboard widgets contributed via `contributes.admin.widgets`. */
   widgets?: PluginWidgetMeta[];
-  /** Custom field types (C7/D16) — `type` → admin editor component path. */
+  /** Custom field types — `type` → admin editor component path. */
   fieldTypes?: Array<{ type: string; component: string }>;
 }
 

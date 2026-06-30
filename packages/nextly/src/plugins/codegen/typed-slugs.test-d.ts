@@ -1,5 +1,5 @@
 /**
- * Compile-time tests for codegen-narrowed `PermissionSlug` / `EventName` (D47).
+ * Compile-time tests for codegen-narrowed `PermissionSlug` / `EventName`.
  *
  * Enforced by `tsc --noEmit` (check-types). We deliberately do NOT augment the
  * global `GeneratedTypes` here — that augmentation is global and would narrow

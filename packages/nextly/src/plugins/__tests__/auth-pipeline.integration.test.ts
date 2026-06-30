@@ -1,5 +1,5 @@
 /**
- * Integration: the auth pipeline (D71) is assembled from a booted plugin's
+ * Integration: the auth pipeline is assembled from a booted plugin's
  * `contributes.auth`. Boots a real Nextly (in-memory SQLite) with a plugin that
  * contributes an `afterAuthenticate` hook + a challenge definition, then builds
  * AuthRouterDeps through the real deps-bridge and asserts the registries were
@@ -42,7 +42,7 @@ const authPlugin: PluginDefinition = {
   },
 };
 
-describe("auth pipeline assembly from contributes.auth (D71)", () => {
+describe("auth pipeline assembly from contributes.auth", () => {
   it("collects the plugin's hooks + challenges and appends the password strategy", async () => {
     handle = await createTestNextly({ plugins: [authPlugin] });
     const deps = buildAuthRouterDeps(

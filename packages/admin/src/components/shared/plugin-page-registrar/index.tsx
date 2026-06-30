@@ -5,7 +5,7 @@ import { usePluginPageRegistration } from "@admin/hooks/usePluginPageRegistratio
 
 /**
  * Side-effect-only component (renders nothing) that keeps the plugin page route
- * registry (D21) in sync with the admin-meta plugin list. Mounted inside
+ * registry in sync with the admin-meta plugin list. Mounted inside
  * `BrandingProvider` so it can read `branding.plugins`.
  */
 export function PluginPageRegistrar(): null {

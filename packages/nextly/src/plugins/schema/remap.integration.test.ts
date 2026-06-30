@@ -11,7 +11,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("framework remap .rename() (D54)", () => {
+describe("framework remap .rename()", () => {
   it("renames a collection end-to-end: table under the new slug, ctx.self resolves, hook fires on the renamed slug", async () => {
     const fired: string[] = [];
     const plugin = definePlugin({

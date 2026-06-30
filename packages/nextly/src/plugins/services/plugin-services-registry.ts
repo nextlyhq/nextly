@@ -1,10 +1,10 @@
 /**
- * Per-plugin custom-service registry (C1/D64).
+ * Per-plugin custom-service registry.
  *
  * Plugins contribute service factories via `contributes.services`; the runtime
  * registers them here keyed by plugin name, and exposes them **lazily** as
- * `ctx.services.plugins.<name>.<svc>` (C1) and `nextly.plugins.<name>.<svc>`
- * (C5) — the same registry, two surfaces. Lazy resolution (a service factory
+ * `ctx.services.plugins.<name>.<svc>` and `nextly.plugins.<name>.<svc>`
+ * — the same registry, two surfaces. Lazy resolution (a service factory
  * runs at most once, on first access) makes cross-plugin access order-
  * independent and never instantiates an unused service.
  *

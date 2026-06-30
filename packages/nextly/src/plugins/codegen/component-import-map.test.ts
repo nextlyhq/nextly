@@ -17,7 +17,7 @@ function plugin(admin: unknown, enabled?: boolean): PluginDefinition {
   } as unknown as PluginDefinition;
 }
 
-describe("buildComponentImportMap (D60)", () => {
+describe("buildComponentImportMap", () => {
   it("imports each module once and registers every page/settings/view component", () => {
     const p = plugin({
       menu: [{ label: "X", to: "/x" }], // no component — must not appear
@@ -76,7 +76,7 @@ describe("buildComponentImportMap (D60)", () => {
   });
 });
 
-describe("buildImportMapArtifact (D60)", () => {
+describe("buildImportMapArtifact", () => {
   it("returns the map placed alongside the generated types file", () => {
     const p = plugin({ settings: { component: "@acme/x/admin#Settings" } });
     const artifact = buildImportMapArtifact([p], "./src/types/nextly-types.ts");

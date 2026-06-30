@@ -8,7 +8,7 @@ const pkg = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8")
 ) as { version: string; keywords: string[] };
 
-describe("redirects() plugin (P7d)", () => {
+describe("redirects() plugin", () => {
   it("defines the redirects collection + manage-redirects permission + lookup route", () => {
     const { plugin } = redirects();
 

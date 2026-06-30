@@ -12,7 +12,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("orphan retention + detection (D14)", () => {
+describe("orphan retention + detection", () => {
   it("flags a pipeline collection absent from the current config as orphaned, but retains it", async () => {
     const widgets = defineCollection({
       slug: "p2_orphan",
@@ -34,7 +34,7 @@ describe("orphan retention + detection (D14)", () => {
     const orphans = await registry.findOrphanedCollections([]);
     expect(orphans.map(o => o.slug)).toContain("p2_orphan");
 
-    // Retained — never auto-dropped (D14).
+    // Retained — never auto-dropped.
     expect(await registry.getCollectionBySlug("p2_orphan")).not.toBeNull();
   });
 

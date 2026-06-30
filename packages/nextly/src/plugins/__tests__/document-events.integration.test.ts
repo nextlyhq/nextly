@@ -42,7 +42,7 @@ const watchDocumentEvents = (
     },
   });
 
-describe("document.* post-commit status events (D69)", () => {
+describe("document.* post-commit status events", () => {
   it("update draft->published emits BOTH statusChanged AND published", async () => {
     const statusChanged: Array<Record<string, unknown>> = [];
     const published: Array<Record<string, unknown>> = [];

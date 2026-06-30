@@ -85,7 +85,7 @@ describe("applyPluginSchemaContributions (fold — D3/D12)", () => {
     expect(result.collections).not.toBe(before);
   });
 
-  it("still contributes schema for disabled plugins (D49)", () => {
+  it("still contributes schema for disabled plugins", () => {
     const config = cfg({ collections: [coll("code-posts")] });
 
     const result = applyPluginSchemaContributions(config, [
@@ -175,7 +175,7 @@ const fieldNames = (
   entity: { fields?: { name?: string }[] } | undefined
 ): string[] => (entity?.fields ?? []).map(f => f.name ?? "");
 
-describe("applyPluginSchemaContributions — contributes.extend (D12)", () => {
+describe("applyPluginSchemaContributions — contributes.extend", () => {
   const extendError = (fn: () => unknown): NextlyError => {
     try {
       fn();
@@ -256,7 +256,7 @@ describe("applyPluginSchemaContributions — contributes.extend (D12)", () => {
   });
 });
 
-describe("applyPluginSchemaContributions — extend field collisions (D13)", () => {
+describe("applyPluginSchemaContributions — extend field collisions", () => {
   const caught = (fn: () => unknown): NextlyError => {
     try {
       fn();
@@ -317,7 +317,7 @@ const relationTo = (
   entity: { fields?: { relationTo?: string }[] } | undefined
 ) => entity?.fields?.[0]?.relationTo;
 
-describe("applyPluginSchemaContributions — renames (D54)", () => {
+describe("applyPluginSchemaContributions — renames", () => {
   const renameError = (fn: () => unknown): NextlyError => {
     try {
       fn();
@@ -421,7 +421,7 @@ describe("applyPluginSchemaContributions — renames (D54)", () => {
   });
 });
 
-describe("applyPluginSchemaContributionsDeferred — defers Builder targets (P8/D3/R2)", () => {
+describe("applyPluginSchemaContributionsDeferred — defers Builder targets", () => {
   it("does not throw on an extend target absent from code+plugin; collects it as deferred", () => {
     const { config, deferredExtends } = applyPluginSchemaContributionsDeferred(
       cfg({ collections: [collWith("posts", "title")] }),
@@ -466,7 +466,7 @@ describe("applyPluginSchemaContributionsDeferred — defers Builder targets (P8/
   });
 });
 
-describe("resolveBuilderExtends — applies deferred extends to Builder entities (P8/D12)", () => {
+describe("resolveBuilderExtends — applies deferred extends to Builder entities", () => {
   const builderColl = (slug: string, ...names: string[]) => ({
     slug,
     fields: names.map(field),
@@ -545,7 +545,7 @@ describe("resolveBuilderExtends — applies deferred extends to Builder entities
   });
 });
 
-describe("finalizeDeferredExtendTargets — runtime existence check (P8/D7)", () => {
+describe("finalizeDeferredExtendTargets — runtime existence check", () => {
   const caught = (fn: () => unknown): NextlyError => {
     try {
       fn();

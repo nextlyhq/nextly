@@ -2,7 +2,7 @@ import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginRole } from "../contributions";
 import type { PluginDefinition } from "../plugin-context";
 
-/** A role bundle resolved to its concrete, seedable shape (D67). */
+/** A role bundle resolved to its concrete, seedable shape. */
 export interface CollectedRole {
   slug: string;
   name: string;
@@ -19,7 +19,7 @@ const RESERVED_ROLE_SLUGS = new Set(["super-admin"]);
 
 /**
  * Fold every plugin's `contributes.roles` (and app-level `config.roles`) into a
- * deduped, collision-validated list of seedable role bundles (D67). Pure — no DB
+ * deduped, collision-validated list of seedable role bundles. Pure — no DB
  * access. Runs over ALL plugins incl. disabled ones so declarative roles stay
  * deterministic across environments (D49 — same policy as the permission fold).
  *

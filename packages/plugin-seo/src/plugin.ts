@@ -1,11 +1,11 @@
 /**
  * @nextlyhq/plugin-seo — a first-party SEO plugin for Nextly.
  *
- * - Extends the named content collections with SEO meta fields (D12).
- * - Declares a `manage-seo` permission (D36).
+ * - Extends the named content collections with SEO meta fields.
+ * - Declares a `manage-seo` permission.
  * - Serves a public sitemap of published entries, namespaced under
- *   `/api/plugins/@nextlyhq/plugin-seo/sitemap.xml` (D25/D28), cached and
- *   invalidated on collection change events (D8/D51).
+ *   `/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`, cached and
+ *   invalidated on collection change events.
  *
  * Authored against `@nextlyhq/plugin-sdk` — the stable, experimental boundary.
  */

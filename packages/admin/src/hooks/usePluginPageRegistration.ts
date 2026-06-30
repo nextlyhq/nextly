@@ -16,7 +16,7 @@ function toSlug(name: string): string {
 }
 
 /**
- * Registers plugin-contributed admin pages (D21) into the client route registry
+ * Registers plugin-contributed admin pages into the client route registry
  * whenever the admin-meta plugin list changes, and triggers auto-registration
  * of their component modules (so `PluginSlot` can resolve them).
  *

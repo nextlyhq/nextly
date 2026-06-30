@@ -35,7 +35,7 @@ function toErrorResponse(req: Request, err: unknown): Response {
 }
 
 /**
- * Resolve secure-by-default auth for a route (D28). `public: true` skips auth
+ * Resolve secure-by-default auth for a route. `public: true` skips auth
  * (`user` is `null`). Otherwise the request must be authenticated; if the route
  * declares `requiredPermission`, that permission is enforced too. Returns either
  * the resolved `user` or a ready-to-return error Response (401/403).
@@ -70,7 +70,7 @@ function permissionArgs(slug: string): [string, string] {
 }
 
 /**
- * Run a matched plugin route (D25/D26). Enforces secure-by-default auth (D28),
+ * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
  * into a Response.
