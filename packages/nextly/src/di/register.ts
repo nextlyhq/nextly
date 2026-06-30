@@ -25,6 +25,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { dequal } from "dequal";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -39,20 +40,55 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import {
+  getEmailProviderRegistry,
+  resetEmailProviderRegistry,
+} from "../domains/email/services/email-provider-registry";
 import type { MetaService } from "../domains/meta";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
+import { getEventBus } from "../events/event-bus";
 import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import { getHookRegistry } from "../hooks/hook-registry";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import type { PluginDefinition } from "../plugins/plugin-context";
+import type { PluginPermission, PluginRole } from "../plugins/contributions";
+import { getCoreVersion } from "../plugins/core-version";
+import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import type {
+  PluginContext,
+  PluginDefinition,
+} from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import type { FieldDefinition } from "../schemas/dynamic-collections";
+import { resolvePlugins } from "../plugins/resolve";
+import { collectRoles } from "../plugins/roles/collect-roles";
+import { collectPluginRoutes } from "../plugins/routes/collect-routes";
+import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
+import { applyPluginSchemaContributionsDeferred } from "../plugins/schema/apply-contributions";
+import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
+import {
+  collectUnresolvedRelationTargets,
+  finalizeRelationTargets,
+  validateCrossPluginRelations,
+} from "../plugins/schema/validate-relations";
+import { extendTargetUnknownError } from "../plugins/schema-error";
+import {
+  clearPluginServices,
+  registerPluginService,
+} from "../plugins/services/plugin-services-registry";
+import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import type {
+  CollectionSource,
+  FieldDefinition,
+} from "../schemas/dynamic-collections";
 import type {
   CollectionRegistryService,
   CodeFirstCollectionConfig,
@@ -87,7 +123,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import { loadDynamicTables } from "./load-dynamic-tables";
+import {
+  type LoadedBuilderEntity,
+  loadBuilderEntities,
+  loadDynamicTables,
+} from "./load-dynamic-tables";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -148,6 +188,21 @@ export interface NextlyServiceConfig {
 
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
+
+  /**
+   * @experimental Fail fast (throw) when a plugin `extend`/relation targets an
+   * entity that is NEITHER a code/plugin entity NOR a Builder collection/single/
+   * component. Default `false`: such a target is warned-and-skipped so a typo or
+   * a removed Builder entity can't take the whole app down (P8). Also enabled by
+   * `NEXTLY_STRICT_PLUGIN_TARGETS=1` (recommended for CI/production).
+   */
+  strictPluginTargets?: boolean;
+
+  /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
+  permissions?: PluginPermission[];
+
+  /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
+  roles?: PluginRole[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];
@@ -229,6 +284,11 @@ export interface ServiceMap {
 // Stored on globalThis to survive ESM module duplication in Next.js/Turbopack.
 const globalForReg = globalThis as unknown as {
   __nextly_isRegistered?: boolean;
+  /** Resolved plugins + their contexts, for reverse-order destroy on shutdown (D4). */
+  __nextly_pluginTeardown?: Array<{
+    plugin: PluginDefinition;
+    context: PluginContext;
+  }>;
 };
 
 // ============================================================
@@ -256,21 +316,87 @@ export async function registerServices(
   }
 
   // ----------------------------------------
-  // Layer 0: Process Plugin Config Transformers
+  // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
-  const transformedConfig = await applyPluginConfigTransformers(config);
+  // Validate core/dependency compatibility (D6) and topologically sort by
+  // declared dependencies (D5), failing fast with a great error (D7). The
+  // resolved order drives BOTH setup and init below. Runs over all plugins
+  // (including disabled ones) so schema stays deterministic (D49).
+  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
+    coreVersion: getCoreVersion(),
+  });
+  const resolvedConfig: NextlyServiceConfig = {
+    ...config,
+    plugins: resolvedPlugins,
+  };
+
+  // ----------------------------------------
+  // Layer 0b: Process Plugin Config Transformers (resolved order)
+  // ----------------------------------------
+  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+
+  // ----------------------------------------
+  // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
+  // ----------------------------------------
+  // Merge `contributes.{collections,singles,components}` into the config so the
+  // downstream registry/sync/migration machinery treats them like ordinary
+  // code-first entities. Runs over ALL resolved plugins (incl. disabled — D49)
+  // and fails fast on plugin-involved slug collisions (D13). The CLI applies the
+  // SAME fold (config-loader.ts) so both paths agree (D50). `extend`/relation
+  // targets that aren't code/plugin entities are DEFERRED here (candidate
+  // Builder-made collections) and finalized after the DB is reachable below —
+  // this is how extending/relating to a Builder collection works (P8/D3/R2).
+  const { config: transformedConfig, deferredExtends } =
+    applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
+
+  // Collect every relationTo (code + plugin) that doesn't resolve to a merged
+  // collection (or core target); require dependsOn for cross-plugin relations
+  // (D15). Builder-target relations stay in `unresolvedRelations` and are
+  // finalized once Builder slugs are loaded from the DB (below).
+  const unresolvedRelations =
+    collectUnresolvedRelationTargets(transformedConfig);
+  validateCrossPluginRelations(resolvedPlugins);
+
+  // Fail fast on invalid plugin-declared custom permissions (D36). Validation
+  // only here; the list is re-derived + seeded in runPostInitTasks.
+  collectCustomPermissions(transformedConfig, resolvedPlugins);
+
+  // Fail fast on role-bundle collisions (D67). Validation only here; roles are
+  // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
+  collectRoles(transformedConfig, resolvedPlugins);
+
+  // Register plugin custom field types (C7/D16) BEFORE schema sync, so the DDL
+  // classifier (classifyFieldKind) maps each custom type to its storage
+  // primitive. Declarative + schema-affecting, so registered for ALL plugins
+  // (incl. disabled, per D49). Clear-and-rebuild per boot; fail-fast on collision.
+  clearFieldTypes();
+  for (const fieldTypePlugin of resolvedPlugins) {
+    for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
+      registerFieldType(fieldType);
+    }
+  }
 
   const {
     adapter: providedAdapter,
     storagePlugins,
     imageProcessor,
     logger,
-    hookRegistry,
+    hookRegistry: providedHookRegistry,
     basePath,
     schemasDir,
     migrationsDir,
     passwordHasher,
   } = transformedConfig;
+
+  // Default to the global hook registry when the boot path didn't supply one.
+  // Both production boot paths (init.ts instrumentation + auth-handler.ts
+  // request-path) omit `hookRegistry`; only the `createTestNextly` harness
+  // passed it. Without a real registry the collection services' hook execution
+  // resolves to a stub, so `ctx.services.collections` reads (used by plugin
+  // routes — e.g. the redirects lookup + SEO sitemap) throw
+  // "executeBeforeOperation is not a function" in production. Defaulting here
+  // also ensures sanitization + activity-log "*" hooks register on every boot.
+  const hookRegistry = providedHookRegistry ?? getHookRegistry();
 
   const resolvedLogger = logger ?? consoleLogger;
   const resolvedBasePath = basePath ?? process.cwd();
@@ -323,6 +449,184 @@ export async function registerServices(
         `[registerServices] Could not register config tables into resolver: ${err instanceof Error ? err.message : String(err)}`
       );
     }
+  }
+
+  // Finalize the deferred Builder-lane targets now the DB is reachable (P8/D3).
+  // Builder/UI entities live in the dynamic_* registry tables (loaded by
+  // `loadDynamicTables` above), not in `config`, so their slugs weren't knowable
+  // at fold time. A plugin extend/relation targeting a Builder collection
+  // resolves here. The runtime now RECONCILES (not just existence-checks) so the
+  // dev-push path converges with `migrate`: each active plugin's fields are
+  // merged onto its Builder target (tagged source:"plugin"/locked) and the
+  // columns materialized via the same add-only apply dev-push already uses;
+  // stale plugin fields (owning plugin removed) are stripped from the registry
+  // row, leaving the physical column orphaned (data-safe). A target in NEITHER
+  // code/plugin NOR the Builder set is unresolved (handled per strict/graceful).
+  {
+    // Always reconcile (no outer guard) so a REMOVED plugin's stale fields are
+    // stripped on the next boot (P8 §7) even when this boot has no deferred
+    // extends. The reconcile is a pure read+transform; the `changed` filter
+    // below keeps a plugin-free or unchanged boot write-free (no registry
+    // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
+    const builderEntities = await loadBuilderEntities(adapter);
+    const { entities, unresolved } = reconcileBuilderContributions(
+      deferredExtends,
+      builderEntities
+    );
+
+    if (unresolved.length > 0) {
+      handleUnresolvedExtends(unresolved, transformedConfig, resolvedLogger);
+    }
+
+    // Only touch the DB for entities whose merged field set actually differs
+    // from what's persisted — keeps an unchanged/plugin-free boot write-free and
+    // skips the apply-helper imports entirely.
+    const dialect = adapter.getCapabilities().dialect;
+    const changedOf = (
+      reconciled: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
+      loaded: LoadedBuilderEntity[]
+    ) =>
+      reconciled.filter(e => {
+        const before = loaded.find(c => c.slug === e.slug);
+        return before !== undefined && !dequal(before.fields, e.fields ?? []);
+      });
+
+    const collChanged = changedOf(
+      entities.collections,
+      builderEntities.collections
+    );
+    const singleChanged = changedOf(entities.singles, builderEntities.singles);
+    const compChanged = changedOf(
+      entities.components,
+      builderEntities.components
+    );
+
+    if (collChanged.length + singleChanged.length + compChanged.length > 0) {
+      const { addMissingColumnsForFields } = await import(
+        "../domains/schema/utils/missing-columns"
+      );
+      const { generateRuntimeSchema } = await import(
+        "../domains/schema/services/runtime-schema-generator"
+      );
+
+      // Materialize FIRST (add-only, never drops → removed-plugin columns
+      // orphan, data-safe), then persist the reconciled fields on the registry
+      // row, then re-register the runtime table so reads in THIS boot see the
+      // new column. A per-entity failure is logged + skipped (retried next boot).
+      const materializeKind = async (
+        kind: string,
+        changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
+        loaded: LoadedBuilderEntity[],
+        persist: (slug: string, fields: FieldConfig[]) => Promise<unknown>,
+        makeRuntime: (
+          tableName: string,
+          fields: FieldConfig[],
+          status: boolean
+        ) => unknown
+      ): Promise<void> => {
+        for (const ent of changed) {
+          const before = loaded.find(c => c.slug === ent.slug);
+          if (!before) continue;
+          const fields = ent.fields ?? [];
+          try {
+            await addMissingColumnsForFields(
+              adapter,
+              resolvedLogger,
+              before.tableName,
+              fields,
+              { timestamps: true }
+            );
+            await persist(ent.slug, fields);
+            if (schemaRegistry) {
+              schemaRegistry.registerDynamicSchema(
+                before.tableName,
+                makeRuntime(before.tableName, fields, before.status)
+              );
+            }
+          } catch (err) {
+            resolvedLogger.warn?.(
+              `[plugins] Failed to materialize plugin fields onto Builder ${kind} "${ent.slug}": ${
+                err instanceof Error ? err.message : String(err)
+              }. Skipping; will retry next boot.`
+            );
+          }
+        }
+      };
+
+      // Collections + singles share the standard runtime-schema generator.
+      const runtimeTable = (
+        tableName: string,
+        fields: FieldConfig[],
+        status: boolean
+      ) =>
+        generateRuntimeSchema(
+          tableName,
+          fields as unknown as FieldDefinition[],
+          dialect,
+          { status }
+        ).table;
+
+      if (collChanged.length > 0) {
+        const { DynamicCollectionRegistryService } = await import(
+          "../domains/dynamic-collections/services/dynamic-collection-registry-service"
+        );
+        const reg = new DynamicCollectionRegistryService(
+          adapter,
+          resolvedLogger
+        );
+        await materializeKind(
+          "collection",
+          collChanged,
+          builderEntities.collections,
+          (slug, fields) =>
+            reg.updateCollectionMetadata(slug, {
+              fields: fields as unknown as FieldDefinition[],
+            }),
+          runtimeTable
+        );
+      }
+
+      if (singleChanged.length > 0) {
+        const { SingleRegistryService } = await import(
+          "../domains/singles/services/single-registry-service"
+        );
+        const reg = new SingleRegistryService(adapter, resolvedLogger);
+        await materializeKind(
+          "single",
+          singleChanged,
+          builderEntities.singles,
+          (slug, fields) => reg.updateSingle(slug, { fields: fields }),
+          runtimeTable
+        );
+      }
+
+      if (compChanged.length > 0) {
+        const { ComponentRegistryService } = await import(
+          "../domains/components/services/component-registry-service"
+        );
+        const { ComponentSchemaService } = await import(
+          "../domains/components/services/component-schema-service"
+        );
+        const reg = new ComponentRegistryService(adapter, resolvedLogger);
+        const compSchema = new ComponentSchemaService(dialect);
+        await materializeKind(
+          "component",
+          compChanged,
+          builderEntities.components,
+          (slug, fields) => reg.updateComponent(slug, { fields: fields }),
+          (tableName, fields) =>
+            compSchema.generateRuntimeSchema(tableName, fields)
+        );
+      }
+    }
+
+    const builderCollectionSlugs = new Set(
+      builderEntities.collections.map(c => c.slug)
+    );
+    finalizeRelationTargets(unresolvedRelations, builderCollectionSlugs, {
+      strict: isStrictPluginTargets(transformedConfig),
+      logger: resolvedLogger,
+    });
   }
 
   // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
@@ -428,7 +732,9 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
-  await initializePlugins(
+  // Stash the resolved plugins + their contexts so shutdownServices can run
+  // destroy() in reverse order (D4).
+  globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
     resolvedLogger,
@@ -476,13 +782,13 @@ async function applyPluginConfigTransformers(
 
   let transformed = config;
   for (const plugin of plugins) {
-    if (!plugin.config) continue;
+    if (!plugin.setup) continue;
     try {
-      transformed = plugin.config(transformed);
+      transformed = plugin.setup(transformed);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Plugin "${plugin.name}" config transformer failed: ${message}`
+        `Plugin "${plugin.name}" setup transformer failed: ${message}`
       );
     }
   }
@@ -775,6 +1081,16 @@ async function syncCodeFirstCollections(
     }
   }
 
+  // Provenance (D14): tag each collection by who contributed it. A slug that a
+  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
+  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
+  const sourceBySlug = new Map<string, CollectionSource>();
+  for (const plugin of transformedConfig.plugins ?? []) {
+    for (const contributed of plugin.contributes?.collections ?? []) {
+      sourceBySlug.set(contributed.slug, `plugin:${plugin.name}`);
+    }
+  }
+
   const codeFirstConfigs: CodeFirstCollectionConfig[] =
     transformedConfig.collections.map(collection => ({
       slug: collection.slug,
@@ -787,6 +1103,7 @@ async function syncCodeFirstCollections(
       tableName: collection.dbName,
       timestamps: collection.timestamps,
       admin: collection.admin,
+      source: sourceBySlug.get(collection.slug) ?? "code",
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
       status: collection.status === true,
@@ -1435,9 +1752,13 @@ async function initializePlugins(
   adapterDrizzleDb: DatabaseInstance,
   logger: Logger,
   hookRegistry: HookRegistry | undefined
-): Promise<void> {
+): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
   const plugins = transformedConfig.plugins ?? [];
-  if (plugins.length === 0) return;
+  if (plugins.length === 0) return [];
+
+  // Collect + validate contributed routes BEFORE any init runs so a route
+  // collision / invalid path fails the boot fast (D25/D7), before side effects.
+  const collectedRoutes = collectPluginRoutes(plugins);
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
@@ -1480,30 +1801,131 @@ async function initializePlugins(
     }
   };
 
-  const pluginContext = createPluginContext(
-    getServiceForPlugin as Parameters<typeof createPluginContext>[0],
-    {
-      register: (hookType, collection, handler) => {
-        pluginHookRegistry.register(hookType, collection, handler);
-      },
-      unregister: (hookType, collection, handler) => {
-        pluginHookRegistry.unregister(hookType, collection, handler);
-      },
-    }
-  );
+  const hookBridge = {
+    register: (
+      hookType: Parameters<typeof pluginHookRegistry.register>[0],
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.register>[2]
+    ) => {
+      pluginHookRegistry.register(hookType, collection, handler);
+    },
+    unregister: (
+      hookType: Parameters<typeof pluginHookRegistry.unregister>[0],
+      collection: string,
+      handler: Parameters<typeof pluginHookRegistry.unregister>[2]
+    ) => {
+      pluginHookRegistry.unregister(hookType, collection, handler);
+    },
+  };
 
+  // HMR/re-registration safety (B2): drop every plugin's prior event/hook
+  // subscriptions before plugins re-subscribe in init(), so the globalThis
+  // EventBus + HookRegistry never accumulate duplicates across module
+  // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
+  // (non-plugin) subscriptions are untracked and untouched.
+  clearPluginSubscriptions();
+  // Re-register plugin services from scratch each boot (D64) — same
+  // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale
+  // service instances.
+  clearPluginServices();
+  // Reset the email provider registry to built-ins, then re-register plugin
+  // providers below (C2/D65) — clear-and-rebuild so HMR can't double-register.
+  resetEmailProviderRegistry();
+
+  const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
+    [];
+  const contexts = new Map<string, PluginContext>();
+
+  // PASS 1 — build every enabled plugin's context, register its contributed
+  // services (D64) and declared event names. Services register BEFORE any init
+  // runs, so a plugin's `init` can resolve any other plugin's service lazily via
+  // `ctx.services.plugins.<name>.<svc>`, regardless of init order.
   for (const plugin of plugins) {
-    if (!plugin.init) continue;
-    try {
-      await plugin.init(pluginContext);
-      logger.info?.(`Plugin "${plugin.name}" initialized`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Plugin "${plugin.name}" initialization failed: ${message}`
+    // D49: `enabled: false` skips behavior (init/hooks/events/destroy). The
+    // plugin's `setup` already ran in applyPluginConfigTransformers, so its
+    // declarative schema is still applied.
+    if (plugin.enabled === false) continue;
+
+    // Build a per-plugin context so `ctx.self` resolves to this plugin's own
+    // entities (D54). Built for every enabled plugin (even without `init`) so
+    // `destroy` has a context at shutdown.
+    const pluginContext = createPluginContext(
+      getServiceForPlugin as Parameters<typeof createPluginContext>[0],
+      hookBridge,
+      plugin
+    );
+    teardown.push({ plugin, context: pluginContext });
+    contexts.set(plugin.name, pluginContext);
+
+    // Register contributed services, lazily bound to this plugin's context (D64).
+    for (const [svcName, factory] of Object.entries(
+      plugin.contributes?.services ?? {}
+    )) {
+      registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+    }
+
+    // Register contributed email providers (C2/D65) — fail-fast on type collision.
+    for (const provider of plugin.contributes?.emailProviders ?? []) {
+      getEmailProviderRegistry().register(
+        provider.type,
+        provider.createAdapter
       );
     }
+
+    // Register custom event names this plugin declares (D9) so its emits
+    // don't trigger an "undeclared event" warning.
+    const declaredEvents = plugin.contributes?.events?.map(e => e.name) ?? [];
+    if (declaredEvents.length > 0) {
+      getEventBus().registerDeclaredEvents(declaredEvents);
+    }
   }
+
+  // PASS 2 — run `init` for each enabled plugin (services from any plugin are now
+  // resolvable). Topological order is preserved from `plugins`.
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    const pluginContext = contexts.get(plugin.name)!;
+
+    if (plugin.init) {
+      try {
+        await plugin.init(pluginContext);
+        logger.info?.(`Plugin "${plugin.name}" initialized`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Plugin "${plugin.name}" initialization failed: ${message}`
+        );
+      }
+    }
+
+    // Post-init lifecycle event (D8) — best-effort, observe-only; other plugins
+    // that subscribed in their own init can react.
+    getEventBus().emit("plugin.initialized", {
+      name: plugin.name,
+      version: plugin.version,
+    });
+  }
+
+  // Register contributed routes into the global registry (D25). Rebuilt every
+  // boot (cleared first) so HMR / re-registration never accumulates. Each route
+  // carries its plugin's boot-built context; the dispatcher adds per-request
+  // user/params at call time.
+  const routeRegistry = getPluginRouteRegistry();
+  routeRegistry.clear();
+  if (collectedRoutes.length > 0) {
+    const contextByPlugin = new Map(
+      teardown.map(t => [t.plugin.name, t.context])
+    );
+    for (const collected of collectedRoutes) {
+      const context = contextByPlugin.get(collected.pluginName);
+      if (context) {
+        routeRegistry.register(collected.pluginName, collected.route, context);
+      }
+    }
+    logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
+  }
+
+  return teardown;
 }
 
 // ============================================================
@@ -1535,6 +1957,22 @@ export async function shutdownServices(): Promise<void> {
     return;
   }
 
+  // Run plugin destroy() in REVERSE init order (mirror of setup→init), each
+  // isolated so one failing teardown can't block the others or the disconnect
+  // (D4/D7). Runs before the adapter disconnects so destroy can still use db.
+  const teardown = globalForReg.__nextly_pluginTeardown ?? [];
+  for (let i = teardown.length - 1; i >= 0; i--) {
+    const { plugin, context } = teardown[i];
+    if (!plugin.destroy) continue;
+    try {
+      await plugin.destroy(context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
+    }
+  }
+  globalForReg.__nextly_pluginTeardown = undefined;
+
   try {
     if (container.has("adapter")) {
       const adapter = container.get<DrizzleAdapter>("adapter");
@@ -1556,4 +1994,35 @@ export async function shutdownServices(): Promise<void> {
 export function clearServices(): void {
   container.clear();
   globalForReg.__nextly_isRegistered = false;
+}
+
+/** Strict plugin-target resolution — config flag OR env (CI/prod). */
+function isStrictPluginTargets(config: NextlyServiceConfig): boolean {
+  return (
+    config.strictPluginTargets === true ||
+    process.env.NEXTLY_STRICT_PLUGIN_TARGETS === "1"
+  );
+}
+
+/**
+ * Handle plugin `extend` targets that resolve to NEITHER a code/plugin entity
+ * NOR a Builder entity (a typo, or a removed/renamed Builder target). Graceful
+ * by default — warn + skip that one contribution so the rest of the app still
+ * boots (P8); strict mode (config flag or `NEXTLY_STRICT_PLUGIN_TARGETS=1`)
+ * restores the fail-fast throw for CI/production (D7/D12).
+ */
+function handleUnresolvedExtends(
+  unresolved: { target: string; owner: string }[],
+  config: NextlyServiceConfig,
+  logger: Logger
+): void {
+  const strict = isStrictPluginTargets(config);
+  for (const u of unresolved) {
+    if (strict) throw extendTargetUnknownError(u.target, u.owner);
+    logger.warn?.(
+      `[plugins] "${u.owner}" extends unknown entity "${u.target}" — skipping. ` +
+        `It is neither a code/plugin entity nor a Builder collection/single/component. ` +
+        `Fix the slug or remove the extend (set NEXTLY_STRICT_PLUGIN_TARGETS=1 to fail fast).`
+    );
+  }
 }

@@ -72,6 +72,16 @@ export { registerMigrateDownCommand, runMigrateDown } from "./migrate-down";
 // Init command
 export { registerInitCommand, runInit, type InitCommandOptions } from "./init";
 
+// Add (install sugar) command (D70)
+export {
+  registerAddCommand,
+  runAdd,
+  buildInstallArgs,
+  detectPackageManager,
+  type AddCommandOptions,
+  type PackageManager,
+} from "./add";
+
 // Upgrade command (Plan B — bookkeeping consolidation)
 export {
   registerUpgradeCommand,

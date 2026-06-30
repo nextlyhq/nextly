@@ -1,0 +1,14 @@
+{
+  "name": "plugin",
+  "label": "Plugin",
+  "description": "Build a reusable Nextly plugin (publishable npm package)",
+  "hint": "Plugin package + embedded /dev playground; no schema approach",
+  "approaches": [],
+  "defaultApproach": null,
+  "collections": [],
+  "singles": [],
+  "hasDemoData": false,
+  "hasFrontendPages": false,
+  "recommendedDatabase": "sqlite",
+  "release": "alpha"
+}

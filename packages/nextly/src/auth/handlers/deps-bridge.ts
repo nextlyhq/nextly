@@ -11,11 +11,20 @@
  */
 
 import { getDialectTables } from "../../database/index";
+import type { NextlyServiceConfig } from "../../di/register";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
+import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
+import { createPluginContext } from "../../plugins/plugin-context";
+import type { AuthUser } from "../../types/auth";
 import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
+import { verifyCredentials } from "../credentials/verify-credentials";
+import { ChallengeRegistry } from "../pipeline/challenge";
+import { AuthHookRegistry } from "../pipeline/hooks";
+import { createPasswordStrategy } from "../pipeline/password-strategy";
 
+import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
 
 /**
@@ -28,7 +37,16 @@ export function buildAuthRouterDeps(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
 ): AuthRouterDeps {
-  return {
+  const base: Omit<
+    AuthRouterDeps,
+    | "authStrategies"
+    | "authHooks"
+    | "challengeRegistry"
+    | "pluginCtx"
+    | "challengeTokenTTL"
+    | "maxChallengeAttempts"
+    | "authUi"
+  > = {
     secret: env.NEXTLY_SECRET || "",
     isProduction: env.NODE_ENV === "production",
     accessTokenTTL: 900, // 15 minutes
@@ -373,6 +391,83 @@ export function buildAuthRouterDeps(
       }
     },
   };
+
+  // ── Auth extensibility pipeline (D71) ──────────────────────────────────
+  // Built-in `password` strategy: wraps verifyCredentials with base's lockout
+  // deps so the legacy login behavior is preserved exactly (zero-regression).
+  const passwordStrategy = createPasswordStrategy({
+    verify: async ({ email, password }) => {
+      const u = await verifyCredentials(
+        { email, password },
+        {
+          findUserByEmail: base.findUserByEmail,
+          incrementFailedAttempts: base.incrementFailedAttempts,
+          lockAccount: base.lockAccount,
+          resetFailedAttempts: base.resetFailedAttempts,
+          maxLoginAttempts: base.maxLoginAttempts,
+          lockoutDurationSeconds: base.lockoutDurationSeconds,
+          requireEmailVerification: base.requireEmailVerification,
+        }
+      );
+      return {
+        id: u.id as AuthUser["id"],
+        email: u.email,
+        name: u.name,
+        image: u.image,
+      };
+    },
+  });
+
+  // Collect plugin contributes.auth (hooks + challenges) + app-config strategies.
+  const config = readServiceConfig(getService);
+  const authHooks = new AuthHookRegistry();
+  const challengeRegistry = new ChallengeRegistry();
+  for (const plugin of config?.plugins ?? []) {
+    const authContrib = plugin.contributes?.auth;
+    if (authContrib?.hooks) authHooks.add(authContrib.hooks);
+    for (const def of authContrib?.challenges ?? []) {
+      challengeRegistry.add(def);
+    }
+  }
+  const configStrategies = config?.auth?.strategies ?? [];
+
+  // Base plugin context for strategies/hooks (system-level; ctx.self empty).
+  // Auth hooks share this context in v1; per-plugin ctx.self resolution in auth
+  // hooks is a documented future refinement (the AuthHooks contract is unchanged).
+  //
+  // createPluginContext resolves "db" as the drizzle instance (not a raw DI
+  // service), so translate "db" → adapter.getDrizzle() the same way di/register
+  // does; everything else delegates to the container.
+  const ctxGetService = ((name: string) => {
+    if (name === "db") {
+      const adapter = getService("adapter") as { getDrizzle: () => unknown };
+      return adapter.getDrizzle();
+    }
+    return getService(name);
+  }) as Parameters<typeof createPluginContext>[0];
+  const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());
+
+  return {
+    ...base,
+    authStrategies: [...configStrategies, passwordStrategy],
+    authHooks,
+    challengeRegistry,
+    pluginCtx,
+    challengeTokenTTL: 300,
+    maxChallengeAttempts: 5,
+    authUi: aggregateAuthUi(config?.plugins ?? []),
+  };
+}
+
+/** Read the sanitized NextlyServiceConfig from the DI container, if present. */
+function readServiceConfig(
+  getService: (name: string) => unknown
+): NextlyServiceConfig | undefined {
+  try {
+    return (getService("config") as NextlyServiceConfig) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

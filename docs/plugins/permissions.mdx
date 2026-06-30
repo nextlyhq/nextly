@@ -1,0 +1,98 @@
+---
+title: Permissions
+description: Declare custom permissions from a plugin, gate routes and admin UI, and check permissions on the client — without ever granting access yourself.
+---
+
+Nextly has a single permission primitive: `{ action, resource }`, identified by the
+slug `"<action>-<resource>"` (e.g. `"export-submissions"`). Plugins **declare** the
+permissions they need; they **never grant** them. An administrator assigns permissions
+to roles (D36).
+
+## Declare a permission
+
+CRUD permissions (`create`/`read`/`update`/`delete`) are **auto-seeded** for every
+collection and single your plugin contributes — you don't declare those. Declare only
+**non-CRUD** custom permissions:
+
+```ts
+definePlugin({
+  // ...
+  contributes: {
+    permissions: [
+      {
+        action: "export",
+        resource: "submissions",
+        label: "Export Submissions",
+        description: "Download form submissions as CSV",
+        group: "Forms",
+      },
+    ],
+  },
+});
+```
+
+Declared permissions are seeded idempotently, tagged with your plugin's provenance, and
+made assignable to roles (super-admin can always assign them). On uninstall they are
+removed with the rest of your plugin's footprint — see
+[Schema & data lifecycle](/docs/plugins/schema).
+
+## Gate a route (server, D28)
+
+Routes are **secure by default**. Set `requiredPermission` to the slug and the
+dispatcher enforces authentication **and** that permission before your handler runs:
+
+```ts
+contributes: {
+  routes: [
+    {
+      method: "GET",
+      path: "/export",
+      requiredPermission: "export-submissions", // typed as PermissionSlug
+      handler: async (_req, ctx) => {
+        // ctx.user is guaranteed here; run as that user:
+        const rows = await ctx.services.collections.listEntries(
+          ctx.self.collections.submissions,
+          {},
+          { as: "user", user: ctx.user ?? undefined }
+        );
+        return Response.json({ items: rows.data });
+      },
+    },
+  ],
+}
+```
+
+`PermissionSlug` narrows to the union of real seeded slugs once you run
+`nextly generate:types` in the consuming app (D47), so typos are caught at compile time.
+
+## Gate the admin UI (client UX, D36)
+
+`requiredPermission` on a menu item, page, or widget hides it for users who lack the
+permission. For finer-grained, in-component checks use `useCan` / `<Can>` from
+`@nextlyhq/plugin-sdk/client`:
+
+```tsx
+import { useCan, Can } from "@nextlyhq/plugin-sdk/client";
+
+function ExportButton() {
+  const canExport = useCan("export-submissions");
+  return (
+    <Can permission="export-submissions">
+      <button disabled={!canExport}>Export CSV</button>
+    </Can>
+  );
+}
+```
+
+> `useCan`/`<Can>` are **client-side UX only** — they hide or disable controls. They are
+> **not** a security boundary. Always enforce the same permission on the server via
+> `requiredPermission` (or `{ as: "user" }` on a service call). These client helpers are
+> currently [`@experimental`](/docs/plugins/stability).
+
+## The golden rule
+
+**Define, never grant.** A plugin that silently grants itself or its users access would
+break an administrator's trust model. Declare what you need; let the operator decide who
+gets it.
+
+See also: [HTTP routes](/docs/plugins/routes) · [Data access](/docs/plugins/services).

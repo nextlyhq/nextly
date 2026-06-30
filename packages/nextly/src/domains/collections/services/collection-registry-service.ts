@@ -91,6 +91,11 @@ export interface CodeFirstCollectionConfig {
   status?: boolean;
   admin?: DynamicCollectionInsert["admin"];
   configPath?: string;
+  /**
+   * Provenance (D14): `"code"` for app code-first collections, `"plugin:<name>"`
+   * for plugin-contributed ones. Defaults to `"code"` when omitted.
+   */
+  source?: CollectionSource;
 }
 
 /** Result of syncing code-first collections. */
@@ -99,6 +104,16 @@ export interface SyncResult {
   updated: string[];
   unchanged: string[];
   errors: Array<{ slug: string; error: string }>;
+}
+
+/**
+ * Pipeline-managed sources (D14): app code-first (`code`) and plugin-contributed
+ * (`plugin:<name>`). These are locked-by-default and may be updated by the boot
+ * pipeline even when locked — unlike Builder (`ui`) entities, which are edited
+ * through the admin and protected by the optimistic lock.
+ */
+function isPipelineSource(source: CollectionSource | undefined): boolean {
+  return source === "code" || (!!source && source.startsWith("plugin:"));
 }
 
 /** Options for listing collections. */
@@ -163,6 +178,21 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getAllRecords(options);
   }
 
+  /**
+   * Find pipeline-managed collections (code/plugin) that are no longer in the
+   * current config — orphans left after a plugin or code collection was removed
+   * (D14). They are RETAINED (never auto-dropped); `nextly prune` drops them
+   * explicitly. Builder (`ui`) collections are excluded — they are managed via
+   * the Visual Builder, not the code config.
+   */
+  async findOrphanedCollections(
+    currentSlugs: string[]
+  ): Promise<DynamicCollectionRecord[]> {
+    const current = new Set(currentSlugs);
+    const all = await this.getAllCollections();
+    return all.filter(r => isPipelineSource(r.source) && !current.has(r.slug));
+  }
+
   async listCollections(
     options?: ListCollectionsOptions
   ): Promise<ListCollectionsResult> {
@@ -223,7 +253,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       timestamps: (data.timestamps ?? true) ? 1 : 0,
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isPipelineSource(data.source)) ? 1 : 0,
       // Persist Draft/Published flag. Stored as 0/1 to match how
       // `timestamps` and `locked` are written in this code path; the
       // SQLite/postgres/mysql Drizzle column types accept either form.
@@ -303,7 +333,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       currentResourceId: existing.id,
     });
 
-    if (existing.locked && options?.source !== "code") {
+    if (existing.locked && !isPipelineSource(options?.source)) {
       // Generic forbidden message per §13.8; lock policy detail and slug
       // move to logContext only.
       throw NextlyError.forbidden({
@@ -384,13 +414,17 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
   }
 
-  async deleteCollection(slug: string): Promise<void> {
+  async deleteCollection(
+    slug: string,
+    options?: { force?: boolean }
+  ): Promise<void> {
     this.logger.debug("Deleting collection", { slug });
 
     const existing = await this.getCollection(slug);
 
-    if (existing.locked) {
+    if (existing.locked && !options?.force) {
       // Generic forbidden message; lock policy detail goes to logContext.
+      // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
       throw NextlyError.forbidden({
         logContext: { reason: "collection-locked-delete", slug },
       });
@@ -447,7 +481,7 @@ export class CollectionRegistryService extends BaseRegistryService<
             fields: config.fields,
             timestamps: config.timestamps ?? true,
             admin: config.admin,
-            source: "code",
+            source: config.source ?? "code",
             locked: true,
             // Forward Draft/Published flag so code-first collections that
             // opt in actually write the column on first sync.
@@ -486,7 +520,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               status: config.status === true,
               tableName: desiredTableName,
             },
-            { source: "code" }
+            { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
           await this.seedPermissionsForCollection(config.slug);
@@ -501,7 +535,7 @@ export class CollectionRegistryService extends BaseRegistryService<
               admin: config.admin,
               locked: true,
             },
-            { source: "code" }
+            { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
         } else {
@@ -547,7 +581,7 @@ export class CollectionRegistryService extends BaseRegistryService<
                 fields: config.fields,
                 timestamps: config.timestamps ?? true,
                 admin: config.admin,
-                source: "code",
+                source: config.source ?? "code",
                 locked: true,
                 configPath: config.configPath,
                 schemaHash: retrySchemaHash,
@@ -615,7 +649,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       timestamps: (data.timestamps ?? true) ? 1 : 0,
       admin: data.admin ? JSON.stringify(data.admin) : null,
       source: data.source,
-      locked: (data.locked ?? data.source === "code") ? 1 : 0,
+      locked: (data.locked ?? isPipelineSource(data.source)) ? 1 : 0,
       // Same as registerCollection — persist Draft/Published as 0/1.
       status: data.status === true ? 1 : 0,
       config_path: data.configPath,
@@ -758,7 +792,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           ? JSON.parse(hooks)
           : hooks
         : undefined,
-      source: r.source as "code" | "ui" | "built-in",
+      source: r.source as CollectionSource,
       locked: r.locked as boolean,
       // Why: read the new status meta-column, defaulting to false for rows
       // written before this column existed (legacy data without status set).

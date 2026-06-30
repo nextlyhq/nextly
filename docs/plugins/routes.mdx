@@ -1,0 +1,90 @@
+---
+title: HTTP routes
+description: Add HTTP endpoints from a plugin — namespaced, secure by default, with typed middleware.
+---
+
+A plugin can contribute HTTP routes through `contributes.routes`. Each route is mounted
+under your plugin's namespace and is **secure by default** (D25/D28).
+
+## Declare a route
+
+```ts
+definePlugin({
+  name: "@acme/nextly-plugin-reports",
+  // ...
+  contributes: {
+    routes: [
+      {
+        method: "GET",
+        path: "/summary",                  // MUST start with "/"
+        requiredPermission: "read-reports", // secure by default
+        handler: async (req, ctx) => {
+          return Response.json({ ok: true });
+        },
+      },
+    ],
+  },
+});
+```
+
+The route above is served at:
+
+```
+/api/plugins/@acme/nextly-plugin-reports/summary
+```
+
+i.e. `/api/plugins/<plugin-name><path>`. Paths support `:param` segments
+(`/items/:id`), captured into `ctx.params`.
+
+## The handler context
+
+A route handler receives the raw web `Request` plus a `PluginRouteContext` — your full
+plugin `ctx` (services/db/events/logger/self/…) **plus** per-request fields:
+
+| Field | Meaning |
+|---|---|
+| `ctx.user` | The authenticated `AuthUser`, or `null` for a `public` route reached without a session. |
+| `ctx.params` | Path parameters captured from `:param` segments. |
+
+Return a standard web `Response`. A thrown error is isolated into a JSON error response
+— a handler failure never crashes the server.
+
+## Secure by default (D28)
+
+- **Default:** the request must be authenticated. Add `requiredPermission` to also
+  enforce a permission (see [Permissions](/docs/plugins/permissions)).
+- **Opt out:** set `public: true` to make a route callable without a session (e.g. a
+  public sitemap or a webhook receiver). `ctx.user` will be `null`.
+
+```ts
+{
+  method: "GET",
+  path: "/sitemap.xml",
+  public: true, // no auth — public derived data
+  handler: async (_req, ctx) => {
+    const xml = await buildSitemap(ctx.services); // use { as: "system" } inside
+    return new Response(xml, { headers: { "content-type": "application/xml" } });
+  },
+}
+```
+
+Pair `public: true` with `{ as: "system" }` service calls only for genuinely public,
+derived data. For user data, keep the route authenticated and call services with
+`{ as: "user", user: ctx.user ?? undefined }`.
+
+## Middleware (D27)
+
+Routes support an ordered, typed middleware chain (onion model). Each middleware calls
+`next()` to continue or returns a `Response` to short-circuit:
+
+```ts
+const timing: Middleware = async (req, ctx, next) => {
+  const res = await next();
+  res.headers.set("x-handler", "reports");
+  return res;
+};
+
+// route: { method, path, middleware: [timing], handler }
+```
+
+See also: [Permissions](/docs/plugins/permissions) · [Data access](/docs/plugins/services).

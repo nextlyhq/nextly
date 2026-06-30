@@ -257,9 +257,13 @@ export function getRegistrySize(): number {
 const knownPluginRegistrations: Map<string, () => Promise<void>> = new Map();
 
 /**
- * Flag to track if auto-registration has been attempted.
+ * Module paths auto-registration has already attempted. Per-module (not a single
+ * boolean) so a plugin whose components are requested AFTER the first call — e.g.
+ * a plugin contributing pages but no collections, loaded once its admin route is
+ * visited — still gets imported (D60; fixes the P5 run-once gap). Each module is
+ * still attempted at most once, so there is no repeated dynamic-import churn.
  */
-let autoRegistrationAttempted = false;
+const attemptedModules = new Set<string>();
 
 /**
  * Register a known plugin's auto-registration function.
@@ -330,12 +334,7 @@ async function tryDynamicImport(
 export async function autoRegisterPluginComponents(
   componentPaths: string[]
 ): Promise<void> {
-  if (autoRegistrationAttempted) {
-    return; // Only attempt once
-  }
-  autoRegistrationAttempted = true;
-
-  // Extract unique module paths from component paths
+  // Extract the unique, not-yet-attempted module paths from the component paths
   // e.g., "@nextlyhq/plugin-form-builder/admin#FormBuilderView" -> "@nextlyhq/plugin-form-builder/admin"
   const modulePaths = new Set<string>();
   for (const path of componentPaths) {
@@ -345,7 +344,13 @@ export async function autoRegisterPluginComponents(
     if (hashIndex === -1) continue;
 
     const modulePath = path.substring(0, hashIndex);
+    if (attemptedModules.has(modulePath)) continue; // attempt each module once
+    attemptedModules.add(modulePath);
     modulePaths.add(modulePath);
+  }
+
+  if (modulePaths.size === 0) {
+    return; // nothing new to register
   }
 
   // Extract package prefixes for checking known registrations
@@ -401,5 +406,5 @@ export async function autoRegisterPluginComponents(
  * @internal
  */
 export function resetAutoRegistration(): void {
-  autoRegistrationAttempted = false;
+  attemptedModules.clear();
 }

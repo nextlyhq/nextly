@@ -1,0 +1,176 @@
+/**
+ * D56 (P7a) — the collection facade plumbs rich-query options + the new
+ * `count` / `createMany` methods through to the entry service. Focused unit
+ * tests with a spied entry service (the live `createTestNextly` path is proven
+ * end-to-end separately in `plugins/__tests__/service-d56.integration.test.ts`).
+ *
+ * Pre-P7a, the facade `listEntries` dropped `where`/`sort`/`depth`/`select` on
+ * the floor (only `page`/`limit` were forwarded) — so service-level filtering
+ * through `ctx.services.collections` was silently a no-op. These assert it
+ * forwards every option, and that `count`/`createMany` exist and delegate.
+ */
+import { describe, expect, it, vi } from "vitest";
+
+import { CollectionService } from "./collection-service";
+
+const noopLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
+
+function make(entry: Record<string, unknown>): CollectionService {
+  return new CollectionService(
+    {} as never,
+    noopLogger as never,
+    {} as never,
+    entry as never
+  );
+}
+
+const listOk = {
+  success: true,
+  data: { docs: [], totalDocs: 0, limit: 10, hasNextPage: false },
+};
+
+describe("CollectionService.listEntries forwards rich-query options (D56, T1)", () => {
+  it("forwards `where` to the entry service", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries(
+      "posts",
+      { where: { status: { equals: "published" } } },
+      { overrideAccess: true }
+    );
+    expect(entry.listEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        where: { status: { equals: "published" } },
+        overrideAccess: true,
+      })
+    );
+  });
+
+  it("converts SortOptions to the entry service's string format", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries(
+      "posts",
+      { sort: { field: "createdAt", direction: "desc" } },
+      {}
+    );
+    expect(entry.listEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: "-createdAt" })
+    );
+
+    await make(entry).listEntries(
+      "posts",
+      { sort: { field: "title", direction: "asc" } },
+      {}
+    );
+    expect(entry.listEntries).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: "title" })
+    );
+  });
+
+  it("forwards no `where`/`sort` when omitted (negative control)", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries("posts", {}, {});
+    const arg = entry.listEntries.mock.calls[0][0];
+    expect(arg.where).toBeUndefined();
+    expect(arg.sort).toBeUndefined();
+  });
+});
+
+describe("CollectionService.listEntries forwards relations/projection (D56, T2)", () => {
+  it("forwards `depth` and `select` to the entry service", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries(
+      "posts",
+      { depth: 2, select: { title: true } },
+      {}
+    );
+    expect(entry.listEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ depth: 2, select: { title: true } })
+    );
+  });
+
+  it("leaves `depth`/`select` undefined when omitted (default depth preserved)", async () => {
+    const entry = { listEntries: vi.fn().mockResolvedValue(listOk) };
+    await make(entry).listEntries("posts", {}, {});
+    const arg = entry.listEntries.mock.calls[0][0];
+    expect(arg.depth).toBeUndefined();
+    expect(arg.select).toBeUndefined();
+  });
+});
+
+describe("CollectionService.count (D56, T3)", () => {
+  it("returns the scalar totalDocs and forwards where/search/overrideAccess", async () => {
+    const entry = {
+      countEntries: vi
+        .fn()
+        .mockResolvedValue({ success: true, data: { totalDocs: 7 } }),
+    };
+    const n = await make(entry).count(
+      "posts",
+      { where: { status: { equals: "published" } }, search: "hi" },
+      { overrideAccess: true }
+    );
+    expect(n).toBe(7);
+    expect(entry.countEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        where: { status: { equals: "published" } },
+        search: "hi",
+        overrideAccess: true,
+      })
+    );
+  });
+
+  it("maps a failed count result to a thrown NextlyError", async () => {
+    const entry = {
+      countEntries: vi.fn().mockResolvedValue({
+        success: false,
+        statusCode: 500,
+        message: "boom",
+      }),
+    };
+    await expect(make(entry).count("posts", {}, {})).rejects.toBeInstanceOf(
+      Error
+    );
+  });
+});
+
+describe("CollectionService.createMany (D56, T4)", () => {
+  const batch = {
+    successful: 2,
+    failed: 1,
+    ids: ["a", "b"],
+    errors: [{ index: 2, error: "bad" }],
+  };
+
+  it("returns the BatchOperationResult and forwards user + overrideAccess", async () => {
+    const entry = { createEntries: vi.fn().mockResolvedValue(batch) };
+    const res = await make(entry).createMany(
+      "posts",
+      [{ t: 1 }, { t: 2 }, { t: 3 }],
+      { user: { id: "u1", email: "u@x.com", role: "", permissions: [] } }
+    );
+    expect(res).toEqual(batch);
+    expect(entry.createEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "posts",
+        user: expect.objectContaining({ id: "u1" }),
+      }),
+      [{ t: 1 }, { t: 2 }, { t: 3 }]
+    );
+  });
+
+  it("forwards overrideAccess for system elevation", async () => {
+    const entry = { createEntries: vi.fn().mockResolvedValue(batch) };
+    await make(entry).createMany("posts", [{ t: 1 }], { overrideAccess: true });
+    expect(entry.createEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ overrideAccess: true }),
+      [{ t: 1 }]
+    );
+  });
+});

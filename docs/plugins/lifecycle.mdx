@@ -1,0 +1,123 @@
+---
+title: Lifecycle, dependencies & order
+description: How and when a plugin runs — the setup/init/destroy lifecycle, load order, declaring dependencies on other plugins, version compatibility, and enabling/disabling.
+---
+
+This page covers *when* a plugin's code runs, in *what order*, and how to express
+ordering and version constraints. For the errors these rules produce, see the
+[error reference](/docs/plugins/error-reference).
+
+## The lifecycle: `contributes → setup → init → destroy` (D4)
+
+```ts
+definePlugin({
+  name: "@acme/nextly-plugin-thing",
+  version: "1.0.0",      // your plugin's semver (used by others' dependsOn ranges)
+  nextly: "^1",          // core-compat range (see Version compatibility)
+  contributes: {
+    /* declarative nouns: collections, extend, permissions, routes, admin, events */
+  },
+  setup(config) {
+    // Escape-hatch config transform. ALL plugins' setup() run before ANY init().
+    // Don't mutate — spread and return a new object.
+    return { ...config };
+  },
+  async init(ctx) {
+    // Runtime wiring: subscribe to events, register hooks, read/write via ctx.services.
+  },
+  async destroy(ctx) {
+    // Teardown on shutdown / HMR / test teardown. Undo anything init() set up.
+  },
+});
+```
+
+Phase order:
+
+1. **`contributes`** is read first (without running your plugin) — the host folds your
+   schema, permissions, routes, and admin contributions into the merged config.
+2. **`setup(config)`** runs for **every** plugin before any `init` — so a plugin can
+   adjust config that a later plugin's `init` relies on.
+3. **`init(ctx)`** runs once services are live. This is where you do runtime work.
+4. **`destroy(ctx)`** runs on shutdown, hot-reload, and test teardown. Always clean up
+   here — leaked subscriptions break HMR and tests.
+
+## Load order (D5)
+
+Plugins are run in a **topological sort** over their declared dependencies, so a plugin
+always initializes **after** the plugins it depends on. When two plugins have no
+dependency relationship, their **array order** in `defineConfig({ plugins: [...] })`
+breaks the tie.
+
+```ts
+export default defineConfig({
+  // a runs before b (array order), unless dependsOn says otherwise
+  plugins: [a(), b()],
+});
+```
+
+A **dependency cycle** is a fail-fast boot error (`PLUGIN_RESOLUTION_ERROR`,
+`reason: "dependency-cycle"`).
+
+## Dependencies (D5)
+
+Declare dependencies on other plugins by **package name → version range**:
+
+```ts
+definePlugin({
+  name: "@acme/nextly-plugin-reports",
+  version: "1.0.0",
+  nextly: "^1",
+  // Hard requirement: must be installed and in-range, and inits first.
+  dependsOn: { "@acme/nextly-plugin-core": "^2" },
+  // Enhance-if-present: fine if absent; if present it must be in-range and inits first.
+  optionalDependsOn: { "@acme/nextly-plugin-search": "^1" },
+});
+```
+
+- **`dependsOn`** — a missing dependency, or one whose installed version is outside the
+  range, is a fail-fast boot error (`reason: "missing-dependency"` /
+  `"version-incompatible"`).
+- **`optionalDependsOn`** — an **absent** optional dependency is fine; a **present but
+  out-of-range** one fails fast (`reason: "optional-version-incompatible"`). Use
+  `ctx.nextlyVersion` or feature checks to branch on whether an optional dep is active.
+
+If your plugin **extends or relates to another plugin's entity**, you must declare a
+`dependsOn` on it — otherwise you get `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`.
+
+## Version compatibility (D6)
+
+Every plugin declares the **core** range it supports via `nextly`. It's checked at boot;
+an out-of-range core is a fail-fast error (`reason: "core-incompatible"` /
+`"invalid-nextly-range"`).
+
+```ts
+nextly: "^1 || ^2", // may span multiple majors
+```
+
+Prereleases (alpha/beta) count as in-range. For runtime feature-detection, read
+`ctx.nextlyVersion` rather than branching on the declared range.
+
+## Enabling & disabling (D49)
+
+`enabled` defaults to `true`. Setting it to `false` **skips the plugin's behavior**
+(`init`, hooks, events, routes, admin UI) but **still applies its declarative schema** —
+so disabling a plugin doesn't drop its tables or strand its data. This lets an
+integrator turn a plugin's behavior off without a destructive schema change.
+
+```ts
+definePlugin({ name: "@acme/nextly-plugin-thing", version: "1.0.0", nextly: "^1", enabled: false });
+```
+
+To actually remove a plugin's tables and data, remove it from the config and run
+`nextly prune` — see [Schema & data lifecycle](/docs/plugins/schema#uninstalling--data-cleanup).
+
+## Inspecting
+
+```bash
+nextly plugins list           # installed plugins + their contributions
+nextly plugins info <name>    # one plugin's details (resolution runs here too)
+```
+
+See also: [Author guide](/docs/plugins/author-guide) ·
+[Schema & data lifecycle](/docs/plugins/schema) ·
+[Error reference](/docs/plugins/error-reference).

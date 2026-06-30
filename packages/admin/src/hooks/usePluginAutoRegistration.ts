@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
 import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import type { ApiCollection } from "@admin/types/entities";
@@ -96,19 +96,18 @@ function extractAllComponentPaths(collections: ApiCollection[]): string[] {
 export function usePluginAutoRegistration(
   collections: ApiCollection[] | undefined
 ): void {
-  // Track if we've already triggered registration
-  const hasTriggeredRef = useRef(false);
-
   useEffect(() => {
-    // Only trigger once when collections are available
-    if (!collections || hasTriggeredRef.current) {
+    if (!collections) {
       return;
     }
 
     const componentPaths = extractAllComponentPaths(collections);
 
+    // Re-run whenever collections change — `autoRegisterPluginComponents`
+    // attempts each module at most once (per-module guard), so newly-loaded
+    // collections register their plugins' modules while previously-seen ones
+    // are skipped. No one-shot ref guard (that was the P5 run-once gap, D60).
     if (componentPaths.length > 0) {
-      hasTriggeredRef.current = true;
       autoRegisterPluginComponents(componentPaths).catch(error => {
         console.error(
           "[usePluginAutoRegistration] Auto-registration failed:",

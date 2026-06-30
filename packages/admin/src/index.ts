@@ -78,6 +78,10 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 
 // Custom hooks
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
+// Permission gating (D36) — client-side UX checks for admin + plugin UI.
+export { useCan } from "./hooks/useCan";
+export { Can } from "./components/guards/Can";
+export type { CanProps } from "./components/guards/Can";
 export { useRowSelection } from "./hooks/useRowSelection";
 export type {
   UseRowSelectionOptions,
@@ -104,6 +108,17 @@ export type { ExternalToast, ToastT } from "sonner";
 export { ErrorBoundary } from "./components/shared/error-boundary";
 export { QueryErrorBoundary } from "./components/shared/query-error-boundary";
 export type { QueryErrorBoundaryProps } from "./components/shared/query-error-boundary";
+export { PluginComponentBoundary } from "./components/shared/plugin-component-boundary";
+export { PluginSlot } from "./components/shared/plugin-slot";
+
+// Plugin admin component registration (D19) — author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`.
+export {
+  registerComponent,
+  registerComponents,
+  registerKnownPlugin,
+  type ComponentPath,
+} from "./lib/plugins/component-registry";
 
 // Error Fallback Components
 export {

@@ -1,0 +1,124 @@
+---
+title: Schema & data lifecycle
+description: Contribute collections, extend existing entities (including Builder-made ones), relate across the merged schema, and clean up safely on uninstall.
+---
+
+A plugin's schema contributions flow through the **same unified merge pipeline** as your
+app's own code-first schema and the Visual Builder's schema (D3). The host can read them
+*without running your plugin*, so the admin and codegen can reason about them.
+
+## Contribute new entities
+
+```ts
+import { defineCollection, text, select } from "nextly";
+
+const Redirects = defineCollection({
+  name: "redirects",
+  fields: {
+    fromPath: text({ required: true }),
+    toPath: text({ required: true }),
+    type: select({ options: ["301", "302"], defaultValue: "301" }),
+  },
+});
+
+definePlugin({
+  // ...
+  contributes: {
+    collections: [Redirects], // also: singles, components
+  },
+});
+```
+
+CRUD permissions are auto-seeded per contributed collection/single. The collection is
+tagged with your plugin's [provenance](#provenance) and locked from Builder editing
+(it's plugin-managed).
+
+## Extend existing entities
+
+`contributes.extend` adds fields to an entity you don't own, by slug (D12):
+
+```ts
+contributes: {
+  extend: [
+    { target: "posts", fields: { metaTitle: text(), metaDescription: text() } },
+    // target can be an array to extend several at once
+  ],
+}
+```
+
+As of the Builder schema lane (P8), `extend` may target a **Builder-made collection**,
+not just a code-first one — the extra fields materialize (a migration adds the columns)
+and are present at runtime. The added fields are attributed to your plugin in provenance,
+so they're cleaned up if your plugin is removed.
+
+> Extending an entity that doesn't exist in the merged schema is a **fail-fast boot
+> error** — see the [error reference](/docs/plugins/error-reference).
+
+## Migrations & databases
+
+A plugin doesn't write SQL or manage tables itself — it **declares** schema through
+`contributes`, and the host materializes it through the normal Nextly migration workflow:
+
+```bash
+nextly migrate        # generate + apply migrations for the merged schema (incl. plugins)
+```
+
+When a consuming app adds your plugin (or you change your contributed schema) and runs
+`nextly migrate`, the plugin's collections and `extend` fields are folded into the merged
+schema and turned into migrations alongside the app's own. The same plugin works across
+Nextly's supported databases (PostgreSQL, MySQL, SQLite) because it goes through the
+managed pipeline rather than dialect-specific SQL — **but** SQLite doesn't enforce some
+constraints that Postgres/MySQL do, so test against a real database too (see
+[Testing](/docs/plugins/testing)).
+
+> Schema changes are applied on `migrate`, not silently at boot — first boot only
+> **creates** missing tables; it never **alters** an existing one. Ship schema changes as
+> migrations so existing installs pick them up.
+
+## Relate across the merged schema
+
+A plugin relationship (`relationship(...)`) may target **any** slug in the merged schema
+— core (`users`, `media`), another plugin's collection, an app collection, or a
+Builder-made one (D15). Targets are validated at boot; an unknown `relationTo` fails
+fast.
+
+## Reference your own slugs via `ctx.self`
+
+Never hardcode your own collection slugs in `init`/handlers — an integrator can rename
+them with `plugin.rename({...})` (D54). Read the resolved slug from `ctx.self`:
+
+```ts
+const slug = ctx.self.collections.redirects; // resolved, post-rename
+await ctx.services.collections.listEntries(slug, {}, { as: "system" });
+```
+
+## Provenance (D14)
+
+Every schema entity carries a `source`: `"code"`, `"ui"` (Builder), `"built-in"`, or
+`"plugin:<name>"`. This is what makes uninstall safe — Nextly knows which tables, fields,
+and permissions belong to which plugin, and never touches the user's own (`code`/`ui`)
+data.
+
+## Uninstalling & data cleanup
+
+When you remove a plugin from `defineConfig({ plugins })`, its contributed tables become
+**orphans** — present in the database, but no longer claimed by any registered plugin.
+Nextly does **not** auto-drop them (your data is never deleted behind your back). Use the
+`prune` CLI to review and remove them:
+
+```bash
+nextly prune           # dry run — lists orphaned plugin:* tables/columns/permissions
+nextly prune --force   # actually drops them (and their data + seeded permissions)
+```
+
+`prune` only ever targets `plugin:<name>` provenance. Code-first (`code`) and
+Builder (`ui`) entities are **always retained** — they're yours, not the plugin's. This
+is why declaring everything through `contributes` (rather than hand-writing tables via
+`ctx.db`) matters: it's what lets uninstall be clean and reversible.
+
+> **Tip for plugin authors:** anything you create through `contributes` /
+> `ctx.services` is provenance-tagged and pruned automatically. Anything you create by
+> reaching into `ctx.db` (raw DDL, side tables) is **not** tracked and will be left
+> behind on uninstall — document it, or avoid it.
+
+See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).

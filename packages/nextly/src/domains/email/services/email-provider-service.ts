@@ -35,9 +35,7 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
 import type { EmailProviderAdapter } from "../types";
 
-import { createResendProvider } from "./providers/resend-provider";
-import { createSendLayerProvider } from "./providers/sendlayer-provider";
-import { createSmtpProvider } from "./providers/smtp-provider";
+import { getEmailProviderRegistry } from "./email-provider-registry";
 
 const MASKED_VALUE = "••••••••";
 
@@ -536,30 +534,9 @@ export class EmailProviderService extends BaseService {
   ): EmailProviderAdapter {
     const config = provider.configuration;
 
-    switch (provider.type) {
-      case "smtp":
-        return createSmtpProvider(
-          config as {
-            host: string;
-            port: number;
-            secure?: boolean;
-            auth: { user: string; pass: string };
-          }
-        );
-      case "resend":
-        return createResendProvider(config as { apiKey: string });
-      case "sendlayer":
-        return createSendLayerProvider(config as { apiKey: string });
-      default:
-        // Unknown provider type — generic public sentence; the offending type
-        // string goes to logContext to avoid echoing untrusted identifiers.
-        throw new NextlyError({
-          code: "BUSINESS_RULE_VIOLATION",
-          publicMessage: "Unsupported email provider type.",
-          statusCode: 422,
-          logContext: { type: provider.type },
-        });
-    }
+    // Built-ins (smtp/resend/sendlayer) + any plugin-contributed provider types
+    // (C2/D65). Unknown type → BUSINESS_RULE_VIOLATION (raised by the registry).
+    return getEmailProviderRegistry().create(provider.type, config);
   }
 
   // ============================================================

@@ -25,7 +25,12 @@ import type { CollectionAccessRules } from "../../services/access/types";
  * const source: CollectionSource = 'code';
  * ```
  */
-export type CollectionSource = "code" | "ui" | "built-in";
+export type CollectionSource =
+  | "code"
+  | "ui"
+  | "built-in"
+  // Plugin-contributed entity provenance (D14): `plugin:<plugin-name>`.
+  | `plugin:${string}`;
 
 /**
  * Migration status for a collection's schema.

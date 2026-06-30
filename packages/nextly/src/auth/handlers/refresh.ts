@@ -7,6 +7,8 @@ import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondData } from "../../api/response-shapes";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
+import type { PluginContext } from "../../plugins/plugin-context";
+import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import {
   setAccessTokenCookie,
@@ -20,6 +22,7 @@ import {
 import { clearCsrfCookie } from "../csrf/csrf-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
+import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   hashRefreshToken,
   generateRefreshToken,
@@ -64,6 +67,14 @@ export interface RefreshHandlerDeps {
   trustProxy: boolean;
   /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
+  /**
+   * Auth-flow hooks (D71). Optional so legacy test fixtures keep working; the DI
+   * path always supplies it. When present, `customizeClaims` runs on refresh too
+   * (so plugin claims survive token rotation).
+   */
+  authHooks?: AuthHookRegistry;
+  /** Plugin context for {@link authHooks}; supplied alongside `authHooks`. */
+  pluginCtx?: PluginContext;
 }
 
 export async function handleRefresh(
@@ -153,7 +164,7 @@ export async function handleRefresh(
       deps.fetchCustomFields(user.id),
     ]);
 
-    const claims = buildClaims({
+    let claims = buildClaims({
       userId: user.id,
       email: user.email,
       name: user.name,
@@ -161,6 +172,20 @@ export async function handleRefresh(
       roleIds,
       customFields,
     });
+    // customizeClaims (D71) — re-apply plugin claim customization on rotation so
+    // refreshed tokens keep the same custom claims a login would mint.
+    if (deps.authHooks && deps.pluginCtx) {
+      claims = await deps.authHooks.runCustomizeClaims(
+        claims,
+        {
+          id: user.id as AuthUser["id"],
+          email: user.email,
+          name: user.name,
+          image: user.image,
+        },
+        deps.pluginCtx
+      );
+    }
     const accessToken = await signAccessToken(
       claims,
       deps.secret,

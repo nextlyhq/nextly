@@ -1,0 +1,81 @@
+---
+title: Contributing a plugin
+description: Publish your own Nextly plugin, get it listed, and the quality checklist every plugin should pass — plus how to contribute a plugin to the Nextly repo.
+---
+
+There are two ways to contribute to the Nextly plugin ecosystem: **publish your own**
+plugin to npm, or **contribute a plugin to the Nextly monorepo**. Both start from the
+same scaffold and quality bar.
+
+## Publish your own plugin
+
+1. **Scaffold** it:
+
+   ```bash
+   npm create nextly-app -- --template plugin
+   ```
+
+   This generates a publishable package (`src/` → `dist/`) plus an embedded `dev/`
+   playground — a minimal Nextly app on SQLite with hot-reload — for iterating locally.
+
+2. **Build it** against the SDK (`@nextlyhq/plugin-sdk`) and iterate in the `dev/`
+   playground (`pnpm dev` → open `/admin`). See the
+   [author guide](/docs/plugins/author-guide).
+
+3. **Test it** — including at least one real-database test (see
+   [Testing](/docs/plugins/testing)).
+
+4. **Publish** to npm with the `nextly-plugin` keyword and an honest `nextly`
+   compatibility range (see [Publishing & distribution](/docs/plugins/distribution)).
+
+That's it — there's no marketplace submission or approval gate in v1. Trust is npm trust
+(D34).
+
+## Get your plugin listed
+
+The [plugins index](/docs/plugins) carries a curated list of community plugins. To add
+yours, open a PR against the Nextly repo that adds a row to the community-plugins table on
+that page, with: package name, one-line description, npm link, source link, and the
+`nextly` range it supports. We review for the quality checklist below (not for feature
+scope) — it's a curated docs list, not a gatekept marketplace.
+
+## Plugin quality checklist
+
+A good Nextly plugin:
+
+- [ ] **Exports clean TypeScript types** and builds to ESM `dist/` (`"type": "module"`,
+      `exports` map, `"files": ["dist"]`).
+- [ ] **Has the `nextly-plugin` keyword** and declares a `nextly` range in
+      `definePlugin` (`peerDependencies` for `nextly`/`@nextlyhq/admin`/`react`).
+- [ ] **Declares, never grants, permissions** (define-but-never-grant, D36) and gates
+      routes/UI with `requiredPermission`.
+- [ ] **Uses `ctx.services`, not raw `ctx.db`**, so its data is managed, secure, and
+      prunable — and picks `{ as: "system" }` vs `{ as: "user" }` deliberately.
+- [ ] **Contributes schema through `contributes`** (not hand-rolled DDL) so provenance
+      tracking and `nextly prune` clean it up on uninstall (D14).
+- [ ] **References its own slugs via `ctx.self`**, never hard-coded (survives
+      `plugin.rename`).
+- [ ] **Reads secrets from env** and wraps them with `secret()` (D37) — never hard-coded.
+- [ ] **Has a README** with install, usage, an options table, and any required host
+      wiring (e.g. a Next.js rewrite or middleware).
+- [ ] **Is tested** with `createTestNextly`, including a real-Postgres test for anything
+      writing typed/system columns.
+- [ ] **Cleans up in `destroy()`** (subscriptions, timers) so HMR/teardown is leak-free.
+
+## Contribute a plugin to the Nextly repo
+
+First-party plugins live in `packages/plugin-<name>/` and follow the same structure as
+`plugin-form-builder` (`src/`, `__tests__/`,
+`tsup.config.ts`, `README.md`). To contribute one:
+
+- Read the repo's root `CONTRIBUTING.md` for dev setup (`pnpm install`, env, the dev
+  loop) and conventions.
+- Use **conventional commits**, scoped to the plugin (e.g.
+  `feat(plugin-foo): add lookup route`).
+- Add unit **and** integration tests; first-party plugins are the exercisers that
+  graduate API surfaces from `@experimental` to `@public` (see
+  [API stability](/docs/plugins/stability)), so cover the surfaces you rely on.
+- Don't add a changeset on a feature branch — releases are cut separately.
+
+See also: [Author guide](/docs/plugins/author-guide) ·
+[Publishing & distribution](/docs/plugins/distribution).
