@@ -122,9 +122,18 @@ export function EntryFormContextProvider({
  *
  * @example
  * ```tsx
- * function MyField({ field }) {
+ * function JoinField({ field }) {
  *   const { entryId, collectionSlug } = useEntryFormContext();
- *   // use entryId and collectionSlug...
+ *
+ *   // Query entries that reference this entry
+ *   const { data } = useEntries({
+ *     collectionSlug: field.collection,
+ *     params: {
+ *       where: { [field.on]: { equals: entryId } },
+ *     },
+ *   });
+ *
+ *   return <ul>{data?.items.map(...)}</ul>;
  * }
  * ```
  */
