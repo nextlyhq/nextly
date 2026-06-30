@@ -43,6 +43,7 @@ import { DynamicCollectionNav } from "./DynamicCollectionNav";
 import { DynamicCustomGroupNav } from "./DynamicCustomGroupNav";
 import { DynamicPluginNav } from "./DynamicPluginNav";
 import { DynamicSingleNav } from "./DynamicSingleNav";
+import { PluginMenuItems } from "./PluginMenuItems";
 
 interface SidebarNavigationProps {
   items: NavigationItem[];
@@ -427,6 +428,7 @@ export function SidebarNavigation({
           <SidebarGroupContent>
             <SidebarMenu>
               <DynamicPluginNav isActive={isActive} search={search} />
+              <PluginMenuItems isActive={isActive} />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

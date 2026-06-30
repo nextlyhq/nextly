@@ -297,7 +297,11 @@ export class CollectionEntryService extends BaseService {
   }
 
   async createEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {

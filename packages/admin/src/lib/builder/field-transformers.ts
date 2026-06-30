@@ -459,6 +459,11 @@ export function convertToBuilderField(
     label: field.label || field.name,
     type: field.type,
     isSystem: field.name === "title" || field.name === "slug",
+    // Provenance (P8): carry the plugin tag through so the Builder renders a
+    // plugin-contributed field locked + badged instead of as an editable field.
+    source: field.source,
+    owner: field.owner,
+    locked: field.locked,
     defaultValue: field.defaultValue as
       | string
       | number

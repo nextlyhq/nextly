@@ -20,6 +20,7 @@ import { eq, desc } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import type { PluginEmailTemplate } from "../../../plugins/contributions";
 import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
 import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
@@ -388,6 +389,46 @@ export class EmailTemplateService extends BaseService {
         // Ignore duplicate slug errors (race condition safety)
         this.logger.warn(
           `Failed to create built-in template "${template.slug}" — may already exist`,
+          { error }
+        );
+      }
+    }
+  }
+
+  /**
+   * Seed plugin-contributed email templates (C2/D65). Idempotent by slug — a
+   * template whose slug already exists is skipped, so an admin's edits to it (or
+   * a built-in) are never clobbered.
+   */
+  async ensurePluginTemplates(templates: PluginEmailTemplate[]): Promise<void> {
+    for (const template of templates) {
+      const existing = await this.getTemplateBySlug(template.slug);
+      if (existing) continue;
+
+      const now = new Date();
+      const values = {
+        id: randomUUID(),
+        name: template.name,
+        slug: template.slug,
+        subject: template.subject,
+        htmlContent: template.htmlContent,
+        plainTextContent: template.plainTextContent ?? null,
+        variables: (template.variables ?? null) as
+          | EmailTemplateVariable[]
+          | null,
+        useLayout: template.useLayout ?? true,
+        isActive: true,
+        providerId: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      try {
+        await this.db.insert(this.emailTemplates).values(values);
+        this.logger.info(`Created plugin email template: ${template.slug}`);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to create plugin template "${template.slug}" — may already exist`,
           { error }
         );
       }

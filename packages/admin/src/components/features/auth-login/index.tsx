@@ -38,6 +38,8 @@ import { getCsrfToken } from "@admin/lib/api/csrf";
 import type { ActionResponse } from "@admin/lib/api/response-types";
 import { cn } from "@admin/lib/utils";
 
+import { AuthUiExtras, AuthChallenge, useAuthUi } from "./auth-ui-extras";
+
 const formSchema = z.object({
   email: z
     .string()
@@ -60,6 +62,13 @@ export function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [resendingVerification, setResendingVerification] = useState(false);
+  // Auth-page UI contributed by plugins (provider buttons, slots, 2FA views) — D57.
+  const authUi = useAuthUi();
+  // Set when a login returns a multi-step challenge (D71); shows the challenge view.
+  const [challenge, setChallenge] = useState<{
+    challengeType: string;
+    pendingToken: string;
+  } | null>(null);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -82,11 +91,32 @@ export function Login() {
 
       // POST to custom auth login endpoint. Capture the result so the
       // toast can surface the server-authored message.
-      const result = await api.public.post<ActionResponse>("/auth/login", {
+      const result = await api.public.post<
+        ActionResponse & {
+          status?: string;
+          challengeType?: string;
+          pendingToken?: string;
+        }
+      >("/auth/login", {
         email: values.email,
         password: values.password,
         csrfToken,
       });
+
+      // Multi-step auth (D71): the server paused login pending a challenge
+      // (e.g. 2FA). Render the challenge view instead of completing the login.
+      if (
+        result?.status === "challenge" &&
+        result.challengeType &&
+        result.pendingToken
+      ) {
+        setChallenge({
+          challengeType: result.challengeType,
+          pendingToken: result.pendingToken,
+        });
+        setIsLoading(false);
+        return;
+      }
 
       // Prefer `result.message` from the server; fall back to a
       // hard-coded string if the server omits it (defensive shim per
@@ -194,135 +224,156 @@ export function Login() {
         </CardHeader>
 
         <CardContent className="pb-10">
-          <FormProvider {...form}>
-            <form
-              onSubmit={e => {
-                void form.handleSubmit(onSubmit)(e);
+          {challenge ? (
+            <AuthChallenge
+              authUi={authUi}
+              challengeType={challenge.challengeType}
+              pendingToken={challenge.pendingToken}
+              onResolved={() => {
+                window.location.href = ROUTES.DASHBOARD;
               }}
-              className="space-y-6"
-            >
-              {emailNotVerified && (
-                <div className="flex items-start gap-3 rounded-none  border border-primary/5 border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
-                  <Mail className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-                  <div className="flex-1 text-sm">
-                    <p className="font-medium text-amber-800 dark:text-amber-200">
-                      Email not verified
-                    </p>
-                    <p className="text-amber-700 dark:text-amber-300 mt-1">
-                      Please check your inbox and click the verification link
-                      before signing in.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleResendVerification();
-                      }}
-                      disabled={resendingVerification}
-                      className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-200 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100 disabled:opacity-50"
-                    >
-                      {resendingVerification
-                        ? "Sending..."
-                        : "Resend verification email"}
-                    </button>
-                  </div>
+            />
+          ) : (
+            <>
+              <FormProvider {...form}>
+                <form
+                  onSubmit={e => {
+                    void form.handleSubmit(onSubmit)(e);
+                  }}
+                  className="space-y-6"
+                >
+                  {emailNotVerified && (
+                    <div className="flex items-start gap-3 rounded-none  border border-primary/5 border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 mb-6">
+                      <Mail className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                      <div className="flex-1 text-sm">
+                        <p className="font-medium text-amber-800 dark:text-amber-200">
+                          Email not verified
+                        </p>
+                        <p className="text-amber-700 dark:text-amber-300 mt-1">
+                          Please check your inbox and click the verification
+                          link before signing in.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleResendVerification();
+                          }}
+                          disabled={resendingVerification}
+                          className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-200 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100 disabled:opacity-50"
+                        >
+                          {resendingVerification
+                            ? "Sending..."
+                            : "Resend verification email"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <FormField
+                    control={form.control}
+                    name="email"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-sm font-medium text-foreground">
+                          Email Address
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            required
+                            type="email"
+                            autoComplete="email"
+                            spellCheck={false}
+                            placeholder="Enter your email address…"
+                            {...field}
+                            className="h-11 rounded-none border-primary/5 dark:border-primary/5"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Password</FormLabel>
+                        <div className="relative">
+                          <FormControl>
+                            <Input
+                              required
+                              type={showPassword ? "text" : "password"}
+                              autoComplete="current-password"
+                              placeholder="Enter your password…"
+                              {...field}
+                              className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
+                            />
+                          </FormControl>
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            tabIndex={-1}
+                            className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            {showPassword ? (
+                              <EyeOff className="h-5 w-5" />
+                            ) : (
+                              <Eye className="h-5 w-5" />
+                            )}
+                          </button>
+                        </div>
+                        <div className="flex justify-end">
+                          <Link
+                            href={ROUTES.FORGOT_PASSWORD}
+                            className="text-sm text-primary cursor-pointer transition-colors font-medium mt-1"
+                          >
+                            Forgot password?
+                          </Link>
+                        </div>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <Button
+                    size="md"
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
+                  >
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        Sign In
+                        <ArrowRight className="h-4 w-4 ml-2" />
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </FormProvider>
+              {(authUi.providers.length > 0 ||
+                authUi.slots.beforeForm.length > 0 ||
+                authUi.slots.afterForm.length > 0 ||
+                authUi.slots.branding.length > 0) && (
+                <div className="mt-6">
+                  <AuthUiExtras authUi={authUi} />
                 </div>
               )}
-
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm font-medium text-foreground">
-                      Email Address
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        required
-                        type="email"
-                        autoComplete="email"
-                        spellCheck={false}
-                        placeholder="Enter your email address…"
-                        {...field}
-                        className="h-11 rounded-none border-primary/5 dark:border-primary/5"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Password</FormLabel>
-                    <div className="relative">
-                      <FormControl>
-                        <Input
-                          required
-                          type={showPassword ? "text" : "password"}
-                          autoComplete="current-password"
-                          placeholder="Enter your password…"
-                          {...field}
-                          className="pr-10 h-11 rounded-none border-primary/5 dark:border-primary/5"
-                        />
-                      </FormControl>
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        tabIndex={-1}
-                        className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {showPassword ? (
-                          <EyeOff className="h-5 w-5" />
-                        ) : (
-                          <Eye className="h-5 w-5" />
-                        )}
-                      </button>
-                    </div>
-                    <div className="flex justify-end">
-                      <Link
-                        href={ROUTES.FORGOT_PASSWORD}
-                        className="text-sm text-primary cursor-pointer transition-colors font-medium mt-1"
-                      >
-                        Forgot password?
-                      </Link>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <Button
-                size="md"
-                type="submit"
-                disabled={isLoading}
-                className="w-full h-11 rounded-none shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
-              >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    Sign In
-                    <ArrowRight className="h-4 w-4 ml-2" />
-                  </>
-                )}
-              </Button>
-            </form>
-          </FormProvider>
-          <div className="mt-8 text-left">
-            <p className="text-muted-foreground">
-              Don&apos;t have an account?{" "}
-              <Link
-                href={ROUTES.REGISTER}
-                className="text-primary cursor-pointer font-medium transition-colors"
-              >
-                Sign up
-              </Link>
-            </p>
-          </div>
+              <div className="mt-8 text-left">
+                <p className="text-muted-foreground">
+                  Don&apos;t have an account?{" "}
+                  <Link
+                    href={ROUTES.REGISTER}
+                    className="text-primary cursor-pointer font-medium transition-colors"
+                  >
+                    Sign up
+                  </Link>
+                </p>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
     </div>

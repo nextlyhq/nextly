@@ -8,7 +8,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Templates that are bundled into the CLI package for offline use.
 // Content templates (blog, etc.) are downloaded from GitHub at runtime.
-const BUNDLED_TEMPLATES = ["base", "blank"] as const;
+// `plugin` is bundled so plugins are scaffoldable offline (D44).
+const BUNDLED_TEMPLATES = ["base", "blank", "plugin"] as const;
 
 function copyBundledTemplates(): void {
   const monoRepoTemplates = path.resolve(__dirname, "../../templates");

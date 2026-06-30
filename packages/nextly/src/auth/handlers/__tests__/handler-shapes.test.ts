@@ -40,8 +40,49 @@ import { handleSession } from "../session";
 import { handleSetup, handleSetupStatus } from "../setup";
 import { handleResendVerification, handleVerifyEmail } from "../verify-email";
 import { hashRefreshToken } from "../../session/refresh";
+import { verifyCredentials } from "../../credentials/verify-credentials";
+import { AuthHookRegistry } from "../../pipeline/hooks";
+import { createPasswordStrategy } from "../../pipeline/password-strategy";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
+
+/**
+ * Build the auth-pipeline deps a login-path test needs: the built-in password
+ * strategy (wrapping verifyCredentials with the given lockout deps, exactly as
+ * deps-bridge does), an empty hook registry, and the challenge token TTL. With
+ * these, handleLogin runs its normal pipeline and the behavior is unchanged.
+ */
+function loginPipelineDeps(lockoutDeps: {
+  findUserByEmail: (email: string) => Promise<unknown>;
+  incrementFailedAttempts: (userId: string) => Promise<void>;
+  lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
+  resetFailedAttempts: (userId: string) => Promise<void>;
+  maxLoginAttempts: number;
+  lockoutDurationSeconds: number;
+  requireEmailVerification: boolean;
+}) {
+  const passwordStrategy = createPasswordStrategy({
+    verify: async ({ email, password }) => {
+      const u = await verifyCredentials(
+        { email, password },
+        lockoutDeps as never
+      );
+      return {
+        id: u.id as never,
+        email: u.email,
+        name: u.name,
+        image: u.image,
+      };
+    },
+  });
+  return {
+    authStrategies: [passwordStrategy],
+    authHooks: new AuthHookRegistry(),
+    pluginCtx: {} as never,
+    challengeTokenTTL: 300,
+    auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+  };
+}
 
 function makeRequest(
   method: string,
@@ -89,6 +130,13 @@ describe("login handler: respondAction shape", () => {
     // succeeds without us having to monkey-patch the credentials module.
     const passwordHash = await hashPassword("Pass1234!");
 
+    const findUserByEmail = vi
+      .fn()
+      .mockResolvedValue({ ...fakeUser, passwordHash });
+    const incrementFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const lockAccount = vi.fn().mockResolvedValue(undefined);
+    const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
+
     const deps = {
       secret: SECRET,
       isProduction: false,
@@ -101,13 +149,22 @@ describe("login handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      findUserByEmail: vi.fn().mockResolvedValue({ ...fakeUser, passwordHash }),
-      incrementFailedAttempts: vi.fn().mockResolvedValue(undefined),
-      lockAccount: vi.fn().mockResolvedValue(undefined),
-      resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
+      findUserByEmail,
+      incrementFailedAttempts,
+      lockAccount,
+      resetFailedAttempts,
       fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      ...loginPipelineDeps({
+        findUserByEmail,
+        incrementFailedAttempts,
+        lockAccount,
+        resetFailedAttempts,
+        maxLoginAttempts: 5,
+        lockoutDurationSeconds: 900,
+        requireEmailVerification: true,
+      }),
     };
 
     const req = makeRequest("POST", {

@@ -168,7 +168,7 @@ export const dynamicCollectionsPg = pgTable(
      * - 'ui': Visual Collection Builder
      * - 'built-in': System collections from Nextly core
      */
-    source: varchar("source", { length: 20 })
+    source: varchar("source", { length: 255 })
       .$type<CollectionSource>()
       .default("ui")
       .notNull(),

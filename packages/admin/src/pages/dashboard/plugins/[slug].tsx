@@ -19,6 +19,7 @@ import { Info, Package, Puzzle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -67,6 +68,9 @@ function PluginsContent({ activeSlug }: { activeSlug?: string }) {
     ? plugins.find(p => toSlug(p.name) === activeSlug)
     : null;
   const pluginTitle = activePlugin?.appearance?.label ?? activePlugin?.name;
+  // When viewing a specific plugin that contributes a settings UI (D21),
+  // render the plugin's own component instead of the read-only metadata table.
+  const settingsComponent = activePlugin?.settings?.component;
 
   return (
     <div>
@@ -81,35 +85,48 @@ function PluginsContent({ activeSlug }: { activeSlug?: string }) {
         />
       </div>
 
-      {/* Page header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-none bg-primary/5">
-            <Puzzle className="h-6 w-6 text-primary" />
+      {settingsComponent ? (
+        <PluginSlot
+          path={settingsComponent}
+          props={{ plugin: activePlugin as unknown as Record<string, unknown> }}
+        />
+      ) : (
+        <>
+          {/* Page header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-none bg-primary/5">
+                <Puzzle className="h-6 w-6 text-primary" />
+              </div>
+              <div className="space-y-1">
+                <h1 className="text-xl font-semibold tracking-tight">
+                  Plugins
+                </h1>
+                <p className="text-sm font-normal text-primary/50 mt-1">
+                  {plugins.length} installed plugin
+                  {plugins.length !== 1 ? "s" : ""}
+                </p>
+              </div>
+            </div>
           </div>
-          <div className="space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight">Plugins</h1>
-            <p className="text-sm font-normal text-primary/50 mt-1">
-              {plugins.length} installed plugin{plugins.length !== 1 ? "s" : ""}
-            </p>
-          </div>
-        </div>
-      </div>
 
-      {/* In-development banner */}
-      <Alert variant="info" role="status" className="mb-6">
-        <Info className="h-4 w-4" />
-        <div>
-          <AlertTitle>Plugins are in development</AlertTitle>
-          <AlertDescription>
-            Plugin installation and management is coming soon. The current view
-            is a preview &mdash; some features may not be fully functional.
-          </AlertDescription>
-        </div>
-      </Alert>
+          {/* In-development banner */}
+          <Alert variant="info" role="status" className="mb-6">
+            <Info className="h-4 w-4" />
+            <div>
+              <AlertTitle>Plugins are in development</AlertTitle>
+              <AlertDescription>
+                Plugin installation and management is coming soon. The current
+                view is a preview &mdash; some features may not be fully
+                functional.
+              </AlertDescription>
+            </div>
+          </Alert>
 
-      {/* Plugins table */}
-      <PluginsTable plugins={plugins} activeSlug={activeSlug} />
+          {/* Plugins table */}
+          <PluginsTable plugins={plugins} activeSlug={activeSlug} />
+        </>
+      )}
     </div>
   );
 }

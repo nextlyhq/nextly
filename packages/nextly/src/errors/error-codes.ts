@@ -47,6 +47,17 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
   NEXTLY_SCHEMA_RELATION_TARGET_MISSING: 400,
+  // Plugin platform (P2b) — schema extend (contributes.extend) + relations (D15).
+  NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
+  NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: 409,
+  NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
+  // Plugin platform (P2c) — framework remap (.rename()).
+  NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
+  // Plugin platform (P0) — boot-time plugin dependency/version resolution.
+  PLUGIN_RESOLUTION_ERROR: 500,
+  // Plugin platform (P4) — contributes.routes collection (D25).
+  NEXTLY_ROUTE_COLLISION: 409,
+  NEXTLY_ROUTE_INVALID_PATH: 400,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

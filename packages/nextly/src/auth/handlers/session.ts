@@ -12,6 +12,7 @@
  * silently auto-login users. See `attemptDevAutoLogin` below.
  */
 import { respondData } from "../../api/response-shapes";
+import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearAccessTokenCookie,
   readAccessTokenCookie,
@@ -20,6 +21,7 @@ import {
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
+import type { AuthHookRegistry } from "../pipeline/hooks";
 import { getSession } from "../session/get-session";
 import {
   generateRefreshToken,
@@ -54,6 +56,15 @@ export type SessionHandlerDeps = Pick<
   // production anyway.
   trustProxy?: boolean;
   trustedProxyIps?: string[];
+  /**
+   * Auth-flow hooks (D71). Optional so legacy fixtures keep working; the DI path
+   * always supplies it. `determineUser` runs first, letting a plugin resolve the
+   * current user from a custom credential (e.g. API key) before core cookie/JWT
+   * resolution.
+   */
+  authHooks?: AuthHookRegistry;
+  /** Plugin context for {@link authHooks}; supplied alongside `authHooks`. */
+  pluginCtx?: PluginContext;
 };
 
 // Reasons we treat the request as not-authenticated. The first three
@@ -69,6 +80,27 @@ export async function handleSession(
   request: Request,
   deps: SessionHandlerDeps
 ): Promise<Response> {
+  // determineUser (D71) — let a plugin resolve the current user from a custom
+  // credential (API key, alt token) before core cookie/JWT resolution. Returns
+  // null to fall through to the normal path.
+  if (deps.authHooks && deps.pluginCtx) {
+    const custom = await deps.authHooks.runDetermineUser(
+      request,
+      deps.pluginCtx
+    );
+    if (custom) {
+      return respondData({
+        user: {
+          id: custom.id,
+          email: custom.email,
+          name: custom.name ?? null,
+          image: custom.image ?? null,
+        },
+        accessToken: null,
+      });
+    }
+  }
+
   const result = await getSession(request, deps.secret);
 
   let failureReason: FailureReason | null = null;

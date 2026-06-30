@@ -40,6 +40,34 @@ export interface EmailConfig {
 }
 
 /**
+ * @experimental A resolved outgoing form notification (template-based) as built
+ * by the submission handler, before it is sent. This is the value transformed by
+ * the `form-builder.beforeEmail` D63 filter seam.
+ */
+export interface FormEmailNotification {
+  /** Resolved recipient address. */
+  to: string;
+  /** Email template slug to render. */
+  templateSlug: string;
+  /** Template variables (submitted data + form metadata). */
+  variables: Record<string, unknown>;
+  /** Email provider id; undefined = system default. */
+  providerId?: string;
+  /** CC addresses, if any. */
+  cc?: string[];
+  /** BCC addresses, if any. */
+  bcc?: string[];
+  /** Source notification id; undefined for filter-injected emails. */
+  notificationId?: string;
+}
+
+/** @experimental Context passed to the `form-builder.beforeEmail` filter seam. */
+export interface BeforeEmailFilterContext {
+  form: Record<string, unknown>;
+  submission: Record<string, unknown>;
+}
+
+/**
  * A single email notification integration stored on a form.
  * Matches the shape saved by the form builder admin UI.
  */
@@ -216,27 +244,6 @@ export interface FormBuilderPluginOptions {
   };
 
   /**
-   * @deprecated Use `formOverrides` and `formSubmissionOverrides` instead.
-   * This option is kept for backward compatibility.
-   */
-  collections?: {
-    forms?: Partial<CollectionConfig> & {
-      slug?: string;
-      labels?: {
-        singular?: string;
-        plural?: string;
-      };
-    };
-    submissions?: Partial<CollectionConfig> & {
-      slug?: string;
-      labels?: {
-        singular?: string;
-        plural?: string;
-      };
-    };
-  };
-
-  /**
    * Configure which field types are available in the form builder.
    *
    * Set to `false` to disable a field type, or provide partial configuration
@@ -290,25 +297,24 @@ export interface FormBuilderPluginOptions {
   /**
    * Hook called before sending email notifications.
    *
-   * Allows modifying, adding, or filtering emails before they are sent.
-   * Return the modified emails array.
+   * Runs as the `form-builder.beforeEmail` D63 filter: the resolved outgoing
+   * notifications (template + recipient + variables) are threaded through this
+   * callback before they are sent. Allows modifying, adding, or filtering the
+   * outgoing notifications. Return the modified array.
    *
    * @example
    * ```typescript
    * beforeEmail: async ({ emails, form, submission }) => {
-   *   // Add BCC to all emails
-   *   return emails.map(email => ({
-   *     ...email,
-   *     bcc: ['archive@example.com'],
-   *   }));
+   *   // Add BCC to all outgoing notifications
+   *   return emails.map((e) => ({ ...e, bcc: ['archive@example.com'] }));
    * }
    * ```
    */
   beforeEmail?: (args: {
-    emails: EmailConfig[];
+    emails: FormEmailNotification[];
     form: FormDocument;
     submission: SubmissionDocument;
-  }) => Promise<EmailConfig[]> | EmailConfig[];
+  }) => Promise<FormEmailNotification[]> | FormEmailNotification[];
 
   /**
    * Email notification settings.

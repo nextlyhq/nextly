@@ -12,6 +12,7 @@
     "@nextlyhq/eslint-config": "0.0.1",
     "nextly": "0.0.1",
     "@nextlyhq/plugin-form-builder": "0.0.1",
+    "@nextlyhq/plugin-sdk": "0.0.1",
     "@nextlyhq/prettier-config": "0.0.1",
     "@nextlyhq/storage-s3": "0.0.1",
     "@nextlyhq/storage-uploadthing": "0.0.1",

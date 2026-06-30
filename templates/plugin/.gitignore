@@ -1,0 +1,10 @@
+node_modules
+dist
+*.log
+
+# Embedded dev playground — never published, never committed build output
+dev/.next
+dev/*.db
+dev/*.db-journal
+.env
+.env.local

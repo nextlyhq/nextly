@@ -13,6 +13,7 @@ import * as telemetry from "@nextlyhq/telemetry";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
+import { registerAddCommand } from "./commands/add";
 import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync";
@@ -29,6 +30,8 @@ import { registerMigrateResolveCommand } from "./commands/migrate-resolve";
 // prefers a new corrective migration or migrate:fresh.
 import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
+import { registerPluginsCommand } from "./commands/plugins";
+import { registerPruneCommand } from "./commands/prune";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
@@ -194,6 +197,7 @@ function registerCommands(program: Command): void {
   registerDbSyncCommand(program);
   registerBuildCommand(program);
   registerInitCommand(program);
+  registerAddCommand(program);
 
   // Type generation commands
   registerGenerateTypesCommand(program);
@@ -205,6 +209,7 @@ function registerCommands(program: Command): void {
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
+  registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
 
@@ -213,6 +218,9 @@ function registerCommands(program: Command): void {
 
   // Permissions commands
   program.addCommand(createPermissionsCleanupCommand());
+
+  // Plugin introspection (D48) — `nextly plugins list` / `info`.
+  registerPluginsCommand(program);
 
   // Telemetry sub-command (status/enable/disable/reset)
   registerTelemetryCommand(program);

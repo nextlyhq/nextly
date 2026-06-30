@@ -23,6 +23,7 @@ import { getSession } from "../auth/session";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
+import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
@@ -32,6 +33,19 @@ import { simplePluralize } from "../shared/lib/pluralization";
 import { respondList, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
+/**
+ * @experimental D63 `admin.nav` filter seam. Lets plugins transform the
+ * collection list that feeds the admin sidebar (hide/reorder/relabel).
+ */
+export async function applyAdminNavFilter<T extends { slug: string }>(
+  items: T[],
+  userId: string
+): Promise<T[]> {
+  return getFilterRegistry().applyFilters(FilterSeams.AdminNav, items, {
+    userId,
+  });
+}
 
 async function getCollectionRegistry(): Promise<CollectionRegistryService> {
   await getCachedNextly();
@@ -152,14 +166,17 @@ export const GET = withErrorHandler(async (request: Request) => {
     filteredCollections = permittedCollections;
   }
 
+  // D63 seam: let plugins transform the admin nav collection list.
+  const navItems = await applyAdminNavFilter(filteredCollections, user.id);
+
   // Translate offset-based pagination to the canonical page/limit meta. The
   // total reflects the post-permission-filter count so non-admins see a
   // total consistent with what they can paginate through.
   const safeLimit = Math.max(1, limit);
   const page = Math.floor(offset / safeLimit) + 1;
-  const total = filteredCollections.length;
+  const total = navItems.length;
   const totalPages = Math.ceil(total / safeLimit);
-  return respondList(filteredCollections, {
+  return respondList(navItems, {
     total,
     page,
     limit: safeLimit,

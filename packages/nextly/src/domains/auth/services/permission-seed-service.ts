@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
+import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -445,6 +446,40 @@ export class PermissionSeedService extends BaseService {
       this.logger.warn(
         "Could not read dynamic_singles table — skipping single permission seeding."
       );
+    }
+
+    return result;
+  }
+
+  /**
+   * Seed plugin-declared custom permissions (D36). Idempotent — the existing
+   * `(action, resource)` unique index + `ensurePermission` make re-seeding a
+   * no-op. New IDs are returned for super-admin assignment by the caller.
+   */
+  async seedCustomPermissions(
+    perms: CollectedPermission[]
+  ): Promise<SeedResult> {
+    const result = this.emptySeedResult();
+
+    for (const perm of perms) {
+      result.total++;
+      try {
+        const ensured = await this.permissionService.ensurePermission(
+          perm.action,
+          perm.resource,
+          perm.name,
+          perm.slug,
+          perm.description
+        );
+        if (ensured.created) {
+          result.created++;
+          result.newPermissionIds.push(ensured.id);
+        } else {
+          result.skipped++;
+        }
+      } catch {
+        result.errors++;
+      }
     }
 
     return result;

@@ -13,6 +13,7 @@
 
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
+import { getNextlyLogger } from "../observability/logger";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 
 import type { HookRegistry } from "./hook-registry";
@@ -139,23 +140,31 @@ function extractEntryTitle(
 function shouldSkip(context: HookContext): boolean {
   // No user or system user — skip
   if (!context.user?.id || context.user.id === "system") {
-    console.log(
-      `[activity-log] SKIP: no user for ${context.operation} on ${context.collection}`,
-      { userId: context.user?.id }
-    );
     return true;
   }
 
   // Hidden collection — skip
   if (getHiddenCollections().has(context.collection)) {
-    console.log(`[activity-log] SKIP: hidden collection ${context.collection}`);
     return true;
   }
 
-  console.log(
-    `[activity-log] PASS: ${context.operation} on ${context.collection} by user ${context.user.id}`
-  );
   return false;
+}
+
+/** Structured debug log for a fire-and-forget activity-log failure. */
+function logActivityError(action: string, error: unknown): void {
+  getNextlyLogger().error({
+    scope: "activity-log",
+    msg: `${action} logActivity failed`,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/** Best-effort display name from the loosely-typed hook user record. */
+function resolveActorName(user: NonNullable<HookContext["user"]>): string {
+  const value = user.name ?? user.firstName ?? user.email ?? "Unknown";
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- user.* are unknown via the index signature; coerce best-effort
+  return String(value);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,18 +178,11 @@ function shouldSkip(context: HookContext): boolean {
 async function activityLogAfterCreateHandler(
   context: HookContext
 ): Promise<void> {
-  console.log(`[activity-log] afterCreate CALLED for ${context.collection}`, {
-    user: context.user,
-    dataId: context.data?.id,
-  });
   try {
     if (shouldSkip(context)) return;
 
     const service = getActivityLogService();
-    if (!service) {
-      console.log("[activity-log] afterCreate: NO SERVICE");
-      return;
-    }
+    if (!service) return;
 
     const entryId = context.data?.id ? String(context.data.id) : undefined;
     const entryTitle = extractEntryTitle(
@@ -190,30 +192,19 @@ async function activityLogAfterCreateHandler(
     );
 
     // Fire-and-forget — do NOT await
-    console.log(`[activity-log] afterCreate: logging activity`, {
-      userId: context.user!.id,
-      action: "create",
-      collection: context.collection,
-      entryId,
-      entryTitle,
-    });
     service
       .logActivity({
         userId: context.user!.id,
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        userName: String(context.user!.name ?? context.user!.firstName ?? context.user!.email ?? "Unknown"),
+        userName: resolveActorName(context.user!),
         userEmail: String(context.user!.email ?? ""),
         action: "create",
         collection: context.collection,
         entryId,
         entryTitle,
       })
-      .then(() => console.log("[activity-log] afterCreate: SUCCESS"))
-      .catch((e: unknown) =>
-        console.error("[activity-log] afterCreate: FAILED", e)
-      );
+      .catch((e: unknown) => logActivityError("afterCreate", e));
   } catch (err) {
-    console.error("[activity-log] afterCreate: EXCEPTION", err);
+    logActivityError("afterCreate", err);
   }
 }
 
@@ -224,18 +215,11 @@ async function activityLogAfterCreateHandler(
 async function activityLogAfterUpdateHandler(
   context: HookContext
 ): Promise<void> {
-  console.log(`[activity-log] afterUpdate CALLED for ${context.collection}`, {
-    user: context.user,
-    dataId: context.data?.id,
-  });
   try {
     if (shouldSkip(context)) return;
 
     const service = getActivityLogService();
-    if (!service) {
-      console.log("[activity-log] afterUpdate: NO SERVICE");
-      return;
-    }
+    if (!service) return;
 
     const entryId = context.data?.id ? String(context.data.id) : undefined;
     const entryTitle = extractEntryTitle(
@@ -244,30 +228,19 @@ async function activityLogAfterUpdateHandler(
       entryId
     );
 
-    console.log(`[activity-log] afterUpdate: logging activity`, {
-      userId: context.user!.id,
-      action: "update",
-      collection: context.collection,
-      entryId,
-      entryTitle,
-    });
     service
       .logActivity({
         userId: context.user!.id,
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        userName: String(context.user!.name ?? context.user!.firstName ?? context.user!.email ?? "Unknown"),
+        userName: resolveActorName(context.user!),
         userEmail: String(context.user!.email ?? ""),
         action: "update",
         collection: context.collection,
         entryId,
         entryTitle,
       })
-      .then(() => console.log("[activity-log] afterUpdate: SUCCESS"))
-      .catch((e: unknown) =>
-        console.error("[activity-log] afterUpdate: FAILED", e)
-      );
+      .catch((e: unknown) => logActivityError("afterUpdate", e));
   } catch (err) {
-    console.error("[activity-log] afterUpdate: EXCEPTION", err);
+    logActivityError("afterUpdate", err);
   }
 }
 
@@ -278,18 +251,11 @@ async function activityLogAfterUpdateHandler(
 async function activityLogAfterDeleteHandler(
   context: HookContext
 ): Promise<void> {
-  console.log(`[activity-log] afterDelete CALLED for ${context.collection}`, {
-    user: context.user,
-    dataId: context.data?.id,
-  });
   try {
     if (shouldSkip(context)) return;
 
     const service = getActivityLogService();
-    if (!service) {
-      console.log("[activity-log] afterDelete: NO SERVICE");
-      return;
-    }
+    if (!service) return;
 
     // For delete, data may be the deleted record or we might only have the ID
     const entryId = context.data?.id
@@ -304,30 +270,19 @@ async function activityLogAfterDeleteHandler(
       entryId
     );
 
-    console.log(`[activity-log] afterDelete: logging activity`, {
-      userId: context.user!.id,
-      action: "delete",
-      collection: context.collection,
-      entryId,
-      entryTitle,
-    });
     service
       .logActivity({
         userId: context.user!.id,
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        userName: String(context.user!.name ?? context.user!.firstName ?? context.user!.email ?? "Unknown"),
+        userName: resolveActorName(context.user!),
         userEmail: String(context.user!.email ?? ""),
         action: "delete",
         collection: context.collection,
         entryId,
         entryTitle,
       })
-      .then(() => console.log("[activity-log] afterDelete: SUCCESS"))
-      .catch((e: unknown) =>
-        console.error("[activity-log] afterDelete: FAILED", e)
-      );
+      .catch((e: unknown) => logActivityError("afterDelete", e));
   } catch (err) {
-    console.error("[activity-log] afterDelete: EXCEPTION", err);
+    logActivityError("afterDelete", err);
   }
 }
 

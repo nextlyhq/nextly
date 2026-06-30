@@ -31,20 +31,20 @@ import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { ComponentConfig } from "../../components/config/types";
+import type { NextlyServiceConfig } from "../../di/register";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
+import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
-import {
-  toSingularLabel,
-  toPluralLabel,
-} from "../../shared/lib/pluralization";
+import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
@@ -94,6 +94,8 @@ interface ResolvedGenerateTypesOptions extends GenerateTypesCommandOptions {
 interface GenerationResult {
   /** Path to generated TypeScript types file */
   typesFile?: string;
+  /** Path to the generated admin component import map, when plugins contribute admin UI (D60) */
+  componentImportMapFile?: string;
   /** Number of collection interfaces generated */
   collectionCount: number;
   /** Number of single interfaces generated */
@@ -247,12 +249,22 @@ async function generateTypes(
     generateModuleAugmentation: generateDeclare,
   };
 
+  // Permission slugs + event names for typed PermissionSlug/EventName (D47).
+  // `config` is the already-merged config (plugin contributions folded by
+  // loadConfig); `config.plugins` is the resolved plugin list.
+  const { permissionSlugs, eventNames } = collectCodegenNames(
+    config as unknown as NextlyServiceConfig,
+    config.plugins ?? []
+  );
+
   const typeGenerator = new TypeGenerator(typeGeneratorOptions);
   const typesFile = typeGenerator.generateTypesFile(
     records,
     singleRecords,
     componentRecords,
-    userFieldRecords
+    userFieldRecords,
+    permissionSlugs,
+    eventNames
   );
 
   // Resolve and write types file
@@ -262,6 +274,22 @@ async function generateTypes(
 
   result.typesFile = typesFilePath;
   logger.debug(`Written types to: ${typesFilePath}`);
+
+  // Write the admin component import map (D60), alongside the types file, when
+  // any plugin contributes admin components. Importing this generated module
+  // from the app self-registers those components (no manual host imports), and
+  // sidesteps the dynamic auto-registration race. No-op when there are none.
+  const importMap = buildImportMapArtifact(
+    config.plugins ?? [],
+    typesOutputPath
+  );
+  if (importMap) {
+    const importMapPath = resolve(cwd, importMap.path);
+    await ensureDir(dirname(importMapPath));
+    await writeFile(importMapPath, importMap.code, "utf-8");
+    result.componentImportMapFile = importMapPath;
+    logger.debug(`Written plugin admin import map to: ${importMapPath}`);
+  }
 
   // Generate Zod schemas if enabled
   if (options.zod !== false) {

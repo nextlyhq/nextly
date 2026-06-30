@@ -12,8 +12,8 @@
 
 "use client";
 
-import { FormLabelWithTooltip } from "@nextlyhq/admin";
 import {
+  FormLabelWithTooltip,
   Input,
   Button,
   Checkbox,

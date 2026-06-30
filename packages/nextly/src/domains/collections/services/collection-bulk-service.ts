@@ -151,9 +151,7 @@ function partitionOutcomes<T>(
     } else {
       // Per-item closure rejected unexpectedly. Defensive: report as
       // INTERNAL_ERROR rather than silently swallowing the bug.
-      result.failures.push(
-        failureFromThrown(ids[index] ?? "", outcome.reason)
-      );
+      result.failures.push(failureFromThrown(ids[index] ?? "", outcome.reason));
       result.failedCount++;
     }
   });
@@ -296,37 +294,43 @@ export class CollectionBulkService extends BaseService {
     // single-item deleteEntry which preserves the full pipeline). The
     // db connection pool naturally throttles real DB concurrency.
     const outcomes = await Promise.allSettled(
-      params.ids.map(async (entryId): Promise<PerItemOutcome<{ id: string }>> => {
-        try {
-          const deleteResult = await this.mutationService.deleteEntry({
-            collectionName: params.collectionName,
-            entryId,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            context: params.context,
-          });
+      params.ids.map(
+        async (entryId): Promise<PerItemOutcome<{ id: string }>> => {
+          try {
+            const deleteResult = await this.mutationService.deleteEntry({
+              collectionName: params.collectionName,
+              entryId,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+              context: params.context,
+            });
 
-          if (deleteResult.success) {
-            return { kind: "success", record: { id: entryId } };
+            if (deleteResult.success) {
+              return { kind: "success", record: { id: entryId } };
+            }
+            // Decompose the legacy envelope into the canonical per-item
+            // failure shape. The legacy `message` would leak driver/value
+            // text on the wire (§13.8 violation); we keep only the canonical
+            // code-to-publicMessage mapping and let the operator log carry
+            // the legacy text via the dispatcher's logger.
+            const { code, message } =
+              legacyEnvelopeToFailureFields(deleteResult);
+            return {
+              kind: "failure",
+              failure: { id: entryId, code, message },
+            };
+          } catch (error: unknown) {
+            // NextlyError thrown from below the boundary: preserve its code +
+            // publicMessage. Anything else is INTERNAL_ERROR with a generic
+            // public message; full detail goes to the operator log via the
+            // outer dispatcher when it logs the cause chain.
+            return {
+              kind: "failure",
+              failure: failureFromThrown(entryId, error),
+            };
           }
-          // Decompose the legacy envelope into the canonical per-item
-          // failure shape. The legacy `message` would leak driver/value
-          // text on the wire (§13.8 violation); we keep only the canonical
-          // code-to-publicMessage mapping and let the operator log carry
-          // the legacy text via the dispatcher's logger.
-          const { code, message } = legacyEnvelopeToFailureFields(deleteResult);
-          return {
-            kind: "failure",
-            failure: { id: entryId, code, message },
-          };
-        } catch (error: unknown) {
-          // NextlyError thrown from below the boundary: preserve its code +
-          // publicMessage. Anything else is INTERNAL_ERROR with a generic
-          // public message; full detail goes to the operator log via the
-          // outer dispatcher when it logs the cause chain.
-          return { kind: "failure", failure: failureFromThrown(entryId, error) };
         }
-      })
+      )
     );
 
     return partitionOutcomes(outcomes, params.ids);
@@ -377,13 +381,17 @@ export class CollectionBulkService extends BaseService {
                 record: updateResult.data as Record<string, unknown>,
               };
             }
-            const { code, message } = legacyEnvelopeToFailureFields(updateResult);
+            const { code, message } =
+              legacyEnvelopeToFailureFields(updateResult);
             return {
               kind: "failure",
               failure: { id: entryId, code, message },
             };
           } catch (error: unknown) {
-            return { kind: "failure", failure: failureFromThrown(entryId, error) };
+            return {
+              kind: "failure",
+              failure: failureFromThrown(entryId, error),
+            };
           }
         }
       )
@@ -743,7 +751,11 @@ export class CollectionBulkService extends BaseService {
    * ```
    */
   async createEntries(
-    params: { collectionName: string; user?: UserContext },
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+    },
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
@@ -766,12 +778,19 @@ export class CollectionBulkService extends BaseService {
       return result;
     }
 
-    // 1. Check collection-level access FIRST (once for all entries)
+    // 1. Check collection-level access FIRST (once for all entries).
+    // `overrideAccess` (D35 system elevation) bypasses the check — mirrors the
+    // by-query bulk methods so `ctx.services.collections.createMany(..., {as:'system'})`
+    // can seed without an ambient user.
+    const accessUser = params.overrideAccess ? undefined : params.user;
     const accessDenied =
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "create",
-        params.user
+        accessUser,
+        undefined,
+        undefined,
+        params.overrideAccess
       );
     if (accessDenied) {
       // All entries fail due to access denial

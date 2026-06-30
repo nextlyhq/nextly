@@ -61,7 +61,10 @@ import {
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import type { SupportedDialect } from "../../domains/schema/services/schema-generator";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
-import { mergeUiEntities } from "../../domains/schema/ui-schema/merge";
+import {
+  applyDeferredExtendsToManifest,
+  mergeUiEntities,
+} from "../../domains/schema/ui-schema/merge";
 import {
   buildCollectionMetadataUpsert,
   buildComponentMetadataUpsert,
@@ -238,6 +241,14 @@ export async function runMigrateCreate(
     logger.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+
+  // Materialize plugin extends that target Builder-made entities (P8): append
+  // the deferred extend fields onto the matching ui-schema entity so they land
+  // in BOTH the table diff (below) and the dynamic_collections.fields metadata.
+  manifest = applyDeferredExtendsToManifest(
+    manifest,
+    configResult.deferredExtends ?? []
+  );
 
   const merged = mergeUiEntities({
     codeCollections,
