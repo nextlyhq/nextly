@@ -61,7 +61,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].settings?.component).toBe("@acme/p/admin#Settings");
   });
 
-  it("folds headerSlot + widgets for enabled plugins (C9/D22)", () => {
+  it("folds headerSlot + widgets for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -133,7 +133,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].headerSlot).toBe("@acme/p/admin#Badge");
   });
 
-  it("omits header for enabled:false plugins (D49)", () => {
+  it("omits header for enabled:false plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -152,7 +152,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].headerSlot).toBeUndefined();
   });
 
-  it("omits headerSlot + widgets for enabled:false plugins (D49)", () => {
+  it("omits headerSlot + widgets for enabled:false plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -172,7 +172,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].widgets).toBeUndefined();
   });
 
-  it("serializes contributes.fieldTypes type→component, even when disabled (C7/D16)", () => {
+  it("serializes contributes.fieldTypes type→component, even when disabled", () => {
     const fieldTypes = [
       { type: "rating", storage: "number", component: "@acme/p/admin#Rating" },
     ];
@@ -185,7 +185,7 @@ describe("buildPluginAdminMeta", () => {
     ]);
 
     // Disabled plugins keep their collections + custom field types so the admin
-    // can still render fields of retained collections (D14/D49).
+    // can still render fields of retained collections.
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes: { fieldTypes } }]),
       undefined
@@ -195,7 +195,7 @@ describe("buildPluginAdminMeta", () => {
     ]);
   });
 
-  it("omits admin contributions for enabled:false plugins (D49)", () => {
+  it("omits admin contributions for enabled:false plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {

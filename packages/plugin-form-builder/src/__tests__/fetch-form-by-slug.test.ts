@@ -1,6 +1,6 @@
 /**
  * R4/D56 — `fetchFormBySlug` resolves a form via a service-level `where` query
- * (P7a) + `{as:'system'}` instead of fetching every form and filtering
+ * + `{as:'system'}` instead of fetching every form and filtering
  * client-side. Focused unit test with a spied collections service.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -21,7 +21,7 @@ const config = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
-describe("fetchFormBySlug (R4/D56)", () => {
+describe("fetchFormBySlug", () => {
   it("queries by slug with a where filter under {as:'system'}", async () => {
     const listEntries = vi
       .fn()

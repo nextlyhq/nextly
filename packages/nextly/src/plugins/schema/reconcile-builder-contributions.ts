@@ -1,6 +1,6 @@
 /**
  * Boot-time reconciliation of plugin `extend` contributions onto UI-Builder
- * entities (P8 / plugin-access-to-ui-builder-entities).
+ * entities.
  *
  * The config fold defers any `extend` whose target isn't a code/plugin entity
  * (a candidate Builder collection/single/component). Under `migrate` those are

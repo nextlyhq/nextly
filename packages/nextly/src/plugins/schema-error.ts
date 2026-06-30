@@ -1,7 +1,7 @@
 import { NextlyError } from "../errors/nextly-error";
 
 /**
- * Fail-fast boot error for plugin schema merging (D13). Mirrors
+ * Fail-fast boot error for plugin schema merging. Mirrors
  * {@link ./resolution-error}: the specific failure mode is carried in
  * `logContext.reason`; the public message stays generic while the detail
  * (kind/slug/owners) lives in `logContext` for operators.
@@ -22,8 +22,8 @@ export function slugCollisionError(
 
 /**
  * Fail-fast boot error when a plugin's `contributes.extend` targets a slug that
- * exists in NEITHER the code/plugin merged schema NOR the Builder/UI set (D12).
- * Since P8 turned on the Builder lane (R2/D3), a Builder-made target is resolved
+ * exists in NEITHER the code/plugin merged schema NOR the Builder/UI set.
+ * Since P8 turned on the Builder lane, a Builder-made target is resolved
  * — on the CLI against `ui-schema.json`, at runtime against the `dynamic_*`
  * tables — and no longer errors here; only a genuine typo (unknown everywhere)
  * does.
@@ -44,7 +44,7 @@ export function extendTargetUnknownError(
 /**
  * Fail-fast boot error when a plugin's `contributes.extend` adds a field whose
  * name already exists on the target (case-insensitive) — either the target's
- * own field or one added by an earlier plugin's extend (D13).
+ * own field or one added by an earlier plugin's extend.
  */
 export function extendFieldDuplicateError(
   target: string,
@@ -62,7 +62,7 @@ export function extendFieldDuplicateError(
 
 /**
  * Fail-fast boot error when a `relationTo` points at a slug that is not a
- * collection in the merged schema (nor a core target users/media) (D15).
+ * collection in the merged schema (nor a core target users/media).
  */
 export function relationTargetMissingError(
   source: string,
@@ -80,7 +80,7 @@ export function relationTargetMissingError(
 
 /**
  * Fail-fast boot error when a plugin's `.rename()` targets a slug it does not
- * contribute (a typo or stale rename) (D54).
+ * contribute (a typo or stale rename).
  */
 export function renameUnknownTargetError(
   target: string,
@@ -97,7 +97,7 @@ export function renameUnknownTargetError(
 
 /**
  * Fail-fast boot error when a plugin relates to another plugin's entity without
- * declaring `dependsOn` on it (D15).
+ * declaring `dependsOn` on it.
  */
 export function crossPluginRelationError(
   sourcePlugin: string,

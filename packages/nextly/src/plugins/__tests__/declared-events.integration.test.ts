@@ -10,7 +10,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("contributes.events declared names (D9)", () => {
+describe("contributes.events declared names", () => {
   it("registers contributes.events so a plugin's custom emits don't warn", async () => {
     const warnings: string[] = [];
     const received: unknown[] = [];

@@ -56,7 +56,7 @@ describe("collectCustomPermissions", () => {
     });
   });
 
-  it("collects from disabled plugins too (D49)", () => {
+  it("collects from disabled plugins too", () => {
     const out = collectCustomPermissions(cfg(), [
       plugin("@acme/x", [{ action: "manage", resource: "seo" }], false),
     ]);
@@ -99,7 +99,7 @@ describe("collectCustomPermissions", () => {
     expect(collectCustomPermissions(cfg(["posts"]), [])).toEqual([]);
   });
 
-  it("folds app-level config.permissions with owner 'app' (D36)", () => {
+  it("folds app-level config.permissions with owner 'app'", () => {
     const out = collectCustomPermissions(
       {
         ...cfg(),

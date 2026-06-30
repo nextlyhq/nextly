@@ -13,7 +13,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("form-builder framework .rename() (D54 / R4)", () => {
+describe("form-builder framework .rename()", () => {
   it("renames the submissions collection; table + afterCreate hook follow via ctx.self", async () => {
     const { plugin } = formBuilder();
 

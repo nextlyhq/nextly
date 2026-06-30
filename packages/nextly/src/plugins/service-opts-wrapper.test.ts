@@ -123,7 +123,7 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
     );
   });
 
-  it("count as:'user' with no user rejects before delegating (D56)", async () => {
+  it("count as:'user' with no user rejects before delegating", async () => {
     const m = mockCollections();
     await expect(
       wrapCollectionsForPlugin(m as never).count("vault", {}, { as: "user" })

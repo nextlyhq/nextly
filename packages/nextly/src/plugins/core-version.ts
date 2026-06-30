@@ -1,5 +1,5 @@
 /**
- * Core version source for the plugin resolver (D6).
+ * Core version source for the plugin resolver.
  *
  * The running core version is needed by `resolvePlugins` to validate each
  * plugin's `nextly` compatibility range. We obtain it from a build-time /

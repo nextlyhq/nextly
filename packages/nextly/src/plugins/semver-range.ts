@@ -2,7 +2,7 @@ import semver from "semver";
 
 /**
  * Policy for all plugin version ranges: prereleases (alpha/beta) count as
- * in-range, so a `>=0.0.2-alpha.0` range matches the `0.0.2-alpha.21` core. (D6)
+ * in-range, so a `>=0.0.2-alpha.0` range matches the `0.0.2-alpha.21` core.
  */
 const RANGE_OPTS = { includePrerelease: true } as const;
 

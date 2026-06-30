@@ -48,7 +48,7 @@ async function bootWithCoreTables(): Promise<TestNextly> {
 
 const STRONG_PASSWORD = "Str0ng-P@ssw0rd!";
 
-describe("auth.* post-commit lifecycle events (D69)", () => {
+describe("auth.* post-commit lifecycle events", () => {
   it("registering a user emits auth.registered with { userId, email }", async () => {
     current = await bootWithCoreTables();
 

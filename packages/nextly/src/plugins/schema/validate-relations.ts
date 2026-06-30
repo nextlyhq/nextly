@@ -1,5 +1,5 @@
 /**
- * Boot-time relationship validation for the merged schema (D15).
+ * Boot-time relationship validation for the merged schema.
  *
  * After the fold (`applyPluginSchemaContributions`), every `relationTo` — on
  * code-first AND plugin-contributed entities — must resolve to a collection in
@@ -45,7 +45,7 @@ export interface UnresolvedRelation {
  * @experimental Collect every `relationTo` in the merged config that doesn't
  * resolve to a code/plugin collection (nor a core target users/media), WITHOUT
  * throwing. A target collected here may still be a Builder/UI-schema collection,
- * which isn't knowable at fold time (P8/R2) — pass the result to
+ * which isn't knowable at fold time — pass the result to
  * {@link finalizeRelationTargets} once Builder slugs are known.
  */
 export function collectUnresolvedRelationTargets(
@@ -86,10 +86,10 @@ export function collectUnresolvedRelationTargets(
 }
 
 /**
- * @experimental Finalize deferred relation targets (P8): any target not present
+ * @experimental Finalize deferred relation targets: any target not present
  * in `builderSlugs` is a dangling reference. By default (and for the eager
  * validation / CLI path) this throws `NEXTLY_SCHEMA_RELATION_TARGET_MISSING`
- * (D15). The runtime boot opts into graceful resolution (`strict: false`): a
+ *. The runtime boot opts into graceful resolution (`strict: false`): a
  * missing target is warned + skipped so a typo or removed Builder entity can't
  * crash boot — mirroring the extend path. Pass an empty set to require targets
  * be code/plugin/core only (the pre-P8 behavior).
@@ -117,7 +117,7 @@ export function finalizeRelationTargets(
 /**
  * @experimental Validate every `relationTo` in the merged config against the
  * merged collection slug set (+ core targets). Throws
- * `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` on the first dangling target (D15).
+ * `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` on the first dangling target.
  * Eager form (no Builder lane) = collect + finalize against an empty Builder set.
  */
 export function validateMergedRelations(config: NextlyServiceConfig): void {
@@ -136,7 +136,7 @@ function pluginEntities(plugin: PluginDefinition): FieldedEntity[] {
 
 /**
  * @experimental Enforce that a plugin relating to ANOTHER plugin's entity
- * declares `dependsOn` on that plugin (D15). Relations to code/core entities or
+ * declares `dependsOn` on that plugin. Relations to code/core entities or
  * to the plugin's own entities need no declaration. Throws
  * `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`.
  *
@@ -187,7 +187,7 @@ export function validateCrossPluginRelations(
       checkFields(entity.fields, plugin);
     }
     // Relations injected via `contributes.extend` are owned by the EXTENDING
-    // plugin, so they must also declare dependsOn for cross-plugin targets (D15).
+    // plugin, so they must also declare dependsOn for cross-plugin targets.
     for (const clause of plugin.contributes?.extend ?? []) {
       checkFields(clause.fields, plugin);
     }

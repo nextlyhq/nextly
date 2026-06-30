@@ -51,7 +51,7 @@ const baseConfig = () =>
 const slugSet = (entities: { slug: string }[] | undefined): string[] =>
   (entities ?? []).map(e => e.slug).sort();
 
-describe("CLI↔runtime schema fold parity (D50)", () => {
+describe("CLI↔runtime schema fold parity", () => {
   const plugins = [
     plugin("@t/a", {
       collections: [coll("a-forms")],
@@ -93,7 +93,7 @@ const fieldNames = (
 ): string[] => (e?.fields ?? []).map(f => f.name ?? "");
 
 /**
- * D50/R2 — the Builder schema lane (P8). A plugin extends BOTH a code collection
+ * D50/R2 — the Builder schema lane. A plugin extends BOTH a code collection
  * and a Builder-made collection. The CLI path (`mergeSetupResultIntoConfig` +
  * `applyPluginSchemaContributionsDeferred`) and the runtime path
  * (`applyPluginSchemaContributionsDeferred`) must (a) fold code/plugin + apply
@@ -101,7 +101,7 @@ const fieldNames = (
  * (c) resolve that deferred extend against the same Builder set to the same
  * extended Builder entity. This is the dual-lane parity that gates the lane.
  */
-describe("CLI↔runtime Builder-lane parity (D50/P8/R2)", () => {
+describe("CLI↔runtime Builder-lane parity", () => {
   const seo = plugin("@t/seo", {
     extend: [
       { target: "code-posts", fields: [fld("seoTitle")] }, // code target

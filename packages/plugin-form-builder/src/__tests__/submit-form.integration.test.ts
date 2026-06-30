@@ -21,7 +21,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("submitForm end-to-end (R4/D56)", () => {
+describe("submitForm end-to-end", () => {
   it("resolves the form, validates, and persists a submission", async () => {
     const fb = formBuilder({
       spamProtection: { honeypot: false, recaptcha: { enabled: false } },

@@ -19,7 +19,7 @@ const notes = () =>
     fields: [text({ name: "title" }), text({ name: "status" })],
   });
 
-describe("collections.listQuery filter seam (D63)", () => {
+describe("collections.listQuery filter seam", () => {
   it("a registered collections.listQuery filter restricts the result set", async () => {
     // Plugin registers a filter that injects title==="B" constraint so only
     // entry B is returned, making the assertion unambiguous regardless of

@@ -6,7 +6,7 @@ import {
   resetAutoRegistration,
 } from "./component-registry";
 
-describe("autoRegisterPluginComponents — per-module guard (D60)", () => {
+describe("autoRegisterPluginComponents — per-module guard", () => {
   beforeEach(() => {
     resetAutoRegistration();
   });

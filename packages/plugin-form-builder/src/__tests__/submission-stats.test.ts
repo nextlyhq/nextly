@@ -1,13 +1,13 @@
 /**
  * R4/D56 — `getFormSubmissionStats` counts submissions per status via the
- * service-level `count` (P7a) under `{as:'system'}`, instead of listing every
+ * service-level `count` under `{as:'system'}`, instead of listing every
  * submission and counting client-side. Focused unit test with a spied service.
  */
 import { describe, expect, it, vi } from "vitest";
 
 import { getFormSubmissionStats } from "../handlers/submit-form";
 
-describe("getFormSubmissionStats (R4/D56)", () => {
+describe("getFormSubmissionStats", () => {
   it("counts per status with where filters and assembles the totals", async () => {
     // fetchFormBySlug resolves the parent form via listEntries.
     const listEntries = vi

@@ -10,7 +10,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("plugin destroy() on shutdown (D4/D7)", () => {
+describe("plugin destroy() on shutdown", () => {
   it("runs destroy in reverse init order, skipping disabled plugins", async () => {
     const order: string[] = [];
     const a = definePlugin({

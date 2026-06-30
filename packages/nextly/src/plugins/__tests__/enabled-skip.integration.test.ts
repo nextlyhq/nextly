@@ -12,7 +12,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("enabled:false behavior-skip (D49)", () => {
+describe("enabled:false behavior-skip", () => {
   it("skips init for a disabled plugin but still runs its setup (schema kept)", async () => {
     let disabledInit = false;
     let enabledInit = false;
@@ -55,7 +55,7 @@ describe("enabled:false behavior-skip (D49)", () => {
     expect(enabledInit).toBe(true);
 
     // Schema contribution still applied — the disabled plugin's setup ran,
-    // so its collection is present in the booted config (D49).
+    // so its collection is present in the booted config.
     const cfg = current.getService("config") as NextlyServiceConfig;
     expect(cfg.collections?.some(c => c.slug === "disabledthings")).toBe(true);
   });

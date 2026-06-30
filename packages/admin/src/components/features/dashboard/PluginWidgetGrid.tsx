@@ -6,7 +6,7 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { cn } from "@admin/lib/utils";
 
 /**
- * Renders plugin-contributed dashboard widgets (D22 / C9). Collects every
+ * Renders plugin-contributed dashboard widgets. Collects every
  * enabled plugin's `widgets`, RBAC-gates each via `useCurrentUserPermissions`
  * (closed-until-loaded — the `useCan` semantics, D36), and renders each through
  * `PluginSlot` (resolution + error isolation, D53) in a 12-column grid where

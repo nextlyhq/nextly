@@ -1,5 +1,5 @@
 /**
- * D56 (P7a) end-to-end — the new `ctx.services.collections` surface (the
+ * D56 end-to-end — the new `ctx.services.collections` surface (the
  * ServiceOpts-wrapped facade) against a live in-memory SQLite boot.
  *
  * Harness scope (mirrors the P3-D35/P4 posture): the in-memory `createTestNextly`
@@ -15,7 +15,7 @@
  *  - `count` with a `where` filter actually reaches the query layer (the filter
  *    the facade used to DROP), under `{as:'system'}` elevation; and
  *  - secure-by-default: `{as:'user'}` enforces RBAC (permission-less user denied)
- *    and a missing user is rejected before any query (D35).
+ *    and a missing user is rejected before any query.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -55,7 +55,7 @@ async function bootWithServices(): Promise<Services> {
   return services;
 }
 
-describe("ctx.services.collections D56 surface (D56/D35)", () => {
+describe("ctx.services.collections D56 surface", () => {
   it("count threads its `where` filter through {as:'system'} end-to-end", async () => {
     const services = await bootWithServices();
     for (const w of [
@@ -91,7 +91,7 @@ describe("ctx.services.collections D56 surface (D56/D35)", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("count as:'user' with no user rejects before any query (D35)", async () => {
+  it("count as:'user' with no user rejects before any query", async () => {
     const services = await bootWithServices();
     await expect(
       services.collections.count("widgets", {}, { as: "user" })

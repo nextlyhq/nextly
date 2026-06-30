@@ -1,5 +1,5 @@
 /**
- * form-builder HTTP route (R4, P4/D25/D28).
+ * form-builder HTTP route.
  *
  * Proves the flagship plugin CONTRIBUTES a real HTTP route and that it mounts
  * under the catch-all, secured by default — the canonical `contributes.routes`
@@ -31,7 +31,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("form-builder export route (R4, D25)", () => {
+describe("form-builder export route", () => {
   it("contributes the submissions export route", () => {
     const { plugin } = formBuilder();
     expect(plugin.contributes?.routes).toContainEqual(

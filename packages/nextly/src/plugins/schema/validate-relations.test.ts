@@ -33,7 +33,7 @@ const caught = (fn: () => unknown): NextlyError => {
   throw new Error("expected validateMergedRelations to throw");
 };
 
-describe("validateMergedRelations (D15)", () => {
+describe("validateMergedRelations", () => {
   it("accepts a relationTo pointing at a collection in the merged set", () => {
     expect(() =>
       validateMergedRelations(
@@ -75,7 +75,7 @@ describe("validateMergedRelations (D15)", () => {
   });
 });
 
-describe("collectUnresolvedRelationTargets + finalizeRelationTargets (P8/D15)", () => {
+describe("collectUnresolvedRelationTargets + finalizeRelationTargets", () => {
   it("collects relationTo targets absent from code+core without throwing", () => {
     const unresolved = collectUnresolvedRelationTargets(
       cfg([coll("posts"), coll("comments", [rel("page", "pages")])])

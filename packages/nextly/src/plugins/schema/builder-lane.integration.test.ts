@@ -18,7 +18,7 @@ import { createTestNextly, type TestNextly } from "../test-nextly";
 
 const textField = (name: string) => ({ name, type: "text" });
 
-describe("Builder schema lane — runtime boot (P8/D3/R2)", () => {
+describe("Builder schema lane — runtime boot", () => {
   let handle: TestNextly | undefined;
   afterEach(async () => {
     await handle?.destroy();

@@ -13,7 +13,7 @@ interface PluginComponentBoundaryProps {
 }
 
 /**
- * Wraps a plugin-contributed admin component in an error boundary (D53/R9).
+ * Wraps a plugin-contributed admin component in an error boundary.
  *
  * A throwing plugin component is contained to a small, identifiable fallback
  * instead of white-screening the surrounding admin page. Use via `PluginSlot`,

@@ -19,7 +19,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("ctx.services.collections ServiceOpts wiring (D35)", () => {
+describe("ctx.services.collections ServiceOpts wiring", () => {
   it("as:'user' with no user rejects via the wrapper", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let services: any;

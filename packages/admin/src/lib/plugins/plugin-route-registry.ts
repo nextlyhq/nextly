@@ -1,5 +1,5 @@
 /**
- * Client-side registry of plugin-contributed admin pages (D21).
+ * Client-side registry of plugin-contributed admin pages.
  *
  * Plugin pages are namespaced under `/admin/plugins/<slug>/<path>` to avoid
  * collisions with core routes (mirrors the P4 API namespacing `/api/plugins/
@@ -16,7 +16,7 @@
 export interface RegisteredPluginPage {
   /** Full namespaced admin path: `/admin/plugins/<slug>/<path>`. */
   fullPath: string;
-  /** Component path resolved via the component registry (D19). */
+  /** Component path resolved via the component registry. */
   component: string;
   /** Permission required to view this page (route-level RBAC, D36). */
   requiredPermission?: string;

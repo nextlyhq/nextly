@@ -1,5 +1,5 @@
 /**
- * T3 — multi-plugin interaction via custom services (C1/D64).
+ * T3 — multi-plugin interaction via custom services.
  *
  * Plugin B `optionalDependsOn` Plugin A and consumes A's contributed service
  * when present, degrading gracefully (no throw) when A is absent/disabled.

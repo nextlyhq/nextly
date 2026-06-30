@@ -1,5 +1,5 @@
 /**
- * Codegen name collection (D47).
+ * Codegen name collection.
  *
  * Pure helpers that derive the typed-slug unions emitted into the generated
  * `Config` interface (see {@link TypeGenerator.generateTypesFile}):
@@ -43,7 +43,7 @@ const SINGLE_ACTIONS = ["read", "update"] as const;
 /**
  * Derive the permission-slug + event-name unions for codegen from the merged
  * config and resolved plugins. Pure. Reuses the single shared permission
- * collector (D36/D50) so generated types match what boot actually seeds.
+ * collector so generated types match what boot actually seeds.
  */
 export function collectCodegenNames(
   config: NextlyServiceConfig,
@@ -78,13 +78,13 @@ export function collectCodegenNames(
     permissionSlugs.add(perm.slug);
   }
 
-  // Lifecycle event (P1) + core event families (D69).
+  // Lifecycle event + core event families.
   eventNames.add("plugin.initialized");
   for (const name of Object.values(DocumentEvents)) eventNames.add(name);
   for (const name of Object.values(AuthEvents)) eventNames.add(name);
   for (const name of Object.values(MediaEvents)) eventNames.add(name);
 
-  // Plugin-declared custom events (D9).
+  // Plugin-declared custom events.
   for (const plugin of plugins) {
     for (const event of plugin.contributes?.events ?? []) {
       eventNames.add(event.name);

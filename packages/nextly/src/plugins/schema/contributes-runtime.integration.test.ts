@@ -16,7 +16,7 @@ const widgetsPlugin: PluginDefinition = {
   contributes: { collections: [widgetsCollection] },
 };
 
-describe("plugin contributes.collections — runtime fold (D3/D50)", () => {
+describe("plugin contributes.collections — runtime fold", () => {
   let handle: TestNextly | undefined;
 
   afterEach(async () => {

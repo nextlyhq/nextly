@@ -43,7 +43,7 @@ interface AdminComponents {
   AfterEdit?: string;
 }
 
-/** Resolve a plugin's declared view slug through its renameMap (D54). */
+/** Resolve a plugin's declared view slug through its renameMap. */
 function resolvedSlug(plugin: PluginDefinition, declared: string): string {
   return plugin.renameMap?.[declared] ?? declared;
 }

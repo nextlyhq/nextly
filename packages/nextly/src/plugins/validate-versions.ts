@@ -4,7 +4,7 @@ import { isValidRange, satisfiesRange } from "./semver-range";
 
 /**
  * Boot-check every plugin's `nextly` core range and its `dependsOn` /
- * present `optionalDependsOn` version ranges (D6). Throws fail-fast (D7).
+ * present `optionalDependsOn` version ranges. Throws fail-fast.
  *
  * Missing-required-dependency *presence* is handled by topoSortPlugins; this
  * function only checks version compatibility of dependencies that ARE present.

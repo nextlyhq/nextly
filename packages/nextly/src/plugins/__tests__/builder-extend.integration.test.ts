@@ -209,7 +209,7 @@ describe("plugin extend → UI-Builder collection (dev-push, P8)", () => {
   });
 });
 
-describe("plugin extend → UI-Builder single + component parity (P8)", () => {
+describe("plugin extend → UI-Builder single + component parity", () => {
   // Two-phase: boot once (no plugins) so the table resolver is set, seed the
   // UI single/component through its registry service, reset DI without dropping
   // the in-memory DB, then boot with the plugin so reconcile materialises.
@@ -340,7 +340,7 @@ describe("plugin removal → orphan column (P8 §7, data-safe)", () => {
   });
 });
 
-describe("plugin relation → UI-Builder collection (P8)", () => {
+describe("plugin relation → UI-Builder collection", () => {
   // NOTE: these tests assert the relation *resolution* (existence check +
   // graceful/strict) — the thing this slice owns. A "Schema apply FAILED —
   // global" line on stderr is expected harness noise: the in-memory push

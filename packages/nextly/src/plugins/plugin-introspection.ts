@@ -1,5 +1,5 @@
 /**
- * Plugin introspection (D48).
+ * Plugin introspection.
  *
  * A pure, read-only view of what each registered plugin IS and CONTRIBUTES —
  * derived WITHOUT running the plugin (`init` is never called). Reuses the same
@@ -10,7 +10,7 @@
  *   - {@link collectPluginRoutes} for route counts (enabled-only, D49);
  *   - {@link buildPluginAdminMeta} for admin menu/page/settings counts.
  *
- * Backs `nextly plugins list` / `nextly plugins info` (D48).
+ * Backs `nextly plugins list` / `nextly plugins info`.
  *
  * @module plugins/plugin-introspection
  */
@@ -24,13 +24,13 @@ import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
 import { collectPluginRoutes } from "./routes/collect-routes";
 
-/** A read-only, introspectable summary of one registered plugin (D48). */
+/** A read-only, introspectable summary of one registered plugin. */
 export interface PluginInfo {
   name: string;
   version: string;
-  /** Declared core-compatibility range (D6). */
+  /** Declared core-compatibility range. */
   nextly: string;
-  /** `false` when `enabled: false` — schema still applies, behavior is skipped (D49). */
+  /** `false` when `enabled: false` — schema still applies, behavior is skipped. */
   enabled: boolean;
   dependsOn: string[];
   optionalDependsOn: string[];
@@ -40,14 +40,14 @@ export interface PluginInfo {
   components: string[];
   /** Custom permission slugs declared by this plugin (CRUD is auto-seeded, not listed). */
   permissions: string[];
-  /** Custom event names this plugin declares it may emit (D9). */
+  /** Custom event names this plugin declares it may emit. */
   events: string[];
   /** Number of HTTP routes contributed (0 when disabled, D49). */
   routeCount: number;
   adminMenuCount: number;
   adminPageCount: number;
   hasSettings: boolean;
-  /** Declared-slug → resolved-slug remap applied by the integrator (D54). */
+  /** Declared-slug → resolved-slug remap applied by the integrator. */
   renamed: Record<string, string>;
 }
 

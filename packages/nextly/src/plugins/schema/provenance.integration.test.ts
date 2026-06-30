@@ -11,7 +11,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("entity provenance (D14)", () => {
+describe("entity provenance", () => {
   it("tags a plugin-contributed collection source=plugin:<name> and keeps it locked", async () => {
     const widgets = defineCollection({
       slug: "p2_prov_plugin",

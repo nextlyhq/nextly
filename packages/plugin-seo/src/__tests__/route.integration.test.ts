@@ -26,7 +26,7 @@ const pages = () =>
     fields: [text({ name: "slug" }), text({ name: "status" })],
   });
 
-describe("seo sitemap route + event invalidation (P7c)", () => {
+describe("seo sitemap route + event invalidation", () => {
   it("declares a public GET /sitemap.xml route", () => {
     const route = seo({ collections: ["pages"], baseUrl: "https://x.com" })
       .plugin.contributes?.routes?.[0];

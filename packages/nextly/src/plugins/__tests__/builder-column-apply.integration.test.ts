@@ -1,8 +1,8 @@
 /**
- * Task 1 — ground the boot-safe Builder column apply.
+ * Ground the boot-safe Builder column apply.
  *
- * The flagged risk for plugin-access-to-UI-Builder-entities was whether the
- * Builder's column apply can be driven outside an admin request. It resolved
+ * The flagged risk was whether the Builder's column apply can be driven outside
+ * an admin request. It resolved
  * to: the boot-safe apply already exists as `addMissingColumnsForFields` (the
  * util dev-push already uses, dev-server.ts:589) — non-request-coupled,
  * add-only, idempotent. This test pins that it materialises a plugin-style

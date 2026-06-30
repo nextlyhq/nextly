@@ -53,7 +53,7 @@ const snapshotForPluginFields = (fields: FieldConfig[]) => {
   );
 };
 
-describe("plugin entities participate in the schema-snapshot cache (D52)", () => {
+describe("plugin entities participate in the schema-snapshot cache", () => {
   it("a reboot with identical plugin schema is a cache hit (dequal match → push skipped)", () => {
     clearCachedSnapshot();
     const firstBoot = snapshotForPluginFields([text({ name: "title" })]);

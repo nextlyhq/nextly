@@ -53,7 +53,7 @@ beforeEach(() => {
   reqPerm.mockReset();
 });
 
-describe("secure-by-default plugin route dispatch (D28)", () => {
+describe("secure-by-default plugin route dispatch", () => {
   it("public route runs the handler without calling auth; user is null", async () => {
     const res = await runPluginRoute(req(), match(route({ public: true })));
     expect(res.status).toBe(200);

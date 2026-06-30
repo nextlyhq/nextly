@@ -1,11 +1,11 @@
 /**
- * `createTestNextly` — in-memory integration harness (D46).
+ * `createTestNextly` — in-memory integration harness.
  *
  * Boots a REAL Nextly instance on in-memory SQLite (not mocks), running the
  * full plugin lifecycle (resolve → setup → schema sync → init), so plugin
  * authors and the framework can integration-test hooks, events, and lifecycle
  * without a live database. Lives in core and is re-exported from
- * `@nextlyhq/plugin-sdk/testing` (D43).
+ * `@nextlyhq/plugin-sdk/testing`.
  *
  * @module plugins/test-nextly
  */
@@ -102,7 +102,7 @@ export async function createTestNextly(
   resetPluginRouteRegistry();
   resetNextlyInstance();
   // Each boot is a fresh, distinct in-memory database. The schema-snapshot
-  // cache (D52) is a globalThis singleton scoped to a single live DB; if left
+  // cache is a globalThis singleton scoped to a single live DB; if left
   // warm from a prior boot it makes the runtime auto-sync skip the push
   // ("schema unchanged"), so the new DB never gets its tables. Clear it so
   // every boot pushes its full desired schema (replaces the old

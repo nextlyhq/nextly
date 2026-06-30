@@ -19,7 +19,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
   const logout = useLogout();
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
-  // Plugin-contributed header-slot components (C9); each self-gates on
+  // Plugin-contributed header-slot components; each self-gates on
   // permission. Read `header.slot` (current) with `headerSlot` (deprecated)
   // fallback.
   const headerSlots = (branding?.plugins ?? [])
@@ -75,7 +75,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
           </a>
         )}
 
-        {/* Plugin header-slot components (C9), rendered before the bell. */}
+        {/* Plugin header-slot components, rendered before the bell. */}
         {headerSlots.map(p => (
           <PluginSlot key={p.name} path={p.slot} />
         ))}

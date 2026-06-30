@@ -3,19 +3,19 @@
  *
  * Pure function: appends each plugin's `contributes.{collections,singles,
  * components}` to the config's own arrays so the downstream merge/migration/
- * sync machinery treats them like ordinary code-first entities (D3/D12). Runs
+ * sync machinery treats them like ordinary code-first entities. Runs
  * over ALL plugins — including disabled ones — so declarative schema stays
- * deterministic across environments (D49).
+ * deterministic across environments.
  *
  * Slug collisions that involve a plugin-contributed entity are a fail-fast boot
- * error (D13). Pre-existing code-vs-code duplicates are left untouched so the
+ * error. Pre-existing code-vs-code duplicates are left untouched so the
  * plugin-free path is byte-for-byte unchanged (decisions doc G2). Collections,
  * singles, and components are independent namespaces (distinct table prefixes),
  * so a collection and a single may share a slug.
  *
  * Called at the same post-`setup` seam by both the runtime boot
  * (`di/register.ts`) and the CLI (`cli/utils/config-loader.ts`), which is what
- * keeps the two paths in agreement (D50).
+ * keeps the two paths in agreement.
  *
  * @module plugins/schema/apply-contributions
  */
@@ -112,13 +112,13 @@ function tryExtend<T extends Fielded>(
 }
 
 /**
- * Apply every plugin's `contributes.extend` (D12): append the declared fields to
+ * Apply every plugin's `contributes.extend`: append the declared fields to
  * the target entity (found by slug across the merged collections/singles/
  * components). `target` may be a slug or an array of slugs (applied to each). An
- * unknown target fails fast (D12). This is the EAGER form used by
+ * unknown target fails fast. This is the EAGER form used by
  * `applyPluginSchemaContributions`; the Builder-aware boot paths instead use the
  * deferring fold so a Builder-made target is resolved later, not thrown here
- * (P8/R2). Pure: clones touched arrays.
+ *. Pure: clones touched arrays.
  */
 function applyExtends(
   collections: NextlyServiceConfig["collections"],
@@ -166,7 +166,7 @@ export interface SchemaEntityLike {
   fields?: FieldConfig[];
 }
 
-/** Builder/UI-schema entities that participate in extend resolution (P8). */
+/** Builder/UI-schema entities that participate in extend resolution. */
 export interface BuilderEntities {
   collections?: SchemaEntityLike[];
   singles?: SchemaEntityLike[];
@@ -176,7 +176,7 @@ export interface BuilderEntities {
 /** Result of the deferring fold: the code+plugin merged config + unresolved extends. */
 export interface FoldResult {
   config: NextlyServiceConfig;
-  /** Extends whose target wasn't a code/plugin entity — resolved later (P8). */
+  /** Extends whose target wasn't a code/plugin entity — resolved later. */
   deferredExtends: DeferredExtend[];
 }
 
@@ -201,7 +201,7 @@ function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
  * across all three). Pure: clones touched arrays. A clause whose target is not
  * found is either thrown (`onUnknown: "throw"`, D12) or collected into `deferred`
  * (`onUnknown: "collect"`) — the latter holds a target that may be a Builder
- * entity until Builder slugs are known (P8/R2).
+ * entity until Builder slugs are known.
  */
 export function applyExtendClauses<
   C extends Fielded,
@@ -240,7 +240,7 @@ export function applyExtendClauses<
  * Rewrite relationship `relationTo` through the rename map, recursing into the
  * nested `fields` of container fields (`group`/`repeater`) so a plugin's own
  * relations follow the rename wherever they are declared, not just at the top
- * level (D54). `group` and `repeater` are the only field-builder containers
+ * level. `group` and `repeater` are the only field-builder containers
  * that nest other fields.
  */
 function rewriteRelations(
@@ -285,7 +285,7 @@ function renameEntity<T extends Fielded>(
 }
 
 /**
- * Apply a plugin's `renameMap` (D54): rename its contributed entity slugs and
+ * Apply a plugin's `renameMap`: rename its contributed entity slugs and
  * rewrite its OWN internal `relationTo` to the renamed slugs (a target that is
  * not a renamed own slug is left untouched). Validates every rename key is a
  * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
@@ -319,10 +319,10 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
 }
 
 /**
- * Apply each plugin's `renameMap` (D54), then fold the resolved
+ * Apply each plugin's `renameMap`, then fold the resolved
  * collections/singles/components into the config arrays (config-first, then
  * topo order). Pure. Throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a plugin-involved
- * collision (D13). Shared by the throwing and deferring folds below so both
+ * collision. Shared by the throwing and deferring folds below so both
  * agree on the merged entity set before `extend` is applied.
  */
 function mergeRenamed(
@@ -357,15 +357,15 @@ function mergeRenamed(
 
 /**
  * @experimental Merge plugin `contributes` schema into the config. Pure — does
- * not mutate `config` or `plugins`. Applies each plugin's `renameMap` (D54)
+ * not mutate `config` or `plugins`. Applies each plugin's `renameMap`
  * before merging, then throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a plugin-
- * involved slug collision (D13) and `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for an
- * `extend` against an unknown target (D12).
+ * involved slug collision and `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for an
+ * `extend` against an unknown target.
  *
  * This eager form throws on ANY extend target absent from the code+plugin set.
- * Builder-aware callers (P8) use {@link applyPluginSchemaContributionsDeferred}
+ * Builder-aware callers use {@link applyPluginSchemaContributionsDeferred}
  * + {@link resolveBuilderExtends} instead, so a Builder target isn't mistaken
- * for a typo before Builder slugs are known (R2).
+ * for a typo before Builder slugs are known.
  */
 export function applyPluginSchemaContributions(
   config: NextlyServiceConfig,
@@ -384,13 +384,13 @@ export function applyPluginSchemaContributions(
 }
 
 /**
- * @experimental Builder-aware fold (P8): same merge + `extend` as
+ * @experimental Builder-aware fold: same merge + `extend` as
  * {@link applyPluginSchemaContributions}, but an `extend` target that isn't a
  * code/plugin entity is NOT thrown — it's returned in `deferredExtends`. The
  * caller resolves those against the Builder set (`resolveBuilderExtends`) once
  * Builder slugs are known: the CLI after `loadUiSchema`, the runtime after
  * `loadDynamicTables`. This is how extending a Builder-made collection works
- * without prematurely failing as an unknown target (R2/D3).
+ * without prematurely failing as an unknown target.
  */
 export function applyPluginSchemaContributionsDeferred(
   config: NextlyServiceConfig,
@@ -418,7 +418,7 @@ export function applyPluginSchemaContributionsDeferred(
 /**
  * @experimental Apply deferred `extend` clauses (from
  * {@link applyPluginSchemaContributionsDeferred}) to the Builder/UI-schema
- * entities, matched by slug across collections/singles/components (P8/D12).
+ * entities, matched by slug across collections/singles/components.
  * Pure: clones touched arrays. Throws `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` for
  * any target that is in NEITHER code/plugin NOR the Builder set — a real typo.
  * On the CLI the returned (extended) entities drive the migration so the columns
@@ -430,7 +430,7 @@ export function resolveBuilderExtends(
 ): BuilderEntities {
   // Tag merged fields with plugin provenance so the materialized Builder rows
   // (migrate output) carry source/owner/locked — the same tags the runtime
-  // reconciler applies, so dev-push and migrate converge (P8).
+  // reconciler applies, so dev-push and migrate converge.
   const tagged = deferred.map(d => ({
     ...d,
     fields: tagPluginFields(d.fields, d.owner),
@@ -450,7 +450,7 @@ export function resolveBuilderExtends(
 }
 
 /**
- * @experimental Validate deferred extend targets at runtime (P8): each must be a
+ * @experimental Validate deferred extend targets at runtime: each must be a
  * known slug (a Builder/UI entity loaded from the DB, where the extend columns
  * were already materialized by `migrate`). Existence-only — it does NOT re-append
  * fields (the DB row is authoritative, so re-applying would duplicate columns,

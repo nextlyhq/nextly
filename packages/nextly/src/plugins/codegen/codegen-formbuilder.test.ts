@@ -7,7 +7,7 @@ import { applyPluginSchemaContributions } from "../schema/apply-contributions";
 import { collectCodegenNames } from "./collect-codegen-names";
 
 /**
- * Codegen dogfood (D47/R4) — drives the form-builder plugin's REAL `contributes`
+ * Codegen dogfood — drives the form-builder plugin's REAL `contributes`
  * shape (forms/form-submissions collections + the `export`/`submissions` custom
  * permission) through the full fold → collect → generate pipeline, and asserts
  * the generated `Config` carries form-builder's typed permission + events.
@@ -53,7 +53,7 @@ function generate(plugin: PluginDefinition): string {
   ).code;
 }
 
-describe("codegen dogfood: form-builder (D47/R4)", () => {
+describe("codegen dogfood: form-builder", () => {
   it("types form-builder's custom permission + per-collection events", () => {
     const code = generate(formBuilder());
 
@@ -67,7 +67,7 @@ describe("codegen dogfood: form-builder (D47/R4)", () => {
     expect(code).toContain('"collection.forms.created": true;');
   });
 
-  it("follows a framework .rename() of the submissions collection (D54)", () => {
+  it("follows a framework .rename() of the submissions collection", () => {
     const renamed = formBuilder().rename!({ "form-submissions": "leads" });
     const code = generate(renamed);
 

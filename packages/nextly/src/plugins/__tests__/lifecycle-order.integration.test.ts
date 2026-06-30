@@ -10,7 +10,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("plugin resolution wired into runtime boot (D5/D6/D7)", () => {
+describe("plugin resolution wired into runtime boot", () => {
   it("runs init in dependency order, not array order", async () => {
     const order: string[] = [];
     const a = definePlugin({

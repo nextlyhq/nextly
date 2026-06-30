@@ -21,7 +21,7 @@ function nextlyWith(findEntryById: ReturnType<typeof vi.fn>) {
   } as any;
 }
 
-describe("fetchParentForm (R4/D35)", () => {
+describe("fetchParentForm", () => {
   it("reads the form via findEntryById as system", async () => {
     const findEntryById = vi
       .fn()

@@ -13,7 +13,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("form-builder on the reshaped PluginContext (R4 / D46)", () => {
+describe("form-builder on the reshaped PluginContext", () => {
   it("boots via contributes.collections — registers its collections + afterCreate hook", async () => {
     const { plugin, collections } = formBuilder();
 

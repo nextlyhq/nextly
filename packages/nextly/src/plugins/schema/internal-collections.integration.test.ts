@@ -11,7 +11,7 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe("internal:true plugin collections (D30)", () => {
+describe("internal:true plugin collections", () => {
   it("is queryable via services but marked hidden from the admin nav", async () => {
     const secrets = defineCollection({
       slug: "p2_secrets",

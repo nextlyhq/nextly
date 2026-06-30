@@ -12,7 +12,7 @@ afterEach(async () => {
   resetFilterRegistry();
 });
 
-describe("ctx.filters + ctx.actions wired to FilterRegistry (D63)", () => {
+describe("ctx.filters + ctx.actions wired to FilterRegistry", () => {
   it("ctx.filters.add registers a filter on the global FilterRegistry", async () => {
     current = await createTestNextly({
       plugins: [

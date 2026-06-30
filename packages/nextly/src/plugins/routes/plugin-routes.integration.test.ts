@@ -1,5 +1,5 @@
 /**
- * End-to-end secure-by-default proof for plugin routes (D28), driven through the
+ * End-to-end secure-by-default proof for plugin routes, driven through the
  * REAL catch-all dispatcher (`createDynamicHandlers`) with REAL JWT auth.
  *
  * Coverage split (documented): auth is stateless JWT verification, so a signed

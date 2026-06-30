@@ -2,13 +2,13 @@ import type { PluginDefinition } from "./plugin-context";
 import { resolutionError } from "./resolution-error";
 
 /**
- * Order plugins so every dependency precedes its dependents (D5). Edges come from
+ * Order plugins so every dependency precedes its dependents. Edges come from
  * `dependsOn` (required) and present `optionalDependsOn`. Array order is the
- * tiebreaker among otherwise-independent plugins. Throws (D7) on a missing
+ * tiebreaker among otherwise-independent plugins. Throws on a missing
  * required dependency or a cycle.
  *
  * Pure — does not read `enabled` (disabled plugins still order, since they still
- * contribute schema in P2).
+ * contribute schema).
  */
 export function topoSortPlugins(
   plugins: PluginDefinition[]
