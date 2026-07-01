@@ -8,18 +8,19 @@
  * @since 0.1.0
  */
 
-import type { CollectionConfig, PluginDefinition } from "nextly";
-// `getCollectionsHandler` runs inside Next.js request handlers, so it
-// lives behind the runtime subpath. Importing from
-// the root would drag Next.js subpaths into Node-only contexts (CLI,
-// config loaders) that pull this plugin via `nextly.config.ts`.
-import { getCollectionsHandler } from "nextly/runtime";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import type { CollectionConfig } from "nextly";
+// Author against the SDK — the stable, experimental plugin boundary.
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
 import type {
+  BeforeEmailFilterContext,
   FormNotificationItem,
   FormBuilderPluginOptions,
+  FormEmailNotification,
+  FormDocument,
+  SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "./types";
 
@@ -43,10 +44,8 @@ type NextlyWithFormBuilderConfig = NextlyInstance & {
 function resolveConfig(
   options: FormBuilderPluginOptions
 ): ResolvedFormBuilderConfig {
-  const formOverrides =
-    options.formOverrides || options.collections?.forms || {};
-  const submissionOverrides =
-    options.formSubmissionOverrides || options.collections?.submissions || {};
+  const formOverrides = options.formOverrides || {};
+  const submissionOverrides = options.formSubmissionOverrides || {};
 
   return {
     formOverrides: {
@@ -167,44 +166,106 @@ export function formBuilder(
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
 
-  const plugin: NextlyPlugin = {
+  const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
-    version: "0.0.8",
-    collections: [formsCol, submissionsCol],
+    // Keep in sync with package.json `version` (guarded by package-metadata.test).
+    version: "0.0.2-alpha.24",
+    nextly: ">=0.0.2-alpha.21",
+
+    // Declarative schema: the merged pipeline folds these into the
+    // app schema — no manual `setup()` append needed. Just register the plugin.
+    contributes: {
+      collections: [formsCol, submissionsCol],
+      // Custom permission — gates submission export beyond CRUD. The
+      // canonical example third-party plugin authors copy.
+      permissions: [
+        {
+          action: "export",
+          resource: "submissions",
+          label: "Export Submissions",
+          description: "Export form submissions as CSV/JSON",
+          group: "Form Builder",
+        },
+      ],
+      // HTTP route — exported at
+      // /api/plugins/@nextlyhq/plugin-form-builder/submissions/export. Secure by
+      // default: gated by the custom `export-submissions` permission. Reads
+      // via the secure-by-default service path as the authed user and
+      // resolves its OWN slug through `ctx.self`. The canonical
+      // contributes.routes example for third-party authors.
+      routes: [
+        {
+          method: "GET",
+          path: "/submissions/export",
+          requiredPermission: "export-submissions",
+          handler: async (_req, ctx) => {
+            const declaredSlug = resolvedConfig.formSubmissionOverrides.slug;
+            const slug = ctx.self.collections[declaredSlug] ?? declaredSlug;
+            const result = await ctx.services.collections.listEntries(
+              slug,
+              {},
+              { as: "user", user: ctx.user ?? undefined }
+            );
+            return Response.json({ items: result.data });
+          },
+        },
+      ],
+      // Admin UI — the canonical contributes.admin example. Paths
+      // are the components form-builder's `/admin` module self-registers (kept
+      // as literals so this node entry stays React-free). menu links to
+      // the forms collection; settings renders the builder UI at
+      // /admin/plugins/<slug>; a custom page is gated by export-submissions;
+      // a submissions beforeList view injects the filter above the list.
+      admin: {
+        menu: [
+          {
+            label: "Forms",
+            to: `/admin/collections/${resolvedConfig.formOverrides.slug}`,
+            icon: "file-text",
+            order: 50,
+            requiredPermission: `read-${resolvedConfig.formOverrides.slug}`,
+          },
+        ],
+        settings: {
+          component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
+        },
+        pages: [
+          {
+            path: "submissions",
+            component: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+            requiredPermission: "export-submissions",
+          },
+        ],
+        views: {
+          [resolvedConfig.formSubmissionOverrides.slug]: {
+            beforeList: "@nextlyhq/plugin-form-builder/admin#SubmissionsFilter",
+          },
+        },
+      },
+    },
 
     admin: {
       order: 50,
       description: "Create and manage forms with submission tracking",
     },
 
-    // -- Config transformer --------------------------------------------------
-    // Automatically adds plugin collections so users don't have to spread them.
-    config(config: Parameters<NonNullable<NextlyPlugin["config"]>>[0]) {
-      const existing: CollectionConfig[] = config.collections || [];
-      const formsSlug = resolvedConfig.formOverrides.slug;
-      const submissionsSlug = resolvedConfig.formSubmissionOverrides.slug;
-
-      const toAdd: CollectionConfig[] = [];
-      if (!existing.some((c: CollectionConfig) => c.slug === formsSlug))
-        toAdd.push(formsCol);
-      if (!existing.some((c: CollectionConfig) => c.slug === submissionsSlug))
-        toAdd.push(submissionsCol);
-
-      return { ...config, collections: [...existing, ...toAdd] };
-    },
-
     // -- Init ----------------------------------------------------------------
     // Registers an afterCreate hook on submissions to send email notifications.
     init(nextly: NextlyInstance) {
-      const submissionSlug = resolvedConfig.formSubmissionOverrides.slug;
+      // Resolve our OWN submissions slug through ctx.self, so the hook
+      // follows a framework `.rename()` as well as our formSubmissionOverrides
+      // option. The declared slug is the key; ctx.self maps it to the resolved
+      // (possibly renamed) slug. Identity when not renamed.
+      const declaredSubmissionsSlug =
+        resolvedConfig.formSubmissionOverrides.slug;
+      const submissionSlug =
+        nextly.self.collections[declaredSubmissionsSlug] ??
+        declaredSubmissionsSlug;
 
-      // Prevent duplicate hook registration in Next.js dev mode
-      const guardKey = `__formBuilder_afterCreate_${submissionSlug}`;
-      const g = globalThis as Record<string, unknown>;
-      if (g[guardKey]) return;
-      g[guardKey] = true;
-
-      nextly.infra.logger.info("Form Builder plugin initialized", {
+      // Hook/event subscriptions are idempotent across HMR — the platform
+      // clears a plugin's prior subscriptions before re-init (B2), so the old
+      // globalThis dedup guard is no longer needed.
+      nextly.logger.info("Form Builder plugin initialized", {
         formsCollection: resolvedConfig.formOverrides.slug,
         submissionsCollection: submissionSlug,
         enabledFields: Object.entries(resolvedConfig.fields)
@@ -215,6 +276,20 @@ export function formBuilder(
       (nextly as NextlyWithFormBuilderConfig).__formBuilderConfig =
         resolvedConfig;
 
+      // D63: run the user's beforeEmail config as a filter on the form-builder seam.
+      if (resolvedConfig.beforeEmail) {
+        nextly.filters.add(
+          "form-builder.beforeEmail",
+          (emails: FormEmailNotification[], ctx: BeforeEmailFilterContext) =>
+            resolvedConfig.beforeEmail!({
+              emails,
+              // Boundary: loose runtime documents → the user's typed contract.
+              form: ctx.form as unknown as FormDocument,
+              submission: ctx.submission as unknown as SubmissionDocument,
+            })
+        );
+      }
+
       // Register afterCreate hook for email notifications
       nextly.hooks.on(
         "afterCreate",
@@ -224,7 +299,7 @@ export function formBuilder(
         }
       );
     },
-  };
+  });
 
   return {
     plugin,
@@ -347,6 +422,10 @@ async function handleSubmissionCreated(
 
   const seen = new Set<string>();
 
+  // -- Build phase: resolve each enabled notification into an outgoing
+  // descriptor (the value the D63 seam transforms).
+  const emails: FormEmailNotification[] = [];
+
   for (const notification of notifications) {
     if (!notification.enabled || !notification.templateSlug) continue;
 
@@ -356,50 +435,79 @@ async function handleSubmissionCreated(
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const to =
+      notification.recipientType === "field"
+        ? resolveFieldRef(notification.to, submittedData)
+        : notification.to;
+
+    if (!to) {
+      nextly.logger.warn?.(
+        "Form Builder: empty recipient, skipping notification",
+        { notificationId: notification.id, formSlug: form.slug }
+      );
+      continue;
+    }
+
+    const cc =
+      Array.isArray(notification.cc) && notification.cc.length
+        ? notification.cc
+        : undefined;
+    const bcc =
+      Array.isArray(notification.bcc) && notification.bcc.length
+        ? notification.bcc
+        : undefined;
+
+    emails.push({
+      to,
+      templateSlug: notification.templateSlug,
+      variables: {
+        ...submittedData,
+        formName: form.name,
+        submissionId: submission.id,
+      },
+      providerId: notification.providerId,
+      cc,
+      bcc,
+      notificationId: notification.id,
+    });
+  }
+
+  if (emails.length === 0) return;
+
+  // -- Seam: thread the outgoing notifications through the D63 filter so user
+  // config (and any other registered handler) can modify/filter them.
+  const finalEmails = await nextly.filters.apply<
+    FormEmailNotification[],
+    BeforeEmailFilterContext
+  >("form-builder.beforeEmail", emails, { form, submission });
+
+  // -- Send phase: send the (possibly transformed) outgoing notifications.
+  for (const email of finalEmails) {
     try {
-      const to =
-        notification.recipientType === "field"
-          ? resolveFieldRef(notification.to, submittedData)
-          : notification.to;
-
-      if (!to) {
-        nextly.infra.logger.warn?.(
-          "Form Builder: empty recipient, skipping notification",
-          { notificationId: notification.id, formSlug: form.slug }
-        );
-        continue;
-      }
-
-      const cc =
-        Array.isArray(notification.cc) && notification.cc.length
-          ? notification.cc
-          : undefined;
-      const bcc =
-        Array.isArray(notification.bcc) && notification.bcc.length
-          ? notification.bcc
-          : undefined;
-
       await emailService.sendWithTemplate(
-        notification.templateSlug,
-        to,
-        { ...submittedData, formName: form.name, submissionId: submission.id },
+        email.templateSlug,
+        email.to,
+        email.variables,
         {
-          providerId: notification.providerId,
-          cc,
-          bcc,
+          providerId: email.providerId,
+          cc: email.cc,
+          bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         }
       );
 
-      nextly.infra.logger.info?.("Form Builder: notification sent", {
+      nextly.logger.info?.("Form Builder: notification sent", {
         formSlug: form.slug,
-        to,
-        templateSlug: notification.templateSlug,
+        to: email.to,
+        templateSlug: email.templateSlug,
+        notificationId: email.notificationId,
         attachmentCount: fileAttachments.length,
       });
     } catch (err) {
-      nextly.infra.logger.error?.("Form Builder: notification failed", {
-        notificationId: notification.id,
+      nextly.logger.error?.("Form Builder: notification failed", {
+        to: email.to,
+        templateSlug: email.templateSlug,
+        notificationId: email.notificationId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -409,33 +517,23 @@ async function handleSubmissionCreated(
 /**
  * Fetch the parent form document for a submission.
  */
-async function fetchParentForm(
+export async function fetchParentForm(
   config: ResolvedFormBuilderConfig,
   formId: string,
   nextly: NextlyInstance
 ): Promise<Record<string, unknown> | null> {
   try {
-    const handler = getCollectionsHandler();
-    if (!handler) {
-      nextly.infra.logger.warn?.(
-        "Form Builder: CollectionsHandler unavailable, skipping notifications"
-      );
-      return null;
-    }
-    const result = await handler.getEntry({
-      collectionName: config.formOverrides.slug,
-      entryId: formId,
-      overrideAccess: true,
-    });
-    const fromData = result?.data;
-    if (fromData) return fromData as Record<string, unknown>;
-    const fromDoc = (result as { doc?: unknown } | undefined)?.doc;
-    if (fromDoc && typeof fromDoc === "object") {
-      return fromDoc as Record<string, unknown>;
-    }
-    return null;
+    // D35/D56: read the parent form through the secure managed service as
+    // system — the afterCreate hook runs without an ambient user. Replaces the
+    // legacy `getCollectionsHandler()` + `overrideAccess` runtime path.
+    const form = await nextly.services.collections.findEntryById(
+      config.formOverrides.slug,
+      formId,
+      { as: "system" }
+    );
+    return form;
   } catch (err) {
-    nextly.infra.logger.error?.("Form Builder: failed to fetch form", {
+    nextly.logger.error?.("Form Builder: failed to fetch form", {
       formId,
       error: err instanceof Error ? err.message : String(err),
     });

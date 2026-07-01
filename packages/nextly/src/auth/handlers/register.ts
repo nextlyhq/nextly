@@ -19,9 +19,12 @@ import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
+import type { PluginContext } from "../../plugins/plugin-context";
 import { EmailSchema, PasswordSchema } from "../../schemas/_zod/validation";
+import type { AuthUser } from "../../types/auth";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
+import type { AuthHookRegistry } from "../pipeline/hooks";
 
 import {
   jsonResponse,
@@ -70,6 +73,14 @@ export interface RegisterHandlerDeps {
     password: string;
     name: string;
   }) => Promise<{ id: string; email: string; name: string | null }>;
+  /**
+   * Auth-flow hooks (D71). Optional; the DI path always supplies it.
+   * `beforeRegister` runs (post-CSRF, pre-validation) so a plugin can normalize/
+   * augment the payload; `afterRegister` runs after a successful create.
+   */
+  authHooks?: AuthHookRegistry;
+  /** Plugin context for {@link authHooks}. */
+  pluginCtx?: PluginContext;
 }
 
 const SILENT_SUCCESS_MESSAGE =
@@ -125,7 +136,14 @@ export async function handleRegister(
       );
     }
 
-    const parsed = RegisterPayloadSchema.safeParse(body);
+    // beforeRegister hook (D71) — let a plugin normalize/augment the payload
+    // before validation. No-op when no hooks are registered.
+    let regBody = body as Record<string, unknown>;
+    if (deps.authHooks && deps.pluginCtx) {
+      regBody = await deps.authHooks.runBeforeRegister(regBody, deps.pluginCtx);
+    }
+
+    const parsed = RegisterPayloadSchema.safeParse(regBody);
     if (!parsed.success) {
       throw NextlyError.validation({
         errors: parsed.error.issues.map(issue => ({
@@ -141,6 +159,15 @@ export async function handleRegister(
 
     try {
       const user = await deps.registerUser({ email, password, name });
+
+      // afterRegister hook (D71) — observe-only side effects after a successful
+      // create (welcome email, provisioning, CRM sync). No-op without hooks.
+      if (deps.authHooks && deps.pluginCtx) {
+        await deps.authHooks.runAfterRegister(
+          { id: user.id as AuthUser["id"], email: user.email, name: user.name },
+          deps.pluginCtx
+        );
+      }
 
       // Spec §13.2: even on real success, the public response is a generic
       // "if this email is available..." message. The response shape is

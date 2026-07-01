@@ -15,7 +15,8 @@
       "@nextlyhq/storage-s3",
       "@nextlyhq/storage-uploadthing",
       "@nextlyhq/storage-vercel-blob",
-      "@nextlyhq/plugin-form-builder"
+      "@nextlyhq/plugin-form-builder",
+      "@nextlyhq/plugin-sdk"
     ]
   ],
   "linked": [],

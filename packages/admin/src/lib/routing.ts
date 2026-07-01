@@ -1,9 +1,12 @@
 import React from "react";
 
 import { NotFoundPage } from "@admin/components/shared/not-found-page";
+import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
+
+import { matchPluginPage } from "./plugins/plugin-route-registry";
 
 /** Props passed to page components by the router */
 export interface PageProps {
@@ -17,6 +20,8 @@ export interface RouteResult {
   searchParams: Record<string, string | string[] | undefined>;
   routeType?: "public" | "private";
   requiredPermission?: string;
+  /** Set when the route resolves to a plugin-contributed page (D21). */
+  pluginComponentPath?: string;
 }
 
 type Params = Record<string, string | string[]>;
@@ -147,6 +152,25 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       searchParams: parseSearchParams(rawSearch),
       routeType: config?.type,
       requiredPermission: config?.requiredPermission,
+    };
+  }
+
+  // Plugin-contributed page (D21) — exact namespaced match, before dynamic
+  // routes so a catch-all can never shadow it. Rendered via PluginSlot inside
+  // the host; RBAC + layout applied by RootLayout from routeType/permission.
+  const pluginPage = matchPluginPage(pathname);
+  if (pluginPage) {
+    return {
+      Component: (props: PageProps) =>
+        React.createElement(PluginPageHost, {
+          ...props,
+          componentPath: pluginPage.component,
+        }),
+      params: {},
+      searchParams: parseSearchParams(rawSearch),
+      routeType: "private",
+      requiredPermission: pluginPage.requiredPermission,
+      pluginComponentPath: pluginPage.component,
     };
   }
 

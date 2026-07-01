@@ -4,10 +4,14 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { FieldConfig } from "../../../collections/fields/types";
 import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import type { MinimalConfigEntity } from "../migrate-create/generate";
 
-import { mergeUiEntities } from "./merge";
+import { applyDeferredExtendsToManifest, mergeUiEntities } from "./merge";
+
+const seoField = (name: string): FieldConfig =>
+  ({ name, type: "text" }) as unknown as FieldConfig;
 
 const codeCollection: MinimalConfigEntity = {
   slug: "posts",
@@ -66,6 +70,55 @@ describe("mergeUiEntities", () => {
     });
     expect(r.singles[0].tableName).toBe("single_home");
     expect(r.components[0].tableName).toBe("comp_seo");
+  });
+
+  it("materializes a plugin's deferred extend onto the Builder entity, flowing into the merged MinimalConfigEntity (P8)", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        { slug: "pages", fields: [{ name: "title", type: "text" }] },
+      ],
+    });
+    const extended = applyDeferredExtendsToManifest(manifest, [
+      {
+        target: "pages",
+        fields: [seoField("metaTitle")],
+        owner: "@acme/plugin-example",
+      },
+    ]);
+    // ui-schema entity now carries the plugin field → dynamic_collections.fields.
+    expect(extended.collections[0].fields.map(f => f.name)).toEqual([
+      "title",
+      "metaTitle",
+    ]);
+    // ...and it flows into the migration table input → generateMigration ADD COLUMN.
+    const merged = mergeUiEntities({
+      codeCollections: [],
+      codeSingles: [],
+      codeComponents: [],
+      manifest: extended,
+    });
+    expect(merged.collections[0].fields.map(f => f.name)).toEqual([
+      "title",
+      "metaTitle",
+    ]);
+  });
+
+  it("returns the manifest unchanged when there are no deferred extends (P8)", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [{ slug: "pages", fields: [] }],
+    });
+    expect(applyDeferredExtendsToManifest(manifest, [])).toBe(manifest);
+  });
+
+  it("throws for a deferred extend target matching no Builder entity (P8 typo guard)", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [{ slug: "pages", fields: [] }],
+    });
+    expect(() =>
+      applyDeferredExtendsToManifest(manifest, [
+        { target: "ghost", fields: [seoField("x")], owner: "@t/x" },
+      ])
+    ).toThrow();
   });
 
   it("forwards a UI collection's status: true into the merged MinimalConfigEntity", () => {

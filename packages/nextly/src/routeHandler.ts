@@ -65,6 +65,9 @@ import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
+import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import { runPluginRoute } from "./plugins/routes/dispatch";
+import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -599,6 +602,18 @@ async function handleServiceRequest(
   const url = new URL(req.url);
   const searchParams = url.searchParams;
 
+  // Plugin-contributed routes (D25), namespaced under /plugins/<name>. They own
+  // their secure-by-default auth (D28) and are matched BEFORE the built-in REST
+  // router (which would 400 on these paths). The verb wrappers' withSecurity()
+  // already applies CORS/rate-limit/headers around this.
+  const pluginRouteMatch = getPluginRouteRegistry().match(
+    httpMethod,
+    "/" + params.join("/")
+  );
+  if (pluginRouteMatch) {
+    return runPluginRoute(req, pluginRouteMatch);
+  }
+
   const { service, operation, method, routeParams } = parseRestRoute(
     params,
     httpMethod,
@@ -954,37 +969,10 @@ async function handleAdminMetaRequest(): Promise<Response> {
     }
   }
 
-  // Collect plugin metadata from registered plugins with host override resolution
+  // Collect plugin metadata from registered plugins with host override
+  // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const plugins = (config?.plugins ?? []).map(plugin => {
-    const pluginSlug = plugin.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    const hostOverride = pluginOverrides?.[pluginSlug];
-
-    // Shallow merge appearance: host override fields win, author defaults preserved
-    const effectiveAppearance = hostOverride?.appearance
-      ? { ...plugin.admin?.appearance, ...hostOverride.appearance }
-      : plugin.admin?.appearance;
-
-    // Resolve plugin collections from the plugin definition.
-    // Plugins should set `collections` on the plugin object so the
-    // admin-meta API can serve which collections belong to each plugin.
-    const pluginCollections = plugin.collections ?? [];
-
-    return {
-      name: plugin.name,
-      version: plugin.version,
-      description: plugin.admin?.description,
-      placement:
-        hostOverride?.placement ?? plugin.admin?.placement ?? "plugins",
-      order: hostOverride?.order ?? plugin.admin?.order,
-      after: hostOverride?.after ?? plugin.admin?.after,
-      appearance: effectiveAppearance,
-      collections: pluginCollections.map(c => c.slug),
-    };
-  });
+  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     payload.plugins = plugins;
   }

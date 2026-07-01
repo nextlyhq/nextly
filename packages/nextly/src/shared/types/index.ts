@@ -56,6 +56,12 @@ export interface RequestContext {
   locale?: string;
   /** Unique request identifier for tracing/logging */
   requestId?: string;
+  /**
+   * @experimental Bypass the access check for this operation (D35 system
+   * elevation). Validation/hooks/events still run — only the access check is
+   * skipped. Default: undefined (enforce access).
+   */
+  overrideAccess?: boolean;
 }
 
 /**
@@ -176,6 +182,16 @@ export interface QueryOptions {
   sort?: SortOptions;
   /** Filter conditions (key-value pairs) */
   where?: Record<string, unknown>;
+  /**
+   * Relation population depth (0–5). Omit to keep the service default depth.
+   * @experimental Plugin data-access option (D56).
+   */
+  depth?: number;
+  /**
+   * Field projection — return only the listed fields (`{ title: true }`).
+   * @experimental Plugin data-access option (D56).
+   */
+  select?: Record<string, boolean>;
 }
 
 /**

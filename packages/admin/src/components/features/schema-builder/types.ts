@@ -314,6 +314,17 @@ export interface BuilderField extends FieldConfig {
    */
   isSystem?: boolean;
   /**
+   * Provenance of the field. "plugin" = contributed by a plugin (rendered
+   * read-only with a "Plugin" badge — manage it in the plugin's code). "ui" =
+   * user-defined in the Builder; "code" = code-first. Mirrors the backend
+   * FieldDefinition.source serialized through admin-meta.
+   */
+  source?: "ui" | "code" | "plugin";
+  /** Owning plugin name when source === "plugin" (shown on the badge). */
+  owner?: string;
+  /** When true, the Builder shows this field read-only (inspect only). */
+  locked?: boolean;
+  /**
    * Field description/help text
    */
   description?: string;

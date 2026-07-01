@@ -48,6 +48,11 @@ import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import {
+  applyPluginAdminViews,
+  type CollectionWithAdmin,
+} from "../../plugins/admin-views";
+import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
@@ -235,7 +240,15 @@ const COLLECTIONS_METHODS: Record<
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
       });
-      return respondDoc(collection);
+      // Fold plugin view overrides (contributes.admin.views, D23) onto the
+      // collection so the list page's injection slots resolve. Collection slots
+      // win; plugin fills empties (see applyPluginAdminViews).
+      const config = getHandlerConfig();
+      const [collectionWithViews] = applyPluginAdminViews(
+        [collection as CollectionWithAdmin],
+        config?.plugins ?? []
+      );
+      return respondDoc(collectionWithViews as unknown);
     },
   },
   updateCollection: {

@@ -99,15 +99,23 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  * Build the placeholder map from user selections.
  */
 function buildPlaceholderMap(options: {
-  database: DatabaseConfig;
+  database?: DatabaseConfig;
   databaseUrl?: string;
+  /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
+  pluginName?: string;
+  /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
+  nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl } = options;
+  const { database, databaseUrl, pluginName, nextlyRange } = options;
 
-  return {
-    "{{databaseDialect}}": database.type,
-    "{{databaseUrl}}": databaseUrl || database.envExample,
-  };
+  const map: Record<string, string> = {};
+  if (database) {
+    map["{{databaseDialect}}"] = database.type;
+    map["{{databaseUrl}}"] = databaseUrl || database.envExample;
+  }
+  if (pluginName) map["{{pluginName}}"] = pluginName;
+  if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
+  return map;
 }
 
 /**
@@ -212,6 +220,7 @@ const NEXTLY_PACKAGES = [
   "@nextlyhq/adapter-mysql",
   "@nextlyhq/adapter-sqlite",
   "@nextlyhq/plugin-form-builder",
+  "@nextlyhq/plugin-sdk",
 ];
 
 /** Cache so we only fetch once per CLI run. */
@@ -295,6 +304,11 @@ export async function generatePackageJson(
   useYalc: boolean = false,
   projectType: ProjectType = "blank"
 ): Promise<string> {
+  // Plugins are a publishable library, not an app — different package.json.
+  if (projectType === "plugin") {
+    return generatePluginPackageJson(projectName, useYalc);
+  }
+
   // Fetch latest Next.js (and eslint-config-next) version from npm
   const runtimeVersions = await resolveRuntimeVersions();
 
@@ -382,6 +396,103 @@ export async function generatePackageJson(
     },
     dependencies,
     devDependencies,
+  };
+
+  return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+/**
+ * Resolve the `nextly` compat range a scaffolded plugin declares + uses to fill
+ * `{{nextlyRange}}`. Uses the latest published `nextly` (`^x.y.z`); falls back to
+ * an open range when offline / using yalc.
+ */
+async function resolvePluginNextlyRange(useYalc: boolean): Promise<string> {
+  if (useYalc) return ">=0.0.0";
+  const versions = await resolveNextlyVersions();
+  const v = versions["nextly"];
+  return v && v !== "latest" ? v : ">=0.0.0";
+}
+
+/**
+ * Generate `package.json` for a scaffolded plugin (D44). A publishable library:
+ * `dist/` ships (the embedded `dev/` playground does not — `files: ["dist"]`),
+ * nextly/admin/sdk/react are peers, and devDeps cover build + test + the dev app.
+ */
+async function generatePluginPackageJson(
+  projectName: string,
+  useYalc: boolean
+): Promise<string> {
+  const versions = useYalc ? {} : await resolveNextlyVersions();
+  const runtimeVersions = await resolveRuntimeVersions();
+  const range = (pkg: string): string => versions[pkg] ?? "latest";
+
+  const peerDependencies: Record<string, string> = {
+    nextly: range("nextly"),
+    "@nextlyhq/admin": range("@nextlyhq/admin"),
+    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    react: PINNED_VERSIONS.react,
+    "react-dom": PINNED_VERSIONS["react-dom"],
+  };
+
+  // devDeps cover: build (tsup/tsc), test (vitest), lint (eslint), AND the
+  // embedded dev/ playground (next + nextly + admin + sqlite adapter).
+  const devDependencies: Record<string, string> = {
+    nextly: range("nextly"),
+    "@nextlyhq/admin": range("@nextlyhq/admin"),
+    "@nextlyhq/ui": range("@nextlyhq/ui"),
+    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    "@nextlyhq/adapter-drizzle": range("@nextlyhq/adapter-drizzle"),
+    "@nextlyhq/adapter-sqlite": range("@nextlyhq/adapter-sqlite"),
+    next: runtimeVersions.next,
+    react: PINNED_VERSIONS.react,
+    "react-dom": PINNED_VERSIONS["react-dom"],
+    "better-sqlite3": "^12.0.0",
+    "@types/node": PINNED_VERSIONS["@types/node"],
+    "@types/react": PINNED_VERSIONS["@types/react"],
+    "@types/react-dom": PINNED_VERSIONS["@types/react-dom"],
+    typescript: PINNED_VERSIONS.typescript,
+    tsup: "^8.5.0",
+    vitest: "^4.0.8",
+    eslint: PINNED_VERSIONS.eslint,
+    "@eslint/js": PINNED_VERSIONS.eslint,
+    "typescript-eslint": "^8.0.0",
+  };
+
+  const pkg = {
+    name: projectName,
+    version: "0.1.0",
+    description: "A Nextly plugin.",
+    type: "module",
+    main: "./dist/index.mjs",
+    module: "./dist/index.mjs",
+    types: "./dist/index.d.ts",
+    exports: {
+      ".": {
+        types: "./dist/index.d.ts",
+        import: "./dist/index.mjs",
+      },
+      "./admin": {
+        types: "./dist/admin/index.d.ts",
+        import: "./dist/admin/index.mjs",
+      },
+    },
+    // Only the built library ships. The dev/ playground is never published.
+    files: ["dist"],
+    keywords: ["nextly", "nextly-plugin"],
+    scripts: {
+      build: "tsup",
+      // Runs the embedded playground (next dev with dev/ as the project root).
+      dev: "next dev dev --turbopack",
+      "check-types": "tsc --noEmit",
+      lint: "eslint .",
+      test: "vitest run",
+      "types:generate": "nextly generate:types",
+    },
+    peerDependencies,
+    devDependencies,
+    // Native build-script allowlist is NOT emitted here: pnpm 11 ignores the
+    // package.json `pnpm` field. It lives in pnpm-workspace.yaml instead (written
+    // by copyPluginTemplate via generatePnpmWorkspaceYaml).
   };
 
   return JSON.stringify(pkg, null, 2) + "\n";
@@ -525,6 +636,14 @@ export async function copyTemplate(
     typeDir = path.join(templatesRoot, projectType);
   }
 
+  // Plugins are a self-contained library scaffold (src/ + embedded dev/), not an
+  // app — no base app, no next.config/.env generation, no frontend page. Copy
+  // the plugin tree as-is, generate its package.json, fill placeholders, done.
+  if (projectType === "plugin") {
+    await copyPluginTemplate({ projectName, typeDir, targetDir, useYalc });
+    return;
+  }
+
   // Verify template directories exist
   if (!(await fs.pathExists(baseDir))) {
     throw new Error(
@@ -666,4 +785,64 @@ export async function copyTemplate(
     placeholders["{{approach}}"] = approach;
   }
   await replacePlaceholders(targetDir, placeholders);
+}
+
+/**
+ * Copy the plugin template (D44/D45): the whole tree (src/ + embedded dev/ +
+ * tsconfig/tsup/vitest/eslint), a generated plugin package.json, then fill
+ * `{{pluginName}}` / `{{nextlyRange}}`. No app base, next.config, or .env.
+ */
+async function copyPluginTemplate(opts: {
+  projectName: string;
+  typeDir: string;
+  targetDir: string;
+  useYalc: boolean;
+}): Promise<void> {
+  const { projectName, typeDir, targetDir, useYalc } = opts;
+
+  if (!(await fs.pathExists(typeDir))) {
+    throw new Error(
+      `Plugin template not found at ${typeDir}. The package may be corrupted or the download failed.`
+    );
+  }
+
+  // Copy the whole template tree, minus skip-files and the manifest.
+  await fs.copy(typeDir, targetDir, {
+    overwrite: true,
+    filter: src => {
+      const basename = path.basename(src);
+      return !SKIP_FILES.has(basename) && basename !== "template.json";
+    },
+  });
+
+  // Generate the plugin package.json (database arg is unused for plugins).
+  const packageJsonContent = await generatePackageJson(
+    projectName,
+    { type: "sqlite" } as DatabaseConfig,
+    useYalc,
+    "plugin"
+  );
+  await fs.writeFile(
+    path.join(targetDir, "package.json"),
+    packageJsonContent,
+    "utf-8"
+  );
+
+  // Write pnpm-workspace.yaml carrying the native-dependency build allowlist.
+  // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
+  // playground uses better-sqlite3 (native build) — so this file is what lets
+  // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
+  // Harmless for npm/yarn/pnpm 9.
+  await fs.writeFile(
+    path.join(targetDir, "pnpm-workspace.yaml"),
+    generatePnpmWorkspaceYaml(),
+    "utf-8"
+  );
+
+  // Fill plugin placeholders across the copied tree (src/ + dev/).
+  const nextlyRange = await resolvePluginNextlyRange(useYalc);
+  await replacePlaceholders(
+    targetDir,
+    buildPlaceholderMap({ pluginName: projectName, nextlyRange })
+  );
 }

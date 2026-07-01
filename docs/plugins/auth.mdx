@@ -1,0 +1,179 @@
+---
+title: Auth extensibility
+description: Extend authentication from a plugin — custom strategies (OAuth/SSO), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
+---
+
+> **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
+> new and ships `@experimental`: it works and is integration-tested, but stays
+> experimental until a first-party plugin exercises it in production (D55). Pin
+> your versions.
+
+Nextly's auth is pluggable through four surfaces, modeled on what Payload, Strapi,
+and WordPress allow — and adding first-class **multi-step (2FA)** that those do
+piecemeal:
+
+| Surface | What it does | Who provides it |
+|---|---|---|
+| **Strategies** | Decide *who a user is* (password, OAuth, SSO, magic-link, passkey) | App opt-in (`defineConfig({ auth: { strategies } })`) |
+| **Auth-flow hooks** | Modify / abort / **challenge** the login, register, logout, session flow | Plugin `contributes.auth.hooks` |
+| **Challenges** | A pending second step (2FA) that pauses login until resolved | Plugin `contributes.auth.challenges` |
+| **Auth-page UI** | Provider buttons, challenge views, login-form slots | Plugin `contributes.auth.ui` |
+
+The built-in email/password login is itself just the `password` strategy, always
+present (and run last) unless you disable it.
+
+## Strategies are opt-in (the trust boundary)
+
+A strategy authenticates users, so it's the highest-trust extension point. A plugin
+may *ship* a strategy, but it only takes effect when the **app** enables it:
+
+```ts
+// nextly.config.ts
+import { defineConfig } from "nextly/config";
+import { googleOAuth } from "@acme/nextly-plugin-google";
+
+export default defineConfig({
+  auth: { strategies: [googleOAuth({ clientId: process.env.GOOGLE_ID! })] },
+});
+```
+
+Hooks, challenges, and UI follow normal contribution rules (active as soon as the
+plugin is installed). Strategies don't — that's deliberate (secure-by-default).
+
+## Worked example: an OAuth strategy
+
+A strategy returns one of four outcomes: `authenticated`, `challenge`, `fail`, or
+`pass` ("not my credential — try the next strategy"). This is the WordPress
+`authenticate`-chain model, typed.
+
+```ts
+import type { AuthStrategy } from "@nextlyhq/plugin-sdk";
+
+export function googleOAuth(opts: { clientId: string }): AuthStrategy {
+  return {
+    name: "oauth-google",
+    async authenticate(input, ctx) {
+      // Only claim requests carrying a Google id_token; otherwise pass through.
+      const idToken = input.body.googleIdToken;
+      if (typeof idToken !== "string") return { type: "pass" };
+
+      const profile = await verifyGoogleToken(idToken, opts.clientId);
+      if (!profile) return { type: "fail", reason: "invalid-google-token" };
+
+      // Find-or-link the local user via the managed services (secure-by-default).
+      const existing = await ctx.services.collections.listEntries(
+        "users",
+        { where: { email: profile.email } },
+        { as: "system" }
+      );
+      const user = existing.data[0];
+      if (!user) return { type: "fail", reason: "no-linked-account" };
+
+      return { type: "authenticated", user: { id: user.id, email: user.email } };
+    },
+  };
+}
+```
+
+Add a **provider button** so it shows on the login screen
+(`contributes.auth.ui.providers`) and you have Strapi-style social login.
+
+## Worked example: TOTP two-factor (a challenge)
+
+2FA is an `afterAuthenticate` hook that returns a **challenge** instead of letting
+the session issue, plus a **challenge definition** that resolves the code. Core
+handles the hard part — a single-purpose, short-lived **pending token**, the
+attempt cap, and re-issuing the session only after the challenge resolves.
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export const twoFactor = definePlugin({
+  name: "@acme/nextly-plugin-2fa",
+  version: "0.1.0",
+  nextly: "^1",
+  contributes: {
+    auth: {
+      // 1. After the password (or any strategy) authenticates, require a second
+      //    step IF the user has 2FA enabled. Returning `{ challenge }` pauses login.
+      hooks: {
+        afterAuthenticate: async (user, ctx) => {
+          const enabled = await isTotpEnabled(ctx, user.id);
+          if (!enabled) return user; // continue → session issues
+          return { challenge: { id: "totp", userId: user.id } };
+        },
+      },
+      // 2. Resolve the challenge: validate the TOTP code the client submits.
+      challenges: [
+        {
+          id: "totp",
+          resolve: async ({ userId, response }, ctx) => {
+            const ok = await verifyTotp(ctx, userId, String(response.code ?? ""));
+            return ok ? { ok: true } : { ok: false, reason: "bad-code" };
+          },
+        },
+      ],
+      // 3. Render the step UI when the login response is a `totp` challenge.
+      ui: { challengeViews: { totp: "@acme/nextly-plugin-2fa/admin#TotpPrompt" } },
+    },
+  },
+});
+```
+
+### The challenge flow on the wire
+
+1. `POST /auth/login` with valid credentials → the `afterAuthenticate` hook returns
+   a challenge, so the response is **not** a session but:
+   ```json
+   { "status": "challenge", "challengeType": "totp", "pendingToken": "…" }
+   ```
+2. The client renders the `challengeViews["totp"]` component, collects the code, and
+   calls:
+   ```
+   POST /auth/challenge/resolve   { "pendingToken": "…", "response": { "code": "123456" } }
+   ```
+3. Core verifies the pending token (single-purpose, TTL'd, attempt-capped), runs your
+   challenge's `resolve`, and on success issues the real session — identical to a
+   direct login. A wrong code re-issues a pending token until the cap is hit.
+
+The pending token authorizes **nothing** except resolving the challenge — it can never
+establish a session (the access guard rejects it). Challenges are stackable (e.g. 2FA
+then a device-confirm).
+
+## Auth-flow hooks reference
+
+All hooks are optional on `contributes.auth.hooks`. Each can **modify** (return a new
+value), **abort** (throw → generic error), or — for `afterAuthenticate` — **challenge**.
+
+| Hook | When | Use |
+|---|---|---|
+| `beforeLogin(input)` | Before any strategy | Pre-checks; throw to block (maintenance mode, IP allowlist) |
+| `afterAuthenticate(user)` | After a strategy identifies the user | **Insert 2FA / step-up**; decorate the user |
+| `afterLogin(user)` | After the session is issued | Side effects (audit, last-login, notify) |
+| `beforeRegister(data)` | Before a new user is created | Normalize / augment the payload |
+| `afterRegister(user)` | After a successful register | Welcome email, provisioning, CRM sync |
+| `beforeLogout` / `afterLogout` | Around logout | Cleanup, revoke external sessions |
+| `determineUser(request)` | Session/refresh resolution | Custom credential (API key, alt token) → return a user or `null` |
+| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add/rename JWT claims |
+
+Hooks observe-or-mutate; they do **not** replace strategies. Use a strategy to
+authenticate, a hook to gate/decorate.
+
+## What stays core (and why)
+
+Session/token issuance, cookies, CSRF, rate-limiting, and account lockout stay in core
+— they're security-critical and identical for every auth method. You extend *who you
+are* and *the flow*, not the session machinery. This matches where Payload, Strapi, and
+WordPress draw the line.
+
+## Security notes
+
+- **Strategies are app-opt-in** — installing a plugin never silently lets it
+  authenticate users.
+- An enabled strategy/hook runs with **full trust** (D34, no sandbox in v1) — vet auth
+  plugins like any dependency.
+- Multi-step uses a **single-purpose pending token** (short TTL, attempt-capped) that
+  can't be used as a session.
+- The whole surface is **`@experimental`** until a first-party plugin graduates it (D55).
+
+See also: [Permissions](/docs/plugins/permissions) · [Data access](/docs/plugins/services) · [API reference](/docs/plugins/api-reference).

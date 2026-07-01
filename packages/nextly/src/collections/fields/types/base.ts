@@ -322,6 +322,14 @@ export interface FieldAdminOptions {
   disabled?: boolean;
 
   /**
+   * @experimental Override the admin field editor with a plugin-registered
+   * component, by string path (D24, e.g. `"@acme/plugin/admin#ColorPicker"`).
+   * Takes precedence over the built-in type dispatch; rendered inside the plugin
+   * error boundary. Register the component via `@nextlyhq/plugin-sdk/admin`.
+   */
+  component?: string;
+
+  /**
    * Conditional logic for showing/hiding the field.
    * The field is hidden when the condition evaluates to false.
    */

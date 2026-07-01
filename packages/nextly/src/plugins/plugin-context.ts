@@ -11,6 +11,10 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { EventBus, EventHandler, EventName } from "../events/event-bus";
+import { getEventBus } from "../events/event-bus";
+import type { Action, Filter } from "../filters";
+import { getFilterRegistry } from "../filters";
 import type { HookHandler, HookType } from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
@@ -20,6 +24,16 @@ import type { UserService } from "../services/users/user-service";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
+import type { PluginContributions } from "./contributions";
+import { getCoreVersion } from "./core-version";
+import type { PluginSelf } from "./self";
+import { resolvePluginSelf } from "./self";
+import {
+  wrapCollectionsForPlugin,
+  type PluginCollectionService,
+} from "./service-opts";
+import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
+import { recordPluginSubscription } from "./subscription-tracker";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -45,7 +59,7 @@ import type { AdminPlacement } from "./admin-placement";
  *
  *     // Register a global hook (all collections)
  *     nextly.hooks.on('afterCreate', '*', async (context) => {
- *       nextly.infra.logger.info(`Created ${context.collection}:${context.data?.id}`);
+ *       nextly.logger.info(`Created ${context.collection}:${context.data?.id}`);
  *     });
  *   }
  * });
@@ -70,6 +84,17 @@ export interface PluginHookRegistry {
    * // Global hook (runs for all collections)
    * nextly.hooks.on('afterDelete', '*', async (context) => {
    *   console.log(`Deleted from ${context.collection}`);
+   * });
+   * ```
+   *
+   * @typeParam T - The document shape. Pass it to get a typed `context.data`
+   *   instead of casting — prefer this over `as unknown as`:
+   * ```typescript
+   * interface Post { id: string; title: string; status: string }
+   * nextly.hooks.on<Post>('beforeCreate', 'posts', (context) => {
+   *   // context.data is typed Post — no cast needed
+   *   if (context.data?.status === 'published') { ... }
+   *   return context.data;
    * });
    * ```
    */
@@ -104,6 +129,34 @@ export interface PluginHookRegistry {
   ): void;
 }
 
+/**
+ * @experimental Typed filter registry exposed to plugins.
+ * Register transforms on named seams, or define + apply your own seams.
+ */
+export interface PluginFilterRegistry {
+  add<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
+  remove<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
+  apply<V = unknown, C = unknown>(
+    name: string,
+    value: V,
+    context: C
+  ): Promise<V>;
+}
+
+/**
+ * @experimental Typed action registry exposed to plugins.
+ * Register ordered, error-isolated side-effects on named seams, or run your own.
+ */
+export interface PluginActionRegistry {
+  add<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
+  remove<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
+  run<P = unknown, C = unknown>(
+    name: string,
+    payload: P,
+    context: C
+  ): Promise<void>;
+}
+
 // ============================================================
 // Plugin Context Interface
 // ============================================================
@@ -114,9 +167,11 @@ export interface PluginHookRegistry {
  * Plugins receive this context during initialization, providing
  * access to all Nextly services and infrastructure.
  *
- * The context is organized into logical groups:
- * - `services`: Core business logic services (collections, users, media)
- * - `infra`: Infrastructure components (database, logger)
+ * The context provides:
+ * - `services`: Core business logic services (collections, users, media, email)
+ * - `db` / `logger`: Raw database escape hatch + diagnostics logger
+ * - `events`: Post-commit, observe-only event bus
+ * - `self` / `nextlyVersion`: Resolved own-entity names + core version
  * - `config`: Read-only configuration
  * - `hooks`: Hook registration for lifecycle events
  *
@@ -143,14 +198,15 @@ export interface PluginHookRegistry {
  *     });
  *
  *     // Use infrastructure
- *     nextly.infra.logger.info('MyPlugin initialized');
+ *     nextly.logger.info('MyPlugin initialized');
  *   }
  * });
  * ```
  */
 export interface PluginContext {
   /**
-   * Core services with full TypeScript autocomplete.
+   * @public Core services with full TypeScript autocomplete — the managed,
+   * secure-by-default data path. Prefer this over `ctx.db`.
    *
    * Provides access to the unified service layer for:
    * - Collections: CRUD operations on dynamic collections
@@ -158,29 +214,53 @@ export interface PluginContext {
    * - Media: File upload and management
    */
   services: {
-    /** Collection service for CRUD operations on dynamic collections */
-    collections: CollectionService;
+    /**
+     * Collection service for CRUD on dynamic collections. Access methods accept
+     * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system.
+     */
+    collections: PluginCollectionService;
     /** User service for user management */
     users: UserService;
     /** Media service for file operations */
     media: MediaService;
     /** Email service for sending emails via templates and providers */
     email: EmailService;
+    /**
+     * @experimental Services contributed by plugins, keyed by plugin name
+     * then service name. Lazily resolved (instantiated on first access). Runtime
+     * type is `unknown` — cast to your service's type, or export it from the
+     * providing plugin.
+     */
+    plugins: Record<string, Record<string, unknown>>;
   };
 
   /**
-   * Infrastructure access.
-   *
-   * Provides access to low-level infrastructure:
-   * - Database: Direct Drizzle database access (use with caution)
-   * - Logger: Logging interface for plugin diagnostics
+   * @experimental Raw Drizzle database instance — the full escape hatch.
+   * Unmanaged: bypasses validation/hooks/RBAC/events. Prefer `services`.
    */
-  infra: {
-    /** Drizzle database instance for direct queries */
-    db: DatabaseInstance;
-    /** Logger for plugin diagnostics */
-    logger: Logger;
-  };
+  db: DatabaseInstance;
+
+  /** @experimental Logger for plugin diagnostics. */
+  logger: Logger;
+
+  /**
+   * @public Post-commit, observe-only, best-effort event bus.
+   * Use a hook to modify/abort; use an event to react/notify.
+   */
+  events: EventBus;
+
+  /**
+   * @experimental Running Nextly core version, for feature-detection.
+   * e.g. "0.0.2-alpha.21".
+   */
+  nextlyVersion: string;
+
+  /**
+   * @experimental Resolved names for this plugin's own entities. Read
+   * `ctx.self.collections[...]` instead of hardcoding slugs so the P2 remap can
+   * rename them transparently. Identity-resolved.
+   */
+  self: PluginSelf;
 
   /**
    * Read-only configuration.
@@ -191,12 +271,17 @@ export interface PluginContext {
   config: Readonly<NextlyServiceConfig>;
 
   /**
-   * Hook registration for lifecycle events.
-   *
-   * Allows plugins to register hooks that run before/after
-   * database operations on collections.
+   * @experimental Hook registration for lifecycle events. Allows plugins to
+   * register hooks that run before/after database operations on collections.
+   * No first-party plugin registers via `ctx.hooks` yet (see STABILITY.md).
    */
   hooks: PluginHookRegistry;
+
+  /** @experimental Typed filter registry. Transform values at named seams. */
+  filters: PluginFilterRegistry;
+
+  /** @experimental Typed action registry. Ordered side-effects at named seams. */
+  actions: PluginActionRegistry;
 }
 
 // ============================================================
@@ -338,7 +423,7 @@ export interface PluginAdminConfig {
  *   async init(nextly) {
  *     // Log all create/update/delete operations
  *     const logOperation = async (context) => {
- *       nextly.infra.logger.info('Audit', {
+ *       nextly.logger.info('Audit', {
  *         collection: context.collection,
  *         operation: context.operation,
  *         user: context.user?.id,
@@ -361,62 +446,106 @@ export interface PluginDefinition {
   name: string;
 
   /**
-   * Plugin version (semver format recommended).
-   * Helps with debugging and compatibility checks.
+   * Plugin semver version.
+   * Required so that other plugins' `dependsOn` ranges can be checked.
    */
-  version?: string;
+  version: string;
+
+  /**
+   * @public Core-compatibility range, boot-checked. May span majors,
+   * e.g. `'^1 || ^2'`. Prereleases (alpha/beta) count as in-range.
+   */
+  nextly: string;
+
+  /**
+   * @experimental Required plugin dependencies → version range.
+   * Plugins are topologically sorted so dependencies initialize first.
+   */
+  dependsOn?: Record<string, string>;
+
+  /**
+   * @experimental Enhance-if-present dependencies → version range.
+   * Absent optional deps are fine; present-but-incompatible fails fast.
+   */
+  optionalDependsOn?: Record<string, string>;
+
+  /**
+   * @experimental Default `true`. `false` skips behavior (init/hooks/events/
+   * routes/admin) but STILL applies declarative schema. Behavior-skip is
+   * wired.
+   */
+  enabled?: boolean;
+
+  /**
+   * @public Declarative contributions — introspectable without running
+   * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
+   */
+  contributes?: PluginContributions;
 
   /**
    * Collections provided by this plugin.
    *
-   * These collections are automatically merged with user collections
-   * in defineConfig(). Users don't need to manually spread plugin collections.
-   *
-   * @example
-   * ```typescript
-   * // Plugin definition
-   * const myPlugin: PluginDefinition = {
-   *   name: 'my-plugin',
-   *   collections: [FormsCollection, SubmissionsCollection],
-   * };
-   *
-   * // User config - collections are auto-merged
-   * export default defineConfig({
-   *   plugins: [myPlugin],
-   *   collections: [Posts, Users], // Plugin collections added automatically
-   * });
-   * ```
+   * @deprecated Prefer `contributes.collections` (wired by the schema pipeline in
+   * P2). Still read by the admin sidebar (routeHandler) — kept for backward
+   * compatibility and merged today via the plugin's own `setup` transformer.
    */
   collections?: CollectionConfig[];
 
   /**
    * Admin configuration for sidebar placement and plugin metadata.
    *
-   * Controls where the plugin's items appear in the sidebar
-   * and provides metadata for the plugin settings page.
+   * Controls where the plugin's items appear in the sidebar (placement/order)
+   * and its appearance + settings-page blurb. This is **complementary** to
+   * `contributes.admin`: `admin` = placement & appearance; `contributes.admin`
+   * = the declarative menu/pages/settings/views surface. Both are retained.
    */
   admin?: PluginAdminConfig;
 
   /**
-   * Plugin initialization function.
-   *
-   * Called after all services are registered.
-   * Receives PluginContext for service access and hook registration.
-   *
-   * @param context - PluginContext with services, infra, config, hooks
-   */
-  init?: (context: PluginContext) => Promise<void> | void;
-
-  /**
-   * Configuration transformer (advanced).
-   *
-   * Allows plugins to modify the config before service initialization.
-   * Use with caution - this runs before services are available.
+   * @public Escape-hatch config transformer; all `setup`s run before any
+   * `init`. Don't mutate the config — spread and return a new object.
    *
    * @param config - Current configuration
    * @returns Modified configuration
    */
-  config?: (config: NextlyServiceConfig) => NextlyServiceConfig;
+  setup?: (config: NextlyServiceConfig) => NextlyServiceConfig;
+
+  /**
+   * @public Plugin initialization function.
+   *
+   * Called after all services are registered.
+   * Receives PluginContext for service access and hook registration.
+   *
+   * @param context - PluginContext with services, db, logger, events, config, hooks
+   */
+  init?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @public Teardown on shutdown / HMR / test teardown.
+   * Invocation is wired.
+   */
+  destroy?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Framework-owned entity remap. Rename this plugin's
+   * contributed entity slugs at registration — declared slug → new slug — to
+   * avoid collisions or match house naming. Returns a NEW definition; the
+   * plugin keeps working because it references its own entities via `ctx.self`.
+   *
+   * @example
+   * ```ts
+   * defineConfig({ plugins: [formBuilder().plugin.rename({ forms: "contact-forms" })] })
+   * ```
+   */
+  rename?: (map: Record<string, string>) => PluginDefinition;
+
+  /**
+   * @internal Accumulated declared-slug → new-slug map from `rename()`.
+   * Consumed by the schema fold (renames merged slugs + the plugin's own
+   * `relationTo`) and by `resolvePluginSelf` (builds `ctx.self`). Not for
+   * plugin authors to set directly.
+   */
+  renameMap?: Record<string, string>;
 }
 
 // ============================================================
@@ -448,7 +577,18 @@ export interface PluginDefinition {
  * ```
  */
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
-  return definition;
+  const withRename: PluginDefinition = {
+    ...definition,
+    // Framework remap: returns a NEW definition with the rename map
+    // merged. The original is left untouched (pure); chainable.
+    rename(map: Record<string, string>): PluginDefinition {
+      return definePlugin({
+        ...withRename,
+        renameMap: { ...(withRename.renameMap ?? {}), ...map },
+      });
+    },
+  };
+  return withRename;
 }
 
 /**
@@ -515,12 +655,26 @@ export function createPluginContext(
       collection: string,
       handler: HookHandler
     ) => void;
-  }
+  },
+  /**
+   * The plugin this context is built for — used to resolve `ctx.self`.
+   * Optional so the factory stays usable without a plugin (empty `self`).
+   */
+  plugin?: PluginDefinition
 ): PluginContext {
+  // Subscriptions made through this context are tracked under the plugin's name
+  // so the runtime can clear them before the plugin re-initializes on HMR (B2).
+  const pluginName = plugin?.name;
+
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
     on: (hookType, collection, handler) => {
       hookRegistry.register(hookType, collection, handler as HookHandler);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          hookRegistry.unregister(hookType, collection, handler as HookHandler)
+        );
+      }
     },
     off: (hookType, collection, handler) => {
       hookRegistry.unregister(hookType, collection, handler as HookHandler);
@@ -536,18 +690,62 @@ export function createPluginContext(
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 
+  // Route isolated event-handler diagnostics through the resolved logger.
+  const rawBus = getEventBus();
+  rawBus.setLogger(logger);
+  // Per-plugin event bus: `on()` also records an unsubscribe thunk so the
+  // runtime can clear this plugin's subscriptions before it re-initializes on
+  // HMR (B2). Every other method delegates to the shared bus unchanged.
+  const events: EventBus = pluginName
+    ? new Proxy(rawBus, {
+        get(target, prop) {
+          if (prop === "on") {
+            return (name: EventName, handler: EventHandler) => {
+              target.on(name, handler);
+              recordPluginSubscription(pluginName, () =>
+                target.off(name, handler)
+              );
+            };
+          }
+          const value = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      })
+    : rawBus;
+
+  const filterRegistry = getFilterRegistry();
+  filterRegistry.setLogger(logger);
+  const pluginFilters: PluginFilterRegistry = {
+    add: (name, fn) => filterRegistry.addFilter(name, fn),
+    remove: (name, fn) => filterRegistry.removeFilter(name, fn),
+    apply: (name, value, context) =>
+      filterRegistry.applyFilters(name, value, context),
+  };
+  const pluginActions: PluginActionRegistry = {
+    add: (name, fn) => filterRegistry.addAction(name, fn),
+    remove: (name, fn) => filterRegistry.removeAction(name, fn),
+    run: (name, payload, context) =>
+      filterRegistry.runActions(name, payload, context),
+  };
+
   return {
     services: {
-      collections: collectionService,
+      collections: wrapCollectionsForPlugin(collectionService),
       users: userService,
       media: mediaService,
       email: emailService,
+      plugins: buildPluginServicesNamespace(),
     },
-    infra: {
-      db,
-      logger,
-    },
+    db,
+    logger,
+    events,
+    nextlyVersion: getCoreVersion(),
+    self: plugin
+      ? resolvePluginSelf(plugin)
+      : { name: "", collections: {}, singles: {} },
     config: Object.freeze({ ...config }),
     hooks: pluginHooks,
+    filters: pluginFilters,
+    actions: pluginActions,
   };
 }

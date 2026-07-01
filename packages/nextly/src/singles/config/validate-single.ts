@@ -22,6 +22,7 @@
  */
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import { hasFieldType } from "../../domains/schema/field-types/field-type-registry";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -156,7 +157,7 @@ function validateField(
   const f = field as Record<string, unknown>;
   const errsBase = errors as unknown as BaseValidationError[];
 
-  if (!validateFieldTypeShared(f.type, path, errsBase)) {
+  if (!validateFieldTypeShared(f.type, path, errsBase, hasFieldType)) {
     return;
   }
   const fieldType = f.type as string;

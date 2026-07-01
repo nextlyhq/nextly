@@ -11,6 +11,7 @@
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { NextlyError } from "../../errors/nextly-error";
+import { emitAuthEvent } from "../../events/domain-events";
 import { env } from "../../lib/env";
 import type {
   AuthResult,
@@ -64,6 +65,8 @@ export async function login(
     roleIds: [],
   });
   const token = await signAccessToken(claims, secret, maxAge);
+
+  emitAuthEvent("loggedIn", { userId: user.id, email: user.email });
 
   return {
     user: user,

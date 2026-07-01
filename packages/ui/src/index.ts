@@ -7,6 +7,8 @@ export { Input, inputVariants } from "./components/input";
 export type { InputProps } from "./components/input";
 export { Textarea } from "./components/textarea";
 export { Label } from "./components/label";
+export { FormLabelWithTooltip } from "./components/form-label-with-tooltip";
+export type { FormLabelWithTooltipProps } from "./components/form-label-with-tooltip";
 
 // Components — Display
 export { Badge, badgeVariants } from "./components/badge";

@@ -173,6 +173,12 @@ export interface TypeGeneratorOptions {
  * console.log(singleIface.code);
  * ```
  */
+
+/** Dedupe + lexically sort a list of strings for deterministic codegen output. */
+function uniqueSorted(values: string[]): string[] {
+  return Array.from(new Set(values)).sort();
+}
+
 export class TypeGenerator {
   private readonly includeComments: boolean;
   private readonly generateInputTypes: boolean;
@@ -208,7 +214,9 @@ export class TypeGenerator {
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[] = [],
     components: DynamicComponentRecord[] = [],
-    userFields: UserFieldDefinitionRecord[] = []
+    userFields: UserFieldDefinitionRecord[] = [],
+    permissionSlugs: string[] = [],
+    eventNames: string[] = []
   ): GeneratedTypesFile {
     const lines: string[] = [];
 
@@ -282,7 +290,9 @@ export class TypeGenerator {
       const config = this.generateConfigInterface(
         collections,
         singles,
-        components
+        components,
+        permissionSlugs,
+        eventNames
       );
       lines.push(config);
       lines.push("");
@@ -1093,7 +1103,9 @@ ${properties}
   private generateConfigInterface(
     collections: DynamicCollectionRecord[],
     singles: DynamicSingleRecord[] = [],
-    components: DynamicComponentRecord[] = []
+    components: DynamicComponentRecord[] = [],
+    permissionSlugs: string[] = [],
+    eventNames: string[] = []
   ): string {
     const lines: string[] = [];
 
@@ -1132,6 +1144,31 @@ ${properties}
       lines.push(`    "${component.slug}": ${interfaceName};`);
     }
     lines.push("  };");
+
+    // Permissions section (D47) — key union only; permission payloads are not
+    // typed. Sorted + deduped for deterministic output. Narrows `PermissionSlug`.
+    // Emitted ONLY when non-empty: an empty map would make `keyof P` resolve to
+    // `never` (breaking every PermissionSlug); omitting the key falls back to
+    // `string` (the safe default — same convention as CollectionSlug).
+    const permissions = uniqueSorted(permissionSlugs);
+    if (permissions.length > 0) {
+      lines.push("  permissions: {");
+      for (const slug of permissions) {
+        lines.push(`    "${slug}": true;`);
+      }
+      lines.push("  };");
+    }
+
+    // Events section (D47) — key union only; event payloads are not typed.
+    // Sorted + deduped; emitted only when non-empty (see permissions above).
+    const events = uniqueSorted(eventNames);
+    if (events.length > 0) {
+      lines.push("  events: {");
+      for (const name of events) {
+        lines.push(`    "${name}": true;`);
+      }
+      lines.push("  };");
+    }
 
     // User section
     lines.push("  user: User;");

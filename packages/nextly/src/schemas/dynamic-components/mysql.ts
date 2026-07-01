@@ -128,7 +128,7 @@ export const dynamicComponentsMysql = mysqlTable(
      * - 'code': defineComponent() in a config file
      * - 'ui': Visual Component Builder
      */
-    source: varchar("source", { length: 20 })
+    source: varchar("source", { length: 255 })
       .$type<ComponentSource>()
       .default("ui")
       .notNull(),

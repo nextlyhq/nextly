@@ -346,9 +346,90 @@ export {
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginContext,
+  type PluginContributions,
   type PluginDefinition,
+  type PluginPermission,
+  type PluginRole,
+  type PluginEmailProvider,
+  type PluginEmailTemplate,
+  type PluginFieldType,
+  type ScheduledTask,
+  type PermissionSlug,
   type PluginHookRegistry,
+  type PluginFilterRegistry,
+  type PluginActionRegistry,
+  type PluginRoute,
+  type PluginRouteContext,
+  type PluginRouteHandler,
+  type Middleware,
+  type RouteMethod,
+  type ComponentPath,
+  type PluginAdminContributions,
+  type PluginAdminPage,
+  type PluginAdminWidget,
+  type PluginCollectionView,
+  type PluginMenuItem,
 } from "./plugins";
+
+// Managed-services elevation (D35) — `ctx.services` ServiceOpts + the auth user.
+export type {
+  ServiceOpts,
+  PluginCollectionService,
+} from "./plugins/service-opts";
+export type { AuthUser } from "./types/auth";
+
+// Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
+// challenge protocol. @experimental until a first-party plugin exercises it (D55).
+export type {
+  AuthInput,
+  AuthOutcome,
+  AuthStrategy,
+  Challenge,
+  ChallengeDefinition,
+  AuthHooks,
+  AuthHookName,
+} from "./auth/pipeline/types";
+
+// Managed data access (D56) — bulk-create result for
+// `ctx.services.collections.createMany`. Rich-query options (`QueryOptions`
+// with where/sort/depth/select) + `PaginatedResult` are exported with the other
+// shared service types above.
+export type { BatchOperationResult } from "./domains/collections/services/collection-types";
+
+// Plugin event bus (D8/D51) — `ctx.events` surface + types.
+export {
+  EventBus,
+  getEventBus,
+  resetEventBus,
+  type EventEnvelope,
+  type EventHandler,
+  type EventName,
+  DocumentEvents,
+  AuthEvents,
+  MediaEvents,
+  type DocumentEventName,
+  type AuthEventName,
+  type MediaEventName,
+} from "./events";
+
+// Plugin filter/action registry (D63) — ctx.filters / ctx.actions surface + seam types.
+export {
+  FilterRegistry,
+  getFilterRegistry,
+  resetFilterRegistry,
+  FilterSeams,
+  type Filter,
+  type Action,
+  type FilterName,
+  type CoreFilterSeam,
+  type EmailPayloadFilterValue,
+  type EmailFilterContext,
+  type EmailAfterSendValue,
+  type NavCollectionItem,
+  type NavFilterContext,
+  type ListQueryWhere,
+  type ListQueryFilterContext,
+} from "./filters";
 
 // ============================================================
 // COLLECTIONS & FIELD TYPES

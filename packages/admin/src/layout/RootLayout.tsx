@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
+import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { GeneralSettingsSyncProvider } from "../context/providers/GeneralSettingsSyncProvider";
@@ -102,6 +103,8 @@ function AdminAppContent() {
     <div className={cn("adminapp", isDark && "dark")} suppressHydrationWarning>
       <PortalProvider container={portalRoot}>
         <BrandingProvider>
+          {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
+          <PluginPageRegistrar />
           <GeneralSettingsSyncProvider>
             {/* Conditional wrapper: Public routes need centering and padding, private routes don't */}
             {routeType === "public" ? (

@@ -64,8 +64,8 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
-      # Strict: package.json shape / publish-readiness across all 12 publishable
-      # packages (nextly + create-nextly-app + 10 @nextlyhq/*). Failures here
+      # Strict: package.json shape / publish-readiness across all 13 publishable
+      # packages (nextly + create-nextly-app + 11 @nextlyhq/*). Failures here
       # block the release pipeline.
       - name: publint
         run: >-

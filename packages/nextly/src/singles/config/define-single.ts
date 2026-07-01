@@ -250,6 +250,8 @@ export function defineSingle(config: SingleConfig): SingleConfig {
     label,
     admin: {
       ...config.admin,
+      // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden wins.
+      hidden: config.internal === true ? true : config.admin?.hidden,
     },
   };
 

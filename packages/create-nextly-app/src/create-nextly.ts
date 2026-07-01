@@ -483,11 +483,14 @@ export async function createNextly(
         await patchNextConfig(cwd, database);
       }
 
-      // Both flows: generate .env with database URL and NEXTLY_SECRET
-      const envDatabase = databaseUrl
-        ? { ...database, connectionUrl: databaseUrl, envExample: databaseUrl }
-        : database;
-      await generateEnv(cwd, envDatabase);
+      // App flows generate a root .env. A plugin is a library — its env lives
+      // in the embedded dev/ playground (dev/.env.example), so skip it here.
+      if (projectType !== "plugin") {
+        const envDatabase = databaseUrl
+          ? { ...database, connectionUrl: databaseUrl, envExample: databaseUrl }
+          : database;
+        await generateEnv(cwd, envDatabase);
+      }
       s.stop("Environment configured");
     } catch (error) {
       s.stop("Failed to generate configuration");
@@ -515,38 +518,67 @@ export async function createNextly(
   if (isFreshProject && projectName && !installInCwd) {
     lines.push(`  ${pc.bold("cd")} ${projectName}`);
   }
-  lines.push(`  ${pc.bold(devCommand)}`);
-  lines.push("");
-
-  // Database-specific note
-  if (databaseType === "sqlite") {
+  if (projectType === "plugin") {
+    // Plugin scaffold: a publishable library with an embedded /dev playground.
+    // No app DB / /admin/setup / storage notes — those don't apply.
+    lines.push(`  ${pc.bold(devCommand)}`);
     lines.push(
-      `  Your database (SQLite) is stored at ${pc.dim("./data/nextly.db")}`
+      `  ${pc.dim("→ runs the embedded /dev playground (SQLite, hot-reload)")}`
+    );
+    lines.push("");
+    lines.push(
+      `  Open ${pc.cyan("http://localhost:3000/admin")} — your plugin is registered.`
+    );
+    lines.push(
+      `  Edit your plugin in ${pc.dim("src/")}; the ${pc.dim("dev/")} app is never published.`
+    );
+    lines.push("");
+    lines.push(
+      `  ${pc.bold(`${pm} test`)} runs the in-memory integration harness.`
+    );
+    lines.push(
+      `  ${pc.bold(`${pm} run build`)}, then ${pc.bold("npm publish")} to ship.`
+    );
+    lines.push("");
+    lines.push(
+      `  Use it in an app: add ${pc.dim("myPlugin()")} to ${pc.dim("plugins")} in nextly.config.ts.`
     );
   } else {
+    lines.push(`  ${pc.bold(devCommand)}`);
+    lines.push("");
+
+    // Database-specific note
+    if (databaseType === "sqlite") {
+      lines.push(
+        `  Your database (SQLite) is stored at ${pc.dim("./data/nextly.db")}`
+      );
+    } else {
+      lines.push(
+        `  Make sure your ${DATABASE_LABELS[databaseType].label} server is running before starting.`
+      );
+    }
     lines.push(
-      `  Make sure your ${DATABASE_LABELS[databaseType].label} server is running before starting.`
+      `  ${pc.bold(devCommand)} will create system tables on first run.`
     );
+
+    // Template-specific notes
+    if (projectType === "blog") {
+      lines.push(
+        `  Visit ${pc.cyan("http://localhost:3000")} to see your blog.`
+      );
+    }
+
+    lines.push(
+      `  Visit ${pc.cyan("http://localhost:3000/admin/setup")} to create your admin account.`
+    );
+    lines.push("");
+
+    // Storage note
+    lines.push(
+      `  Storage: Using local disk ${pc.dim("(./public/uploads)")} by default.`
+    );
+    lines.push("  See docs to configure S3, Vercel Blob, or other providers.");
   }
-  lines.push(
-    `  ${pc.bold(devCommand)} will create system tables on first run.`
-  );
-
-  // Template-specific notes
-  if (projectType === "blog") {
-    lines.push(`  Visit ${pc.cyan("http://localhost:3000")} to see your blog.`);
-  }
-
-  lines.push(
-    `  Visit ${pc.cyan("http://localhost:3000/admin/setup")} to create your admin account.`
-  );
-  lines.push("");
-
-  // Storage note
-  lines.push(
-    `  Storage: Using local disk ${pc.dim("(./public/uploads)")} by default.`
-  );
-  lines.push("  See docs to configure S3, Vercel Blob, or other providers.");
 
   p.note(lines.join("\n"), "Next steps");
 

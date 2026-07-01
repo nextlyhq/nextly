@@ -296,6 +296,13 @@ export interface SingleConfig {
   fields: FieldConfig[];
 
   /**
+   * @experimental Internal/private storage (D30). Stays in the merged schema
+   * (accessible via services / raw db) but hidden from the admin nav (implies
+   * `admin.hidden`).
+   */
+  internal?: boolean;
+
+  /**
    * Display label for the Admin UI.
    * If not provided, the label is auto-generated from the slug.
    *

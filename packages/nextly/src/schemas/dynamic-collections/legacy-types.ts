@@ -149,4 +149,16 @@ export type FieldDefinition = {
   components?: string[];
   /** Whether this component field allows multiple instances (array) */
   repeatable?: boolean;
+
+  /**
+   * Provenance of this field. "ui" = user-defined in the Builder; "code" =
+   * code-first; "plugin" = contributed by a plugin (locked in the Builder,
+   * removed from the registry when the plugin is removed). Defaults to "ui"
+   * when absent.
+   */
+  source?: "ui" | "code" | "plugin";
+  /** Owning plugin name when source === "plugin" (for reconcile + display). */
+  owner?: string;
+  /** When true, the Builder schema editor shows this field read-only (inspect only). */
+  locked?: boolean;
 };

@@ -1,8 +1,9 @@
 /**
  * Project type / template selection.
  * "blog" is the first content template added for alpha.
+ * "plugin" scaffolds a publishable Nextly plugin package + embedded /dev playground (D44/D45).
  */
-export type ProjectType = "blank" | "blog";
+export type ProjectType = "blank" | "blog" | "plugin";
 
 /**
  * Schema approach selection for content templates.

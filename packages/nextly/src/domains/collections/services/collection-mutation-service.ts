@@ -31,6 +31,8 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import { emitDocumentEvent } from "../../../events/domain-events";
+import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -57,6 +59,30 @@ import {
   getTableName,
   generateSlug,
 } from "./collection-utils";
+
+/**
+ * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
+ * best-effort: fired after the operation's transaction has committed and its
+ * after* hooks have run, and wrapped so a missing/erroring bus can never break
+ * the mutation. Use a hook (in-transaction) to modify/abort; use this to react.
+ */
+function emitCollectionEvent(
+  action: "created" | "updated" | "deleted",
+  collection: string,
+  data: Record<string, unknown>,
+  user: unknown
+): void {
+  try {
+    getEventBus().emit(`collection.${collection}.${action}`, {
+      collection,
+      id: (data as { id?: unknown }).id,
+      data,
+      user,
+    });
+  } catch {
+    // Best-effort — never surface event-dispatch failures to the caller.
+  }
+}
 
 /**
  * Convert any thrown error into the legacy CollectionServiceResult shape.
@@ -675,6 +701,20 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // Post-commit reaction event (D8/D51).
+      emitCollectionEvent("created", params.collectionName, entry, params.user);
+
+      // D69: a document created directly as `published` is a publish event too.
+      // (No statusChanged on create — there is no prior status to transition from.)
+      const createdStatus = (entry as { status?: unknown }).status;
+      if (createdStatus === "published") {
+        emitDocumentEvent("published", params.collectionName, {
+          id: (entry as { id?: unknown }).id,
+          data: { ...entry },
+          user: params.user,
+        });
+      }
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
         if (
@@ -1200,6 +1240,39 @@ export class CollectionMutationService extends BaseService {
         )
       );
 
+      // Post-commit reaction event (D8/D51).
+      emitCollectionEvent(
+        "updated",
+        params.collectionName,
+        updated,
+        params.user
+      );
+
+      // D69 document-level status events. Status is a user-defined field;
+      // emit only when a `status` field value actually changed on update.
+      // `data` is shallow-snapshotted so async subscribers aren't exposed to the
+      // in-place JSON-field deserialization that happens below for the response.
+      const previousStatus =
+        ((existingEntry as Record<string, unknown>).status as
+          | string
+          | undefined) ?? null;
+      const nextStatus = (updated as { status?: unknown }).status;
+      if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
+        const docBase = {
+          id: (updated as { id?: unknown }).id,
+          data: { ...(updated as Record<string, unknown>) },
+          user: params.user,
+        };
+        emitDocumentEvent("statusChanged", params.collectionName, {
+          ...docBase,
+          previousStatus,
+          status: nextStatus,
+        });
+        if (nextStatus === "published" && previousStatus !== "published") {
+          emitDocumentEvent("published", params.collectionName, docBase);
+        }
+      }
+
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
         if (
@@ -1418,6 +1491,14 @@ export class CollectionMutationService extends BaseService {
           params.user,
           sharedContext
         )
+      );
+
+      // Post-commit reaction event (D8/D51).
+      emitCollectionEvent(
+        "deleted",
+        params.collectionName,
+        deleted,
+        params.user
       );
 
       return {

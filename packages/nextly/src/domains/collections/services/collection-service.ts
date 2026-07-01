@@ -63,11 +63,24 @@ import type {
   RequestContext,
   PaginatedResult,
   QueryOptions,
+  SortOptions,
   Logger,
 } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { WhereFilter } from "../query/query-operators";
 
 import type { CollectionMetadataService } from "./collection-metadata-service";
+import type { BatchOperationResult } from "./collection-types";
+
+/**
+ * Convert the structured {@link SortOptions} into the entry service's string
+ * sort format (`-field` = desc, `field` = asc). Returns `undefined` when no
+ * sort is requested so the entry service keeps its default ordering.
+ */
+function serializeSort(sort: SortOptions | undefined): string | undefined {
+  if (!sort) return undefined;
+  return sort.direction === "desc" ? `-${sort.field}` : sort.field;
+}
 
 /**
  * Collection metadata returned from operations
@@ -387,6 +400,7 @@ export class CollectionService extends BaseService {
       {
         collectionName,
         user: context.user,
+        overrideAccess: context.overrideAccess,
       },
       data
     );
@@ -406,6 +420,38 @@ export class CollectionService extends BaseService {
     });
 
     return result.data as CollectionEntry;
+  }
+
+  /**
+   * Bulk-create entries in a single transaction (D56).
+   *
+   * Returns an index-based {@link BatchOperationResult} — the natural shape for
+   * creates, which have no caller-supplied ids to key failures by (mirrors the
+   * existing batch ops `createEntries`/`updateEntries`/`deleteEntries`).
+   *
+   * @param collectionName - Name of the collection
+   * @param data - Array of entry payloads to create
+   * @param context - Request context (carries `overrideAccess` for elevation)
+   * @returns Per-batch result: counts, created ids, and index-keyed failures
+   */
+  async createMany(
+    collectionName: string,
+    data: Record<string, unknown>[],
+    context: RequestContext
+  ): Promise<BatchOperationResult> {
+    this.logger.debug("Creating entries (bulk)", {
+      collectionName,
+      count: data.length,
+    });
+
+    return this.entryService.createEntries(
+      {
+        collectionName,
+        user: context.user,
+        overrideAccess: context.overrideAccess,
+      },
+      data
+    );
   }
 
   /**
@@ -431,8 +477,17 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.listEntries({
       collectionName,
       user: context.user,
+      overrideAccess: context.overrideAccess,
       page,
       limit,
+      // D56: forward the rich-query options the facade previously dropped, so
+      // filtering/sorting/relation-population through `ctx.services.collections`
+      // actually applies. `depth`/`select` stay undefined when omitted so the
+      // entry service keeps its default depth.
+      where: options.where as WhereFilter | undefined,
+      sort: serializeSort(options.sort),
+      depth: options.depth,
+      select: options.select,
     });
 
     if (!result.success || !result.data) {
@@ -449,6 +504,41 @@ export class CollectionService extends BaseService {
         hasMore: paginatedResponse.hasNextPage,
       },
     };
+  }
+
+  /**
+   * Count entries matching an optional filter (D56 aggregation-lite).
+   *
+   * Lets plugins answer "how many?" without loading rows or dropping to raw
+   * `ctx.db`. For richer aggregations (sum/avg/group-by) use the raw `ctx.db`
+   * escape hatch (D33) — relational aggregation pipelines are out of scope.
+   *
+   * @param collectionName - Name of the collection
+   * @param options - Optional `where` filter and full-text `search`
+   * @param context - Request context (carries `overrideAccess` for elevation)
+   * @returns Number of matching entries
+   * @throws NextlyError if counting fails
+   */
+  async count(
+    collectionName: string,
+    options: { where?: Record<string, unknown>; search?: string } = {},
+    context: RequestContext
+  ): Promise<number> {
+    this.logger.debug("Counting entries", { collectionName });
+
+    const result = await this.entryService.countEntries({
+      collectionName,
+      user: context.user,
+      overrideAccess: context.overrideAccess,
+      where: options.where as WhereFilter | undefined,
+      search: options.search,
+    });
+
+    if (!result.success || !result.data) {
+      throw this.mapLegacyErrorToNextlyError(result);
+    }
+
+    return result.data.totalDocs;
   }
 
   /**
@@ -471,6 +561,7 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       user: context.user,
+      overrideAccess: context.overrideAccess,
     });
 
     if (!result.success) {
@@ -521,6 +612,7 @@ export class CollectionService extends BaseService {
         collectionName,
         entryId,
         user: context.user,
+        overrideAccess: context.overrideAccess,
       },
       data
     );
@@ -576,6 +668,7 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       user: context.user,
+      overrideAccess: context.overrideAccess,
     });
 
     if (!result.success) {
