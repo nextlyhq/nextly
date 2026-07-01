@@ -13,7 +13,6 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  */
 export const ALWAYS_JSON_TYPES = new Set([
   "richText",
-  "blocks",
   "repeater",
   "group",
   "json",

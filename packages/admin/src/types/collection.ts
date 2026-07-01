@@ -10,30 +10,19 @@
  * - Media: upload
  * - Relational: relationship
  * - Structured: repeater, group, json, component
- *
- * Read-data aliases (backwards compatibility — rendered, not stored):
- * - string (alias for text)
- * - decimal (alias for number with float format)
- * - boolean (alias for checkbox)
- * - richtext (alias for richText)
- * - relation (alias for relationship)
  */
 export type FieldPrimitiveType =
   // Text types
   | "text"
-  | "string" // Alias for text
   | "textarea"
   | "richText"
-  | "richtext" // Alias
   | "email"
   | "password"
   | "code"
   // Number types
   | "number"
-  | "decimal" // Alias
   // Selection types
   | "checkbox"
-  | "boolean" // Alias for checkbox
   | "date"
   | "select"
   | "radio"
@@ -42,7 +31,6 @@ export type FieldPrimitiveType =
   | "upload"
   // Relational types
   | "relationship"
-  | "relation" // Alias
   // Structured types
   | "repeater"
   | "group"
@@ -163,15 +151,6 @@ export interface FieldDefinition {
   components?: string[];
   /** Whether this component field allows multiple instances (array) */
   repeatable?: boolean;
-  /** Block types for blocks field */
-  blocks?: Array<{
-    slug: string;
-    labels?: {
-      singular?: string;
-      plural?: string;
-    };
-    fields: FieldDefinition[];
-  }>;
 }
 
 /**

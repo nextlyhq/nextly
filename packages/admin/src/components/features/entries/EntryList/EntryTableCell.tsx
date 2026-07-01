@@ -347,11 +347,8 @@ function JsonCell({ value }: { value: unknown }) {
  * - Relationship: Badge with document label
  * - Upload: Image thumbnail or file icon
  * - Array: Item count badge
- * - Blocks: Block count badge
  * - Rich Text: Plain text excerpt
  * - JSON: Code preview
- * - Point: Coordinates display
- * - Slug: Monospace text
  * - Code: Monospace text
  * - Group: Group indicator
  *
@@ -404,7 +401,6 @@ export function EntryTableCell({
   switch (fieldType) {
     // Text-based fields
     case "text":
-    case "string": // Legacy alias - some collections store 'string' instead of 'text'
     case "textarea":
     case "email":
     case "password": {
@@ -412,7 +408,6 @@ export function EntryTableCell({
       return renderContent(<TextCell value={String(value)} />);
     }
 
-    case "slug":
     case "code": {
       // Monospace for technical fields
       // eslint-disable-next-line @typescript-eslint/no-base-to-string
@@ -486,20 +481,41 @@ export function EntryTableCell({
       return <span className="text-muted-foreground">-</span>;
     }
 
-    case "blocks": {
-      if (Array.isArray(value)) {
-        const count = value.length;
-        return (
-          <Badge variant="default">
-            {count} {count === 1 ? "block" : "blocks"}
-          </Badge>
-        );
-      }
-      return <span className="text-muted-foreground">-</span>;
-    }
-
     case "group": {
       return <Badge variant="default">Group</Badge>;
+    }
+
+    // Chips field — render as a list of badges
+    case "chips": {
+      const items = Array.isArray(value)
+        ? value
+        : typeof value === "string"
+          ? (() => {
+              try {
+                const parsed: unknown = JSON.parse(value);
+                return Array.isArray(parsed) ? parsed : [value];
+              } catch {
+                return [value];
+              }
+            })()
+          : [value];
+      return (
+        <div className="flex flex-wrap gap-1">
+          {(items as unknown[]).slice(0, 5).map((chip, idx) => (
+            <Badge key={idx} variant="outline">
+              {String(chip)}
+            </Badge>
+          ))}
+          {items.length > 5 && (
+            <Badge variant="default">+{items.length - 5}</Badge>
+          )}
+        </div>
+      );
+    }
+
+    // Component field — indicate a nested component
+    case "component": {
+      return <Badge variant="default">Component</Badge>;
     }
 
     // Rich content
@@ -510,27 +526,6 @@ export function EntryTableCell({
     // JSON data
     case "json": {
       return renderContent(<JsonCell value={value} />);
-    }
-
-    // Geographic point
-    case "point": {
-      if (Array.isArray(value) && value.length === 2) {
-        const [lng, lat] = value as [number, number];
-        return (
-          <span className="font-mono text-xs whitespace-nowrap">
-            {lat.toFixed(4)}, {lng.toFixed(4)}
-          </span>
-        );
-      }
-      return <span className="text-muted-foreground">-</span>;
-    }
-
-    // Layout fields (should not appear in table, but handle gracefully)
-    case "tabs":
-    case "collapsible":
-    case "row":
-    case "ui": {
-      return <span className="text-muted-foreground">-</span>;
     }
 
     // Fallback for unknown types

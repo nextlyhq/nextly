@@ -342,7 +342,6 @@ export function FieldRenderer({
       // Text Types
       // =========================================
       case "text":
-      case "string": // Legacy alias - some collections store 'string' instead of 'text'
         return <TextInput {...commonProps} field={field as TextFieldConfig} />;
 
       case "textarea":
@@ -379,7 +378,6 @@ export function FieldRenderer({
       // Number Types
       // =========================================
       case "number":
-      case "decimal": // Legacy alias
         return (
           <NumberInput {...commonProps} field={field as NumberFieldConfig} />
         );
@@ -388,7 +386,6 @@ export function FieldRenderer({
       // Selection Types
       // =========================================
       case "checkbox":
-      case "boolean": // Legacy alias
         return (
           <CheckboxInput
             {...commonProps}
@@ -426,7 +423,6 @@ export function FieldRenderer({
       // Relational Types
       // =========================================
       case "relationship":
-      case "relation": // Legacy alias
         return (
           <RelationshipInput
             {...commonProps}
@@ -472,7 +468,6 @@ export function FieldRenderer({
       // Special Types
       // =========================================
       case "richText":
-      case "richtext": // Legacy alias
         return (
           <ClientOnly>
             <Suspense fallback={<EditorSkeleton />}>

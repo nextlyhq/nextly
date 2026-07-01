@@ -113,7 +113,7 @@ export interface RelationshipValidationError {
   collection: string;
 
   /**
-   * The field path (supports nested paths like "blocks.content.author").
+   * The field path (supports nested paths like "group.author").
    */
   field: string;
 
@@ -625,31 +625,6 @@ export class CollectionSyncService extends BaseService {
 
         if ("fields" in field && Array.isArray(field.fields)) {
           processFields(field.fields as FieldConfig[], fieldPath);
-        }
-
-        if ("blocks" in field && Array.isArray(field.blocks)) {
-          for (const block of field.blocks as Array<{
-            slug: string;
-            fields: FieldConfig[];
-          }>) {
-            processFields(block.fields, `${fieldPath}.${block.slug}`);
-          }
-        }
-
-        if ("tabs" in field && Array.isArray(field.tabs)) {
-          for (const tab of field.tabs as Array<{
-            name?: string;
-            label?: string;
-            fields: FieldConfig[];
-          }>) {
-            // Named tabs include the tab name in the path
-            const tabPath = tab.name
-              ? path
-                ? `${path}.${tab.name}`
-                : tab.name
-              : path;
-            processFields(tab.fields, tabPath);
-          }
         }
       }
     };

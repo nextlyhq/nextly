@@ -46,10 +46,7 @@ import {
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import {
-  toSingularLabel,
-  toPluralLabel,
-} from "../../shared/lib/pluralization";
+import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -568,53 +565,6 @@ function validateFieldRelationships(
           warnings,
           fieldPath
         );
-      }
-    }
-
-    // Recurse into blocks (not yet in DynamicFieldType — future field type)
-    if ((field.type as string) === "blocks") {
-      const blocks = (
-        field as {
-          blocks?: Array<{ slug: string; fields?: CollectionConfig["fields"] }>;
-        }
-      ).blocks;
-      if (blocks) {
-        for (const block of blocks) {
-          if (block.fields) {
-            validateFieldRelationships(
-              collectionSlug,
-              block.fields,
-              validSlugs,
-              errors,
-              warnings,
-              `${fieldPath}.${block.slug}`
-            );
-          }
-        }
-      }
-    }
-
-    // Recurse into tabs (not yet in DynamicFieldType — future field type)
-    if ((field.type as string) === "tabs") {
-      const tabs = (
-        field as {
-          tabs?: Array<{ name?: string; fields?: CollectionConfig["fields"] }>;
-        }
-      ).tabs;
-      if (tabs) {
-        for (const tab of tabs) {
-          if (tab.fields) {
-            const tabPrefix = tab.name ? `${fieldPath}.${tab.name}` : fieldPath;
-            validateFieldRelationships(
-              collectionSlug,
-              tab.fields,
-              validSlugs,
-              errors,
-              warnings,
-              tabPrefix
-            );
-          }
-        }
       }
     }
   }

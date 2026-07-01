@@ -46,7 +46,6 @@ const TYPES_WITH_TYPE_SPECIFIC_EDITOR = new Set([
   "repeater",
   "group",
   "component",
-  "blocks",
 ]);
 
 export function GeneralTab({ field, readOnly = false, onChange }: Props) {

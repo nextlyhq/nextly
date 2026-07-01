@@ -58,19 +58,7 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
  * Mirrors the logic in SchemaGenerator to ensure consistent handling.
  */
 export function shouldTreatAsJson(field: FieldConfig): boolean {
-  if (
-    [
-      "json",
-      "repeater",
-      "blocks",
-      "group",
-      "tabs",
-      "collapsible",
-      "point",
-      "richText",
-      "chips",
-    ].includes(field.type)
-  ) {
+  if (["json", "repeater", "group", "richText", "chips"].includes(field.type)) {
     return true;
   }
 
@@ -124,6 +112,7 @@ export function getDefaultValue(field: FieldConfig): unknown {
     case "text":
     case "textarea":
     case "email":
+    case "password":
     case "code":
       return "";
 
@@ -137,16 +126,21 @@ export function getDefaultValue(field: FieldConfig): unknown {
       return "{}";
     case "repeater":
       return "[]";
+    case "chips":
+      return "[]";
     case "group":
       return "{}";
 
     case "select":
+    case "radio":
       return "";
 
     case "date":
       return null;
 
     case "relationship":
+    case "upload":
+    case "component":
       return null;
 
     default:

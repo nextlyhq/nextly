@@ -3,18 +3,10 @@ export enum FieldType {
   TEXT = "TEXT",
   EMAIL = "EMAIL",
   PASSWORD = "PASSWORD",
-  URL = "URL",
   TEXTAREA = "TEXTAREA",
   NUMBER = "NUMBER",
-  COLOR = "COLOR",
-  MEDIA = "MEDIA",
-  EDITOR = "EDITOR",
   SELECT = "SELECT",
-  BOOLEAN = "BOOLEAN",
   RADIO = "RADIO",
-  RELATION = "RELATION",
-  DATE_PICKER = "DATE_PICKER",
-  REPEATER = "REPEATER",
 }
 
 // Minimal validation configuration supported in this UI

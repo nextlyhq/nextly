@@ -7,14 +7,7 @@ import type { FieldConfig } from "nextly/config";
  * is included because it's a tall content surface that doesn't compose well
  * side-by-side with other fields.
  */
-const BLOCK_FIELD_TYPES = new Set([
-  "tabs",
-  "row",
-  "collapsible",
-  "blocks",
-  "component",
-  "richText",
-]);
+const BLOCK_FIELD_TYPES = new Set(["component", "richText"]);
 
 /**
  * Parses an `admin.width` string ("50%", "33%", "100%", etc.) into a number 0-100.

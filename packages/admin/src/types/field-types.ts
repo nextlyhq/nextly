@@ -17,19 +17,23 @@ export enum FieldType {
 
   // Choice
   SELECT = "select",
-  BOOLEAN = "boolean",
+  CHECKBOX = "checkbox",
   RADIO = "radio",
   CHIPS = "chips",
 
   // Relational
-  RELATION = "relation",
+  RELATIONSHIP = "relationship",
 
   // Advanced
-  DATE_PICKER = "date",
+  DATE = "date",
 
   // Layout
   REPEATER = "repeater",
   GROUP = "group",
+  CODE = "code",
+  JSON = "json",
+  UPLOAD = "upload",
+  COMPONENT = "component",
 }
 
 /**
@@ -120,8 +124,8 @@ export interface SelectFieldConfig extends BaseFieldConfig {
 /**
  * Boolean Field Configuration
  */
-export interface BooleanFieldConfig extends BaseFieldConfig {
-  type: FieldType.BOOLEAN;
+export interface CheckboxFieldConfig extends BaseFieldConfig {
+  type: FieldType.CHECKBOX;
   validation?: {
     required?: boolean;
   };
@@ -172,7 +176,7 @@ export interface ChipsFieldConfig extends BaseFieldConfig {
  * Relation Field Configuration
  */
 export interface RelationFieldConfig extends BaseFieldConfig {
-  type: FieldType.RELATION;
+  type: FieldType.RELATIONSHIP;
   validation?: {
     required?: boolean;
     pattern?: string;
@@ -187,10 +191,10 @@ export interface RelationFieldConfig extends BaseFieldConfig {
 }
 
 /**
- * Date Picker Field Configuration
+ * Date Field Configuration
  */
 export interface DatePickerFieldConfig extends BaseFieldConfig {
-  type: FieldType.DATE_PICKER;
+  type: FieldType.DATE;
   validation?: {
     required?: boolean;
     pattern?: string;
@@ -288,6 +292,65 @@ export interface PasswordFieldConfig extends BaseFieldConfig {
   };
 }
 
+/**
+ * Code Field Configuration
+ */
+export interface CodeFieldConfig extends BaseFieldConfig {
+  type: FieldType.CODE;
+  validation?: {
+    required?: boolean;
+  };
+  ui?: {
+    description?: string;
+    placeholder?: string;
+    language?: string;
+  };
+}
+
+/**
+ * JSON Field Configuration
+ */
+export interface JSONFieldConfig extends BaseFieldConfig {
+  type: FieldType.JSON;
+  validation?: {
+    required?: boolean;
+  };
+  ui?: {
+    description?: string;
+  };
+}
+
+/**
+ * Upload Field Configuration
+ */
+export interface UploadFieldConfig extends BaseFieldConfig {
+  type: FieldType.UPLOAD;
+  relationTo?: string;
+  hasMany?: boolean;
+  validation?: {
+    required?: boolean;
+  };
+  ui?: {
+    description?: string;
+  };
+}
+
+/**
+ * Component Field Configuration
+ */
+export interface ComponentFieldConfig extends BaseFieldConfig {
+  type: FieldType.COMPONENT;
+  component?: string;
+  components?: string[];
+  repeatable?: boolean;
+  validation?: {
+    required?: boolean;
+  };
+  ui?: {
+    description?: string;
+  };
+}
+
 export type FieldConfig =
   | TextFieldConfig
   | EmailFieldConfig
@@ -295,14 +358,18 @@ export type FieldConfig =
   | TextAreaFieldConfig
   | NumberFieldConfig
   | SelectFieldConfig
-  | BooleanFieldConfig
+  | CheckboxFieldConfig
   | RadioFieldConfig
   | ChipsFieldConfig
   | RelationFieldConfig
   | DatePickerFieldConfig
   | RepeaterFieldConfig
   | GroupFieldConfig
-  | RichTextFieldConfig;
+  | RichTextFieldConfig
+  | CodeFieldConfig
+  | JSONFieldConfig
+  | UploadFieldConfig
+  | ComponentFieldConfig;
 
 /**
  * Field type definition with display info for UI

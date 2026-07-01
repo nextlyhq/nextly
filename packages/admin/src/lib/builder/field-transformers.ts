@@ -31,7 +31,7 @@ export function toKebabName(s: string): string {
 }
 
 /**
- * Recursively find a field by ID, searching through nested fields and block types.
+ * Recursively find a field by ID, searching through nested fields.
  */
 export function findFieldById(
   fields: BuilderField[],
@@ -44,14 +44,6 @@ export function findFieldById(
     if (field.fields && field.fields.length > 0) {
       const found = findFieldById(field.fields, fieldId);
       if (found) return found;
-    }
-    if (field.type === "blocks" && field.blocks) {
-      for (const block of field.blocks) {
-        if (block.fields && block.fields.length > 0) {
-          const found = findFieldById(block.fields, fieldId);
-          if (found) return found;
-        }
-      }
     }
   }
   return null;
@@ -84,43 +76,6 @@ export function findParentContainerId(
 }
 
 /**
- * Add a field to a specific block type within a Blocks field.
- */
-export function addFieldToBlockType(
-  fields: BuilderField[],
-  blocksFieldId: string,
-  blockIndex: number,
-  newField: BuilderField
-): BuilderField[] {
-  return fields.map(field => {
-    if (field.id === blocksFieldId && field.type === "blocks" && field.blocks) {
-      const updatedBlocks = field.blocks.map((block, idx) => {
-        if (idx === blockIndex) {
-          return {
-            ...block,
-            fields: [...(block.fields || []), newField],
-          };
-        }
-        return block;
-      });
-      return { ...field, blocks: updatedBlocks };
-    }
-    if (field.fields && field.fields.length > 0) {
-      return {
-        ...field,
-        fields: addFieldToBlockType(
-          field.fields,
-          blocksFieldId,
-          blockIndex,
-          newField
-        ),
-      };
-    }
-    return field;
-  });
-}
-
-/**
  * Add a field to a Repeater field's nested fields.
  */
 export function addFieldToArray(
@@ -140,18 +95,6 @@ export function addFieldToArray(
         ...field,
         fields: addFieldToArray(field.fields, arrayFieldId, newField),
       };
-    }
-    if (field.type === "blocks" && field.blocks) {
-      const updatedBlocks = field.blocks.map(block => {
-        if (block.fields && block.fields.length > 0) {
-          return {
-            ...block,
-            fields: addFieldToArray(block.fields, arrayFieldId, newField),
-          };
-        }
-        return block;
-      });
-      return { ...field, blocks: updatedBlocks };
     }
     return field;
   });
@@ -178,18 +121,6 @@ export function addFieldToGroup(
         fields: addFieldToGroup(field.fields, groupFieldId, newField),
       };
     }
-    if (field.type === "blocks" && field.blocks) {
-      const updatedBlocks = field.blocks.map(block => {
-        if (block.fields && block.fields.length > 0) {
-          return {
-            ...block,
-            fields: addFieldToGroup(block.fields, groupFieldId, newField),
-          };
-        }
-        return block;
-      });
-      return { ...field, blocks: updatedBlocks };
-    }
     return field;
   });
 }
@@ -211,18 +142,6 @@ export function updateFieldById(
         fields: updateFieldById(field.fields, updatedField),
       };
     }
-    if (field.type === "blocks" && field.blocks) {
-      const updatedBlocks = field.blocks.map(block => {
-        if (block.fields && block.fields.length > 0) {
-          return {
-            ...block,
-            fields: updateFieldById(block.fields, updatedField),
-          };
-        }
-        return block;
-      });
-      return { ...field, blocks: updatedBlocks };
-    }
     return field;
   });
 }
@@ -242,18 +161,6 @@ export function deleteFieldById(
           ...field,
           fields: deleteFieldById(field.fields, fieldId),
         };
-      }
-      if (field.type === "blocks" && field.blocks) {
-        const updatedBlocks = field.blocks.map(block => {
-          if (block.fields && block.fields.length > 0) {
-            return {
-              ...block,
-              fields: deleteFieldById(block.fields, fieldId),
-            };
-          }
-          return block;
-        });
-        return { ...field, blocks: updatedBlocks };
       }
       return field;
     });
@@ -280,18 +187,6 @@ export function reorderNestedFields(
         ...field,
         fields: reorderNestedFields(field.fields, activeId, overId),
       };
-    }
-    if (field.type === "blocks" && field.blocks) {
-      const updatedBlocks = field.blocks.map(block => {
-        if (block.fields && block.fields.length > 0) {
-          return {
-            ...block,
-            fields: reorderNestedFields(block.fields, activeId, overId),
-          };
-        }
-        return block;
-      });
-      return { ...field, blocks: updatedBlocks };
     }
     return field;
   });
@@ -333,17 +228,6 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // Nested fields
   if (field.fields && field.fields.length > 0) {
     definition.fields = field.fields.map(convertToFieldDefinition);
-  }
-
-  // Blocks
-  if (field.type === "blocks" && field.blocks && field.blocks.length > 0) {
-    definition.blocks = field.blocks.map(block => ({
-      slug: block.slug,
-      labels: block.label ? { singular: block.label } : undefined,
-      fields: block.fields
-        ? block.fields.map(f => convertToFieldDefinition(f))
-        : [],
-    }));
   }
 
   // Options (select, radio)

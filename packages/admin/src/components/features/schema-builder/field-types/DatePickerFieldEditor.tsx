@@ -80,10 +80,10 @@ export function DatePickerFieldEditor({
 
   // Handle form submission
   const handleSubmit = form.handleSubmit((data: DatePickerFieldFormValues) => {
-    // Create field config with form data and the DATE_PICKER type
+    // Create field config with form data and the DATE type
     const fieldConfig: Omit<DatePickerFieldConfig, "id"> = {
       ...data,
-      type: FieldType.DATE_PICKER,
+      type: FieldType.DATE,
     };
     onSubmit(fieldConfig);
   });

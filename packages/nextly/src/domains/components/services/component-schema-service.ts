@@ -1121,7 +1121,6 @@ export type New${this.toPascalCase(componentSlug)}Component = typeof ${tableName
       case "number":
         return "0";
       case "checkbox":
-      case "boolean":
         return this.dialect === "sqlite" ? "0" : "FALSE";
       case "date":
         if (this.dialect === "sqlite") {

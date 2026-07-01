@@ -151,9 +151,9 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       },
     },
   },
-  [FieldType.BOOLEAN]: {
-    type: FieldType.BOOLEAN,
-    label: "Boolean",
+  [FieldType.CHECKBOX]: {
+    type: FieldType.CHECKBOX,
+    label: "Checkbox",
     description: "Yes/no or true/false values with multiple display options",
     icon: "toggle-left",
     category: FIELD_CATEGORIES.CHOICE,
@@ -199,9 +199,9 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
   },
 
   // Relational
-  [FieldType.RELATION]: {
-    type: FieldType.RELATION,
-    label: "Relation",
+  [FieldType.RELATIONSHIP]: {
+    type: FieldType.RELATIONSHIP,
+    label: "Relationship",
     description: "Reference to other content",
     icon: "link",
     category: FIELD_CATEGORIES.RELATIONAL,
@@ -219,9 +219,9 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
   },
 
   // Advanced
-  [FieldType.DATE_PICKER]: {
-    type: FieldType.DATE_PICKER,
-    label: "Date Picker",
+  [FieldType.DATE]: {
+    type: FieldType.DATE,
+    label: "Date",
     description: "Date picker for date/time values",
     icon: "calendar",
     category: FIELD_CATEGORIES.ADVANCED,
@@ -267,6 +267,58 @@ export const FIELD_TYPES: Record<FieldType, FieldTypeDefinition> = {
       ui: {
         description: "",
         collapsible: true,
+      },
+    },
+  },
+
+  [FieldType.CODE]: {
+    type: FieldType.CODE,
+    label: "Code",
+    description: "Source code with syntax highlighting",
+    icon: "code",
+    category: FIELD_CATEGORIES.ADVANCED,
+    defaultConfig: {
+      validation: {
+        required: false,
+      },
+    },
+  },
+
+  [FieldType.JSON]: {
+    type: FieldType.JSON,
+    label: "JSON",
+    description: "Raw JSON value",
+    icon: "braces",
+    category: FIELD_CATEGORIES.ADVANCED,
+    defaultConfig: {
+      validation: {
+        required: false,
+      },
+    },
+  },
+
+  [FieldType.UPLOAD]: {
+    type: FieldType.UPLOAD,
+    label: "Upload",
+    description: "File or image upload",
+    icon: "upload",
+    category: FIELD_CATEGORIES.BASIC,
+    defaultConfig: {
+      validation: {
+        required: false,
+      },
+    },
+  },
+
+  [FieldType.COMPONENT]: {
+    type: FieldType.COMPONENT,
+    label: "Component",
+    description: "Embed a reusable component",
+    icon: "puzzle",
+    category: FIELD_CATEGORIES.LAYOUT,
+    defaultConfig: {
+      validation: {
+        required: false,
       },
     },
   },

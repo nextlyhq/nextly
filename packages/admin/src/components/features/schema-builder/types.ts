@@ -305,7 +305,7 @@ export interface RepeaterFieldLabels {
 
 /**
  * Builder field with unique ID for drag-and-drop
- * Supports nested fields for array, group, and blocks types
+ * Supports nested fields for repeater and group types
  */
 export interface BuilderField extends FieldConfig {
   id: string;
@@ -421,17 +421,6 @@ export interface BuilderField extends FieldConfig {
    * @default false
    */
   repeatable?: boolean;
-  // ============================================================
-  // Blocks Field Properties
-  // ============================================================
-  /**
-   * Block types for blocks field
-   */
-  blocks?: Array<{
-    slug: string;
-    label?: string;
-    fields: BuilderField[];
-  }>;
 }
 
 /**

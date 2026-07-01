@@ -167,17 +167,7 @@ function isDataField(field: FieldConfig): field is NamedDataFieldConfig {
  */
 function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
   const dataFields: NamedDataFieldConfig[] = [];
-  const excludedTypes = [
-    "tabs",
-    "collapsible",
-    "row",
-    "ui",
-    "group",
-    "relationship",
-    "repeater",
-    "blocks",
-    "component",
-  ];
+  const excludedTypes = ["group", "relationship", "repeater", "component"];
 
   for (const field of fields) {
     // Only include direct data fields that are not complex/layout types

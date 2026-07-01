@@ -25,7 +25,7 @@ import {
   FormDescription,
 } from "@admin/components/ui/form";
 import { createSlugSchema } from "@admin/lib/validation";
-import type { BooleanFieldConfig } from "@admin/types/field-types";
+import type { CheckboxFieldConfig } from "@admin/types/field-types";
 import { FieldType } from "@admin/types/field-types";
 
 // Define schema for boolean field form
@@ -59,8 +59,8 @@ const booleanFieldSchema = z.object({
 type BooleanFieldFormValues = z.infer<typeof booleanFieldSchema>;
 
 interface BooleanFieldEditorProps {
-  initialData?: Partial<BooleanFieldConfig>;
-  onSubmit: (data: Omit<BooleanFieldConfig, "id">) => void;
+  initialData?: Partial<CheckboxFieldConfig>;
+  onSubmit: (data: Omit<CheckboxFieldConfig, "id">) => void;
   formRef?: React.RefObject<HTMLFormElement | null>;
 }
 
@@ -99,9 +99,9 @@ export function BooleanFieldEditor({
   // Handle form submission
   const handleSubmit = form.handleSubmit((data: BooleanFieldFormValues) => {
     // Create field config with form data and the BOOLEAN type
-    const fieldConfig: Omit<BooleanFieldConfig, "id"> = {
+    const fieldConfig: Omit<CheckboxFieldConfig, "id"> = {
       ...data,
-      type: FieldType.BOOLEAN,
+      type: FieldType.CHECKBOX,
     };
     onSubmit(fieldConfig);
   });
